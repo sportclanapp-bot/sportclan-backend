@@ -181,6 +181,46 @@ export async function register(req: Request, res: Response) {
   return res.json({ user, accessToken, refreshToken, isNewUser: true });
 }
 
+// POST /auth/otp/login  { phone, code }
+// Returning users log in with phone + OTP only — no password.
+// Validates OTP, looks up user by phone, issues fresh tokens.
+// Errors:
+//   400 — phone/code missing or OTP invalid/expired
+//   404 — phone is not registered (caller should route to register flow)
+export async function otpLogin(req: Request, res: Response) {
+  const { phone, code } = req.body || {};
+  if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
+  const p = normalizePhone(phone);
+  const entry = otpStore.get(p);
+  if (!entry) return res.status(400).json({ error: 'No OTP requested' });
+  if (Date.now() > entry.expiresAt) {
+    otpStore.delete(p);
+    return res.status(400).json({ error: 'OTP expired' });
+  }
+  // Accept either the original code or the VERIFIED marker (verify-otp may
+  // have already been called separately by the client).
+  if (entry.code !== code && entry.code !== 'VERIFIED') {
+    return res.status(400).json({ error: 'Invalid OTP' });
+  }
+
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, created_at')
+    .eq('phone', p)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!user) {
+    // Phone is not registered — caller should switch to the register flow.
+    return res.status(404).json({ error: 'Phone not registered', needsRegistration: true });
+  }
+
+  otpStore.delete(p);
+  const accessToken = generateAccessToken(user.id);
+  const refreshToken = generateRefreshToken(user.id);
+  await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
+  return res.json({ user, accessToken, refreshToken, isNewUser: false });
+}
+
 // POST /auth/login  { phone, password }
 export async function login(req: Request, res: Response) {
   const { phone, password } = req.body || {};

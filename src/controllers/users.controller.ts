@@ -31,7 +31,10 @@ export async function getUserById(req: Request, res: Response) {
 
 // PATCH /users/me — update own profile.
 // Change #4: NO size limit on profile_picture_url. We accept any URL.
-const ALLOWED_FIELDS = ['name', 'email', 'city_id', 'profile_picture_url', 'bio'] as const;
+const ALLOWED_FIELDS = [
+  'name', 'email', 'city_id', 'profile_picture_url', 'bio',
+  'link', 'gender', 'dob',
+] as const;
 
 export async function updateMe(req: Request, res: Response) {
   const userId = req.userId;

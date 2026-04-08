@@ -9,12 +9,18 @@ import rateLimit from 'express-rate-limit';
 import authRoutes from './routes/auth.routes';
 import citiesRoutes from './routes/cities.routes';
 import sportsRoutes from './routes/sports.routes';
+import usersRoutes from './routes/users.routes';
+import notificationsRoutes from './routes/notifications.routes';
+import uploadsRoutes from './routes/uploads.routes';
+import appRoutes from './routes/app.routes';
 
 const app = express();
 
 app.use(helmet());
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+// 12mb cap supports base64-encoded profile photos (Change #4: no client size limit;
+// server compresses). Larger uploads should switch to multipart in a future module.
+app.use(express.json({ limit: '12mb' }));
 
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -51,6 +57,10 @@ app.use('/auth/send-otp', sendOtpLimiter);
 app.use('/auth', authLimiter, authRoutes);
 app.use('/cities', citiesRoutes);
 app.use('/sports', sportsRoutes);
+app.use('/users', usersRoutes);
+app.use('/notifications', notificationsRoutes);
+app.use('/uploads', uploadsRoutes);
+app.use('/app', appRoutes);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {

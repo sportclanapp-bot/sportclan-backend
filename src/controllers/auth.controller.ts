@@ -62,45 +62,123 @@ function isOtpVerified(phone: string): boolean {
   return !!e && e.code === 'VERIFIED' && Date.now() < e.expiresAt;
 }
 
-// POST /auth/register  { phone, code, name, password, city_id?, account_type? }
+// POST /auth/register
+// OTP-only multi-step registration. Body shape:
+//   {
+//     phone, code,                       // required — OTP gate
+//     name, username,                    // required identity
+//     email?, gender?, dob?, link?,      // optional profile
+//     city_id?, bio?,
+//     account_types?: string[],          // → user_account_types
+//     sport_ids?: string[],              // → user_sports
+//     coupon_code?: string               // → coupon_usages (best-effort)
+//   }
+//
+// Notes:
+//   * No password — OTP is the credential. password_hash stays null.
+//   * Username uniqueness is enforced case-insensitively.
+//   * account_types and sport_ids inserts are best-effort; a partial failure
+//     does NOT roll back the user row (we'd rather have a half-populated
+//     account than no account at all on a transient DB blip).
 export async function register(req: Request, res: Response) {
-  const { phone, code, name, password, city_id, account_type } = req.body || {};
-  if (!phone || !code || !name || !password) {
-    return res.status(400).json({ error: 'phone, code, name, password are required' });
-  }
+  const {
+    phone, code,
+    name, username, email, gender, dob, link, city_id, bio,
+    account_types, sport_ids, coupon_code,
+  } = req.body || {};
+
+  if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
+  if (!name || !username) return res.status(400).json({ error: 'name and username are required' });
+
   const p = normalizePhone(phone);
   const entry = otpStore.get(p);
   if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
     return res.status(400).json({ error: 'OTP not verified' });
   }
-  const { data: existing } = await supabase
-    .from('users')
-    .select('id')
-    .eq('phone', p)
-    .maybeSingle();
-  if (existing) return res.status(409).json({ error: 'Phone already registered' });
 
-  const password_hash = await bcrypt.hash(password, 10);
+  // Phone must be free
+  const { data: existingPhone } = await supabase
+    .from('users').select('id').eq('phone', p).maybeSingle();
+  if (existingPhone) return res.status(409).json({ error: 'Phone already registered' });
+
+  // Username must be free (case-insensitive)
+  const { data: existingUsername } = await supabase
+    .from('users').select('id').ilike('username', username).maybeSingle();
+  if (existingUsername) return res.status(409).json({ error: 'Username already taken' });
+
+  if (gender && !['male', 'female', 'other'].includes(gender)) {
+    return res.status(400).json({ error: 'gender must be male, female, or other' });
+  }
+
+  // The legacy users.account_type column is kept for backward compat — store
+  // the first selected type so existing code that reads it still works.
+  const primaryAccountType = Array.isArray(account_types) && account_types.length > 0
+    ? account_types[0]
+    : 'fan';
+
   const { data: user, error } = await supabase
     .from('users')
     .insert({
       phone: p,
       name,
-      password_hash,
+      username,
+      email: email || null,
+      gender: gender || null,
+      dob: dob || null,
+      link: link || null,
+      bio: bio || null,
       city_id: city_id || null,
-      account_type: account_type || 'fan',
+      account_type: primaryAccountType,
       is_premium: false,
       coin_balance: 0,
     })
-    .select('id, phone, name, city_id, account_type, is_premium, coin_balance')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, coin_balance, created_at')
     .single();
-  if (error || !user) return res.status(500).json({ error: error?.message || 'Failed to create user' });
+  if (error || !user) {
+    return res.status(500).json({ error: error?.message || 'Failed to create user' });
+  }
+
+  // Best-effort multi-row inserts.
+  if (Array.isArray(account_types) && account_types.length > 0) {
+    const rows = account_types.map((t: string) => ({ user_id: user.id, account_type: t }));
+    await supabase.from('user_account_types').insert(rows);
+  }
+  if (Array.isArray(sport_ids) && sport_ids.length > 0) {
+    const rows = sport_ids.map((sid: string) => ({ user_id: user.id, sport_id: sid }));
+    await supabase.from('user_sports').insert(rows);
+  }
+
+  // Apply coupon if present and valid.
+  if (coupon_code) {
+    const { data: coupon } = await supabase
+      .from('coupon_codes')
+      .select('id, premium_months, coins, max_uses, uses_count, expires_at, active')
+      .ilike('code', coupon_code)
+      .maybeSingle();
+    if (coupon && coupon.active &&
+        (!coupon.expires_at || new Date(coupon.expires_at) > new Date()) &&
+        (coupon.max_uses == null || coupon.uses_count < coupon.max_uses)) {
+      const updates: Record<string, unknown> = {};
+      if (coupon.coins) updates.coin_balance = coupon.coins;
+      if (coupon.premium_months) {
+        updates.is_premium = true;
+        updates.premium_expires_at = new Date(
+          Date.now() + coupon.premium_months * 30 * 24 * 60 * 60 * 1000,
+        ).toISOString();
+      }
+      if (Object.keys(updates).length > 0) {
+        await supabase.from('users').update(updates).eq('id', user.id);
+      }
+      await supabase.from('coupon_usages').insert({ coupon_id: coupon.id, user_id: user.id });
+      await supabase.from('coupon_codes').update({ uses_count: coupon.uses_count + 1 }).eq('id', coupon.id);
+    }
+  }
 
   otpStore.delete(p);
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
   await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
-  return res.json({ user, accessToken, refreshToken });
+  return res.json({ user, accessToken, refreshToken, isNewUser: true });
 }
 
 // POST /auth/login  { phone, password }
@@ -149,6 +227,38 @@ export async function logout(req: Request, res: Response) {
     await supabase.from('refresh_tokens').update({ revoked: true }).eq('token', refreshToken);
   }
   return res.json({ success: true });
+}
+
+// GET /auth/username/check?username=
+// Returns { available: boolean }. Used by RegisterStep1 before submit.
+export async function checkUsername(req: Request, res: Response) {
+  const username = ((req.query.username as string) || '').trim();
+  if (!username) return res.status(400).json({ error: 'username is required' });
+  if (username.length < 3) return res.json({ available: false });
+  const { data } = await supabase
+    .from('users').select('id').ilike('username', username).maybeSingle();
+  return res.json({ available: !data });
+}
+
+// GET /auth/coupon/validate?code=
+// Returns { valid: boolean, description?: string }. Best-effort lookup —
+// the actual coupon application happens in the register controller.
+export async function validateCoupon(req: Request, res: Response) {
+  const code = ((req.query.code as string) || '').trim();
+  if (!code) return res.status(400).json({ error: 'code is required' });
+  const { data: coupon } = await supabase
+    .from('coupon_codes')
+    .select('description, expires_at, active, max_uses, uses_count')
+    .ilike('code', code)
+    .maybeSingle();
+  if (!coupon || !coupon.active) return res.json({ valid: false });
+  if (coupon.expires_at && new Date(coupon.expires_at) < new Date()) {
+    return res.json({ valid: false });
+  }
+  if (coupon.max_uses != null && coupon.uses_count >= coupon.max_uses) {
+    return res.json({ valid: false });
+  }
+  return res.json({ valid: true, description: coupon.description ?? undefined });
 }
 
 // POST /auth/google — placeholder

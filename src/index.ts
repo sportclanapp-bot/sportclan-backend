@@ -13,6 +13,8 @@ import usersRoutes from './routes/users.routes';
 import notificationsRoutes from './routes/notifications.routes';
 import uploadsRoutes from './routes/uploads.routes';
 import appRoutes from './routes/app.routes';
+import invitesRoutes from './routes/invites.routes';
+import servicesRoutes from './routes/services.routes';
 
 const app = express();
 
@@ -61,6 +63,8 @@ app.use('/users', usersRoutes);
 app.use('/notifications', notificationsRoutes);
 app.use('/uploads', uploadsRoutes);
 app.use('/app', appRoutes);
+app.use('/invites', invitesRoutes);
+app.use('/services', servicesRoutes);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {

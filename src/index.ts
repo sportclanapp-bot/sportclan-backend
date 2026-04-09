@@ -23,6 +23,11 @@ import communityRoutes from './routes/community.routes';
 import messagesRoutes from './routes/messages.routes';
 import searchRoutes from './routes/search.routes';
 import availabilityRoutes from './routes/availability.routes';
+import subscriptionsRoutes from './routes/subscriptions.routes';
+import giftsRoutes from './routes/gifts.routes';
+import transactionsRoutes from './routes/transactions.routes';
+import accountRoutes from './routes/account.routes';
+import webhooksRoutes from './routes/webhooks.routes';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -83,6 +88,11 @@ app.use('/community', communityRoutes);
 app.use('/messages', messagesRoutes);
 app.use('/search', searchRoutes);
 app.use('/availability', availabilityRoutes);
+app.use('/subscriptions', subscriptionsRoutes);
+app.use('/gifts', giftsRoutes);
+app.use('/transactions', transactionsRoutes);
+app.use('/account', accountRoutes);
+app.use('/webhooks', webhooksRoutes);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {

@@ -15,6 +15,11 @@ import uploadsRoutes from './routes/uploads.routes';
 import appRoutes from './routes/app.routes';
 import invitesRoutes from './routes/invites.routes';
 import servicesRoutes from './routes/services.routes';
+import teamsRoutes from './routes/teams.routes';
+import tournamentsRoutes from './routes/tournaments.routes';
+import matchesRoutes from './routes/matches.routes';
+import scoringRoutes from './routes/scoring.routes';
+import leaderboardRoutes from './routes/leaderboard.routes';
 
 const app = express();
 
@@ -65,6 +70,11 @@ app.use('/uploads', uploadsRoutes);
 app.use('/app', appRoutes);
 app.use('/invites', invitesRoutes);
 app.use('/services', servicesRoutes);
+app.use('/teams', teamsRoutes);
+app.use('/tournaments', tournamentsRoutes);
+app.use('/matches', matchesRoutes);
+app.use('/scoring', scoringRoutes);
+app.use('/leaderboard', leaderboardRoutes);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {

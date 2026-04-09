@@ -1,0 +1,299 @@
+import { Request, Response } from 'express';
+import { supabase } from '../utils/supabase';
+
+function generateEntryCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+// POST /tournaments — Premium required (Change #6)
+export async function createTournament(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { data: user } = await supabase
+      .from('users')
+      .select('is_premium, premium_expires_at')
+      .eq('id', userId)
+      .maybeSingle();
+    const premiumActive =
+      user?.is_premium &&
+      (!user.premium_expires_at || new Date(user.premium_expires_at).getTime() > Date.now());
+    if (!premiumActive) {
+      return res.status(403).json({
+        error: 'Premium subscription required to create tournaments',
+        code: 'PREMIUM_REQUIRED',
+      });
+    }
+
+    const {
+      sport_id,
+      name,
+      description,
+      format,
+      city_id,
+      venue,
+      start_date,
+      end_date,
+      entry_fee,
+      max_teams,
+      prize_pool,
+      banner_url,
+      tiebreaker_rules,
+    } = req.body || {};
+    if (!sport_id || !name || !format) {
+      return res.status(400).json({ error: 'sport_id, name, format are required' });
+    }
+
+    // Generate unique entry code (retry a few times on collision)
+    let entry_code = generateEntryCode();
+    for (let i = 0; i < 5; i++) {
+      const { data: existing } = await supabase
+        .from('tournaments')
+        .select('id')
+        .eq('entry_code', entry_code)
+        .maybeSingle();
+      if (!existing) break;
+      entry_code = generateEntryCode();
+    }
+
+    const { data: tournament, error } = await supabase
+      .from('tournaments')
+      .insert({
+        sport_id,
+        name,
+        description: description || null,
+        format,
+        city_id: city_id || null,
+        venue: venue || null,
+        start_date: start_date || null,
+        end_date: end_date || null,
+        entry_fee: entry_fee ?? 0,
+        max_teams: max_teams ?? null,
+        prize_pool: prize_pool ?? null,
+        banner_url: banner_url || null,
+        entry_code,
+        created_by: userId,
+        tiebreaker_rules: tiebreaker_rules ?? [],
+      })
+      .select('*')
+      .single();
+    if (error || !tournament) return res.status(500).json({ error: error?.message || 'Failed to create tournament' });
+    return res.json({ tournament });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// GET /tournaments
+export async function listTournaments(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { sport_id, city_id, status, mine } = req.query as Record<string, string | undefined>;
+    let query = supabase.from('tournaments').select('*').order('created_at', { ascending: false }).limit(100);
+    if (sport_id) query = query.eq('sport_id', sport_id);
+    if (city_id) query = query.eq('city_id', city_id);
+    if (status) query = query.eq('status', status);
+    if (mine === '1') query = query.eq('created_by', userId);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ tournaments: data || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// GET /tournaments/:id
+export async function getTournament(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data: tournament, error } = await supabase
+      .from('tournaments')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !tournament) return res.status(404).json({ error: 'Tournament not found' });
+    const { data: entries } = await supabase
+      .from('tournament_entries')
+      .select('id, status, seed, group_label, entered_at, team:team_id (id, name, logo_url, sport_id)')
+      .eq('tournament_id', id);
+    return res.json({ tournament, entries: entries || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// POST /tournaments/:id/entries — captain enters their team
+export async function createEntry(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { team_id } = req.body || {};
+    if (!team_id) return res.status(400).json({ error: 'team_id is required' });
+    const { data: membership } = await supabase
+      .from('team_members')
+      .select('role')
+      .eq('team_id', team_id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (membership?.role !== 'captain') {
+      return res.status(403).json({ error: 'Only the team captain can enter a tournament' });
+    }
+    const { data, error } = await supabase
+      .from('tournament_entries')
+      .insert({ tournament_id: id, team_id, status: 'pending' })
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ entry: data });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// PATCH /tournaments/:id/entries/:entryId
+export async function updateEntry(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id, entryId } = req.params;
+    const { status, seed, group_label } = req.body || {};
+    if (status && !['pending', 'approved', 'rejected', 'withdrawn'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    const { data: entry } = await supabase
+      .from('tournament_entries')
+      .select('id, tournament_id, team_id')
+      .eq('id', entryId)
+      .eq('tournament_id', id)
+      .maybeSingle();
+    if (!entry) return res.status(404).json({ error: 'Entry not found' });
+
+    const { data: tournament } = await supabase
+      .from('tournaments')
+      .select('created_by')
+      .eq('id', id)
+      .maybeSingle();
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+
+    const isCreator = tournament.created_by === userId;
+    const { data: membership } = await supabase
+      .from('team_members')
+      .select('role')
+      .eq('team_id', entry.team_id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    const isTeamCaptain = membership?.role === 'captain';
+
+    if (status === 'approved' || status === 'rejected') {
+      if (!isCreator) return res.status(403).json({ error: 'Only the tournament creator can approve/reject' });
+    } else if (status === 'withdrawn') {
+      if (!isTeamCaptain) return res.status(403).json({ error: 'Only the team captain can withdraw' });
+    } else {
+      if (!isCreator) return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const update: Record<string, any> = {};
+    if (status !== undefined) update.status = status;
+    if (seed !== undefined) update.seed = seed;
+    if (group_label !== undefined) update.group_label = group_label;
+
+    const { data, error } = await supabase
+      .from('tournament_entries')
+      .update(update)
+      .eq('id', entryId)
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ entry: data });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// PATCH /tournaments/:id — creator only
+export async function updateTournament(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data: tournament } = await supabase
+      .from('tournaments')
+      .select('created_by')
+      .eq('id', id)
+      .maybeSingle();
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+    if (tournament.created_by !== userId) return res.status(403).json({ error: 'Only the creator can update' });
+
+    const allowedKeys = [
+      'name',
+      'description',
+      'format',
+      'city_id',
+      'venue',
+      'start_date',
+      'end_date',
+      'entry_fee',
+      'max_teams',
+      'prize_pool',
+      'banner_url',
+      'status',
+      'tiebreaker_rules',
+    ];
+    const update: Record<string, any> = {};
+    for (const key of allowedKeys) {
+      if (req.body && key in req.body) update[key] = req.body[key];
+    }
+    update.updated_at = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('tournaments')
+      .update(update)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ tournament: data });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// POST /tournaments/join  { entry_code, team_id }
+export async function joinByCode(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { entry_code, team_id } = req.body || {};
+    if (!entry_code || !team_id) return res.status(400).json({ error: 'entry_code and team_id are required' });
+    const { data: tournament } = await supabase
+      .from('tournaments')
+      .select('id')
+      .eq('entry_code', entry_code)
+      .maybeSingle();
+    if (!tournament) return res.status(404).json({ error: 'Invalid entry code' });
+    const { data: membership } = await supabase
+      .from('team_members')
+      .select('role')
+      .eq('team_id', team_id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (membership?.role !== 'captain') {
+      return res.status(403).json({ error: 'Only the team captain can enter a tournament' });
+    }
+    const { data, error } = await supabase
+      .from('tournament_entries')
+      .insert({ tournament_id: tournament.id, team_id, status: 'pending' })
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ entry: data, tournament_id: tournament.id });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}

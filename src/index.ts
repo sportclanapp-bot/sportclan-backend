@@ -19,6 +19,10 @@ import tournamentsRoutes from './routes/tournaments.routes';
 import matchesRoutes from './routes/matches.routes';
 import scoringRoutes from './routes/scoring.routes';
 import leaderboardRoutes from './routes/leaderboard.routes';
+import communityRoutes from './routes/community.routes';
+import messagesRoutes from './routes/messages.routes';
+import searchRoutes from './routes/search.routes';
+import availabilityRoutes from './routes/availability.routes';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -75,6 +79,10 @@ app.use('/tournaments', tournamentsRoutes);
 app.use('/matches', matchesRoutes);
 app.use('/scoring', scoringRoutes);
 app.use('/leaderboard', leaderboardRoutes);
+app.use('/community', communityRoutes);
+app.use('/messages', messagesRoutes);
+app.use('/search', searchRoutes);
+app.use('/availability', availabilityRoutes);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {

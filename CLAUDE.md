@@ -58,6 +58,7 @@ Deployments: Railway (backend), EAS Build (app)
 ## What has been built so far
 [UPDATE THIS SECTION AFTER EACH PART]
 - Part 1: Foundation + accounts complete. Both projects exist, .env files filled, app on phone.
+- Part 4: Full match + tournament system. All 11 sport scoring screens built (Cricket at full fidelity). Teams, tournaments, fixtures, leaderboard, match sharing, umpire assignment, squad lock. Tournament creation requires Premium (Change #6).
 
 ## Environment variables
 All secrets are in .env files. Never hardcode any key. All frontend env vars use EXPO_PUBLIC_ prefix.

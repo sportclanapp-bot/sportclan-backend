@@ -1,5 +1,4 @@
-import dotenv from 'dotenv';
-dotenv.config();
+import 'dotenv/config';
 
 import express, { Request, Response } from 'express';
 import cors from 'cors';
@@ -22,6 +21,7 @@ import scoringRoutes from './routes/scoring.routes';
 import leaderboardRoutes from './routes/leaderboard.routes';
 
 const app = express();
+app.set('trust proxy', 1);
 
 app.use(helmet());
 app.use(cors());

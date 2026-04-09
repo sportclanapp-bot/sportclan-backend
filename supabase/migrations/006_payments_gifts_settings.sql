@@ -7,7 +7,7 @@
 CREATE TABLE IF NOT EXISTS subscriptions (
   id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id                   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  plan_id                   TEXT NOT NULL,                         -- '1_month','2_months','3_months','6_months','1_year','coins_50'
+  plan_id                   TEXT NOT NULL,                         -- 1_month, 2_months, 3_months, 6_months, 1_year, coins_50
   status                    TEXT NOT NULL DEFAULT 'active',         -- active, pending, expired, cancelled
   amount_inr                INTEGER NOT NULL,                      -- rupees
   currency                  TEXT NOT NULL DEFAULT 'INR',
@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   provider_subscription_id  TEXT,                                  -- Razorpay subscription_id or Apple originalTransactionId
   provider_order_id         TEXT,                                  -- Razorpay order_id
   provider_payment_id       TEXT,                                  -- Razorpay payment_id or Apple transactionId
-  coupon_code               TEXT,                                  -- e.g. 'EARLYBIRDS'
+  coupon_code               TEXT,                                  -- e.g. EARLYBIRDS
   starts_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at                TIMESTAMPTZ,
   auto_renew                BOOLEAN NOT NULL DEFAULT true,
@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status);
 CREATE TABLE IF NOT EXISTS transactions (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  type          TEXT NOT NULL,                          -- 'subscription','coins','coupon','gift_sent','gift_received'
+  type          TEXT NOT NULL,                          -- subscription, coins, coupon, gift_sent, gift_received
   amount_inr    INTEGER DEFAULT 0,                     -- rupees paid (0 for gifts/coupons)
   coins         INTEGER DEFAULT 0,                     -- coins involved (negative = deducted)
   description   TEXT,
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS gift_transactions (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   sender_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   receiver_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  gift_id       TEXT NOT NULL,                         -- 'gold_trophy','silver_trophy', etc.
+  gift_id       TEXT NOT NULL,                         -- gold_trophy, silver_trophy, etc.
   gift_emoji    TEXT NOT NULL,
   gift_name     TEXT NOT NULL,
   coin_cost     INTEGER NOT NULL,

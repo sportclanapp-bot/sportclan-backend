@@ -1,12 +1,18 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.uploadProfilePhoto = void 0;
 const crypto_1 = require("crypto");
+const sharp_1 = __importDefault(require("sharp"));
 const r2_1 = require("../utils/r2");
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const MAX_DIMENSION = 1200;
+const JPEG_QUALITY = 80;
 // POST /uploads/profile-photo
 // Body: { base64: string, mime: string }
-// Change #4: NO file size limit. Server compresses automatically (TODO).
+// Change #4: NO file size limit. Server compresses automatically.
 // Returns: { url: string }
 async function uploadProfilePhoto(req, res) {
     const userId = req.userId;
@@ -28,12 +34,19 @@ async function uploadProfilePhoto(req, res) {
     catch {
         return res.status(400).json({ error: 'Invalid base64 payload' });
     }
-    // TODO: server-side compression with sharp (Change #4 — no client size limit).
-    // For Part 3 we upload as-is. Add sharp resize/compress in a later module.
-    const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
-    const key = `profile-photos/${userId}/${(0, crypto_1.randomUUID)()}.${ext}`;
+    // Server-side compression: resize to max 1200px on longest side, JPEG quality 80
     try {
-        const url = await (0, r2_1.uploadBuffer)(key, buf, mime);
+        buf = await (0, sharp_1.default)(buf)
+            .resize(MAX_DIMENSION, MAX_DIMENSION, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: JPEG_QUALITY })
+            .toBuffer();
+    }
+    catch (err) {
+        return res.status(400).json({ error: 'Could not process image: ' + (err?.message ?? 'unknown') });
+    }
+    const key = `profile-photos/${userId}/${(0, crypto_1.randomUUID)()}.jpg`;
+    try {
+        const url = await (0, r2_1.uploadBuffer)(key, buf, 'image/jpeg');
         return res.json({ url });
     }
     catch (err) {

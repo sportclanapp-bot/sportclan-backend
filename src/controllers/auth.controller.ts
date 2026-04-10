@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import axios from 'axios';
 import { supabase } from '../utils/supabase';
 import {
   generateAccessToken,
@@ -27,6 +28,28 @@ function normalizePhone(phone: string): string {
   return phone.trim().replace(/\s+/g, '');
 }
 
+// Send SMS via 2Factor.in API
+async function sendSmsOtp(phone: string, code: string): Promise<boolean> {
+  const apiKey = process.env.TWOFACTOR_API_KEY;
+  if (!apiKey) {
+    // Fallback to console in dev when API key is not configured
+    // eslint-disable-next-line no-console
+    console.log(`[OTP DEV] phone=${phone} code=${code}`);
+    return true;
+  }
+  try {
+    // 2Factor.in SMS OTP API — phone must be 10-digit Indian number or with +91 prefix
+    const cleanPhone = phone.replace(/^\+91/, '');
+    const url = `https://2factor.in/API/V1/${apiKey}/SMS/${cleanPhone}/${code}/SportClan+OTP`;
+    const { data } = await axios.get(url);
+    return data.Status === 'Success';
+  } catch (err: any) {
+    // eslint-disable-next-line no-console
+    console.error('[2Factor.in] SMS send failed:', err?.message);
+    return false;
+  }
+}
+
 // POST /auth/send-otp  { phone, purpose? }
 export async function sendOtp(req: Request, res: Response) {
   const { phone, purpose = 'login' } = req.body || {};
@@ -34,10 +57,12 @@ export async function sendOtp(req: Request, res: Response) {
   const p = normalizePhone(phone);
   const code = generateOtp();
   otpStore.set(p, { code, expiresAt: Date.now() + OTP_TTL_MS, purpose });
-  // MOCK: log to console instead of sending SMS
-  // eslint-disable-next-line no-console
-  console.log(`[OTP MOCK] phone=${p} purpose=${purpose} code=${code}`);
-  return res.json({ success: true, message: 'OTP sent (mock — see server logs)' });
+
+  const sent = await sendSmsOtp(p, code);
+  if (!sent) {
+    return res.status(500).json({ error: 'Failed to send OTP. Please try again.' });
+  }
+  return res.json({ success: true, message: 'OTP sent' });
 }
 
 // POST /auth/verify-otp  { phone, code }

@@ -11,6 +11,7 @@ import {
   getBlockedUsers,
   getProfileCompleteness,
   discoverPlayers,
+  getSportProfile,
 } from '../controllers/users.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -25,6 +26,7 @@ router.get('/discover', authenticateToken, discoverPlayers);
 router.get('/:id', getUserById);
 router.get('/:id/followers', getFollowers);
 router.get('/:id/following', getFollowing);
+router.get('/:id/sport-profile/:sportId', getSportProfile);
 
 router.post('/:id/follow', authenticateToken, followUser);
 router.delete('/:id/follow', authenticateToken, unfollowUser);

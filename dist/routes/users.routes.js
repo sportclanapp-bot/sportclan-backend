@@ -12,6 +12,7 @@ router.get('/discover', auth_middleware_1.authenticateToken, users_controller_1.
 router.get('/:id', users_controller_1.getUserById);
 router.get('/:id/followers', users_controller_1.getFollowers);
 router.get('/:id/following', users_controller_1.getFollowing);
+router.get('/:id/sport-profile/:sportId', users_controller_1.getSportProfile);
 router.post('/:id/follow', auth_middleware_1.authenticateToken, users_controller_1.followUser);
 router.delete('/:id/follow', auth_middleware_1.authenticateToken, users_controller_1.unfollowUser);
 router.post('/:id/block', auth_middleware_1.authenticateToken, users_controller_1.blockUser);

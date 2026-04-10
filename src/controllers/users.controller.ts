@@ -288,3 +288,30 @@ export async function discoverPlayers(req: Request, res: Response) {
 
   return res.json({ players, mode: mode || 'singles' });
 }
+
+// GET /users/:id/sport-profile/:sportId — per-sport rating + stats
+export async function getSportProfile(req: Request, res: Response) {
+  const { id, sportId } = req.params;
+
+  const { data: profile } = await supabase
+    .from('user_sport_profiles')
+    .select('rating, matches_played, wins, losses, draws, last_match_at')
+    .eq('user_id', id)
+    .eq('sport_id', sportId)
+    .maybeSingle();
+
+  if (!profile) {
+    return res.json({
+      profile: {
+        rating: 1200,
+        matches_played: 0,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        last_match_at: null,
+      },
+    });
+  }
+
+  return res.json({ profile });
+}

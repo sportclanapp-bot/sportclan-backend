@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = void 0;
+exports.getSportProfile = exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = void 0;
 const supabase_1 = require("../utils/supabase");
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS = 'id, phone, name, email, city_id, account_type, profile_picture_url, bio, is_premium, premium_expires_at, coin_balance, created_at';
@@ -298,4 +298,28 @@ async function discoverPlayers(req, res) {
     return res.json({ players, mode: mode || 'singles' });
 }
 exports.discoverPlayers = discoverPlayers;
+// GET /users/:id/sport-profile/:sportId — per-sport rating + stats
+async function getSportProfile(req, res) {
+    const { id, sportId } = req.params;
+    const { data: profile } = await supabase_1.supabase
+        .from('user_sport_profiles')
+        .select('rating, matches_played, wins, losses, draws, last_match_at')
+        .eq('user_id', id)
+        .eq('sport_id', sportId)
+        .maybeSingle();
+    if (!profile) {
+        return res.json({
+            profile: {
+                rating: 1200,
+                matches_played: 0,
+                wins: 0,
+                losses: 0,
+                draws: 0,
+                last_match_at: null,
+            },
+        });
+    }
+    return res.json({ profile });
+}
+exports.getSportProfile = getSportProfile;
 //# sourceMappingURL=users.controller.js.map

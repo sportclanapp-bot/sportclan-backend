@@ -8,7 +8,6 @@ const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const axios_1 = __importDefault(require("axios"));
 const supabase_1 = require("../utils/supabase");
 const jwt_1 = require("../utils/jwt");
-const otpStore = new Map();
 const OTP_TTL_MS = 5 * 60 * 1000;
 function generateOtp() {
     return Math.floor(100000 + Math.random() * 900000).toString();
@@ -45,7 +44,8 @@ async function sendOtp(req, res) {
         return res.status(400).json({ error: 'phone is required' });
     const p = normalizePhone(phone);
     const code = generateOtp();
-    otpStore.set(p, { code, expiresAt: Date.now() + OTP_TTL_MS, purpose });
+    const expires_at = new Date(Date.now() + OTP_TTL_MS).toISOString();
+    await supabase_1.supabase.from('otp_codes').upsert({ phone: p, code, purpose, expires_at }, { onConflict: 'phone' });
     const sent = await sendSmsOtp(p, code);
     if (!sent) {
         return res.status(500).json({ error: 'Failed to send OTP. Please try again.' });
@@ -59,24 +59,27 @@ async function verifyOtp(req, res) {
     if (!phone || !code)
         return res.status(400).json({ error: 'phone and code are required' });
     const p = normalizePhone(phone);
-    const entry = otpStore.get(p);
+    const { data: entry } = await supabase_1.supabase
+        .from('otp_codes')
+        .select('code, expires_at')
+        .eq('phone', p)
+        .maybeSingle();
     if (!entry)
         return res.status(400).json({ error: 'No OTP requested' });
-    if (Date.now() > entry.expiresAt) {
-        otpStore.delete(p);
+    if (new Date() > new Date(entry.expires_at)) {
+        await supabase_1.supabase.from('otp_codes').delete().eq('phone', p);
         return res.status(400).json({ error: 'OTP expired' });
     }
     if (entry.code !== code)
         return res.status(400).json({ error: 'Invalid OTP' });
-    // Mark verified by re-storing with a short verified window
-    otpStore.set(p, { ...entry, code: 'VERIFIED', expiresAt: Date.now() + OTP_TTL_MS });
+    // Mark verified by updating the code to VERIFIED
+    await supabase_1.supabase.from('otp_codes').update({
+        code: 'VERIFIED',
+        expires_at: new Date(Date.now() + OTP_TTL_MS).toISOString(),
+    }).eq('phone', p);
     return res.json({ success: true, verified: true });
 }
 exports.verifyOtp = verifyOtp;
-function isOtpVerified(phone) {
-    const e = otpStore.get(normalizePhone(phone));
-    return !!e && e.code === 'VERIFIED' && Date.now() < e.expiresAt;
-}
 // POST /auth/register
 // OTP-only multi-step registration. Body shape:
 //   {
@@ -102,9 +105,17 @@ async function register(req, res) {
     if (!name || !username)
         return res.status(400).json({ error: 'name and username are required' });
     const p = normalizePhone(phone);
-    const entry = otpStore.get(p);
+    const { data: entry } = await supabase_1.supabase
+        .from('otp_codes')
+        .select('code, expires_at')
+        .eq('phone', p)
+        .maybeSingle();
     if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
         return res.status(400).json({ error: 'OTP not verified' });
+    }
+    if (new Date() > new Date(entry.expires_at)) {
+        await supabase_1.supabase.from('otp_codes').delete().eq('phone', p);
+        return res.status(400).json({ error: 'OTP expired' });
     }
     // Phone must be free
     const { data: existingPhone } = await supabase_1.supabase
@@ -178,7 +189,7 @@ async function register(req, res) {
             await supabase_1.supabase.from('coupon_codes').update({ uses_count: coupon.uses_count + 1 }).eq('id', coupon.id);
         }
     }
-    otpStore.delete(p);
+    await supabase_1.supabase.from('otp_codes').delete().eq('phone', p);
     const accessToken = (0, jwt_1.generateAccessToken)(user.id);
     const refreshToken = (0, jwt_1.generateRefreshToken)(user.id);
     await supabase_1.supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
@@ -196,11 +207,15 @@ async function otpLogin(req, res) {
     if (!phone || !code)
         return res.status(400).json({ error: 'phone and code are required' });
     const p = normalizePhone(phone);
-    const entry = otpStore.get(p);
+    const { data: entry } = await supabase_1.supabase
+        .from('otp_codes')
+        .select('code, expires_at')
+        .eq('phone', p)
+        .maybeSingle();
     if (!entry)
         return res.status(400).json({ error: 'No OTP requested' });
-    if (Date.now() > entry.expiresAt) {
-        otpStore.delete(p);
+    if (new Date() > new Date(entry.expires_at)) {
+        await supabase_1.supabase.from('otp_codes').delete().eq('phone', p);
         return res.status(400).json({ error: 'OTP expired' });
     }
     // Accept either the original code or the VERIFIED marker (verify-otp may
@@ -219,7 +234,7 @@ async function otpLogin(req, res) {
         // Phone is not registered — caller should switch to the register flow.
         return res.status(404).json({ error: 'Phone not registered', needsRegistration: true });
     }
-    otpStore.delete(p);
+    await supabase_1.supabase.from('otp_codes').delete().eq('phone', p);
     const accessToken = (0, jwt_1.generateAccessToken)(user.id);
     const refreshToken = (0, jwt_1.generateRefreshToken)(user.id);
     await supabase_1.supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
@@ -328,15 +343,23 @@ async function resetPassword(req, res) {
         return res.status(400).json({ error: 'phone, code, newPassword are required' });
     }
     const p = normalizePhone(phone);
-    const entry = otpStore.get(p);
+    const { data: entry } = await supabase_1.supabase
+        .from('otp_codes')
+        .select('code, expires_at')
+        .eq('phone', p)
+        .maybeSingle();
     if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
         return res.status(400).json({ error: 'OTP not verified' });
+    }
+    if (new Date() > new Date(entry.expires_at)) {
+        await supabase_1.supabase.from('otp_codes').delete().eq('phone', p);
+        return res.status(400).json({ error: 'OTP expired' });
     }
     const password_hash = await bcryptjs_1.default.hash(newPassword, 10);
     const { error } = await supabase_1.supabase.from('users').update({ password_hash }).eq('phone', p);
     if (error)
         return res.status(500).json({ error: error.message });
-    otpStore.delete(p);
+    await supabase_1.supabase.from('otp_codes').delete().eq('phone', p);
     return res.json({ success: true });
 }
 exports.resetPassword = resetPassword;
@@ -349,9 +372,17 @@ async function changePhone(req, res) {
     if (!newPhone || !code)
         return res.status(400).json({ error: 'newPhone and code are required' });
     const p = normalizePhone(newPhone);
-    const entry = otpStore.get(p);
+    const { data: entry } = await supabase_1.supabase
+        .from('otp_codes')
+        .select('code, expires_at')
+        .eq('phone', p)
+        .maybeSingle();
     if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
         return res.status(400).json({ error: 'OTP not verified' });
+    }
+    if (new Date() > new Date(entry.expires_at)) {
+        await supabase_1.supabase.from('otp_codes').delete().eq('phone', p);
+        return res.status(400).json({ error: 'OTP expired' });
     }
     const { data: existing } = await supabase_1.supabase
         .from('users')
@@ -363,7 +394,7 @@ async function changePhone(req, res) {
     const { error } = await supabase_1.supabase.from('users').update({ phone: p }).eq('id', userId);
     if (error)
         return res.status(500).json({ error: error.message });
-    otpStore.delete(p);
+    await supabase_1.supabase.from('otp_codes').delete().eq('phone', p);
     return res.json({ success: true });
 }
 exports.changePhone = changePhone;

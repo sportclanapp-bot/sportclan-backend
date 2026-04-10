@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
+const path_1 = __importDefault(require("path"));
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
@@ -34,8 +35,16 @@ const webhooks_routes_1 = __importDefault(require("./routes/webhooks.routes"));
 const badges_routes_1 = __importDefault(require("./routes/badges.routes"));
 const app = (0, express_1.default)();
 app.set('trust proxy', 1);
-app.use((0, helmet_1.default)());
+app.use((0, helmet_1.default)({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+        },
+    },
+}));
 app.use((0, cors_1.default)());
+app.use(express_1.default.static(path_1.default.join(__dirname, '..', 'public')));
 // 12mb cap supports base64-encoded profile photos (Change #4: no client size limit;
 // server compresses). Larger uploads should switch to multipart in a future module.
 app.use(express_1.default.json({ limit: '12mb' }));

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — SportClan</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #F5F7FA; color: #212121; line-height: 1.7; }
+  .header { background: linear-gradient(135deg, #0A1628, #1A3A5C, #1565C0); color: #fff; padding: 40px 20px; text-align: center; }
+  .header h1 { font-size: 28px; font-weight: 800; margin-bottom: 6px; }
+  .header p { font-size: 13px; opacity: 0.6; }
+  .container { max-width: 720px; margin: 0 auto; padding: 24px 20px 60px; }
+  .updated { font-size: 12px; color: #757575; margin-bottom: 24px; }
+  h2 { font-size: 18px; font-weight: 800; color: #1A3A5C; margin: 28px 0 10px; }
+  h3 { font-size: 15px; font-weight: 700; color: #1A3A5C; margin: 18px 0 8px; }
+  p, li { font-size: 14px; color: #424242; margin-bottom: 8px; }
+  ul { padding-left: 20px; margin-bottom: 12px; }
+  li { margin-bottom: 4px; }
+  .card { background: #fff; border: 1px solid #E0E0E0; border-radius: 12px; padding: 20px; margin: 16px 0; }
+  .card h3 { margin-top: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #EEE; font-size: 13px; }
+  th { background: #F5F7FA; font-weight: 700; color: #1A3A5C; }
+  .footer { text-align: center; padding: 30px 20px; font-size: 12px; color: #9E9E9E; }
+  a { color: #1565C0; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Privacy Policy</h1>
+  <p>SportClan &mdash; Find your clan. Play your game.</p>
+</div>
+
+<div class="container">
+  <p class="updated">Last updated: 11 April 2026</p>
+
+  <h2>1. Introduction</h2>
+  <p>SportClan (&ldquo;we&rdquo;, &ldquo;our&rdquo;, &ldquo;us&rdquo;) operates the SportClan mobile application (the &ldquo;App&rdquo;). This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our App. By using SportClan you agree to this policy. If you do not agree, please discontinue use of the App.</p>
+
+  <h2>2. Information We Collect</h2>
+
+  <h3>2.1 Information You Provide</h3>
+  <ul>
+    <li><strong>Account details:</strong> name, username, phone number, email address, date of birth, gender, city, bio, profile photo.</li>
+    <li><strong>Sports preferences:</strong> selected sports, account types (player, organiser, umpire, coach, commentator, business).</li>
+    <li><strong>Content you create:</strong> community posts, comments, messages, match data, team information, tournament entries.</li>
+    <li><strong>Payment information:</strong> processed securely via Razorpay (Android) and Apple In-App Purchase (iOS). We do not store card or bank details on our servers.</li>
+    <li><strong>Feedback and support enquiries.</strong></li>
+  </ul>
+
+  <h3>2.2 Information Collected Automatically</h3>
+  <ul>
+    <li><strong>Device information:</strong> device model, operating system version, unique device identifiers.</li>
+    <li><strong>Usage data:</strong> screens viewed, features used, app performance metrics via Firebase Analytics.</li>
+    <li><strong>Push notification tokens</strong> via Firebase Cloud Messaging.</li>
+    <li><strong>Crash reports and diagnostics</strong> via Sentry.</li>
+    <li><strong>We do NOT collect device fingerprint data.</strong></li>
+    <li><strong>We do NOT track your precise location</strong> unless you explicitly grant permission for nearby player discovery.</li>
+  </ul>
+
+  <h2>3. How We Use Your Information</h2>
+  <ul>
+    <li>To create and manage your account.</li>
+    <li>To enable core features: live match scoring across 11 sports, teams, tournaments, community posts, chat, player discovery, and search.</li>
+    <li>To calculate and display ELO-based player ratings and leaderboard rankings.</li>
+    <li>To process payments and manage Premium subscriptions.</li>
+    <li>To send push notifications for match updates, messages, gifts, and community activity.</li>
+    <li>To award badges based on your activity milestones.</li>
+    <li>To improve the App through analytics and crash reporting.</li>
+    <li>To enforce our Terms of Service and prevent misuse (profanity detection, spam prevention).</li>
+    <li>To respond to your feedback and support requests.</li>
+  </ul>
+
+  <h2>4. Third-Party Service Providers</h2>
+  <p>We share data only with trusted service providers necessary to operate the App. We do not sell your personal information to any third party.</p>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Provider</th><th>Purpose</th><th>Data Shared</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Supabase</td><td>Database &amp; file storage</td><td>All account and content data</td></tr>
+        <tr><td>Firebase (Google)</td><td>Push notifications &amp; analytics</td><td>Device tokens, usage events</td></tr>
+        <tr><td>Razorpay</td><td>Payment processing (Android)</td><td>Payment amount, order ID</td></tr>
+        <tr><td>Apple</td><td>In-App Purchases (iOS)</td><td>Purchase receipts</td></tr>
+        <tr><td>Sentry</td><td>Crash reporting</td><td>Error logs, device info</td></tr>
+        <tr><td>Railway</td><td>Backend hosting</td><td>Server-side data processing</td></tr>
+        <tr><td>2Factor.in</td><td>OTP delivery (SMS/Voice)</td><td>Phone number only</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>5. Data Storage and Security</h2>
+  <ul>
+    <li>Your data is stored on Supabase (PostgreSQL) with Row Level Security (RLS) enabled on all sensitive tables.</li>
+    <li>Media files (profile photos) are stored on Supabase Storage.</li>
+    <li>All data is transmitted over HTTPS/TLS encryption.</li>
+    <li>Passwords are hashed using bcrypt with a cost factor of 10.</li>
+    <li>Authentication uses JSON Web Tokens (JWT) with short-lived access tokens (15 minutes) and longer-lived refresh tokens (30 days).</li>
+    <li>OTP codes are stored in the database with a 5-minute expiry and are deleted after successful verification.</li>
+    <li>While we implement industry-standard security measures, no method of electronic storage is 100% secure.</li>
+  </ul>
+
+  <h2>6. Your Rights Under the DPDP Act 2023 (India)</h2>
+  <p>Under the Digital Personal Data Protection Act, 2023, you have the following rights:</p>
+  <ul>
+    <li><strong>Right to Access:</strong> Request a copy of all personal data we hold about you.</li>
+    <li><strong>Right to Correction:</strong> Request correction of inaccurate or incomplete data via the Edit Profile screen.</li>
+    <li><strong>Right to Erasure:</strong> Request complete deletion of your account and all associated data. We will process deletion within <strong>30 days</strong> of your request.</li>
+    <li><strong>Right to Data Portability:</strong> Request an export of your data in JSON format. We will deliver this via email within <strong>72 hours</strong>.</li>
+    <li><strong>Right to Withdraw Consent:</strong> You may withdraw consent at any time by deleting your account from the App settings.</li>
+    <li><strong>Right to Grievance Redressal:</strong> Contact our Grievance Officer at <a href="mailto:support@sportclan.in">support@sportclan.in</a>.</li>
+  </ul>
+  <p>To exercise any of these rights, email <a href="mailto:support@sportclan.in">support@sportclan.in</a> or use the &ldquo;Request Data Export&rdquo; and &ldquo;Delete Account&rdquo; options within the App.</p>
+
+  <h2>7. Data Retention</h2>
+  <ul>
+    <li>We retain your data for as long as your account is active.</li>
+    <li>When you request account deletion, we remove all personal data within <strong>30 days</strong>.</li>
+    <li>Anonymised match statistics and leaderboard data may be retained for historical integrity.</li>
+    <li>Server logs are retained for 90 days for security and debugging purposes.</li>
+    <li>Payment transaction records are retained as required by Indian tax and financial regulations.</li>
+  </ul>
+
+  <h2>8. Cookies and Tracking</h2>
+  <p>The SportClan App does not use cookies. We use Firebase Analytics for aggregate usage statistics. We do not engage in cross-app tracking or behavioural advertising.</p>
+
+  <h2>9. Children&rsquo;s Privacy</h2>
+  <p>SportClan is not intended for children under 13 years of age. We do not knowingly collect personal information from children under 13. If we discover that a child under 13 has provided us with personal data, we will delete it promptly. If you are a parent or guardian and believe your child has provided us with personal data, please contact us at <a href="mailto:support@sportclan.in">support@sportclan.in</a>.</p>
+
+  <h2>10. International Data Transfers</h2>
+  <p>Our primary data storage is within Supabase&rsquo;s infrastructure. Some third-party providers (Firebase, Sentry) may process data outside India. Where data is transferred internationally, we ensure it is protected by appropriate safeguards consistent with the DPDP Act 2023.</p>
+
+  <h2>11. Changes to This Policy</h2>
+  <p>We may update this Privacy Policy from time to time. Changes will be posted in the App and on this page, and the &ldquo;Last updated&rdquo; date will be revised. Continued use of the App after changes constitutes acceptance of the updated policy. Material changes will be notified via push notification.</p>
+
+  <h2>12. Contact Us</h2>
+  <div class="card">
+    <p><strong>SportClan</strong></p>
+    <p>Email: <a href="mailto:support@sportclan.in">support@sportclan.in</a></p>
+    <p>Grievance Officer: <a href="mailto:support@sportclan.in">support@sportclan.in</a></p>
+    <p>Address: SportClan, India</p>
+  </div>
+</div>
+
+<div class="footer">
+  &copy; 2026 SportClan. All rights reserved.
+</div>
+
+</body>
+</html>

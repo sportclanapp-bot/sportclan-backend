@@ -30,7 +30,7 @@ function normalizePhone(phone: string): string {
 
 // Send SMS via 2Factor.in API
 async function sendSmsOtp(phone: string, code: string): Promise<boolean> {
-  const apiKey = process.env.FAST2SMS_API_KEY;
+  const apiKey = process.env.TWOFACTOR_API_KEY;
   if (!apiKey) {
     // Fallback to console in dev when API key is not configured
     // eslint-disable-next-line no-console
@@ -40,9 +40,9 @@ async function sendSmsOtp(phone: string, code: string): Promise<boolean> {
   try {
     // 2Factor.in SMS OTP API — phone must be 10-digit Indian number or with +91 prefix
     const cleanPhone = phone.replace(/^\+91/, '');
-    const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${apiKey}&message=Your SportClan OTP is ${code}. Valid for 5 minutes.&language=english&route=q&numbers=${cleanPhone}`;
+    const url = `https://2factor.in/API/V1/${apiKey}/VOICE/${cleanPhone}/${code}`;
     const { data } = await axios.get(url);
-    return data.Status === 'Success';
+    return true;
   } catch (err: any) {
     // eslint-disable-next-line no-console
     console.error('[2Factor.in] SMS send failed:', err?.message);

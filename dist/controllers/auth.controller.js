@@ -292,9 +292,12 @@ async function registerEmail(req, res) {
     if (existingUsername)
         return res.status(409).json({ error: 'Username already taken' });
     const password_hash = await bcryptjs_1.default.hash(password, 10);
+    // phone is NOT NULL in the schema — generate a unique placeholder for email-only accounts
+    const placeholderPhone = `+0${Date.now()}`;
     const { data: user, error } = await supabase_1.supabase
         .from('users')
         .insert({
+        phone: placeholderPhone,
         email: email.trim(),
         name,
         username,

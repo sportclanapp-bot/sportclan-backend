@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.changePhone = exports.resetPassword = exports.googleAuth = exports.validateCoupon = exports.checkUsername = exports.logout = exports.refresh = exports.login = exports.otpLogin = exports.register = exports.verifyOtp = exports.sendOtp = void 0;
+exports.changePhone = exports.resetPassword = exports.googleAuth = exports.validateCoupon = exports.checkUsername = exports.logout = exports.refresh = exports.registerEmail = exports.login = exports.otpLogin = exports.register = exports.verifyOtp = exports.sendOtp = void 0;
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const axios_1 = __importDefault(require("axios"));
 const supabase_1 = require("../utils/supabase");
@@ -241,19 +241,26 @@ async function otpLogin(req, res) {
     return res.json({ user, accessToken, refreshToken, isNewUser: false });
 }
 exports.otpLogin = otpLogin;
-// POST /auth/login  { phone, password }
+// POST /auth/login  { phone, password } or { email, password }
 async function login(req, res) {
-    const { phone, password } = req.body || {};
-    if (!phone || !password)
-        return res.status(400).json({ error: 'phone and password are required' });
-    const p = normalizePhone(phone);
-    const { data: user } = await supabase_1.supabase
+    const { phone, email, password } = req.body || {};
+    if (!password || (!phone && !email)) {
+        return res.status(400).json({ error: 'password and either phone or email are required' });
+    }
+    let query = supabase_1.supabase
         .from('users')
-        .select('id, phone, name, password_hash, city_id, account_type, is_premium, coin_balance')
-        .eq('phone', p)
-        .maybeSingle();
+        .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, created_at');
+    if (email) {
+        query = query.ilike('email', email.trim());
+    }
+    else {
+        query = query.eq('phone', normalizePhone(phone));
+    }
+    const { data: user } = await query.maybeSingle();
     if (!user)
         return res.status(401).json({ error: 'Invalid credentials' });
+    if (!user.password_hash)
+        return res.status(401).json({ error: 'Account uses OTP login only' });
     const ok = await bcryptjs_1.default.compare(password, user.password_hash);
     if (!ok)
         return res.status(401).json({ error: 'Invalid credentials' });
@@ -264,6 +271,49 @@ async function login(req, res) {
     return res.json({ user: safe, accessToken, refreshToken });
 }
 exports.login = login;
+// POST /auth/register-email  { email, password, name, username }
+// Email+password registration for reviewer/test accounts.
+async function registerEmail(req, res) {
+    const { email, password, name, username } = req.body || {};
+    if (!email || !password || !name || !username) {
+        return res.status(400).json({ error: 'email, password, name, and username are required' });
+    }
+    if (password.length < 8) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    // Email must be free
+    const { data: existingEmail } = await supabase_1.supabase
+        .from('users').select('id').ilike('email', email.trim()).maybeSingle();
+    if (existingEmail)
+        return res.status(409).json({ error: 'Email already registered' });
+    // Username must be free (case-insensitive)
+    const { data: existingUsername } = await supabase_1.supabase
+        .from('users').select('id').ilike('username', username).maybeSingle();
+    if (existingUsername)
+        return res.status(409).json({ error: 'Username already taken' });
+    const password_hash = await bcryptjs_1.default.hash(password, 10);
+    const { data: user, error } = await supabase_1.supabase
+        .from('users')
+        .insert({
+        email: email.trim(),
+        name,
+        username,
+        password_hash,
+        account_type: 'fan',
+        is_premium: false,
+        coin_balance: 0,
+    })
+        .select('id, phone, name, username, email, city_id, account_type, profile_picture_url, is_premium, coin_balance, created_at')
+        .single();
+    if (error || !user) {
+        return res.status(500).json({ error: error?.message || 'Failed to create user' });
+    }
+    const accessToken = (0, jwt_1.generateAccessToken)(user.id);
+    const refreshToken = (0, jwt_1.generateRefreshToken)(user.id);
+    await supabase_1.supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
+    return res.json({ user, accessToken, refreshToken, isNewUser: true });
+}
+exports.registerEmail = registerEmail;
 // POST /auth/refresh  { refreshToken }
 async function refresh(req, res) {
     const { refreshToken } = req.body || {};

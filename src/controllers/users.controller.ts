@@ -32,9 +32,11 @@ export async function getUserById(req: Request, res: Response) {
 // PATCH /users/me — update own profile.
 // Change #4: NO size limit on profile_picture_url. We accept any URL.
 const ALLOWED_FIELDS = [
-  'name', 'email', 'city_id', 'profile_picture_url', 'bio',
+  'name', 'username', 'email', 'city_id', 'profile_picture_url', 'bio',
   'link', 'gender', 'dob',
 ] as const;
+
+const USERNAME_COOLDOWN_DAYS = 30;
 
 export async function updateMe(req: Request, res: Response) {
   const userId = req.userId;
@@ -46,6 +48,42 @@ export async function updateMe(req: Request, res: Response) {
   if (Object.keys(patch).length === 0) {
     return res.status(400).json({ error: 'No updatable fields provided' });
   }
+
+  // Username change: enforce 30-day cooldown and uniqueness
+  if ('username' in patch && patch.username) {
+    const { data: current } = await supabase
+      .from('users')
+      .select('username, last_username_changed_at')
+      .eq('id', userId)
+      .single();
+
+    if (current && (patch.username as string).toLowerCase() !== current.username?.toLowerCase()) {
+      // Check cooldown
+      if (current.last_username_changed_at) {
+        const lastChanged = new Date(current.last_username_changed_at);
+        const nextAllowed = new Date(lastChanged.getTime() + USERNAME_COOLDOWN_DAYS * 24 * 60 * 60 * 1000);
+        if (new Date() < nextAllowed) {
+          return res.status(400).json({
+            error: `Username can only be changed once every 30 days. Next change available: ${nextAllowed.toISOString().split('T')[0]}`,
+          });
+        }
+      }
+      // Check uniqueness
+      const { data: taken } = await supabase
+        .from('users')
+        .select('id')
+        .ilike('username', patch.username as string)
+        .neq('id', userId)
+        .maybeSingle();
+      if (taken) return res.status(409).json({ error: 'Username already taken' });
+
+      patch.last_username_changed_at = new Date().toISOString();
+    } else {
+      // Same username — remove from patch
+      delete patch.username;
+    }
+  }
+
   patch.updated_at = new Date().toISOString();
   const { data, error } = await supabase
     .from('users')

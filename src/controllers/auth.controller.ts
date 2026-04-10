@@ -7,10 +7,11 @@ import {
   generateRefreshToken,
   verifyRefreshToken,
 } from '../utils/jwt';
+import { setOtp, getOtp, deleteOtp } from '../utils/redis';
 
 type OtpPurpose = 'login' | 'register' | 'reset' | 'change_phone';
 
-const OTP_TTL_MS = 5 * 60 * 1000;
+const OTP_TTL_SECONDS = 300; // 5 minutes
 
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -48,12 +49,8 @@ export async function sendOtp(req: Request, res: Response) {
   if (!phone) return res.status(400).json({ error: 'phone is required' });
   const p = normalizePhone(phone);
   const code = generateOtp();
-  const expires_at = new Date(Date.now() + OTP_TTL_MS).toISOString();
 
-  await supabase.from('otp_codes').upsert(
-    { phone: p, code, purpose, expires_at },
-    { onConflict: 'phone' },
-  );
+  await setOtp(p, code, purpose, OTP_TTL_SECONDS);
 
   const sent = await sendSmsOtp(p, code);
   if (!sent) {
@@ -67,22 +64,11 @@ export async function verifyOtp(req: Request, res: Response) {
   const { phone, code } = req.body || {};
   if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
   const p = normalizePhone(phone);
-  const { data: entry } = await supabase
-    .from('otp_codes')
-    .select('code, expires_at')
-    .eq('phone', p)
-    .maybeSingle();
-  if (!entry) return res.status(400).json({ error: 'No OTP requested' });
-  if (new Date() > new Date(entry.expires_at)) {
-    await supabase.from('otp_codes').delete().eq('phone', p);
-    return res.status(400).json({ error: 'OTP expired' });
-  }
+  const entry = await getOtp(p);
+  if (!entry) return res.status(400).json({ error: 'No OTP requested or OTP expired' });
   if (entry.code !== code) return res.status(400).json({ error: 'Invalid OTP' });
-  // Mark verified by updating the code to VERIFIED
-  await supabase.from('otp_codes').update({
-    code: 'VERIFIED',
-    expires_at: new Date(Date.now() + OTP_TTL_MS).toISOString(),
-  }).eq('phone', p);
+  // Mark verified — store VERIFIED with fresh TTL
+  await setOtp(p, 'VERIFIED', entry.purpose, OTP_TTL_SECONDS);
   return res.json({ success: true, verified: true });
 }
 
@@ -115,17 +101,9 @@ export async function register(req: Request, res: Response) {
   if (!name || !username) return res.status(400).json({ error: 'name and username are required' });
 
   const p = normalizePhone(phone);
-  const { data: entry } = await supabase
-    .from('otp_codes')
-    .select('code, expires_at')
-    .eq('phone', p)
-    .maybeSingle();
+  const entry = await getOtp(p);
   if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
     return res.status(400).json({ error: 'OTP not verified' });
-  }
-  if (new Date() > new Date(entry.expires_at)) {
-    await supabase.from('otp_codes').delete().eq('phone', p);
-    return res.status(400).json({ error: 'OTP expired' });
   }
 
   // Phone must be free
@@ -206,7 +184,7 @@ export async function register(req: Request, res: Response) {
     }
   }
 
-  await supabase.from('otp_codes').delete().eq('phone', p);
+  await deleteOtp(p);
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
   await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
@@ -223,16 +201,8 @@ export async function otpLogin(req: Request, res: Response) {
   const { phone, code } = req.body || {};
   if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
   const p = normalizePhone(phone);
-  const { data: entry } = await supabase
-    .from('otp_codes')
-    .select('code, expires_at')
-    .eq('phone', p)
-    .maybeSingle();
-  if (!entry) return res.status(400).json({ error: 'No OTP requested' });
-  if (new Date() > new Date(entry.expires_at)) {
-    await supabase.from('otp_codes').delete().eq('phone', p);
-    return res.status(400).json({ error: 'OTP expired' });
-  }
+  const entry = await getOtp(p);
+  if (!entry) return res.status(400).json({ error: 'No OTP requested or OTP expired' });
   // Accept either the original code or the VERIFIED marker (verify-otp may
   // have already been called separately by the client).
   if (entry.code !== code && entry.code !== 'VERIFIED') {
@@ -246,11 +216,10 @@ export async function otpLogin(req: Request, res: Response) {
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!user) {
-    // Phone is not registered — caller should switch to the register flow.
     return res.status(404).json({ error: 'Phone not registered', needsRegistration: true });
   }
 
-  await supabase.from('otp_codes').delete().eq('phone', p);
+  await deleteOtp(p);
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
   await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
@@ -408,22 +377,14 @@ export async function resetPassword(req: Request, res: Response) {
     return res.status(400).json({ error: 'phone, code, newPassword are required' });
   }
   const p = normalizePhone(phone);
-  const { data: entry } = await supabase
-    .from('otp_codes')
-    .select('code, expires_at')
-    .eq('phone', p)
-    .maybeSingle();
+  const entry = await getOtp(p);
   if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
-    return res.status(400).json({ error: 'OTP not verified' });
-  }
-  if (new Date() > new Date(entry.expires_at)) {
-    await supabase.from('otp_codes').delete().eq('phone', p);
-    return res.status(400).json({ error: 'OTP expired' });
+    return res.status(400).json({ error: 'OTP not verified or expired' });
   }
   const password_hash = await bcrypt.hash(newPassword, 10);
   const { error } = await supabase.from('users').update({ password_hash }).eq('phone', p);
   if (error) return res.status(500).json({ error: error.message });
-  await supabase.from('otp_codes').delete().eq('phone', p);
+  await deleteOtp(p);
   return res.json({ success: true });
 }
 
@@ -434,17 +395,9 @@ export async function changePhone(req: Request, res: Response) {
   const { newPhone, code } = req.body || {};
   if (!newPhone || !code) return res.status(400).json({ error: 'newPhone and code are required' });
   const p = normalizePhone(newPhone);
-  const { data: entry } = await supabase
-    .from('otp_codes')
-    .select('code, expires_at')
-    .eq('phone', p)
-    .maybeSingle();
+  const entry = await getOtp(p);
   if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
-    return res.status(400).json({ error: 'OTP not verified' });
-  }
-  if (new Date() > new Date(entry.expires_at)) {
-    await supabase.from('otp_codes').delete().eq('phone', p);
-    return res.status(400).json({ error: 'OTP expired' });
+    return res.status(400).json({ error: 'OTP not verified or expired' });
   }
   const { data: existing } = await supabase
     .from('users')
@@ -454,6 +407,6 @@ export async function changePhone(req: Request, res: Response) {
   if (existing) return res.status(409).json({ error: 'Phone already in use' });
   const { error } = await supabase.from('users').update({ phone: p }).eq('id', userId);
   if (error) return res.status(500).json({ error: error.message });
-  await supabase.from('otp_codes').delete().eq('phone', p);
+  await deleteOtp(p);
   return res.json({ success: true });
 }

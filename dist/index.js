@@ -1,0 +1,96 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+require("dotenv/config");
+const express_1 = __importDefault(require("express"));
+const cors_1 = __importDefault(require("cors"));
+const helmet_1 = __importDefault(require("helmet"));
+const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
+const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
+const cities_routes_1 = __importDefault(require("./routes/cities.routes"));
+const sports_routes_1 = __importDefault(require("./routes/sports.routes"));
+const users_routes_1 = __importDefault(require("./routes/users.routes"));
+const notifications_routes_1 = __importDefault(require("./routes/notifications.routes"));
+const uploads_routes_1 = __importDefault(require("./routes/uploads.routes"));
+const app_routes_1 = __importDefault(require("./routes/app.routes"));
+const invites_routes_1 = __importDefault(require("./routes/invites.routes"));
+const services_routes_1 = __importDefault(require("./routes/services.routes"));
+const teams_routes_1 = __importDefault(require("./routes/teams.routes"));
+const tournaments_routes_1 = __importDefault(require("./routes/tournaments.routes"));
+const matches_routes_1 = __importDefault(require("./routes/matches.routes"));
+const scoring_routes_1 = __importDefault(require("./routes/scoring.routes"));
+const leaderboard_routes_1 = __importDefault(require("./routes/leaderboard.routes"));
+const community_routes_1 = __importDefault(require("./routes/community.routes"));
+const messages_routes_1 = __importDefault(require("./routes/messages.routes"));
+const search_routes_1 = __importDefault(require("./routes/search.routes"));
+const availability_routes_1 = __importDefault(require("./routes/availability.routes"));
+const subscriptions_routes_1 = __importDefault(require("./routes/subscriptions.routes"));
+const gifts_routes_1 = __importDefault(require("./routes/gifts.routes"));
+const transactions_routes_1 = __importDefault(require("./routes/transactions.routes"));
+const account_routes_1 = __importDefault(require("./routes/account.routes"));
+const webhooks_routes_1 = __importDefault(require("./routes/webhooks.routes"));
+const app = (0, express_1.default)();
+app.set('trust proxy', 1);
+app.use((0, helmet_1.default)());
+app.use((0, cors_1.default)());
+// 12mb cap supports base64-encoded profile photos (Change #4: no client size limit;
+// server compresses). Larger uploads should switch to multipart in a future module.
+app.use(express_1.default.json({ limit: '12mb' }));
+const globalLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000,
+    max: 200,
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use(globalLimiter);
+const authLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+const sendOtpLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.get('/', (_req, res) => {
+    res.json({ ok: true, service: 'sportclan-backend' });
+});
+app.get('/health', (_req, res) => {
+    res.json({ status: 'ok' });
+});
+// Stricter limit on /auth/send-otp must be mounted BEFORE the general /auth limiter
+app.use('/auth/send-otp', sendOtpLimiter);
+app.use('/auth', authLimiter, auth_routes_1.default);
+app.use('/cities', cities_routes_1.default);
+app.use('/sports', sports_routes_1.default);
+app.use('/users', users_routes_1.default);
+app.use('/notifications', notifications_routes_1.default);
+app.use('/uploads', uploads_routes_1.default);
+app.use('/app', app_routes_1.default);
+app.use('/invites', invites_routes_1.default);
+app.use('/services', services_routes_1.default);
+app.use('/teams', teams_routes_1.default);
+app.use('/tournaments', tournaments_routes_1.default);
+app.use('/matches', matches_routes_1.default);
+app.use('/scoring', scoring_routes_1.default);
+app.use('/leaderboard', leaderboard_routes_1.default);
+app.use('/community', community_routes_1.default);
+app.use('/messages', messages_routes_1.default);
+app.use('/search', search_routes_1.default);
+app.use('/availability', availability_routes_1.default);
+app.use('/subscriptions', subscriptions_routes_1.default);
+app.use('/gifts', gifts_routes_1.default);
+app.use('/transactions', transactions_routes_1.default);
+app.use('/account', account_routes_1.default);
+app.use('/webhooks', webhooks_routes_1.default);
+const PORT = parseInt(process.env.PORT || '4000', 10);
+app.listen(PORT, () => {
+    // eslint-disable-next-line no-console
+    console.log(`[sportclan-backend] listening on :${PORT}`);
+});
+//# sourceMappingURL=index.js.map

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = void 0;
+exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = void 0;
 const supabase_1 = require("../utils/supabase");
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS = 'id, phone, name, email, city_id, account_type, profile_picture_url, bio, is_premium, premium_expires_at, coin_balance, created_at';
@@ -207,4 +207,95 @@ async function getProfileCompleteness(req, res) {
     return res.json({ percent, missing });
 }
 exports.getProfileCompleteness = getProfileCompleteness;
+// GET /users/discover?sport_id=&mode=singles|doubles
+// Returns players within ±15% rating, same city, not blocked, sorted by last_active.
+async function discoverPlayers(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    const { sport_id, mode } = req.query;
+    if (!sport_id)
+        return res.status(400).json({ error: 'sport_id is required' });
+    // Get requesting user's city and sport profile
+    const { data: me } = await supabase_1.supabase
+        .from('users')
+        .select('city_id')
+        .eq('id', userId)
+        .maybeSingle();
+    if (!me)
+        return res.status(404).json({ error: 'User not found' });
+    const { data: myProfile } = await supabase_1.supabase
+        .from('user_sport_profiles')
+        .select('rating')
+        .eq('user_id', userId)
+        .eq('sport_id', sport_id)
+        .maybeSingle();
+    const myRating = myProfile?.rating ?? 1200;
+    const ratingLow = myRating * 0.85;
+    const ratingHigh = myRating * 1.15;
+    // Get blocked user IDs (in both directions)
+    const { data: blocksOut } = await supabase_1.supabase
+        .from('user_blocks')
+        .select('blocked_id')
+        .eq('blocker_id', userId);
+    const { data: blocksIn } = await supabase_1.supabase
+        .from('user_blocks')
+        .select('blocker_id')
+        .eq('blocked_id', userId);
+    const blockedIds = new Set();
+    blockedIds.add(userId);
+    for (const b of blocksOut || [])
+        blockedIds.add(b.blocked_id);
+    for (const b of blocksIn || [])
+        blockedIds.add(b.blocker_id);
+    // Query user_sport_profiles within rating range for this sport
+    let query = supabase_1.supabase
+        .from('user_sport_profiles')
+        .select('user_id, rating, matches_played, wins, last_match_at')
+        .eq('sport_id', sport_id)
+        .gte('rating', ratingLow)
+        .lte('rating', ratingHigh)
+        .order('last_match_at', { ascending: false, nullsFirst: false })
+        .limit(50);
+    const { data: profiles, error } = await query;
+    if (error)
+        return res.status(500).json({ error: error.message });
+    // Filter out blocked users
+    const filteredProfiles = (profiles || []).filter((p) => !blockedIds.has(p.user_id));
+    if (filteredProfiles.length === 0)
+        return res.json({ players: [] });
+    // Fetch user details for matched profiles
+    const matchedIds = filteredProfiles.map((p) => p.user_id);
+    const { data: users } = await supabase_1.supabase
+        .from('users')
+        .select('id, name, username, profile_picture_url, city_id, is_premium')
+        .in('id', matchedIds);
+    const userMap = new Map();
+    for (const u of users || [])
+        userMap.set(u.id, u);
+    // Filter by same city if user has one
+    const players = filteredProfiles
+        .map((p) => {
+        const u = userMap.get(p.user_id);
+        if (!u)
+            return null;
+        if (me.city_id && u.city_id && u.city_id !== me.city_id)
+            return null;
+        return {
+            user_id: p.user_id,
+            name: u.name,
+            username: u.username,
+            profile_picture_url: u.profile_picture_url,
+            city_id: u.city_id,
+            is_premium: u.is_premium,
+            rating: p.rating,
+            matches_played: p.matches_played,
+            wins: p.wins,
+            last_active: p.last_match_at,
+        };
+    })
+        .filter(Boolean);
+    return res.json({ players, mode: mode || 'singles' });
+}
+exports.discoverPlayers = discoverPlayers;
 //# sourceMappingURL=users.controller.js.map

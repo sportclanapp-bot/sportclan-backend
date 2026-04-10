@@ -8,6 +8,7 @@ const router = (0, express_1.Router)();
 router.patch('/me', auth_middleware_1.authenticateToken, users_controller_1.updateMe);
 router.get('/me/blocked', auth_middleware_1.authenticateToken, users_controller_1.getBlockedUsers);
 router.get('/me/profile-completeness', auth_middleware_1.authenticateToken, users_controller_1.getProfileCompleteness);
+router.get('/discover', auth_middleware_1.authenticateToken, users_controller_1.discoverPlayers);
 router.get('/:id', users_controller_1.getUserById);
 router.get('/:id/followers', users_controller_1.getFollowers);
 router.get('/:id/following', users_controller_1.getFollowing);

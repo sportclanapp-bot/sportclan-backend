@@ -10,6 +10,7 @@ import {
   unblockUser,
   getBlockedUsers,
   getProfileCompleteness,
+  discoverPlayers,
 } from '../controllers/users.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -19,6 +20,7 @@ const router = Router();
 router.patch('/me', authenticateToken, updateMe);
 router.get('/me/blocked', authenticateToken, getBlockedUsers);
 router.get('/me/profile-completeness', authenticateToken, getProfileCompleteness);
+router.get('/discover', authenticateToken, discoverPlayers);
 
 router.get('/:id', getUserById);
 router.get('/:id/followers', getFollowers);

@@ -28,6 +28,7 @@ import giftsRoutes from './routes/gifts.routes';
 import transactionsRoutes from './routes/transactions.routes';
 import accountRoutes from './routes/account.routes';
 import webhooksRoutes from './routes/webhooks.routes';
+import badgesRoutes from './routes/badges.routes';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -93,6 +94,7 @@ app.use('/gifts', giftsRoutes);
 app.use('/transactions', transactionsRoutes);
 app.use('/account', accountRoutes);
 app.use('/webhooks', webhooksRoutes);
+app.use('/badges', badgesRoutes);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {

@@ -40,7 +40,7 @@ async function sendSmsOtp(phone: string, code: string): Promise<boolean> {
   try {
     // 2Factor.in SMS OTP API — phone must be 10-digit Indian number or with +91 prefix
     const cleanPhone = phone.replace(/^\+91/, '');
-    const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${apiKey}&variables_values=${code}&route=otp&numbers=${cleanPhone}`;
+    const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${apiKey}&message=Your SportClan OTP is ${code}. Valid for 5 minutes.&language=english&route=q&numbers=${cleanPhone}`;
     const { data } = await axios.get(url);
     return data.Status === 'Success';
   } catch (err: any) {

@@ -19,9 +19,6 @@ function app() {
     const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
     // Railway stores the private key with literal \n — convert to real newlines.
     const privateKey = (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
-    console.log('[fcm-debug] PROJECT_ID:', process.env.FIREBASE_PROJECT_ID ? 'SET' : 'MISSING');
-    console.log('[fcm-debug] CLIENT_EMAIL:', process.env.FIREBASE_CLIENT_EMAIL ? 'SET' : 'MISSING');
-    console.log('[fcm-debug] PRIVATE_KEY:', process.env.FIREBASE_PRIVATE_KEY ? 'SET (len:' + process.env.FIREBASE_PRIVATE_KEY.length + ')' : 'MISSING');
     if (!projectId || !clientEmail || !privateKey) {
         _disabled = true;
         // eslint-disable-next-line no-console

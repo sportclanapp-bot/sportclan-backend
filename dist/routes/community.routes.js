@@ -7,6 +7,7 @@ const router = (0, express_1.Router)();
 // Posts
 router.get('/posts', community_controller_1.listPosts);
 router.get('/posts/my-count', auth_middleware_1.authenticateToken, community_controller_1.getMyPostCount);
+router.get('/sport-story-counts', auth_middleware_1.authenticateToken, community_controller_1.getSportStoryCounts);
 router.get('/posts/:id', community_controller_1.getPost);
 router.post('/posts', auth_middleware_1.authenticateToken, community_controller_1.createPost);
 router.patch('/posts/:id', auth_middleware_1.authenticateToken, community_controller_1.updatePost);

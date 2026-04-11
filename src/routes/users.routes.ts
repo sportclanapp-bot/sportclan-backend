@@ -13,6 +13,8 @@ import {
   getProfileCompleteness,
   discoverPlayers,
   getSportProfile,
+  getActivityHeatmap,
+  getRival,
 } from '../controllers/users.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -29,6 +31,8 @@ router.get('/:id', getUserById);
 router.get('/:id/followers', getFollowers);
 router.get('/:id/following', getFollowing);
 router.get('/:id/sport-profile/:sportId', getSportProfile);
+router.get('/:id/activity-heatmap', getActivityHeatmap);
+router.get('/:id/rival', authenticateToken, getRival);
 
 router.post('/:id/follow', authenticateToken, followUser);
 router.delete('/:id/follow', authenticateToken, unfollowUser);

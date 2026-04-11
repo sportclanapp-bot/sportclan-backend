@@ -15,8 +15,12 @@ function detectProfanity(text: string): string[] {
 
 // ─── LIST POSTS (feed) ──────────────────────────────────────────────────────
 export async function listPosts(req: Request, res: Response) {
-  const { sport_id, city_id, post_type, author_id, cursor, limit = '20' } = req.query;
+  const { sport_id, city_id, post_type, author_id, cursor, limit = '20', sort } = req.query;
   const pageSize = Math.min(parseInt(limit as string, 10) || 20, 50);
+  const sortMode = (sort as string) || 'recent';
+  // When trending, only consider posts from the last 24h and order by likes
+  // desc. `likes_count` already exists on the table (post_likes count cache).
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
   let query = supabase
     .from('community_posts')
@@ -60,14 +64,18 @@ export async function listPosts(req: Request, res: Response) {
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
     `)
-    .order('created_at', { ascending: false })
     .limit(pageSize);
+  if (sortMode === 'trending') {
+    q = q.gte('created_at', since24h).order('likes_count', { ascending: false });
+  } else {
+    q = q.order('created_at', { ascending: false });
+  }
 
   if (sport_id) q = q.eq('sport_id', sport_id as string);
   if (city_id) q = q.eq('city_id', city_id as string);
   if (post_type) q = q.eq('post_type', post_type as string);
   if (author_id) q = q.eq('author_id', author_id as string);
-  if (cursor) q = q.lt('created_at', cursor as string);
+  if (cursor && sortMode !== 'trending') q = q.lt('created_at', cursor as string);
 
   const result = await q;
 
@@ -79,6 +87,38 @@ export async function listPosts(req: Request, res: Response) {
     nextCursor: items.length === pageSize ? items[items.length - 1]?.created_at : null,
     hasMore: items.length === pageSize,
   });
+}
+
+// ─── GET SPORT STORY COUNTS ─────────────────────────────────────────────────
+// Powers the "Stories row" at the top of the community feed. Returns, per
+// sport, how many posts exist newer than `since` (defaults to 7 days ago).
+// The frontend passes the user's last-visit timestamp from AsyncStorage.
+export async function getSportStoryCounts(req: Request, res: Response) {
+  const since = (req.query.since as string) ||
+    new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from('community_posts')
+    .select('sport_id, sport:sports!sport_id(id, name, emoji)')
+    .gt('created_at', since)
+    .not('sport_id', 'is', null);
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const counts = new Map<string, { sport_id: string; name: string; emoji: string; count: number }>();
+  for (const row of data || []) {
+    const sport: any = row.sport;
+    if (!sport?.id) continue;
+    const existing = counts.get(sport.id);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      counts.set(sport.id, { sport_id: sport.id, name: sport.name, emoji: sport.emoji, count: 1 });
+    }
+  }
+
+  const result = Array.from(counts.values()).sort((a, b) => b.count - a.count);
+  return res.json({ sports: result });
 }
 
 // ─── GET SINGLE POST ────────────────────────────────────────────────────────

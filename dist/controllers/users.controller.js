@@ -1,10 +1,98 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getSportProfile = exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = exports.getMe = void 0;
+exports.getSportProfile = exports.getRival = exports.getActivityHeatmap = exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = exports.getMe = void 0;
 const supabase_1 = require("../utils/supabase");
 const subscriptions_controller_1 = require("./subscriptions.controller");
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS = 'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, created_at';
+// Fire smart engagement notifications lazily from /users/me. Best-effort,
+// never throws — failures here must not block the main profile response.
+async function runSmartNotifications(userId) {
+    try {
+        const now = new Date();
+        const twoHrsMs = 2 * 60 * 60 * 1000;
+        const in2h = new Date(now.getTime() + twoHrsMs).toISOString();
+        const nowIso = now.toISOString();
+        // 1. Match reminders for matches starting in the next 2 hours where the
+        //    user is a participant and a reminder hasn't been sent yet.
+        const { data: parts } = await supabase_1.supabase
+            .from('match_participants')
+            .select('match_id, match:matches(id, team_a_name, team_b_name, scheduled_at, status)')
+            .eq('user_id', userId);
+        const soonMatches = (parts || []).filter((p) => {
+            const m = p.match;
+            if (!m)
+                return false;
+            if (m.status === 'completed' || m.status === 'cancelled')
+                return false;
+            if (!m.scheduled_at)
+                return false;
+            const t = new Date(m.scheduled_at).toISOString();
+            return t > nowIso && t <= in2h;
+        });
+        for (const p of soonMatches) {
+            const m = p.match;
+            // Have we already inserted a reminder for this user+match? Check notifs.
+            const { data: existing } = await supabase_1.supabase
+                .from('notifications')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('type', 'match_reminder')
+                .contains('data', { matchId: m.id })
+                .maybeSingle();
+            if (existing)
+                continue;
+            await supabase_1.supabase.from('notifications').insert({
+                user_id: userId,
+                type: 'match_reminder',
+                title: 'Match reminder',
+                body: `\u23F0 ${m.team_a_name} vs ${m.team_b_name} starts in 1 hour!`,
+                data: { matchId: m.id, screen: 'MatchDetail' },
+            });
+        }
+        // 2. Friday evening engagement nudge: if it's Friday 18:00-20:00 local
+        //    (we assume IST / UTC+5:30 for the India audience) and the user
+        //    hasn't created a match this week, insert a once-per-week nudge.
+        const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+        const dayOfWeek = ist.getUTCDay(); // 5 = Friday in IST
+        const hourIst = ist.getUTCHours();
+        if (dayOfWeek === 5 && hourIst >= 18 && hourIst < 20) {
+            // Start of current ISO week (Monday 00:00 IST).
+            const weekStart = new Date(ist);
+            const diffToMonday = (weekStart.getUTCDay() + 6) % 7;
+            weekStart.setUTCDate(weekStart.getUTCDate() - diffToMonday);
+            weekStart.setUTCHours(0, 0, 0, 0);
+            const weekStartIso = new Date(weekStart.getTime() - 5.5 * 60 * 60 * 1000).toISOString();
+            const { data: myMatches } = await supabase_1.supabase
+                .from('matches')
+                .select('id')
+                .eq('created_by', userId)
+                .gte('created_at', weekStartIso)
+                .limit(1);
+            if (!myMatches || myMatches.length === 0) {
+                const { data: alreadySent } = await supabase_1.supabase
+                    .from('notifications')
+                    .select('id')
+                    .eq('user_id', userId)
+                    .eq('type', 'weekend_nudge')
+                    .gte('created_at', weekStartIso)
+                    .maybeSingle();
+                if (!alreadySent) {
+                    await supabase_1.supabase.from('notifications').insert({
+                        user_id: userId,
+                        type: 'weekend_nudge',
+                        title: '\uD83C\uDFC6 Plan your weekend match!',
+                        body: 'Create a match and invite your friends before Sunday.',
+                        data: { screen: 'Home' },
+                    });
+                }
+            }
+        }
+    }
+    catch {
+        // swallow
+    }
+}
 // GET /users/me — self profile with premium lazy expiry check.
 // Wired to Fix 1: on every app-startup fetch we reconcile subscription state.
 async function getMe(req, res) {
@@ -12,6 +100,8 @@ async function getMe(req, res) {
     if (!userId)
         return res.status(401).json({ error: 'Unauthorized' });
     await (0, subscriptions_controller_1.checkExpiredSubscriptions)(userId);
+    // Fire-and-forget — the profile response shouldn't wait on this.
+    void runSmartNotifications(userId);
     const { data, error } = await supabase_1.supabase
         .from('users')
         .select(PUBLIC_FIELDS)
@@ -368,6 +458,177 @@ async function discoverPlayers(req, res) {
     return res.json({ players, mode: mode || 'singles' });
 }
 exports.discoverPlayers = discoverPlayers;
+// GET /users/:id/activity-heatmap — returns an entry per day for the last
+// 84 days. `type` is one of 'none' | 'played' | 'won'. Cheap to compute
+// on demand; the frontend caches it per-user.
+async function getActivityHeatmap(req, res) {
+    const { id } = req.params;
+    // 84 days ago in the same timezone as the server.
+    const since = new Date();
+    since.setDate(since.getDate() - 83);
+    since.setHours(0, 0, 0, 0);
+    const sinceIso = since.toISOString();
+    // Fetch this user's match participations joined with the match row so we
+    // can tell who won. Cast team_side to 'A' | 'B' for the winner check.
+    const { data, error } = await supabase_1.supabase
+        .from('match_participants')
+        .select('team_side, match:matches(id, scheduled_at, status, winner_team_id, team_a_id, team_b_id, updated_at)')
+        .eq('user_id', id)
+        .limit(500);
+    if (error)
+        return res.status(500).json({ error: error.message });
+    const byDay = new Map();
+    for (const row of data || []) {
+        const match = row.match;
+        if (!match)
+            continue;
+        if (match.status !== 'completed')
+            continue;
+        const ts = match.updated_at ?? match.scheduled_at;
+        if (!ts)
+            continue;
+        const d = new Date(ts);
+        if (d < since)
+            continue;
+        const key = d.toISOString().slice(0, 10);
+        // Winner detection: winner_team_id matches the side's team id.
+        const mySideTeamId = row.team_side === 'A' ? match.team_a_id : match.team_b_id;
+        const iWon = match.winner_team_id && match.winner_team_id === mySideTeamId;
+        // "won" is more interesting than "played", so upgrade but never downgrade.
+        if (iWon) {
+            byDay.set(key, 'won');
+        }
+        else if (!byDay.has(key)) {
+            byDay.set(key, 'played');
+        }
+    }
+    // Emit an 84-day dense array, oldest first.
+    const out = [];
+    for (let i = 0; i < 84; i++) {
+        const d = new Date(since);
+        d.setDate(since.getDate() + i);
+        const key = d.toISOString().slice(0, 10);
+        out.push({ date: key, type: byDay.get(key) ?? 'none' });
+    }
+    return res.json({ heatmap: out });
+}
+exports.getActivityHeatmap = getActivityHeatmap;
+// GET /users/:id/rival?sport_id=... — finds a rival player: the user in the
+// same sport with the closest higher rating. Searches progressively wider
+// scopes (city → state → country) and returns the first match. Returns null
+// if the caller is the top player in the wider pool.
+async function getRival(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    const { id } = req.params;
+    const sportId = req.query.sport_id;
+    if (!sportId)
+        return res.status(400).json({ error: 'sport_id is required' });
+    // Get the requester's rating + location.
+    const { data: myProfile } = await supabase_1.supabase
+        .from('user_sport_profiles')
+        .select('rating, matches_played')
+        .eq('user_id', id)
+        .eq('sport_id', sportId)
+        .maybeSingle();
+    if (!myProfile)
+        return res.json({ rival: null });
+    const { data: me } = await supabase_1.supabase
+        .from('users')
+        .select('city_id')
+        .eq('id', id)
+        .maybeSingle();
+    const myCityId = me?.city_id ?? null;
+    // Resolve state via cities join for state-level fallback.
+    let myStateId = null;
+    if (myCityId) {
+        const { data: cityRow } = await supabase_1.supabase
+            .from('cities')
+            .select('state_id, state')
+            .eq('id', myCityId)
+            .maybeSingle();
+        myStateId = cityRow?.state_id ?? cityRow?.state ?? null;
+    }
+    // Query all candidate profiles with higher rating and sort by delta.
+    const { data: higher } = await supabase_1.supabase
+        .from('user_sport_profiles')
+        .select('user_id, rating, matches_played, wins')
+        .eq('sport_id', sportId)
+        .gt('rating', myProfile.rating)
+        .order('rating', { ascending: true })
+        .limit(200);
+    if (!higher || higher.length === 0) {
+        return res.json({ rival: null });
+    }
+    const candidateIds = higher.map((h) => h.user_id).filter((uid) => uid !== id);
+    if (candidateIds.length === 0)
+        return res.json({ rival: null });
+    const { data: users } = await supabase_1.supabase
+        .from('users')
+        .select('id, name, username, profile_picture_url, city_id, is_premium')
+        .in('id', candidateIds);
+    const userMap = new Map();
+    for (const u of users || [])
+        userMap.set(u.id, u);
+    // Helper: resolve a candidate's state from their city.
+    const stateCache = new Map();
+    const resolveState = async (cityId) => {
+        if (!cityId)
+            return null;
+        if (stateCache.has(cityId))
+            return stateCache.get(cityId) ?? null;
+        const { data: cityRow } = await supabase_1.supabase
+            .from('cities')
+            .select('state_id, state')
+            .eq('id', cityId)
+            .maybeSingle();
+        const s = cityRow?.state_id ?? cityRow?.state ?? null;
+        stateCache.set(cityId, s);
+        return s;
+    };
+    // Tiered search: city first, then state, then country-wide. The candidates
+    // array is already ordered by rating ascending, so the first match we keep
+    // for each tier is the closest-higher rival.
+    const pickTier = async (tier) => {
+        for (const h of higher) {
+            if (h.user_id === id)
+                continue;
+            const u = userMap.get(h.user_id);
+            if (!u)
+                continue;
+            if (tier === 'city' && myCityId && u.city_id !== myCityId)
+                continue;
+            if (tier === 'state') {
+                if (!myStateId)
+                    continue;
+                const s = await resolveState(u.city_id);
+                if (s !== myStateId)
+                    continue;
+            }
+            return { profile: h, user: u };
+        }
+        return null;
+    };
+    const match = (await pickTier('city')) ?? (await pickTier('state')) ?? (await pickTier('country'));
+    if (!match)
+        return res.json({ rival: null });
+    return res.json({
+        rival: {
+            user_id: match.profile.user_id,
+            name: match.user.name,
+            username: match.user.username,
+            profile_picture_url: match.user.profile_picture_url,
+            city_id: match.user.city_id,
+            is_premium: !!match.user.is_premium,
+            rating: match.profile.rating,
+            matches_played: match.profile.matches_played,
+            wins: match.profile.wins,
+            points_ahead: Math.round((match.profile.rating - myProfile.rating) * 100) / 100,
+        },
+    });
+}
+exports.getRival = getRival;
 // GET /users/:id/sport-profile/:sportId — per-sport rating + stats
 async function getSportProfile(req, res) {
     const { id, sportId } = req.params;

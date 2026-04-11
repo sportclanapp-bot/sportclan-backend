@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers } from '../utils/notify';
+import { upsertVenue } from './venues.controller';
 
 // POST /matches — create. FREE for all (Change #6).
 export async function createMatch(req: Request, res: Response) {
@@ -46,6 +47,13 @@ export async function createMatch(req: Request, res: Response) {
       .select('*')
       .single();
     if (error || !data) return res.status(500).json({ error: error?.message || 'Failed to create match' });
+
+    // Best-effort venue upsert — tracks frequently-used venues for the
+    // autocomplete in CreateMatchScreen. Errors are swallowed.
+    if (venue && typeof venue === 'string') {
+      void upsertVenue(venue, city_id ?? null, userId);
+    }
+
     return res.json({ match: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -75,6 +83,80 @@ export async function listOpenMatches(req: Request, res: Response) {
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+// POST /matches/:id/rate  { matchQuality: 1-5, wouldPlayAgain: boolean }
+// Inserts one row per (match, rater) into match_ratings. Returns the
+// existing row if the user has already rated this match.
+export async function rateMatchHandler(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  const { matchQuality, wouldPlayAgain } = req.body || {};
+  if (typeof matchQuality !== 'number' || matchQuality < 1 || matchQuality > 5) {
+    return res.status(400).json({ error: 'matchQuality must be 1-5' });
+  }
+  if (typeof wouldPlayAgain !== 'boolean') {
+    return res.status(400).json({ error: 'wouldPlayAgain must be boolean' });
+  }
+
+  // Dedupe — one rating per user per match.
+  const { data: existing } = await supabase
+    .from('match_ratings')
+    .select('*')
+    .eq('match_id', id)
+    .eq('rater_id', userId)
+    .maybeSingle();
+  if (existing) return res.json({ success: true, rating: existing, alreadyRated: true });
+
+  const { data, error } = await supabase
+    .from('match_ratings')
+    .insert({
+      match_id: id,
+      rater_id: userId,
+      match_quality: matchQuality,
+      would_play_again: wouldPlayAgain,
+    })
+    .select('*')
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+
+  return res.json({ success: true, rating: data });
+}
+
+// PATCH /matches/:id/toss  { tossWinnerTeamId, tossChoice }
+// Stores the toss outcome on the match row so the scoring screen can
+// display it in its header.
+export async function setMatchTossHandler(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  const { tossWinnerTeamId, tossChoice } = req.body || {};
+  if (!tossChoice) return res.status(400).json({ error: 'tossChoice is required' });
+
+  const { data: match } = await supabase
+    .from('matches')
+    .select('created_by, umpire_id')
+    .eq('id', id)
+    .maybeSingle();
+  if (!match) return res.status(404).json({ error: 'Match not found' });
+  if (match.created_by !== userId && match.umpire_id !== userId) {
+    return res.status(403).json({ error: 'Only the creator or umpire can record the toss' });
+  }
+
+  const { data, error } = await supabase
+    .from('matches')
+    .update({
+      toss_winner_team_id: tossWinnerTeamId ?? null,
+      toss_choice: tossChoice,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+
+  return res.json({ match: data });
 }
 
 // POST /matches/:id/join — join an open match as a player.
@@ -163,7 +245,21 @@ export async function getMatch(req: Request, res: Response) {
       .from('match_events')
       .select('id', { count: 'exact', head: true })
       .eq('match_id', id);
-    return res.json({ match, participants: participants || [], events_count: count || 0 });
+
+    // Compute the average match-quality rating from match_ratings on read.
+    // Cheap — there are only a handful of ratings per match.
+    const { data: ratings } = await supabase
+      .from('match_ratings')
+      .select('match_quality')
+      .eq('match_id', id);
+    const matchWithRating: any = { ...match };
+    if (ratings && ratings.length > 0) {
+      const sum = ratings.reduce((acc, r: any) => acc + (r.match_quality ?? 0), 0);
+      matchWithRating.avg_rating = Math.round((sum / ratings.length) * 10) / 10;
+      matchWithRating.rating_count = ratings.length;
+    }
+
+    return res.json({ match: matchWithRating, participants: participants || [], events_count: count || 0 });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

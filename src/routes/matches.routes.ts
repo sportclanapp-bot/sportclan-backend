@@ -10,6 +10,8 @@ import {
   completeMatch,
   listOpenMatches,
   joinOpenMatch,
+  rateMatchHandler,
+  setMatchTossHandler,
 } from '../controllers/matches.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -26,5 +28,7 @@ router.post('/:id/participants', authenticateToken, addParticipants);
 router.post('/:id/umpire/self-assign', authenticateToken, selfAssignUmpire);
 router.post('/:id/complete', authenticateToken, completeMatch);
 router.post('/:id/join', authenticateToken, joinOpenMatch);
+router.post('/:id/rate', authenticateToken, rateMatchHandler);
+router.patch('/:id/toss', authenticateToken, setMatchTossHandler);
 
 export default router;

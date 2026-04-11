@@ -15,5 +15,7 @@ router.post('/:id/participants', auth_middleware_1.authenticateToken, matches_co
 router.post('/:id/umpire/self-assign', auth_middleware_1.authenticateToken, matches_controller_1.selfAssignUmpire);
 router.post('/:id/complete', auth_middleware_1.authenticateToken, matches_controller_1.completeMatch);
 router.post('/:id/join', auth_middleware_1.authenticateToken, matches_controller_1.joinOpenMatch);
+router.post('/:id/rate', auth_middleware_1.authenticateToken, matches_controller_1.rateMatchHandler);
+router.patch('/:id/toss', auth_middleware_1.authenticateToken, matches_controller_1.setMatchTossHandler);
 exports.default = router;
 //# sourceMappingURL=matches.routes.js.map

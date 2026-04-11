@@ -31,6 +31,9 @@ import accountRoutes from './routes/account.routes';
 import webhooksRoutes from './routes/webhooks.routes';
 import badgesRoutes from './routes/badges.routes';
 import challengesRoutes from './routes/challenges.routes';
+import seasonsRoutes from './routes/seasons.routes';
+import kudosRoutes from './routes/kudos.routes';
+import venuesRoutes from './routes/venues.routes';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -106,6 +109,9 @@ app.use('/account', accountRoutes);
 app.use('/webhooks', webhooksRoutes);
 app.use('/badges', badgesRoutes);
 app.use('/challenges', challengesRoutes);
+app.use('/seasons', seasonsRoutes);
+app.use('/kudos', kudosRoutes);
+app.use('/venues', venuesRoutes);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {

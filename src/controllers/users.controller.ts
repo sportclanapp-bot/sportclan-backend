@@ -4,7 +4,7 @@ import { checkExpiredSubscriptions } from './subscriptions.controller';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
-  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, created_at';
+  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, created_at';
 
 // GET /users/me — self profile with premium lazy expiry check.
 // Wired to Fix 1: on every app-startup fetch we reconcile subscription state.
@@ -58,7 +58,7 @@ export async function getUserById(req: Request, res: Response) {
 // Change #4: NO size limit on profile_picture_url. We accept any URL.
 const ALLOWED_FIELDS = [
   'name', 'username', 'email', 'city_id', 'profile_picture_url', 'bio',
-  'link', 'gender', 'dob', 'show_dob',
+  'link', 'gender', 'dob', 'show_dob', 'is_available',
 ] as const;
 
 const USERNAME_COOLDOWN_DAYS = 30;
@@ -322,13 +322,13 @@ export async function discoverPlayers(req: Request, res: Response) {
   const matchedIds = filteredProfiles.map((p) => p.user_id);
   const { data: users } = await supabase
     .from('users')
-    .select('id, name, username, profile_picture_url, city_id, is_premium')
+    .select('id, name, username, profile_picture_url, city_id, is_premium, is_available, streak_count')
     .in('id', matchedIds);
 
   const userMap = new Map<string, any>();
   for (const u of users || []) userMap.set(u.id, u);
 
-  // Filter by same city if user has one
+  // Filter by same city if user has one, then rank by availability + rating.
   const players = filteredProfiles
     .map((p) => {
       const u = userMap.get(p.user_id);
@@ -341,13 +341,21 @@ export async function discoverPlayers(req: Request, res: Response) {
         profile_picture_url: u.profile_picture_url,
         city_id: u.city_id,
         is_premium: u.is_premium,
+        is_available: !!u.is_available,
+        streak_count: u.streak_count ?? 0,
         rating: p.rating,
         matches_played: p.matches_played,
         wins: p.wins,
         last_active: p.last_match_at,
       };
     })
-    .filter(Boolean);
+    .filter(Boolean) as any[];
+
+  // Available players rank first; ties break by rating desc.
+  players.sort((a, b) => {
+    if (a.is_available !== b.is_available) return a.is_available ? -1 : 1;
+    return (b.rating ?? 0) - (a.rating ?? 0);
+  });
 
   return res.json({ players, mode: mode || 'singles' });
 }

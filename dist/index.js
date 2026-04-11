@@ -33,6 +33,7 @@ const transactions_routes_1 = __importDefault(require("./routes/transactions.rou
 const account_routes_1 = __importDefault(require("./routes/account.routes"));
 const webhooks_routes_1 = __importDefault(require("./routes/webhooks.routes"));
 const badges_routes_1 = __importDefault(require("./routes/badges.routes"));
+const challenges_routes_1 = __importDefault(require("./routes/challenges.routes"));
 const app = (0, express_1.default)();
 app.set('trust proxy', 1);
 app.use((0, helmet_1.default)({
@@ -99,6 +100,7 @@ app.use('/transactions', transactions_routes_1.default);
 app.use('/account', account_routes_1.default);
 app.use('/webhooks', webhooks_routes_1.default);
 app.use('/badges', badges_routes_1.default);
+app.use('/challenges', challenges_routes_1.default);
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {
     // eslint-disable-next-line no-console

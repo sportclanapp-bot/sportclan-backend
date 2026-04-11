@@ -6,11 +6,14 @@ const auth_middleware_1 = require("../middleware/auth.middleware");
 const router = (0, express_1.Router)();
 router.post('/', auth_middleware_1.authenticateToken, matches_controller_1.createMatch);
 router.get('/', auth_middleware_1.authenticateToken, matches_controller_1.listMatches);
+// /open must come before /:id so it isn't captured as a match id.
+router.get('/open', auth_middleware_1.authenticateToken, matches_controller_1.listOpenMatches);
 router.get('/:id', auth_middleware_1.authenticateToken, matches_controller_1.getMatch);
 router.patch('/:id', auth_middleware_1.authenticateToken, matches_controller_1.updateMatch);
 router.delete('/:id', auth_middleware_1.authenticateToken, matches_controller_1.cancelMatch);
 router.post('/:id/participants', auth_middleware_1.authenticateToken, matches_controller_1.addParticipants);
 router.post('/:id/umpire/self-assign', auth_middleware_1.authenticateToken, matches_controller_1.selfAssignUmpire);
 router.post('/:id/complete', auth_middleware_1.authenticateToken, matches_controller_1.completeMatch);
+router.post('/:id/join', auth_middleware_1.authenticateToken, matches_controller_1.joinOpenMatch);
 exports.default = router;
 //# sourceMappingURL=matches.routes.js.map

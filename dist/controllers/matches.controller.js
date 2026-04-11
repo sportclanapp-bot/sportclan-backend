@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.completeMatch = exports.cancelMatch = exports.selfAssignUmpire = exports.addParticipants = exports.updateMatch = exports.getMatch = exports.listMatches = exports.createMatch = void 0;
+exports.completeMatch = exports.cancelMatch = exports.selfAssignUmpire = exports.addParticipants = exports.updateMatch = exports.getMatch = exports.listMatches = exports.joinOpenMatch = exports.listOpenMatches = exports.createMatch = void 0;
 const supabase_1 = require("../utils/supabase");
 const ratingEngine_1 = require("../utils/ratingEngine");
 const notify_1 = require("../utils/notify");
@@ -10,7 +10,7 @@ async function createMatch(req, res) {
     if (!userId)
         return res.status(401).json({ error: 'Unauthorized' });
     try {
-        const { sport_id, team_a_id, team_b_id, team_a_name, team_b_name, scheduled_at, venue, city_id, format, overs, tournament_id, } = req.body || {};
+        const { sport_id, team_a_id, team_b_id, team_a_name, team_b_name, scheduled_at, venue, city_id, format, overs, tournament_id, is_open, players_needed, } = req.body || {};
         if (!sport_id)
             return res.status(400).json({ error: 'sport_id is required' });
         const { data, error } = await supabase_1.supabase
@@ -28,6 +28,8 @@ async function createMatch(req, res) {
             format: format || null,
             overs: overs ?? null,
             status: 'scheduled',
+            is_open: !!is_open,
+            players_needed: players_needed ?? 0,
             created_by: userId,
         })
             .select('*')
@@ -41,6 +43,88 @@ async function createMatch(req, res) {
     }
 }
 exports.createMatch = createMatch;
+// GET /matches/open — list open matches (is_open=true, not yet completed).
+// Optional sport_id and city_id filters. Ordered by scheduled_at ascending so
+// the soonest match shows first.
+async function listOpenMatches(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const { sport_id, city_id } = req.query;
+        let query = supabase_1.supabase
+            .from('matches')
+            .select('*')
+            .eq('is_open', true)
+            .in('status', ['scheduled', 'upcoming'])
+            .order('scheduled_at', { ascending: true })
+            .limit(100);
+        if (sport_id)
+            query = query.eq('sport_id', sport_id);
+        if (city_id)
+            query = query.eq('city_id', city_id);
+        const { data, error } = await query;
+        if (error)
+            return res.status(500).json({ error: error.message });
+        return res.json({ matches: data ?? [] });
+    }
+    catch (e) {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.listOpenMatches = listOpenMatches;
+// POST /matches/:id/join — join an open match as a player.
+// Inserts a match_participants row with team_side='A' (simple heuristic —
+// future iterations can balance sides automatically).
+async function joinOpenMatch(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const { id } = req.params;
+        const { data: match } = await supabase_1.supabase
+            .from('matches')
+            .select('id, is_open, status, players_needed')
+            .eq('id', id)
+            .maybeSingle();
+        if (!match)
+            return res.status(404).json({ error: 'Match not found' });
+        if (!match.is_open)
+            return res.status(400).json({ error: 'Match is not open' });
+        if (match.status === 'completed' || match.status === 'cancelled') {
+            return res.status(400).json({ error: 'Match has ended' });
+        }
+        // Don't double-join.
+        const { data: existing } = await supabase_1.supabase
+            .from('match_participants')
+            .select('id')
+            .eq('match_id', id)
+            .eq('user_id', userId)
+            .maybeSingle();
+        if (existing)
+            return res.json({ success: true, alreadyJoined: true });
+        const { error } = await supabase_1.supabase
+            .from('match_participants')
+            .insert({ match_id: id, user_id: userId, team_side: 'A' });
+        if (error)
+            return res.status(500).json({ error: error.message });
+        // Decrement players_needed (never below 0). If it hits 0, close the match.
+        const nextNeeded = Math.max(0, (match.players_needed ?? 0) - 1);
+        await supabase_1.supabase
+            .from('matches')
+            .update({
+            players_needed: nextNeeded,
+            is_open: nextNeeded > 0,
+            updated_at: new Date().toISOString(),
+        })
+            .eq('id', id);
+        return res.json({ success: true, players_needed: nextNeeded });
+    }
+    catch (e) {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.joinOpenMatch = joinOpenMatch;
 // GET /matches
 async function listMatches(req, res) {
     const userId = req.userId;
@@ -377,6 +461,39 @@ async function completeMatch(req, res) {
         // Insert rating history
         if (ratingHistoryRows.length > 0) {
             await supabase_1.supabase.from('rating_history').insert(ratingHistoryRows);
+        }
+        // Activity streaks: advance each participant's streak_count based on the
+        // gap between today and their last_match_date. Rules:
+        //   * same day     → no change (already counted)
+        //   * yesterday    → +1
+        //   * older / null → reset to 1
+        // Best-effort — failures never block match completion.
+        try {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const { data: currentUsers } = await supabase_1.supabase
+                .from('users')
+                .select('id, streak_count, last_match_date')
+                .in('id', allPlayerIds);
+            for (const u of currentUsers || []) {
+                const last = u.last_match_date;
+                let nextStreak = 1;
+                if (last === todayStr) {
+                    nextStreak = u.streak_count ?? 1;
+                }
+                else if (last) {
+                    const lastMs = new Date(last + 'T00:00:00Z').getTime();
+                    const todayMs = new Date(todayStr + 'T00:00:00Z').getTime();
+                    const diffDays = Math.round((todayMs - lastMs) / 86400000);
+                    nextStreak = diffDays === 1 ? (u.streak_count ?? 0) + 1 : 1;
+                }
+                await supabase_1.supabase
+                    .from('users')
+                    .update({ streak_count: nextStreak, last_match_date: todayStr })
+                    .eq('id', u.id);
+            }
+        }
+        catch {
+            // swallow — streaks are a nice-to-have
         }
         // Mark match as completed
         const { data: updatedMatch, error: updateErr } = await supabase_1.supabase

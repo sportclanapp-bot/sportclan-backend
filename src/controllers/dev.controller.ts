@@ -1011,22 +1011,28 @@ export async function loadFullData(req: Request, res: Response) {
       summary.errors.push(`match_planner: matchRows empty (allTourneys=${(allTourneys ?? []).length}, newTourneyIds=${newTourneyIds.size}, teamsBySport.size=${teamsBySport.size})`);
     }
 
-    // ── STEP 9: Match events for first 3 completed cricket matches ───────
+    // ── STEP 9: Match events for 3 completed cricket matches ─────────────
+    // Use the inserted IDs list directly (small) instead of a DB round-trip.
     const cricketSportId = sportIdByName.get('Cricket');
-    if (cricketSportId && insertedMatchIds.length > 0) {
-      const { data: cricketCompleted } = await supabase
-        .from('matches')
-        .select('id')
-        .eq('sport_id', cricketSportId)
-        .eq('status', 'completed')
-        .in('id', insertedMatchIds)
-        .limit(3);
+    if (cricketSportId) {
+      // Filter insertedMatchRows to completed cricket matches — we already
+      // know which rows we pushed and what their status is, so we can pull
+      // the matching IDs back out without another query.
+      const cricketCompletedIds: string[] = [];
+      for (let i = 0; i < matchRows.length && cricketCompletedIds.length < 3; i++) {
+        const row = matchRows[i];
+        if (row.sport_id === cricketSportId && row.status === 'completed') {
+          const insertedId = insertedMatchIds[i];
+          if (insertedId) cricketCompletedIds.push(insertedId);
+        }
+      }
       const eventRows: any[] = [];
-      for (const m of cricketCompleted ?? []) eventRows.push(...cricketEvents(m.id, userId));
+      for (const mid of cricketCompletedIds) eventRows.push(...cricketEvents(mid, userId));
       if (eventRows.length > 0) {
         for (let i = 0; i < eventRows.length; i += 100) {
           const chunk = eventRows.slice(i, i + 100);
-          const { data } = await supabase.from('match_events').insert(chunk).select('id');
+          const { data, error } = await supabase.from('match_events').insert(chunk).select('id');
+          if (error) summary.errors.push(`match_events[${i}]: ${error.message}`);
           summary.match_events_created += data?.length ?? 0;
         }
       }

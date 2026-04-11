@@ -901,6 +901,7 @@ async function loadFullData(req, res) {
                         scheduled_at: new Date(now + (idx + 2) * day).toISOString(),
                         venue: 'Shivaji Park', city_id: puneId,
                         status: 'scheduled',
+                        score_summary: {},
                         created_by: userId,
                     });
                 }
@@ -931,6 +932,7 @@ async function loadFullData(req, res) {
                         scheduled_at: new Date(now + (idx + 3) * day).toISOString(),
                         venue: 'Nehru Stadium', city_id: puneId,
                         status: 'scheduled',
+                        score_summary: {},
                         created_by: userId,
                     });
                 }
@@ -947,6 +949,7 @@ async function loadFullData(req, res) {
                         scheduled_at: new Date(now + (8 + idx) * day).toISOString(),
                         venue: 'Balewadi Sports Complex', city_id: puneId,
                         status: 'scheduled',
+                        score_summary: {},
                         created_by: userId,
                     });
                 }

@@ -13,6 +13,7 @@ import {
   getProfileCompleteness,
   discoverPlayers,
   getSportProfile,
+  updateSportProfile,
   getActivityHeatmap,
   getRival,
   getRatingHistory,
@@ -32,6 +33,7 @@ router.get('/:id', getUserById);
 router.get('/:id/followers', getFollowers);
 router.get('/:id/following', getFollowing);
 router.get('/:id/sport-profile/:sportId', getSportProfile);
+router.patch('/:id/sport-profile/:sportId', authenticateToken, updateSportProfile);
 router.get('/:id/activity-heatmap', getActivityHeatmap);
 router.get('/:id/rating-history', authenticateToken, getRatingHistory);
 router.get('/:id/rival', authenticateToken, getRival);

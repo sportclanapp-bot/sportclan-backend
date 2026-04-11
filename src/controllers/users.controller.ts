@@ -664,12 +664,26 @@ export async function getRatingHistory(req: Request, res: Response) {
 }
 
 // GET /users/:id/sport-profile/:sportId — per-sport rating + stats
+// Every preference column the frontend can edit. Centralised here so
+// getSportProfile and updateSportProfile agree on what's allowed.
+const SPORT_PROFILE_PREFS = [
+  'batting_style', 'bowling_style', 'role',
+  'dominant_hand', 'play_type', 'preferred_position', 'playing_level',
+  'preferred_foot', 'position', 'play_style',
+  'backhand_type', 'grip_type', 'preferred_side',
+  'playing_style', 'stick_type',
+] as const;
+
+const SPORT_PROFILE_SELECT =
+  'rating, matches_played, wins, losses, draws, last_match_at, ' +
+  SPORT_PROFILE_PREFS.join(', ');
+
 export async function getSportProfile(req: Request, res: Response) {
   const { id, sportId } = req.params;
 
   const { data: profile } = await supabase
     .from('user_sport_profiles')
-    .select('rating, matches_played, wins, losses, draws, last_match_at')
+    .select(SPORT_PROFILE_SELECT)
     .eq('user_id', id)
     .eq('sport_id', sportId)
     .maybeSingle();
@@ -686,6 +700,60 @@ export async function getSportProfile(req: Request, res: Response) {
       },
     });
   }
+
+  return res.json({ profile });
+}
+
+// PATCH /users/:id/sport-profile/:sportId
+// Updates any subset of the per-sport preference columns. Only the owner
+// of the profile (id === req.userId) can update. Creates the row if it
+// doesn't yet exist so the first-edit flow works.
+export async function updateSportProfile(req: Request, res: Response) {
+  const callerId = req.userId;
+  if (!callerId) return res.status(401).json({ error: 'Unauthorized' });
+  const { id, sportId } = req.params;
+  if (id !== callerId) return res.status(403).json({ error: 'Can only update your own sport profile' });
+
+  // Whitelist the incoming patch against SPORT_PROFILE_PREFS so arbitrary
+  // fields (like rating) can't be overwritten through this endpoint.
+  const incoming = req.body ?? {};
+  const patch: Record<string, unknown> = {};
+  for (const key of SPORT_PROFILE_PREFS) {
+    if (key in incoming) patch[key] = incoming[key];
+  }
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: 'No updatable fields provided' });
+  }
+
+  // Upsert on (user_id, sport_id). Supabase's upsert needs the full target
+  // row, so we look up first and choose insert vs update.
+  const { data: existing } = await supabase
+    .from('user_sport_profiles')
+    .select('id')
+    .eq('user_id', id)
+    .eq('sport_id', sportId)
+    .maybeSingle();
+
+  if (existing) {
+    const { error } = await supabase
+      .from('user_sport_profiles')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', existing.id);
+    if (error) return res.status(500).json({ error: error.message });
+  } else {
+    const { error } = await supabase
+      .from('user_sport_profiles')
+      .insert({ user_id: id, sport_id: sportId, ...patch });
+    if (error) return res.status(500).json({ error: error.message });
+  }
+
+  // Return the fresh row so the client can render immediately.
+  const { data: profile } = await supabase
+    .from('user_sport_profiles')
+    .select(SPORT_PROFILE_SELECT)
+    .eq('user_id', id)
+    .eq('sport_id', sportId)
+    .maybeSingle();
 
   return res.json({ profile });
 }

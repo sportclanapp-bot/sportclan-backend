@@ -42,9 +42,20 @@ export async function createTournament(req: Request, res: Response) {
       prize_pool,
       banner_url,
       tiebreaker_rules,
+      sport_metadata,
     } = req.body || {};
     if (!sport_id || !name || !format) {
       return res.status(400).json({ error: 'sport_id, name, format are required' });
+    }
+    // Whitelist only string values in sport_metadata to avoid arbitrary
+    // shape injection. Empty strings and __custom__ sentinel are dropped.
+    const metadata: Record<string, string> = {};
+    if (sport_metadata && typeof sport_metadata === 'object') {
+      for (const [k, v] of Object.entries(sport_metadata)) {
+        if (typeof v === 'string' && v && v !== '__custom__') {
+          metadata[k] = v;
+        }
+      }
     }
 
     // Generate unique entry code (retry a few times on collision)
@@ -77,6 +88,7 @@ export async function createTournament(req: Request, res: Response) {
         entry_code,
         created_by: userId,
         tiebreaker_rules: tiebreaker_rules ?? [],
+        sport_metadata: metadata,
       })
       .select('*')
       .single();

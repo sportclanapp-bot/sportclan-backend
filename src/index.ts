@@ -111,5 +111,15 @@ const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`[sportclan-backend] listening on :${PORT}`);
+  // Payment webhook HMAC verification silently 500s every hit without this —
+  // surface it loudly at boot so it's impossible to ship without noticing.
+  if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[sportclan-backend] \u26A0\uFE0F  RAZORPAY_WEBHOOK_SECRET is not set. ' +
+      'Razorpay webhook signature verification will fail. ' +
+      'Add it to the hosting provider env (Render/Railway) before launch.',
+    );
+  }
 });
 // Sat Apr 11 01:56:26 IST 2026

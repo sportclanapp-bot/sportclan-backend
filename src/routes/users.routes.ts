@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import {
+  getMe,
   getUserById,
   updateMe,
   followUser,
@@ -18,6 +19,7 @@ import { authenticateToken } from '../middleware/auth.middleware';
 const router = Router();
 
 // Self routes — must be declared before /:id so they don't get captured.
+router.get('/me', authenticateToken, getMe);
 router.patch('/me', authenticateToken, updateMe);
 router.get('/me/blocked', authenticateToken, getBlockedUsers);
 router.get('/me/profile-completeness', authenticateToken, getProfileCompleteness);

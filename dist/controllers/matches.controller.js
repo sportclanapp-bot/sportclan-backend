@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.completeMatch = exports.cancelMatch = exports.selfAssignUmpire = exports.addParticipants = exports.updateMatch = exports.getMatch = exports.listMatches = exports.createMatch = void 0;
 const supabase_1 = require("../utils/supabase");
 const ratingEngine_1 = require("../utils/ratingEngine");
+const notify_1 = require("../utils/notify");
 // POST /matches — create. FREE for all (Change #6).
 async function createMatch(req, res) {
     const userId = req.userId;
@@ -219,7 +220,11 @@ async function cancelMatch(req, res) {
         return res.status(401).json({ error: 'Unauthorized' });
     try {
         const { id } = req.params;
-        const { data: match } = await supabase_1.supabase.from('matches').select('created_by').eq('id', id).maybeSingle();
+        const { data: match } = await supabase_1.supabase
+            .from('matches')
+            .select('id, created_by, team_a_name, team_b_name')
+            .eq('id', id)
+            .maybeSingle();
         if (!match)
             return res.status(404).json({ error: 'Match not found' });
         if (match.created_by !== userId)
@@ -232,6 +237,28 @@ async function cancelMatch(req, res) {
             .single();
         if (error)
             return res.status(500).json({ error: error.message });
+        // PRD Addition #17: notify every participant of the cancellation.
+        try {
+            const { data: participants } = await supabase_1.supabase
+                .from('match_participants')
+                .select('user_id')
+                .eq('match_id', id);
+            const participantIds = (participants || []).map((p) => p.user_id);
+            const matchLabel = (match.team_a_name && match.team_b_name)
+                ? `${match.team_a_name} vs ${match.team_b_name}`
+                : 'Your match';
+            if (participantIds.length > 0) {
+                await (0, notify_1.notifyUsers)(participantIds, {
+                    type: 'match_cancelled',
+                    title: 'Match cancelled',
+                    body: `${matchLabel} has been cancelled by the organiser`,
+                    data: { matchId: id, screen: 'MatchDetail' },
+                });
+            }
+        }
+        catch {
+            // best-effort
+        }
         return res.json({ match: data });
     }
     catch (e) {
@@ -250,7 +277,7 @@ async function completeMatch(req, res) {
         const { winner_team_id } = req.body || {};
         const { data: match } = await supabase_1.supabase
             .from('matches')
-            .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id')
+            .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name')
             .eq('id', id)
             .maybeSingle();
         if (!match)
@@ -364,6 +391,47 @@ async function completeMatch(req, res) {
             .single();
         if (updateErr)
             return res.status(500).json({ error: updateErr.message });
+        // Resolve sport name for nicer notification copy — falls back to ID.
+        let sportName = 'rating';
+        try {
+            const { data: sport } = await supabase_1.supabase
+                .from('sports')
+                .select('name')
+                .eq('id', match.sport_id)
+                .maybeSingle();
+            if (sport?.name)
+                sportName = sport.name;
+        }
+        catch {
+            // fall through
+        }
+        // PRD 12.1: notify each player of their rating delta.
+        for (const row of ratingHistoryRows) {
+            const sign = row.delta >= 0 ? '+' : '';
+            void (0, notify_1.notifyUser)({
+                userId: row.user_id,
+                type: 'rating_change',
+                title: `${sportName} rating updated`,
+                body: `Your ${sportName} rating changed: ${row.old_rating} \u2192 ${row.new_rating} (${sign}${row.delta})`,
+                data: { sportId: match.sport_id, screen: 'SportProfile' },
+            });
+        }
+        // PRD Section 4: if the match had an assigned umpire, prompt all
+        // participants to rate them.
+        if (match.umpire_id) {
+            const matchLabel = (match.team_a_name && match.team_b_name)
+                ? `${match.team_a_name} vs ${match.team_b_name}`
+                : 'your match';
+            const participantIds = allPlayerIds.filter((uid) => uid !== match.umpire_id);
+            if (participantIds.length > 0) {
+                void (0, notify_1.notifyUsers)(participantIds, {
+                    type: 'umpire_rating_prompt',
+                    title: 'Rate your umpire',
+                    body: `Rate your umpire for ${matchLabel}`,
+                    data: { umpireId: match.umpire_id, matchId: id, screen: 'UmpireRatings' },
+                });
+            }
+        }
         return res.json({
             match: updatedMatch,
             ratings: ratingHistoryRows.map((r) => ({

@@ -67,3 +67,19 @@ All secrets are in .env files. Never hardcode any key. All frontend env vars use
 Always: git add . && git commit -m "message" && git push
 For backend changes: also push to Railway via git push (auto-deploys)
 For app changes that need a rebuild: note it — don't run eas build automatically
+
+## Before Launch Checklist
+Do these immediately before cutting the production Store build:
+1. **Remove dev test data endpoint**
+   - Delete `~/sportclan-backend/src/routes/dev.routes.ts`
+   - Delete `~/sportclan-backend/src/controllers/dev.controller.ts`
+   - Remove the `import devRoutes` and `app.use('/dev', devRoutes)` lines from `src/index.ts`
+   - Remove the "Load Test Data" button from `~/sportclan/src/screens/home/HamburgerMenuScreen.tsx`
+2. **Verify env vars on Render/Railway**
+   - `RAZORPAY_WEBHOOK_SECRET` (payment webhook HMAC — backend 500s without it)
+   - `FIREBASE_PROJECT_ID` / `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY` (FCM push)
+   - `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`
+   - `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (OTP)
+   - `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` / `R2_ACCOUNT_ID` (uploads)
+3. **Run SQL migration 011_launch_fixes.sql** against production Supabase (adds `coupon_codes`, `users.show_dob`, `users.last_premium_reminder_at`)
+4. **Sanity-check EARLYBIRDS coupon**: `SELECT * FROM coupon_codes WHERE code = 'EARLYBIRDS';` should return one row with `expires_at = 2026-09-12 23:59:59+05:30`.

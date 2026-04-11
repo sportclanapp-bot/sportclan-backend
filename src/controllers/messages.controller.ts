@@ -376,6 +376,9 @@ export async function getMessages(req: Request, res: Response) {
   });
 }
 
+// PRD Addition #14 — hard cap on chat message length.
+const MAX_MESSAGE_LENGTH = 1000;
+
 // ─── SEND MESSAGE ───────────────────────────────────────────────────────────
 export async function sendMessage(req: Request, res: Response) {
   const userId = req.userId!;
@@ -384,6 +387,9 @@ export async function sendMessage(req: Request, res: Response) {
 
   if (!content && !image_url) {
     return res.status(400).json({ error: 'Content or image required' });
+  }
+  if (typeof content === 'string' && content.length > MAX_MESSAGE_LENGTH) {
+    return res.status(400).json({ error: `Message exceeds ${MAX_MESSAGE_LENGTH} character limit` });
   }
 
   // Verify participant

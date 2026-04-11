@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.submitFeedback = exports.revokeAllSessions = exports.revokeSession = exports.getSessions = exports.deleteAccount = void 0;
+exports.submitFeedback = exports.exportData = exports.revokeAllSessions = exports.revokeSession = exports.getSessions = exports.deleteAccount = void 0;
 const supabase_1 = require("../utils/supabase");
 // POST /account/delete — soft-delete with 30-day grace
 async function deleteAccount(req, res) {
@@ -59,6 +59,64 @@ async function revokeAllSessions(req, res) {
     return res.json({ success: true, message: 'All other sessions revoked' });
 }
 exports.revokeAllSessions = revokeAllSessions;
+// POST /account/export-data — DPDP Act right-to-portability.
+// Assembles a JSON bundle of everything we store about the authenticated user
+// that they've actually produced (profile, posts, matches, messages, txns,
+// social graph). Inline, no background job yet — dataset sizes are small.
+async function exportData(req, res) {
+    const userId = req.userId;
+    const [profileRes, postsRes, matchesRes, messagesRes, txnsRes, followersRes, followingRes, sportProfilesRes,] = await Promise.all([
+        supabase_1.supabase
+            .from('users')
+            .select('id, phone, name, username, email, bio, gender, dob, city_id, created_at, is_premium, premium_expires_at, coin_balance')
+            .eq('id', userId)
+            .maybeSingle(),
+        supabase_1.supabase
+            .from('posts')
+            .select('id, content, image_url, created_at')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false }),
+        supabase_1.supabase
+            .from('match_participants')
+            .select('match_id, team_side, role, match:matches(id, sport_id, scheduled_at, status, winner_team_id)')
+            .eq('user_id', userId),
+        supabase_1.supabase
+            .from('messages')
+            .select('id, chat_id, content, created_at')
+            .eq('sender_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(100),
+        supabase_1.supabase
+            .from('transactions')
+            .select('id, type, amount_inr, coins, description, status, created_at')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false }),
+        supabase_1.supabase
+            .from('follow_relationships')
+            .select('follower_id, created_at')
+            .eq('following_id', userId),
+        supabase_1.supabase
+            .from('follow_relationships')
+            .select('following_id, created_at')
+            .eq('follower_id', userId),
+        supabase_1.supabase
+            .from('user_sport_profiles')
+            .select('sport_id, rating, matches_played, wins, losses, draws, last_match_at')
+            .eq('user_id', userId),
+    ]);
+    return res.json({
+        exportedAt: new Date().toISOString(),
+        profile: profileRes.data ?? null,
+        sport_profiles: sportProfilesRes.data ?? [],
+        posts: postsRes.data ?? [],
+        matches: matchesRes.data ?? [],
+        messages_last_100: messagesRes.data ?? [],
+        transactions: txnsRes.data ?? [],
+        followers: followersRes.data ?? [],
+        following: followingRes.data ?? [],
+    });
+}
+exports.exportData = exportData;
 // POST /account/feedback  { category, message, rating?, email? }
 async function submitFeedback(req, res) {
     const userId = req.userId;

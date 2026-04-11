@@ -64,6 +64,75 @@ export async function revokeAllSessions(req: Request, res: Response) {
   return res.json({ success: true, message: 'All other sessions revoked' });
 }
 
+// POST /account/export-data — DPDP Act right-to-portability.
+// Assembles a JSON bundle of everything we store about the authenticated user
+// that they've actually produced (profile, posts, matches, messages, txns,
+// social graph). Inline, no background job yet — dataset sizes are small.
+export async function exportData(req: Request, res: Response) {
+  const userId = req.userId!;
+
+  const [
+    profileRes,
+    postsRes,
+    matchesRes,
+    messagesRes,
+    txnsRes,
+    followersRes,
+    followingRes,
+    sportProfilesRes,
+  ] = await Promise.all([
+    supabase
+      .from('users')
+      .select('id, phone, name, username, email, bio, gender, dob, city_id, created_at, is_premium, premium_expires_at, coin_balance')
+      .eq('id', userId)
+      .maybeSingle(),
+    supabase
+      .from('posts')
+      .select('id, content, image_url, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('match_participants')
+      .select('match_id, team_side, role, match:matches(id, sport_id, scheduled_at, status, winner_team_id)')
+      .eq('user_id', userId),
+    supabase
+      .from('messages')
+      .select('id, chat_id, content, created_at')
+      .eq('sender_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(100),
+    supabase
+      .from('transactions')
+      .select('id, type, amount_inr, coins, description, status, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('follow_relationships')
+      .select('follower_id, created_at')
+      .eq('following_id', userId),
+    supabase
+      .from('follow_relationships')
+      .select('following_id, created_at')
+      .eq('follower_id', userId),
+    supabase
+      .from('user_sport_profiles')
+      .select('sport_id, rating, matches_played, wins, losses, draws, last_match_at')
+      .eq('user_id', userId),
+  ]);
+
+  return res.json({
+    exportedAt: new Date().toISOString(),
+    profile: profileRes.data ?? null,
+    sport_profiles: sportProfilesRes.data ?? [],
+    posts: postsRes.data ?? [],
+    matches: matchesRes.data ?? [],
+    messages_last_100: messagesRes.data ?? [],
+    transactions: txnsRes.data ?? [],
+    followers: followersRes.data ?? [],
+    following: followingRes.data ?? [],
+  });
+}
+
 // POST /account/feedback  { category, message, rating?, email? }
 export async function submitFeedback(req: Request, res: Response) {
   const userId = req.userId!;

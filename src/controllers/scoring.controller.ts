@@ -1,5 +1,32 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { notifyUsers } from '../utils/notify';
+
+// Fire-and-forget: push the big moments of a live match (wickets, goals) to
+// every participant in the match. Failures are swallowed — the fan-out must
+// never block the scorer's UI.
+async function fanoutScoreUpdate(
+  matchId: string,
+  title: string,
+  body: string,
+): Promise<void> {
+  try {
+    const { data: participants } = await supabase
+      .from('match_participants')
+      .select('user_id')
+      .eq('match_id', matchId);
+    const userIds = (participants || []).map((p) => p.user_id);
+    if (userIds.length === 0) return;
+    await notifyUsers(userIds, {
+      type: 'score_update',
+      title,
+      body,
+      data: { matchId, screen: 'MatchDetail' },
+    });
+  } catch {
+    // best-effort
+  }
+}
 
 async function authorizeScorer(matchId: string, userId: string) {
   const { data: match } = await supabase
@@ -69,6 +96,37 @@ export async function createEvent(req: Request, res: Response) {
       }
     } catch {
       // ignore best-effort update errors
+    }
+
+    // PRD 12.1: fan out push notifications for wickets and goals. We don't
+    // await — the scorer shouldn't block on push delivery.
+    try {
+      if (event_type === 'wicket') {
+        const side = (payload?.team_side as string) || 'A';
+        const playerName = (payload?.batter_name as string) || (payload?.player_name as string) || 'Batter';
+        const runs = payload?.batter_runs ?? payload?.runs_scored ?? '';
+        const inning: any = (match.score_summary || {})[side] || {};
+        const scoreStr = `${inning.runs ?? 0}/${(inning.wickets ?? 0) + 1}`;
+        const teamLabel = `Team ${side}`;
+        const title = 'Wicket!';
+        const body = runs !== ''
+          ? `${playerName} out for ${runs} | ${teamLabel} ${scoreStr}`
+          : `${playerName} out | ${teamLabel} ${scoreStr}`;
+        void fanoutScoreUpdate(matchId, title, body);
+      } else if (event_type === 'goal') {
+        const side = (payload?.team_side as string) || 'A';
+        const teamLabel = (payload?.team_name as string) || `Team ${side}`;
+        const summary: any = match.score_summary || {};
+        const a = summary.A?.goals ?? summary.A?.score ?? 0;
+        const b = summary.B?.goals ?? summary.B?.score ?? 0;
+        const newA = side === 'A' ? a + 1 : a;
+        const newB = side === 'B' ? b + 1 : b;
+        const title = 'GOAL!';
+        const body = `${teamLabel} scores! ${newA}-${newB}`;
+        void fanoutScoreUpdate(matchId, title, body);
+      }
+    } catch {
+      // ignore
     }
 
     return res.json({ event });

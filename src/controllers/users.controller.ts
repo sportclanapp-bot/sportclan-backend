@@ -1,9 +1,26 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { checkExpiredSubscriptions } from './subscriptions.controller';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
-  'id, phone, name, email, city_id, account_type, profile_picture_url, bio, is_premium, premium_expires_at, coin_balance, created_at';
+  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, created_at';
+
+// GET /users/me — self profile with premium lazy expiry check.
+// Wired to Fix 1: on every app-startup fetch we reconcile subscription state.
+export async function getMe(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  await checkExpiredSubscriptions(userId);
+  const { data, error } = await supabase
+    .from('users')
+    .select(PUBLIC_FIELDS)
+    .eq('id', userId)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'User not found' });
+  return res.json({ user: data });
+}
 
 // GET /users/:id — public profile
 export async function getUserById(req: Request, res: Response) {
@@ -16,6 +33,14 @@ export async function getUserById(req: Request, res: Response) {
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: 'User not found' });
 
+  // Respect the DOB privacy toggle (PRD 17.5): if the owner hid their DOB,
+  // strip it from the public response. Viewing your own profile hits
+  // /users/me instead, so we don't need a self-bypass here.
+  const safeUser: any = { ...data };
+  if (safeUser.show_dob === false) {
+    safeUser.dob = null;
+  }
+
   // Counts (followers/following) — best-effort, never fail the request.
   const [followersRes, followingRes] = await Promise.all([
     supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('following_id', id),
@@ -23,7 +48,7 @@ export async function getUserById(req: Request, res: Response) {
   ]);
 
   return res.json({
-    user: data,
+    user: safeUser,
     followers: followersRes.count ?? 0,
     following: followingRes.count ?? 0,
   });
@@ -33,7 +58,7 @@ export async function getUserById(req: Request, res: Response) {
 // Change #4: NO size limit on profile_picture_url. We accept any URL.
 const ALLOWED_FIELDS = [
   'name', 'username', 'email', 'city_id', 'profile_picture_url', 'bio',
-  'link', 'gender', 'dob',
+  'link', 'gender', 'dob', 'show_dob',
 ] as const;
 
 const USERNAME_COOLDOWN_DAYS = 30;

@@ -1,7 +1,101 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.cancel = exports.redeemCoupon = exports.appleVerify = exports.verify = exports.initiate = exports.getMySubscription = exports.getPlans = void 0;
+exports.cancel = exports.redeemCoupon = exports.appleVerify = exports.verify = exports.initiate = exports.getMySubscription = exports.getPlans = exports.checkExpiredSubscriptions = void 0;
 const supabase_1 = require("../utils/supabase");
+const fcm_1 = require("../utils/fcm");
+// ─── Expiry auto-checker ──────────────────────────────────────────────────────
+// Runs on every hit to /users/me and /subscriptions/me so there's no cron
+// dependency. Cheap because it only scans the current user's rows.
+//
+// 1. If an active subscription's expires_at has passed, mark the subscription
+//    expired AND clear is_premium / premium_expires_at on the user.
+// 2. If premium expires in <= 3 days, insert a one-per-day notification and
+//    fire a push. Throttled by users.last_premium_reminder_at so we don't spam
+//    on every GET.
+async function checkExpiredSubscriptions(userId) {
+    const nowIso = new Date().toISOString();
+    // 1. Expire lapsed active subscriptions for this user.
+    const { data: lapsed } = await supabase_1.supabase
+        .from('subscriptions')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('status', 'active')
+        .lt('expires_at', nowIso);
+    if (lapsed && lapsed.length > 0) {
+        await supabase_1.supabase
+            .from('subscriptions')
+            .update({ status: 'expired', updated_at: nowIso })
+            .in('id', lapsed.map((s) => s.id));
+        await supabase_1.supabase
+            .from('users')
+            .update({ is_premium: false, premium_expires_at: null })
+            .eq('id', userId);
+        // Insert in-app notification + push.
+        await supabase_1.supabase.from('notifications').insert({
+            user_id: userId,
+            type: 'premium_expired',
+            title: 'Premium expired',
+            body: 'Your Premium plan has expired. Renew now!',
+            data: { screen: 'SubscriptionScreen' },
+        });
+        const { data: tokens } = await supabase_1.supabase
+            .from('push_tokens')
+            .select('token')
+            .eq('user_id', userId);
+        if (tokens && tokens.length > 0) {
+            await (0, fcm_1.sendPushToTokens)(tokens.map((t) => t.token), {
+                title: 'Premium expired',
+                body: 'Your Premium plan has expired. Renew now!',
+                data: { type: 'premium_expired', screen: 'SubscriptionScreen' },
+            });
+        }
+        return;
+    }
+    // 2. Warn 3 days before expiry, throttled to once per day.
+    const { data: user } = await supabase_1.supabase
+        .from('users')
+        .select('is_premium, premium_expires_at, last_premium_reminder_at')
+        .eq('id', userId)
+        .maybeSingle();
+    if (!user?.is_premium || !user.premium_expires_at)
+        return;
+    const expiresAt = new Date(user.premium_expires_at).getTime();
+    const now = Date.now();
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const daysLeft = Math.ceil((expiresAt - now) / msPerDay);
+    if (daysLeft > 3 || daysLeft < 0)
+        return;
+    // Already reminded today?
+    if (user.last_premium_reminder_at) {
+        const lastRemind = new Date(user.last_premium_reminder_at).getTime();
+        if (now - lastRemind < msPerDay)
+            return;
+    }
+    await supabase_1.supabase
+        .from('users')
+        .update({ last_premium_reminder_at: new Date().toISOString() })
+        .eq('id', userId);
+    const body = `Your Premium expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}. Renew now!`;
+    await supabase_1.supabase.from('notifications').insert({
+        user_id: userId,
+        type: 'premium_expiring',
+        title: 'Premium expiring soon',
+        body,
+        data: { screen: 'SubscriptionScreen', daysLeft: String(daysLeft) },
+    });
+    const { data: tokens } = await supabase_1.supabase
+        .from('push_tokens')
+        .select('token')
+        .eq('user_id', userId);
+    if (tokens && tokens.length > 0) {
+        await (0, fcm_1.sendPushToTokens)(tokens.map((t) => t.token), {
+            title: 'Premium expiring soon',
+            body,
+            data: { type: 'premium_expiring', screen: 'SubscriptionScreen' },
+        });
+    }
+}
+exports.checkExpiredSubscriptions = checkExpiredSubscriptions;
 // ─── Plan catalogue ────────────────────────────────────────────────────────────
 const PLANS = [
     { id: '1_month', name: '1 Month', months: 1, price: 70, badge: null },
@@ -22,6 +116,8 @@ exports.getPlans = getPlans;
 // GET /subscriptions/me
 async function getMySubscription(req, res) {
     const userId = req.userId;
+    // Lazy-expire any lapsed subscription for this user before we return state.
+    await checkExpiredSubscriptions(userId);
     const { data } = await supabase_1.supabase
         .from('subscriptions')
         .select('*')
@@ -175,11 +271,40 @@ async function redeemCoupon(req, res) {
     const { code } = req.body || {};
     if (!code)
         return res.status(400).json({ error: 'code required' });
-    const coupon = COUPONS[code.toUpperCase()];
-    if (!coupon)
-        return res.status(400).json({ error: 'Invalid coupon code' });
-    if (new Date(coupon.expiresAt) < new Date())
+    // Prefer the coupon_codes table (single source of truth). Fall back to the
+    // hard-coded map so existing deployments keep working if the migration has
+    // not yet run.
+    const upperCode = code.toUpperCase();
+    let months = 0;
+    let coins = 0;
+    let couponExpiry = null;
+    let couponRowId = null;
+    const { data: couponRow } = await supabase_1.supabase
+        .from('coupon_codes')
+        .select('code, subscription_months, coin_bonus, expires_at, max_uses, used_count')
+        .eq('code', upperCode)
+        .maybeSingle();
+    if (couponRow) {
+        if (couponRow.max_uses > 0 && couponRow.used_count >= couponRow.max_uses) {
+            return res.status(400).json({ error: 'Coupon fully redeemed' });
+        }
+        months = couponRow.subscription_months;
+        coins = couponRow.coin_bonus;
+        couponExpiry = couponRow.expires_at ? new Date(couponRow.expires_at) : null;
+        couponRowId = couponRow.code;
+    }
+    else {
+        const legacy = COUPONS[upperCode];
+        if (!legacy)
+            return res.status(400).json({ error: 'Invalid coupon code' });
+        months = legacy.months;
+        coins = legacy.coins;
+        couponExpiry = new Date(legacy.expiresAt);
+    }
+    if (couponExpiry && couponExpiry < new Date()) {
         return res.status(400).json({ error: 'Coupon expired' });
+    }
+    const coupon = { months, coins };
     // Check if already used
     const { data: existing } = await supabase_1.supabase
         .from('subscriptions')
@@ -218,6 +343,23 @@ async function redeemCoupon(req, res) {
         reference_id: code.toUpperCase(),
         status: 'completed',
     });
+    // Bump used_count so we honour max_uses.
+    if (couponRowId) {
+        await supabase_1.supabase.rpc('increment_coupon_usage', { p_code: couponRowId }).then(() => undefined, async () => {
+            // Fallback if the RPC doesn't exist — do a simple update.
+            const { data: fresh } = await supabase_1.supabase
+                .from('coupon_codes')
+                .select('used_count')
+                .eq('code', couponRowId)
+                .maybeSingle();
+            if (fresh) {
+                await supabase_1.supabase
+                    .from('coupon_codes')
+                    .update({ used_count: (fresh.used_count ?? 0) + 1 })
+                    .eq('code', couponRowId);
+            }
+        });
+    }
     return res.json({
         success: true,
         months: coupon.months,

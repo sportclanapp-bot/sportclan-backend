@@ -1,9 +1,29 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getSportProfile = exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = void 0;
+exports.getSportProfile = exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = exports.getMe = void 0;
 const supabase_1 = require("../utils/supabase");
+const subscriptions_controller_1 = require("./subscriptions.controller");
 // Public-safe user fields. Never returns password_hash.
-const PUBLIC_FIELDS = 'id, phone, name, email, city_id, account_type, profile_picture_url, bio, is_premium, premium_expires_at, coin_balance, created_at';
+const PUBLIC_FIELDS = 'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, created_at';
+// GET /users/me — self profile with premium lazy expiry check.
+// Wired to Fix 1: on every app-startup fetch we reconcile subscription state.
+async function getMe(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    await (0, subscriptions_controller_1.checkExpiredSubscriptions)(userId);
+    const { data, error } = await supabase_1.supabase
+        .from('users')
+        .select(PUBLIC_FIELDS)
+        .eq('id', userId)
+        .maybeSingle();
+    if (error)
+        return res.status(500).json({ error: error.message });
+    if (!data)
+        return res.status(404).json({ error: 'User not found' });
+    return res.json({ user: data });
+}
+exports.getMe = getMe;
 // GET /users/:id — public profile
 async function getUserById(req, res) {
     const { id } = req.params;
@@ -16,13 +36,20 @@ async function getUserById(req, res) {
         return res.status(500).json({ error: error.message });
     if (!data)
         return res.status(404).json({ error: 'User not found' });
+    // Respect the DOB privacy toggle (PRD 17.5): if the owner hid their DOB,
+    // strip it from the public response. Viewing your own profile hits
+    // /users/me instead, so we don't need a self-bypass here.
+    const safeUser = { ...data };
+    if (safeUser.show_dob === false) {
+        safeUser.dob = null;
+    }
     // Counts (followers/following) — best-effort, never fail the request.
     const [followersRes, followingRes] = await Promise.all([
         supabase_1.supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('following_id', id),
         supabase_1.supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('follower_id', id),
     ]);
     return res.json({
-        user: data,
+        user: safeUser,
         followers: followersRes.count ?? 0,
         following: followingRes.count ?? 0,
     });
@@ -32,7 +59,7 @@ exports.getUserById = getUserById;
 // Change #4: NO size limit on profile_picture_url. We accept any URL.
 const ALLOWED_FIELDS = [
     'name', 'username', 'email', 'city_id', 'profile_picture_url', 'bio',
-    'link', 'gender', 'dob',
+    'link', 'gender', 'dob', 'show_dob',
 ];
 const USERNAME_COOLDOWN_DAYS = 30;
 async function updateMe(req, res) {

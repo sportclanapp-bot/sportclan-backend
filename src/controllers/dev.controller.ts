@@ -1,3 +1,8 @@
+// ════════════════════════════════════════════════════════════════════════════
+// ⚠️  REMOVE BEFORE PRODUCTION LAUNCH ⚠️
+// Delete this file AND src/routes/dev.routes.ts AND the /dev mount in
+// src/index.ts before the final Store submission. See dev.routes.ts header.
+// ════════════════════════════════════════════════════════════════════════════
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
+import { notifyUser, notifyUsers } from '../utils/notify';
 
 // POST /matches — create. FREE for all (Change #6).
 export async function createMatch(req: Request, res: Response) {
@@ -200,7 +201,11 @@ export async function cancelMatch(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
-    const { data: match } = await supabase.from('matches').select('created_by').eq('id', id).maybeSingle();
+    const { data: match } = await supabase
+      .from('matches')
+      .select('id, created_by, team_a_name, team_b_name')
+      .eq('id', id)
+      .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (match.created_by !== userId) return res.status(403).json({ error: 'Only the creator can cancel' });
     const { data, error } = await supabase
@@ -210,6 +215,29 @@ export async function cancelMatch(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: error.message });
+
+    // PRD Addition #17: notify every participant of the cancellation.
+    try {
+      const { data: participants } = await supabase
+        .from('match_participants')
+        .select('user_id')
+        .eq('match_id', id);
+      const participantIds = (participants || []).map((p) => p.user_id);
+      const matchLabel = (match.team_a_name && match.team_b_name)
+        ? `${match.team_a_name} vs ${match.team_b_name}`
+        : 'Your match';
+      if (participantIds.length > 0) {
+        await notifyUsers(participantIds, {
+          type: 'match_cancelled',
+          title: 'Match cancelled',
+          body: `${matchLabel} has been cancelled by the organiser`,
+          data: { matchId: id, screen: 'MatchDetail' },
+        });
+      }
+    } catch {
+      // best-effort
+    }
+
     return res.json({ match: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -227,7 +255,7 @@ export async function completeMatch(req: Request, res: Response) {
 
     const { data: match } = await supabase
       .from('matches')
-      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id')
+      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -356,6 +384,48 @@ export async function completeMatch(req: Request, res: Response) {
       .single();
 
     if (updateErr) return res.status(500).json({ error: updateErr.message });
+
+    // Resolve sport name for nicer notification copy — falls back to ID.
+    let sportName = 'rating';
+    try {
+      const { data: sport } = await supabase
+        .from('sports')
+        .select('name')
+        .eq('id', match.sport_id)
+        .maybeSingle();
+      if (sport?.name) sportName = sport.name;
+    } catch {
+      // fall through
+    }
+
+    // PRD 12.1: notify each player of their rating delta.
+    for (const row of ratingHistoryRows) {
+      const sign = row.delta >= 0 ? '+' : '';
+      void notifyUser({
+        userId: row.user_id,
+        type: 'rating_change',
+        title: `${sportName} rating updated`,
+        body: `Your ${sportName} rating changed: ${row.old_rating} \u2192 ${row.new_rating} (${sign}${row.delta})`,
+        data: { sportId: match.sport_id, screen: 'SportProfile' },
+      });
+    }
+
+    // PRD Section 4: if the match had an assigned umpire, prompt all
+    // participants to rate them.
+    if (match.umpire_id) {
+      const matchLabel = (match.team_a_name && match.team_b_name)
+        ? `${match.team_a_name} vs ${match.team_b_name}`
+        : 'your match';
+      const participantIds = allPlayerIds.filter((uid) => uid !== match.umpire_id);
+      if (participantIds.length > 0) {
+        void notifyUsers(participantIds, {
+          type: 'umpire_rating_prompt',
+          title: 'Rate your umpire',
+          body: `Rate your umpire for ${matchLabel}`,
+          data: { umpireId: match.umpire_id, matchId: id, screen: 'UmpireRatings' },
+        });
+      }
+    }
 
     return res.json({
       match: updatedMatch,

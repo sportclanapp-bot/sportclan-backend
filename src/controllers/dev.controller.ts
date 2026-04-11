@@ -801,31 +801,49 @@ export async function loadFullData(req: Request, res: Response) {
       (t) => !existingTourneyKeys.has(`${t.sport_id}::${t.name}`),
     );
 
+    // Track the freshly-inserted tournament rows (with their DB-assigned IDs)
+    // so we only seed matches for tournaments that are brand new on this run.
+    const freshlyInsertedTourneys: Array<{ id: string; name: string; sport_id: string; status: string }> = [];
     if (newTourneyRows.length > 0) {
       for (let i = 0; i < newTourneyRows.length; i += 20) {
         const chunk = newTourneyRows.slice(i, i + 20);
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from('tournaments')
           .insert(chunk)
-          .select('id');
-        summary.tournaments_created += data?.length ?? 0;
+          .select('id, name, sport_id, status');
+        if (error) summary.errors.push(`tournaments[${i}]: ${error.message}`);
+        if (data) {
+          summary.tournaments_created += data.length;
+          for (const t of data) freshlyInsertedTourneys.push(t as any);
+        }
       }
     }
 
-    // Re-fetch all target tournaments
+    // Re-fetch all target tournaments (used later for general lookups)
     const { data: allTourneys } = await supabase
       .from('tournaments')
       .select('id, name, sport_id, status')
       .in('name', targetTournamentNames);
 
     // ── STEP 8: Create matches ───────────────────────────────────────────
-    // Track newly-created tournament IDs so we only seed matches for those
-    const newTourneyKeys = new Set(newTourneyRows.map((t) => `${t.sport_id}::${t.name}`));
-    const newTourneyIds = new Set(
-      (allTourneys ?? [])
-        .filter((t) => newTourneyKeys.has(`${t.sport_id}::${t.name}`))
-        .map((t) => t.id),
-    );
+    // Seed matches for (a) freshly inserted tournaments and (b) existing
+    // tournaments that have zero matches yet. That way a re-run after a
+    // previous tournaments-only pass still fills in the match fixtures.
+    const tourneyIdsNeedingMatches = new Set<string>(freshlyInsertedTourneys.map((t) => t.id));
+    const existingTourneyIdsToCheck = (allTourneys ?? [])
+      .map((t) => t.id)
+      .filter((id) => !tourneyIdsNeedingMatches.has(id));
+    if (existingTourneyIdsToCheck.length > 0) {
+      const { data: existingMatches } = await supabase
+        .from('matches')
+        .select('tournament_id')
+        .in('tournament_id', existingTourneyIdsToCheck);
+      const tourneysWithMatches = new Set((existingMatches ?? []).map((m) => m.tournament_id));
+      for (const tid of existingTourneyIdsToCheck) {
+        if (!tourneysWithMatches.has(tid)) tourneyIdsNeedingMatches.add(tid);
+      }
+    }
+    const newTourneyIds = tourneyIdsNeedingMatches;
 
     const matchRows: any[] = [];
     const completedMatchBuckets: Array<{ tournament: any; sportName: SportName; teams: Array<{ id: string; name: string }> }> = [];

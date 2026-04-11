@@ -1,10 +1,33 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getSportProfile = exports.getRival = exports.getActivityHeatmap = exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = exports.getMe = void 0;
+exports.getSportProfile = exports.getRatingHistory = exports.getRival = exports.getActivityHeatmap = exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = exports.getMe = void 0;
 const supabase_1 = require("../utils/supabase");
 const subscriptions_controller_1 = require("./subscriptions.controller");
 // Public-safe user fields. Never returns password_hash.
-const PUBLIC_FIELDS = 'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, created_at';
+const PUBLIC_FIELDS = 'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, created_at';
 // Fire smart engagement notifications lazily from /users/me. Best-effort,
 // never throws — failures here must not block the main profile response.
 async function runSmartNotifications(userId) {
@@ -111,6 +134,26 @@ async function getMe(req, res) {
         return res.status(500).json({ error: error.message });
     if (!data)
         return res.status(404).json({ error: 'User not found' });
+    // Profile-completion bonus — 10 coins, once per user. Idempotent via
+    // coin_events unique key. Requires name + photo + city + at least 1 sport.
+    try {
+        const hasName = !!data.name;
+        const hasPhoto = !!data.profile_picture_url;
+        const hasCity = !!data.city_id;
+        if (hasName && hasPhoto && hasCity) {
+            const { count: sportCount } = await supabase_1.supabase
+                .from('user_sports')
+                .select('id', { count: 'exact', head: true })
+                .eq('user_id', userId);
+            if ((sportCount ?? 0) > 0) {
+                const { awardCoins } = await Promise.resolve().then(() => __importStar(require('../utils/coins')));
+                void awardCoins(userId, 'complete_profile', 10);
+            }
+        }
+    }
+    catch {
+        // swallow
+    }
     return res.json({ user: data });
 }
 exports.getMe = getMe;
@@ -629,6 +672,28 @@ async function getRival(req, res) {
     });
 }
 exports.getRival = getRival;
+// GET /users/:id/rating-history?sport_id=... — last-10 rating history rows
+// for the given user/sport, oldest-first so the chart can render straight
+// left→right without client-side reversal.
+async function getRatingHistory(req, res) {
+    const { id } = req.params;
+    const sportId = req.query.sport_id;
+    if (!sportId)
+        return res.status(400).json({ error: 'sport_id is required' });
+    const { data, error } = await supabase_1.supabase
+        .from('rating_history')
+        .select('old_rating, new_rating, delta, created_at')
+        .eq('user_id', id)
+        .eq('sport_id', sportId)
+        .order('created_at', { ascending: false })
+        .limit(10);
+    if (error)
+        return res.status(500).json({ error: error.message });
+    // Oldest → newest.
+    const ordered = (data ?? []).reverse();
+    return res.json({ history: ordered });
+}
+exports.getRatingHistory = getRatingHistory;
 // GET /users/:id/sport-profile/:sportId — per-sport rating + stats
 async function getSportProfile(req, res) {
     const { id, sportId } = req.params;

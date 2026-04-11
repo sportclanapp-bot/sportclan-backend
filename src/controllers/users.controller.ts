@@ -4,7 +4,7 @@ import { checkExpiredSubscriptions } from './subscriptions.controller';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
-  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, created_at';
+  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, created_at';
 
 // Fire smart engagement notifications lazily from /users/me. Best-effort,
 // never throws — failures here must not block the main profile response.
@@ -110,6 +110,27 @@ export async function getMe(req: Request, res: Response) {
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: 'User not found' });
+
+  // Profile-completion bonus — 10 coins, once per user. Idempotent via
+  // coin_events unique key. Requires name + photo + city + at least 1 sport.
+  try {
+    const hasName = !!data.name;
+    const hasPhoto = !!data.profile_picture_url;
+    const hasCity = !!data.city_id;
+    if (hasName && hasPhoto && hasCity) {
+      const { count: sportCount } = await supabase
+        .from('user_sports')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId);
+      if ((sportCount ?? 0) > 0) {
+        const { awardCoins } = await import('../utils/coins');
+        void awardCoins(userId, 'complete_profile', 10);
+      }
+    }
+  } catch {
+    // swallow
+  }
+
   return res.json({ user: data });
 }
 
@@ -618,6 +639,28 @@ export async function getRival(req: Request, res: Response) {
       points_ahead: Math.round((match.profile.rating - myProfile.rating) * 100) / 100,
     },
   });
+}
+
+// GET /users/:id/rating-history?sport_id=... — last-10 rating history rows
+// for the given user/sport, oldest-first so the chart can render straight
+// left→right without client-side reversal.
+export async function getRatingHistory(req: Request, res: Response) {
+  const { id } = req.params;
+  const sportId = req.query.sport_id as string | undefined;
+  if (!sportId) return res.status(400).json({ error: 'sport_id is required' });
+
+  const { data, error } = await supabase
+    .from('rating_history')
+    .select('old_rating, new_rating, delta, created_at')
+    .eq('user_id', id)
+    .eq('sport_id', sportId)
+    .order('created_at', { ascending: false })
+    .limit(10);
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Oldest → newest.
+  const ordered = (data ?? []).reverse();
+  return res.json({ history: ordered });
 }
 
 // GET /users/:id/sport-profile/:sportId — per-sport rating + stats

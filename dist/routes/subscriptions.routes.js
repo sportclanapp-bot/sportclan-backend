@@ -11,5 +11,6 @@ router.post('/verify', auth_middleware_1.authenticateToken, subscriptions_contro
 router.post('/apple/verify', auth_middleware_1.authenticateToken, subscriptions_controller_1.appleVerify);
 router.post('/coupon', auth_middleware_1.authenticateToken, subscriptions_controller_1.redeemCoupon);
 router.post('/cancel', auth_middleware_1.authenticateToken, subscriptions_controller_1.cancel);
+router.post('/trial', auth_middleware_1.authenticateToken, subscriptions_controller_1.startTrial);
 exports.default = router;
 //# sourceMappingURL=subscriptions.routes.js.map

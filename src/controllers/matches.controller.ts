@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers } from '../utils/notify';
 import { upsertVenue } from './venues.controller';
+import { awardCoins } from '../utils/coins';
 
 // POST /matches — create. FREE for all (Change #6).
 export async function createMatch(req: Request, res: Response) {
@@ -224,6 +225,111 @@ export async function listMatches(req: Request, res: Response) {
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
     return res.json({ matches: data || [] });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// GET /matches/:id/commentary — returns match_events formatted into
+// human-readable commentary lines. Cheap — reads only the events table.
+export async function getCommentary(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data: match } = await supabase
+      .from('matches')
+      .select('id, sport_id, team_a_name, team_b_name')
+      .eq('id', id)
+      .maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+
+    const { data: events, error } = await supabase
+      .from('match_events')
+      .select('id, event_type, period, clock_seconds, payload, created_at')
+      .eq('match_id', id)
+      .order('created_at', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+
+    const isCricket = !!match.sport_id && String(match.sport_id).toLowerCase().includes('cric');
+    let legalBalls = 0;
+    const enriched: Array<any> = [];
+    for (const ev of events ?? []) {
+      const p: any = ev.payload ?? {};
+
+      // For cricket, compute the over.ball label from a running legal-ball
+      // count. Wides and no-balls don't advance the legal count.
+      let overBallLabel: string | null = null;
+      if (isCricket) {
+        const isLegal = !(p.is_extra || ev.event_type === 'extra' || p.type === 'Wd' || p.type === 'Nb');
+        if (isLegal) legalBalls += 1;
+        const displayBalls = isLegal ? legalBalls : legalBalls + 1;
+        const overNum = Math.floor((displayBalls - 1) / 6);
+        const ballInOver = ((displayBalls - 1) % 6) + 1;
+        overBallLabel = `${overNum}.${ballInOver}`;
+      }
+
+      let commentary = ev.event_type as string;
+      let isWicket = false;
+      let isBoundary = false;
+      if (ev.event_type === 'wicket' || (ev.event_type === 'ball' && p.wicket)) {
+        isWicket = true;
+        const batter = p.batsmanName || p.player_name || p.batter || 'Batter';
+        commentary = `OUT! ${batter}${p.runs != null ? ` — ${p.runs} runs` : ''}`;
+      } else if (ev.event_type === 'ball') {
+        const runs = Number(p.runs ?? 0);
+        if (runs === 4) {
+          commentary = 'FOUR! Beautiful shot';
+          isBoundary = true;
+        } else if (runs === 6) {
+          commentary = 'SIX! That\u2019s massive!';
+          isBoundary = true;
+        } else if (runs === 0) {
+          commentary = 'Dot ball';
+        } else {
+          commentary = `${runs} run${runs === 1 ? '' : 's'}`;
+        }
+      } else if (ev.event_type === 'extra') {
+        if (p.type === 'Wd') commentary = 'Wide ball';
+        else if (p.type === 'Nb') commentary = 'No ball called';
+        else commentary = `Extra: ${p.type ?? ''}`;
+      } else if (ev.event_type === 'goal') {
+        const team = p.team_name || `Team ${p.team_side ?? ''}`;
+        const a = p.score_a ?? '';
+        const b = p.score_b ?? '';
+        commentary = `\u26BD GOAL! ${team} scores!${a !== '' ? ` ${a}-${b}` : ''}`;
+        isBoundary = true;
+      } else if (ev.event_type === 'yellow_card') {
+        commentary = `\uD83D\uDFE8 Yellow card${p.player ? ` for ${p.player}` : ''}`;
+      } else if (ev.event_type === 'red_card') {
+        commentary = `\uD83D\uDFE5 Red card${p.player ? ` for ${p.player}` : ''}`;
+        isWicket = true;
+      } else {
+        commentary = `${ev.event_type}${p && Object.keys(p).length > 0 ? ` ${JSON.stringify(p).slice(0, 80)}` : ''}`;
+      }
+
+      enriched.push({
+        id: ev.id,
+        over_ball: overBallLabel,
+        event_type: ev.event_type,
+        commentary,
+        timestamp: ev.created_at,
+        is_wicket: isWicket,
+        is_boundary: isBoundary,
+      });
+    }
+
+    // Return newest-first.
+    enriched.reverse();
+    return res.json({
+      commentary: enriched,
+      match: {
+        id: match.id,
+        sport_id: match.sport_id,
+        team_a_name: match.team_a_name,
+        team_b_name: match.team_b_name,
+      },
+    });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -544,6 +650,15 @@ export async function completeMatch(req: Request, res: Response) {
     // Insert rating history
     if (ratingHistoryRows.length > 0) {
       await supabase.from('rating_history').insert(ratingHistoryRows);
+    }
+
+    // Award 5 coins to every player on the winning team. Idempotent per
+    // (user, match) via awardCoins' unique key on coin_events.
+    if (winner_team_id) {
+      const winnerIds = winner_team_id === match.team_a_id ? teamA : teamB;
+      for (const uid of winnerIds) {
+        void awardCoins(uid, `win_match_${id}`, 5);
+      }
     }
 
     // Activity streaks: advance each participant's streak_count based on the

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getGroupMembers = exports.markAsRead = exports.forwardMessage = exports.deleteMessage = exports.sendMessage = exports.getMessages = exports.deleteGroup = exports.leaveGroup = exports.promoteMember = exports.removeMember = exports.addMember = exports.updateGroup = exports.createGroup = exports.getOrCreateDM = exports.listChats = void 0;
+exports.getGroupMembers = exports.markAsRead = exports.batchMarkRead = exports.forwardMessage = exports.deleteMessage = exports.sendMessage = exports.getMessages = exports.deleteGroup = exports.leaveGroup = exports.promoteMember = exports.removeMember = exports.addMember = exports.updateGroup = exports.createGroup = exports.getOrCreateDM = exports.listChats = void 0;
 const supabase_1 = require("../utils/supabase");
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
 async function listChats(req, res) {
@@ -430,6 +430,39 @@ async function forwardMessage(req, res) {
     return res.json({ success: true, forwarded_to: chat_ids.length });
 }
 exports.forwardMessage = forwardMessage;
+// POST /messages/read  { messageIds: string[] }
+// Batch-append the caller's id to each message's read_by array if it isn't
+// already present. Idempotent and cheap — PostgREST's array_append via
+// rpc isn't available, so we read each row, compute the next array, and
+// write it back in a single bulk update.
+async function batchMarkRead(req, res) {
+    const userId = req.userId;
+    const { messageIds } = req.body ?? {};
+    if (!Array.isArray(messageIds) || messageIds.length === 0) {
+        return res.status(400).json({ error: 'messageIds array is required' });
+    }
+    // Pull the rows whose read_by doesn't already contain the caller.
+    const { data: rows, error } = await supabase_1.supabase
+        .from('messages')
+        .select('id, read_by, sender_id')
+        .in('id', messageIds);
+    if (error)
+        return res.status(500).json({ error: error.message });
+    const updates = [];
+    for (const r of rows ?? []) {
+        if (r.sender_id === userId)
+            continue; // never mark own messages
+        const existing = Array.isArray(r.read_by) ? r.read_by : [];
+        if (existing.includes(userId))
+            continue;
+        updates.push({ id: r.id, read_by: [...existing, userId] });
+    }
+    for (const u of updates) {
+        await supabase_1.supabase.from('messages').update({ read_by: u.read_by }).eq('id', u.id);
+    }
+    return res.json({ success: true, updated: updates.length });
+}
+exports.batchMarkRead = batchMarkRead;
 // ─── MARK AS READ ───────────────────────────────────────────────────────────
 async function markAsRead(req, res) {
     const userId = req.userId;

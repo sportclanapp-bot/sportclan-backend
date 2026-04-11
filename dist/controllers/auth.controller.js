@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -116,6 +139,19 @@ async function register(req, res) {
     const primaryAccountType = Array.isArray(account_types) && account_types.length > 0
         ? account_types[0]
         : 'fan';
+    // Generate a unique referral code (retry a couple of times on collision).
+    const { generateReferralCode } = await Promise.resolve().then(() => __importStar(require('./referrals.controller')));
+    let referralCode = generateReferralCode();
+    for (let i = 0; i < 3; i++) {
+        const { data: existing } = await supabase_1.supabase
+            .from('users')
+            .select('id')
+            .eq('referral_code', referralCode)
+            .maybeSingle();
+        if (!existing)
+            break;
+        referralCode = generateReferralCode();
+    }
     const { data: user, error } = await supabase_1.supabase
         .from('users')
         .insert({
@@ -131,8 +167,9 @@ async function register(req, res) {
         account_type: primaryAccountType,
         is_premium: false,
         coin_balance: 0,
+        referral_code: referralCode,
     })
-        .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, coin_balance, created_at')
+        .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, coin_balance, referral_code, created_at')
         .single();
     if (error || !user) {
         return res.status(500).json({ error: error?.message || 'Failed to create user' });
@@ -169,6 +206,15 @@ async function register(req, res) {
             await supabase_1.supabase.from('coupon_usages').insert({ coupon_id: coupon.id, user_id: user.id });
             await supabase_1.supabase.from('coupon_codes').update({ uses_count: coupon.uses_count + 1 }).eq('id', coupon.id);
         }
+    }
+    // Welcome bonus — 10 coins on first registration. Idempotent via
+    // the (user_id, event_type) unique key on coin_events.
+    try {
+        const { awardCoins } = await Promise.resolve().then(() => __importStar(require('../utils/coins')));
+        await awardCoins(user.id, 'first_registration', 10);
+    }
+    catch {
+        // non-critical
     }
     await (0, redis_1.deleteOtp)(p);
     const accessToken = (0, jwt_1.generateAccessToken)(user.id);

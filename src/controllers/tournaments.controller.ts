@@ -264,6 +264,72 @@ export async function updateTournament(req: Request, res: Response) {
   }
 }
 
+// GET /tournaments/:id/bracket — returns the knockout bracket grouped
+// into named rounds. Infers the round-count from the total match count:
+//   8 matches → Round of 16 → QF → SF → F (if we ever get there)
+//   7 matches → QF (4) → SF (2) → F (1)
+//   3 matches → SF (2) → F (1)
+//   1 match  → F (1)
+// Ordering within a round uses scheduled_at.
+export async function getBracket(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data: tournament } = await supabase
+      .from('tournaments')
+      .select('id, name, format')
+      .eq('id', id)
+      .maybeSingle();
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+
+    const { data: matches, error } = await supabase
+      .from('matches')
+      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at')
+      .eq('tournament_id', id)
+      .order('scheduled_at', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Infer round structure. We walk the match list in chronological order
+    // and split into standard knockout round sizes (1 final, 2 semis, 4 QFs
+    // etc). Anything that doesn't fit falls into a final "Round 1" bucket.
+    const total = matches?.length ?? 0;
+    const roundSizes: Array<{ name: string; size: number }> = [];
+    if (total >= 8) roundSizes.push({ name: 'Quarter-Finals', size: 4 });
+    if (total >= 3) roundSizes.push({ name: 'Semi-Finals', size: 2 });
+    if (total >= 1) roundSizes.push({ name: 'Final', size: 1 });
+
+    // Matches come in chronologically: earliest rounds first. Pop from the
+    // *end* of roundSizes to build earliest→latest.
+    const rounds: Array<{ name: string; matches: any[] }> = [];
+    const reversedSizes = [...roundSizes].reverse();
+    let cursor = 0;
+    for (const r of reversedSizes) {
+      const slice = (matches ?? []).slice(cursor, cursor + r.size);
+      cursor += r.size;
+      rounds.push({
+        name: r.name,
+        matches: slice.map((m) => {
+          const ss: any = m.score_summary ?? {};
+          return {
+            id: m.id,
+            team_a_name: m.team_a_name,
+            team_b_name: m.team_b_name,
+            score_a: ss.team_a_score ?? null,
+            score_b: ss.team_b_score ?? null,
+            winner_team_id: m.winner_team_id,
+            status: m.status,
+          };
+        }),
+      });
+    }
+
+    return res.json({ tournament, rounds });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 // POST /tournaments/join  { entry_code, team_id }
 export async function joinByCode(req: Request, res: Response) {
   const userId = req.userId;

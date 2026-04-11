@@ -12,6 +12,7 @@ import {
   joinOpenMatch,
   rateMatchHandler,
   setMatchTossHandler,
+  getCommentary,
 } from '../controllers/matches.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -21,6 +22,7 @@ router.post('/', authenticateToken, createMatch);
 router.get('/', authenticateToken, listMatches);
 // /open must come before /:id so it isn't captured as a match id.
 router.get('/open', authenticateToken, listOpenMatches);
+router.get('/:id/commentary', authenticateToken, getCommentary);
 router.get('/:id', authenticateToken, getMatch);
 router.patch('/:id', authenticateToken, updateMatch);
 router.delete('/:id', authenticateToken, cancelMatch);

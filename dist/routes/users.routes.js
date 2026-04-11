@@ -15,6 +15,7 @@ router.get('/:id/followers', users_controller_1.getFollowers);
 router.get('/:id/following', users_controller_1.getFollowing);
 router.get('/:id/sport-profile/:sportId', users_controller_1.getSportProfile);
 router.get('/:id/activity-heatmap', users_controller_1.getActivityHeatmap);
+router.get('/:id/rating-history', auth_middleware_1.authenticateToken, users_controller_1.getRatingHistory);
 router.get('/:id/rival', auth_middleware_1.authenticateToken, users_controller_1.getRival);
 router.post('/:id/follow', auth_middleware_1.authenticateToken, users_controller_1.followUser);
 router.delete('/:id/follow', auth_middleware_1.authenticateToken, users_controller_1.unfollowUser);

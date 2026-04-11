@@ -34,6 +34,7 @@ import challengesRoutes from './routes/challenges.routes';
 import seasonsRoutes from './routes/seasons.routes';
 import kudosRoutes from './routes/kudos.routes';
 import venuesRoutes from './routes/venues.routes';
+import referralsRoutes from './routes/referrals.routes';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -112,6 +113,7 @@ app.use('/challenges', challengesRoutes);
 app.use('/seasons', seasonsRoutes);
 app.use('/kudos', kudosRoutes);
 app.use('/venues', venuesRoutes);
+app.use('/referrals', referralsRoutes);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {

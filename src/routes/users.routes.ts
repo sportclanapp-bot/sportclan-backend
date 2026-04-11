@@ -15,6 +15,7 @@ import {
   getSportProfile,
   getActivityHeatmap,
   getRival,
+  getRatingHistory,
 } from '../controllers/users.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -32,6 +33,7 @@ router.get('/:id/followers', getFollowers);
 router.get('/:id/following', getFollowing);
 router.get('/:id/sport-profile/:sportId', getSportProfile);
 router.get('/:id/activity-heatmap', getActivityHeatmap);
+router.get('/:id/rating-history', authenticateToken, getRatingHistory);
 router.get('/:id/rival', authenticateToken, getRival);
 
 router.post('/:id/follow', authenticateToken, followUser);

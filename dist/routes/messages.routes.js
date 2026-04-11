@@ -22,6 +22,7 @@ router.get('/groups/:id/members', messages_controller_1.getGroupMembers);
 router.get('/chats/:id/messages', messages_controller_1.getMessages);
 router.post('/chats/:id/messages', messages_controller_1.sendMessage);
 router.post('/chats/:id/read', messages_controller_1.markAsRead);
+router.post('/read', messages_controller_1.batchMarkRead);
 router.delete('/messages/:messageId', messages_controller_1.deleteMessage);
 router.post('/forward', messages_controller_1.forwardMessage);
 exports.default = router;

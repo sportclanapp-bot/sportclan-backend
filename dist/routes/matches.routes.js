@@ -8,6 +8,7 @@ router.post('/', auth_middleware_1.authenticateToken, matches_controller_1.creat
 router.get('/', auth_middleware_1.authenticateToken, matches_controller_1.listMatches);
 // /open must come before /:id so it isn't captured as a match id.
 router.get('/open', auth_middleware_1.authenticateToken, matches_controller_1.listOpenMatches);
+router.get('/:id/commentary', auth_middleware_1.authenticateToken, matches_controller_1.getCommentary);
 router.get('/:id', auth_middleware_1.authenticateToken, matches_controller_1.getMatch);
 router.patch('/:id', auth_middleware_1.authenticateToken, matches_controller_1.updateMatch);
 router.delete('/:id', auth_middleware_1.authenticateToken, matches_controller_1.cancelMatch);

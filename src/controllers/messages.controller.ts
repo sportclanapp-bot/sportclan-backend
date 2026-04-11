@@ -485,6 +485,40 @@ export async function forwardMessage(req: Request, res: Response) {
   return res.json({ success: true, forwarded_to: chat_ids.length });
 }
 
+// POST /messages/read  { messageIds: string[] }
+// Batch-append the caller's id to each message's read_by array if it isn't
+// already present. Idempotent and cheap — PostgREST's array_append via
+// rpc isn't available, so we read each row, compute the next array, and
+// write it back in a single bulk update.
+export async function batchMarkRead(req: Request, res: Response) {
+  const userId = req.userId!;
+  const { messageIds } = req.body ?? {};
+  if (!Array.isArray(messageIds) || messageIds.length === 0) {
+    return res.status(400).json({ error: 'messageIds array is required' });
+  }
+
+  // Pull the rows whose read_by doesn't already contain the caller.
+  const { data: rows, error } = await supabase
+    .from('messages')
+    .select('id, read_by, sender_id')
+    .in('id', messageIds);
+  if (error) return res.status(500).json({ error: error.message });
+
+  const updates: Array<{ id: string; read_by: string[] }> = [];
+  for (const r of rows ?? []) {
+    if (r.sender_id === userId) continue; // never mark own messages
+    const existing: string[] = Array.isArray(r.read_by) ? r.read_by : [];
+    if (existing.includes(userId)) continue;
+    updates.push({ id: r.id, read_by: [...existing, userId] });
+  }
+
+  for (const u of updates) {
+    await supabase.from('messages').update({ read_by: u.read_by }).eq('id', u.id);
+  }
+
+  return res.json({ success: true, updated: updates.length });
+}
+
 // ─── MARK AS READ ───────────────────────────────────────────────────────────
 export async function markAsRead(req: Request, res: Response) {
   const userId = req.userId!;

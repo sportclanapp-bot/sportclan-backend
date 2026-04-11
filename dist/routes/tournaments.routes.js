@@ -8,6 +8,7 @@ router.post('/', auth_middleware_1.authenticateToken, tournaments_controller_1.c
 router.get('/', auth_middleware_1.authenticateToken, tournaments_controller_1.listTournaments);
 router.post('/join', auth_middleware_1.authenticateToken, tournaments_controller_1.joinByCode);
 router.get('/:id', auth_middleware_1.authenticateToken, tournaments_controller_1.getTournament);
+router.get('/:id/bracket', auth_middleware_1.authenticateToken, tournaments_controller_1.getBracket);
 router.patch('/:id', auth_middleware_1.authenticateToken, tournaments_controller_1.updateTournament);
 router.post('/:id/entries', auth_middleware_1.authenticateToken, tournaments_controller_1.createEntry);
 router.patch('/:id/entries/:entryId', auth_middleware_1.authenticateToken, tournaments_controller_1.updateEntry);

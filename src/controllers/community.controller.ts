@@ -209,6 +209,24 @@ export async function createPost(req: Request, res: Response) {
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
+
+  // Award coins: 2 per post, capped at 5/day via a date-scoped event type.
+  try {
+    const { awardCoins } = await import('../utils/coins');
+    const today = new Date().toISOString().slice(0, 10);
+    const { count: postsToday } = await supabase
+      .from('community_posts')
+      .select('id', { count: 'exact', head: true })
+      .eq('author_id', userId)
+      .gte('created_at', `${today}T00:00:00Z`);
+    const todayN = postsToday ?? 1;
+    if (todayN <= 5) {
+      void awardCoins(userId, `community_post_${today}_${todayN}`, 2);
+    }
+  } catch {
+    // best-effort
+  }
+
   return res.status(201).json({ data });
 }
 

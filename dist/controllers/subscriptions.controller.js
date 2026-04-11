@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.cancel = exports.redeemCoupon = exports.appleVerify = exports.verify = exports.initiate = exports.getMySubscription = exports.getPlans = exports.checkExpiredSubscriptions = void 0;
+exports.cancel = exports.startTrial = exports.redeemCoupon = exports.appleVerify = exports.verify = exports.initiate = exports.getMySubscription = exports.getPlans = exports.checkExpiredSubscriptions = void 0;
 const supabase_1 = require("../utils/supabase");
 const fcm_1 = require("../utils/fcm");
 // ─── Expiry auto-checker ──────────────────────────────────────────────────────
@@ -373,6 +373,63 @@ async function redeemCoupon(req, res) {
     });
 }
 exports.redeemCoupon = redeemCoupon;
+// POST /subscriptions/trial — one-time 7-day Premium trial.
+// Requires trial_used=false. Flips is_premium=true, sets premium_expires_at
+// to now+7 days, marks trial_used=true, and inserts a dummy subscription
+// row with amount=0 so transactions/history stay consistent.
+async function startTrial(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    const { data: usr } = await supabase_1.supabase
+        .from('users')
+        .select('trial_used, is_premium')
+        .eq('id', userId)
+        .maybeSingle();
+    if (!usr)
+        return res.status(404).json({ error: 'User not found' });
+    if (usr.trial_used)
+        return res.status(400).json({ error: 'Trial already used' });
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { error: updErr } = await supabase_1.supabase
+        .from('users')
+        .update({
+        is_premium: true,
+        premium_expires_at: expiresAt,
+        trial_used: true,
+    })
+        .eq('id', userId);
+    if (updErr)
+        return res.status(500).json({ error: updErr.message });
+    // Create a trial subscription record.
+    await supabase_1.supabase.from('subscriptions').insert({
+        user_id: userId,
+        plan_id: 'trial',
+        status: 'active',
+        amount_inr: 0,
+        payment_provider: 'trial',
+        expires_at: expiresAt,
+    });
+    // Best-effort push.
+    try {
+        const { data: tokens } = await supabase_1.supabase
+            .from('push_tokens')
+            .select('token')
+            .eq('user_id', userId);
+        if (tokens && tokens.length > 0) {
+            await (0, fcm_1.sendPushToTokens)(tokens.map((t) => t.token), {
+                title: '\uD83C\uDF89 Premium trial started',
+                body: 'You\u2019ve got 7 days of SportClan Premium. Enjoy!',
+                data: { type: 'trial_started', screen: 'SubscriptionScreen' },
+            });
+        }
+    }
+    catch {
+        // swallow
+    }
+    return res.json({ success: true, trialEndsAt: expiresAt });
+}
+exports.startTrial = startTrial;
 // POST /subscriptions/cancel
 async function cancel(req, res) {
     const userId = req.userId;

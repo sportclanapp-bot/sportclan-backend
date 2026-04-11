@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.searchMentions = exports.checkLiked = exports.getMyPostCount = exports.reportContent = exports.reactToComment = exports.deleteComment = exports.createComment = exports.listComments = exports.unlikePost = exports.likePost = exports.closePost = exports.deletePost = exports.updatePost = exports.createPost = exports.getPost = exports.getSportStoryCounts = exports.listPosts = void 0;
 const supabase_1 = require("../utils/supabase");
@@ -202,6 +225,23 @@ async function createPost(req, res) {
         .single();
     if (error)
         return res.status(500).json({ error: error.message });
+    // Award coins: 2 per post, capped at 5/day via a date-scoped event type.
+    try {
+        const { awardCoins } = await Promise.resolve().then(() => __importStar(require('../utils/coins')));
+        const today = new Date().toISOString().slice(0, 10);
+        const { count: postsToday } = await supabase_1.supabase
+            .from('community_posts')
+            .select('id', { count: 'exact', head: true })
+            .eq('author_id', userId)
+            .gte('created_at', `${today}T00:00:00Z`);
+        const todayN = postsToday ?? 1;
+        if (todayN <= 5) {
+            void awardCoins(userId, `community_post_${today}_${todayN}`, 2);
+        }
+    }
+    catch {
+        // best-effort
+    }
     return res.status(201).json({ data });
 }
 exports.createPost = createPost;

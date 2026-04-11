@@ -126,6 +126,19 @@ export async function register(req: Request, res: Response) {
     ? account_types[0]
     : 'fan';
 
+  // Generate a unique referral code (retry a couple of times on collision).
+  const { generateReferralCode } = await import('./referrals.controller');
+  let referralCode = generateReferralCode();
+  for (let i = 0; i < 3; i++) {
+    const { data: existing } = await supabase
+      .from('users')
+      .select('id')
+      .eq('referral_code', referralCode)
+      .maybeSingle();
+    if (!existing) break;
+    referralCode = generateReferralCode();
+  }
+
   const { data: user, error } = await supabase
     .from('users')
     .insert({
@@ -141,8 +154,9 @@ export async function register(req: Request, res: Response) {
       account_type: primaryAccountType,
       is_premium: false,
       coin_balance: 0,
+      referral_code: referralCode,
     })
-    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, coin_balance, created_at')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, coin_balance, referral_code, created_at')
     .single();
   if (error || !user) {
     return res.status(500).json({ error: error?.message || 'Failed to create user' });
@@ -182,6 +196,15 @@ export async function register(req: Request, res: Response) {
       await supabase.from('coupon_usages').insert({ coupon_id: coupon.id, user_id: user.id });
       await supabase.from('coupon_codes').update({ uses_count: coupon.uses_count + 1 }).eq('id', coupon.id);
     }
+  }
+
+  // Welcome bonus — 10 coins on first registration. Idempotent via
+  // the (user_id, event_type) unique key on coin_events.
+  try {
+    const { awardCoins } = await import('../utils/coins');
+    await awardCoins(user.id, 'first_registration', 10);
+  } catch {
+    // non-critical
   }
 
   await deleteOtp(p);

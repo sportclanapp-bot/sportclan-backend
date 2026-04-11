@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticateToken } from '../middleware/auth.middleware';
 import {
   getPlans, getMySubscription, initiate, verify,
-  appleVerify, redeemCoupon, cancel,
+  appleVerify, redeemCoupon, cancel, startTrial,
 } from '../controllers/subscriptions.controller';
 
 const router = Router();
@@ -14,5 +14,6 @@ router.post('/verify', authenticateToken, verify);
 router.post('/apple/verify', authenticateToken, appleVerify);
 router.post('/coupon', authenticateToken, redeemCoupon);
 router.post('/cancel', authenticateToken, cancel);
+router.post('/trial', authenticateToken, startTrial);
 
 export default router;

@@ -48,6 +48,47 @@ const TEAM_DATA = {
     Basketball: ['Mumbai Hoops', 'Delhi Dunkers'],
     Hockey: ['Punjab Lions', 'Odisha Warriors'],
 };
+// Sport colors (hex without #) for ui-avatars.com backgrounds
+const SPORT_HEX = {
+    Cricket: '15803D',
+    Badminton: '1D4ED8',
+    Football: '1E3A8A',
+    Tennis: 'C2410C',
+    'Table Tennis': '9D174D',
+    Pickleball: '065F46',
+    Chess: '374151',
+    Carrom: '5B21B6',
+    Volleyball: '9A3412',
+    Basketball: 'B45309',
+    Hockey: '0E7490',
+};
+// Build initials from a team/tournament name for ui-avatars
+function initials(name) {
+    return name
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((w) => w[0])
+        .join('')
+        .toUpperCase();
+}
+function teamLogoUrl(teamName, sportName) {
+    const bg = SPORT_HEX[sportName] ?? '1565C0';
+    const initialsStr = encodeURIComponent(initials(teamName));
+    return `https://ui-avatars.com/api/?name=${initialsStr}&background=${bg}&color=fff&size=200&bold=true`;
+}
+function tournamentBannerUrl(index) {
+    return `https://picsum.photos/seed/tournament${index}/1200/400`;
+}
+function sportPostImageUrl(sportName, index) {
+    const seed = sportName.toLowerCase().replace(/\s+/g, '') + index;
+    return `https://picsum.photos/seed/${seed}/800/600`;
+}
+function profilePhotoUrl(i) {
+    // pravatar has 70 images available (img=1 to img=70)
+    const id = ((i - 1) % 70) + 1;
+    return `https://i.pravatar.cc/300?img=${id}`;
+}
 const BIOS = [
     'Weekend cricket enthusiast \u00B7 Looking for match partners',
     'Badminton player \u00B7 State level \u00B7 Love doubles',
@@ -221,6 +262,7 @@ async function loadTestData(req, res) {
                 email: `test${i}@sportclan.test`,
                 city_id: cityId,
                 account_type: accountType,
+                profile_picture_url: profilePhotoUrl(i),
                 bio: rand(BIOS),
                 is_premium: i <= 20,
                 coin_balance: randInt(50, 500),
@@ -301,6 +343,7 @@ async function loadTestData(req, res) {
                 teamRowsToInsert.push({
                     sport_id: sid,
                     name: teamName,
+                    logo_url: teamLogoUrl(teamName, sportName),
                     city_id: anyCity,
                     created_by: userId,
                     is_public: true,
@@ -368,15 +411,18 @@ async function loadTestData(req, res) {
             { status: 'upcoming', startOffset: 7, endOffset: 30, prefix: 'Winter' },
             { status: 'upcoming', startOffset: 14, endOffset: 45, prefix: 'Championship' },
         ];
+        let tourneyIndex = 0;
         for (const sportName of SPORT_NAMES) {
             const sid = sportsByName.get(sportName.toLowerCase());
             if (!sid)
                 continue;
             for (const cfg of tournamentConfigs) {
+                tourneyIndex += 1;
                 const entryCode = `${sportName.slice(0, 3).toUpperCase()}${cfg.prefix.slice(0, 3).toUpperCase()}${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+                const tournamentName = `${cfg.prefix} ${sportName} Cup 2026`;
                 tournamentRowsToInsert.push({
                     sport_id: sid,
-                    name: `${cfg.prefix} ${sportName} Cup 2026`,
+                    name: tournamentName,
                     description: `Open ${sportName} tournament \u2014 all levels welcome`,
                     format: 'knockout',
                     city_id: anyCity,
@@ -386,6 +432,7 @@ async function loadTestData(req, res) {
                     entry_fee: randInt(0, 2000),
                     max_teams: 8,
                     prize_pool: randInt(5000, 50000),
+                    banner_url: tournamentBannerUrl(tourneyIndex),
                     status: cfg.status,
                     entry_code: entryCode,
                     created_by: userId,
@@ -528,10 +575,12 @@ async function loadTestData(req, res) {
         const postRows = POSTS.slice(0, 30).map((p, i) => {
             const sportName = SPORT_NAMES[i % SPORT_NAMES.length];
             const sid = sportsByName.get(sportName.toLowerCase()) ?? null;
+            // Add images to every 2nd post (15 total) for a mix of text + visual posts
+            const hasImage = i % 2 === 0;
             return {
                 author_id: postAuthorPool[i % postAuthorPool.length],
                 content: p.content,
-                image_url: i < 3 ? `https://picsum.photos/seed/${i + 1}/400/300` : null,
+                image_url: hasImage ? sportPostImageUrl(sportName, i + 1) : null,
                 sport_id: sid,
                 city_id: anyCity,
                 post_type: p.type,
@@ -635,6 +684,7 @@ async function loadTestData(req, res) {
             coin_balance: 2000,
             is_premium: true,
             premium_expires_at: new Date(Date.now() + 180 * 86400000).toISOString(),
+            profile_picture_url: profilePhotoUrl(1),
         })
             .eq('id', userId);
         // Sport profiles for current user in Cricket and Badminton

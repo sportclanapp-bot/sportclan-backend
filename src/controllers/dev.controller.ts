@@ -1007,9 +1007,8 @@ export async function loadFullData(req: Request, res: Response) {
         for (const m of data) insertedMatchIds.push(m.id);
       }
     }
-    if (matchRows.length === 0) {
-      summary.errors.push(`match_planner: matchRows empty (allTourneys=${(allTourneys ?? []).length}, newTourneyIds=${newTourneyIds.size}, teamsBySport.size=${teamsBySport.size})`);
-    }
+    // matchRows can legitimately be empty on re-runs once every tournament
+    // already has fixtures, so that's not an error worth reporting.
 
     // ── STEP 9: Match events for 3 completed cricket matches ─────────────
     // Query directly — works on both fresh runs and re-runs. Skip matches
@@ -1187,10 +1186,25 @@ export async function loadFullData(req: Request, res: Response) {
         message: rand(kudosMessages),
       });
     }
+    // Kudos has a UNIQUE (from_user_id, to_user_id, match_id) constraint.
+    // Filter out rows that already exist so re-runs don't fail.
     if (kudosRows.length > 0) {
-      const { data, error } = await supabase.from('kudos').insert(kudosRows).select('id');
-      if (error) summary.errors.push(`kudos: ${error.message}`);
-      summary.kudos_created = data?.length ?? 0;
+      const matchIds = Array.from(new Set(kudosRows.map((k) => k.match_id)));
+      const { data: existingKudos } = await supabase
+        .from('kudos')
+        .select('from_user_id, to_user_id, match_id')
+        .in('match_id', matchIds);
+      const existingKeys = new Set(
+        (existingKudos ?? []).map((k) => `${k.from_user_id}::${k.to_user_id}::${k.match_id}`),
+      );
+      const newKudos = kudosRows.filter(
+        (k) => !existingKeys.has(`${k.from_user_id}::${k.to_user_id}::${k.match_id}`),
+      );
+      if (newKudos.length > 0) {
+        const { data, error } = await supabase.from('kudos').insert(newKudos).select('id');
+        if (error) summary.errors.push(`kudos: ${error.message}`);
+        summary.kudos_created = data?.length ?? 0;
+      }
     }
 
     // ── STEP 14: Gifts received by caller (15) ───────────────────────────

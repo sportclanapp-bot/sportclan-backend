@@ -38,6 +38,7 @@ const seasons_routes_1 = __importDefault(require("./routes/seasons.routes"));
 const kudos_routes_1 = __importDefault(require("./routes/kudos.routes"));
 const venues_routes_1 = __importDefault(require("./routes/venues.routes"));
 const referrals_routes_1 = __importDefault(require("./routes/referrals.routes"));
+const dev_routes_1 = __importDefault(require("./routes/dev.routes"));
 const app = (0, express_1.default)();
 app.set('trust proxy', 1);
 app.use((0, helmet_1.default)({
@@ -109,6 +110,7 @@ app.use('/seasons', seasons_routes_1.default);
 app.use('/kudos', kudos_routes_1.default);
 app.use('/venues', venues_routes_1.default);
 app.use('/referrals', referrals_routes_1.default);
+app.use('/dev', dev_routes_1.default);
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {
     // eslint-disable-next-line no-console

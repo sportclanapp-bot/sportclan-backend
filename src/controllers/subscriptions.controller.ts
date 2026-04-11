@@ -300,28 +300,38 @@ export async function redeemCoupon(req: Request, res: Response) {
   if (!code) return res.status(400).json({ error: 'code required' });
 
   // Prefer the coupon_codes table (single source of truth). Fall back to the
-  // hard-coded map so existing deployments keep working if the migration has
-  // not yet run.
+  // hard-coded map so existing deployments keep working if the table lookup
+  // fails for any reason. Production schema (verified 2026-04-11):
+  //   id, code, description, premium_months, coins, max_uses (nullable),
+  //   uses_count, expires_at, active, created_at.
   const upperCode = code.toUpperCase();
   let months = 0;
   let coins = 0;
   let couponExpiry: Date | null = null;
-  let couponRowId: string | null = null;
+  let couponDbId: string | null = null;
 
   const { data: couponRow } = await supabase
     .from('coupon_codes')
-    .select('code, subscription_months, coin_bonus, expires_at, max_uses, used_count')
+    .select('id, code, premium_months, coins, expires_at, max_uses, uses_count, active')
     .eq('code', upperCode)
     .maybeSingle();
 
   if (couponRow) {
-    if (couponRow.max_uses > 0 && couponRow.used_count >= couponRow.max_uses) {
+    if (couponRow.active === false) {
+      return res.status(400).json({ error: 'Coupon is disabled' });
+    }
+    // max_uses is nullable — null means unlimited.
+    if (
+      couponRow.max_uses != null &&
+      couponRow.max_uses > 0 &&
+      (couponRow.uses_count ?? 0) >= couponRow.max_uses
+    ) {
       return res.status(400).json({ error: 'Coupon fully redeemed' });
     }
-    months = couponRow.subscription_months;
-    coins = couponRow.coin_bonus;
+    months = couponRow.premium_months ?? 0;
+    coins = couponRow.coins ?? 0;
     couponExpiry = couponRow.expires_at ? new Date(couponRow.expires_at) : null;
-    couponRowId = couponRow.code;
+    couponDbId = couponRow.id;
   } else {
     const legacy = COUPONS[upperCode];
     if (!legacy) return res.status(400).json({ error: 'Invalid coupon code' });
@@ -378,25 +388,19 @@ export async function redeemCoupon(req: Request, res: Response) {
     status: 'completed',
   });
 
-  // Bump used_count so we honour max_uses.
-  if (couponRowId) {
-    await supabase.rpc('increment_coupon_usage', { p_code: couponRowId }).then(
-      () => undefined,
-      async () => {
-        // Fallback if the RPC doesn't exist — do a simple update.
-        const { data: fresh } = await supabase
-          .from('coupon_codes')
-          .select('used_count')
-          .eq('code', couponRowId!)
-          .maybeSingle();
-        if (fresh) {
-          await supabase
-            .from('coupon_codes')
-            .update({ used_count: (fresh.used_count ?? 0) + 1 })
-            .eq('code', couponRowId!);
-        }
-      },
-    );
+  // Bump uses_count so we honour max_uses on the next redemption. Best-effort.
+  if (couponDbId) {
+    const { data: fresh } = await supabase
+      .from('coupon_codes')
+      .select('uses_count')
+      .eq('id', couponDbId)
+      .maybeSingle();
+    if (fresh) {
+      await supabase
+        .from('coupon_codes')
+        .update({ uses_count: (fresh.uses_count ?? 0) + 1 })
+        .eq('id', couponDbId);
+    }
   }
 
   return res.json({

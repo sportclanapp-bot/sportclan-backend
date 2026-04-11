@@ -20,24 +20,68 @@ async function deleteAccount(req, res) {
 }
 exports.deleteAccount = deleteAccount;
 // GET /account/sessions
+// GET /account/sessions — returns the caller's active sessions.
+//
+// There's a `sessions` table in the schema but nothing actually writes to
+// it — the real source of truth for who's signed in is `refresh_tokens`,
+// which gets a row on every login. We read from there and synthesise a
+// session shape the frontend can render: id, device label, last-used time,
+// and a "This device" flag for the token that matches the current request.
 async function getSessions(req, res) {
     const userId = req.userId;
+    const currentRefreshToken = req.headers['x-refresh-token'] ?? null;
     const { data, error } = await supabase_1.supabase
-        .from('sessions')
-        .select('*')
+        .from('refresh_tokens')
+        .select('id, token, created_at, user_agent, device_name, last_used_at')
         .eq('user_id', userId)
-        .order('last_active', { ascending: false });
-    if (error)
-        return res.status(500).json({ error: error.message });
-    return res.json({ sessions: data ?? [] });
+        .order('created_at', { ascending: false });
+    if (error) {
+        // If any of those optional columns don't exist, retry with just id/token/
+        // created_at so the endpoint still works on older schemas.
+        const fallback = await supabase_1.supabase
+            .from('refresh_tokens')
+            .select('id, token, created_at')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false });
+        if (fallback.error)
+            return res.status(500).json({ error: fallback.error.message });
+        const sessions = (fallback.data ?? []).map((row) => ({
+            id: row.id,
+            device_name: 'Mobile',
+            device_os: null,
+            ip_address: null,
+            location: null,
+            is_current: currentRefreshToken ? row.token === currentRefreshToken : false,
+            last_active: row.created_at,
+            created_at: row.created_at,
+        }));
+        return res.json({ sessions });
+    }
+    const sessions = (data ?? []).map((row) => ({
+        id: row.id,
+        device_name: row.device_name ?? row.user_agent ?? 'Mobile',
+        device_os: null,
+        ip_address: null,
+        location: null,
+        is_current: currentRefreshToken ? row.token === currentRefreshToken : false,
+        last_active: row.last_used_at ?? row.created_at,
+        created_at: row.created_at,
+    }));
+    // If we couldn't identify "this device" by the refresh token header, mark
+    // the most recent row as current — that's the session the user is most
+    // likely sitting in right now.
+    if (!sessions.some((s) => s.is_current) && sessions.length > 0) {
+        sessions[0].is_current = true;
+    }
+    return res.json({ sessions });
 }
 exports.getSessions = getSessions;
-// DELETE /account/sessions/:sessionId
+// DELETE /account/sessions/:sessionId — delete a single refresh_tokens row.
 async function revokeSession(req, res) {
     const userId = req.userId;
     const { sessionId } = req.params;
     const { error } = await supabase_1.supabase
-        .from('sessions')
+        .from('refresh_tokens')
         .delete()
         .eq('id', sessionId)
         .eq('user_id', userId);
@@ -46,14 +90,20 @@ async function revokeSession(req, res) {
     return res.json({ success: true });
 }
 exports.revokeSession = revokeSession;
-// DELETE /account/sessions — revoke all other sessions
+// DELETE /account/sessions/all — revoke all other refresh tokens.
+// The caller's current token (X-Refresh-Token header) is preserved so they
+// stay logged in on this device.
 async function revokeAllSessions(req, res) {
     const userId = req.userId;
-    const { error } = await supabase_1.supabase
-        .from('sessions')
+    const currentRefreshToken = req.headers['x-refresh-token'] ?? null;
+    let query = supabase_1.supabase
+        .from('refresh_tokens')
         .delete()
-        .eq('user_id', userId)
-        .eq('is_current', false);
+        .eq('user_id', userId);
+    if (currentRefreshToken) {
+        query = query.neq('token', currentRefreshToken);
+    }
+    const { error } = await query;
     if (error)
         return res.status(500).json({ error: error.message });
     return res.json({ success: true, message: 'All other sessions revoked' });

@@ -1012,22 +1012,27 @@ export async function loadFullData(req: Request, res: Response) {
     }
 
     // ── STEP 9: Match events for 3 completed cricket matches ─────────────
-    // Use the inserted IDs list directly (small) instead of a DB round-trip.
+    // Query directly — works on both fresh runs and re-runs. Skip matches
+    // that already have any events so we don't duplicate commentary.
     const cricketSportId = sportIdByName.get('Cricket');
     if (cricketSportId) {
-      // Filter insertedMatchRows to completed cricket matches — we already
-      // know which rows we pushed and what their status is, so we can pull
-      // the matching IDs back out without another query.
-      const cricketCompletedIds: string[] = [];
-      for (let i = 0; i < matchRows.length && cricketCompletedIds.length < 3; i++) {
-        const row = matchRows[i];
-        if (row.sport_id === cricketSportId && row.status === 'completed') {
-          const insertedId = insertedMatchIds[i];
-          if (insertedId) cricketCompletedIds.push(insertedId);
-        }
-      }
+      const { data: cricketCompleted } = await supabase
+        .from('matches')
+        .select('id')
+        .eq('sport_id', cricketSportId)
+        .eq('status', 'completed')
+        .order('created_at', { ascending: false })
+        .limit(3);
       const eventRows: any[] = [];
-      for (const mid of cricketCompletedIds) eventRows.push(...cricketEvents(mid, userId));
+      for (const m of cricketCompleted ?? []) {
+        // Skip if this match already has events (prevents duplication)
+        const { count } = await supabase
+          .from('match_events')
+          .select('id', { count: 'exact', head: true })
+          .eq('match_id', m.id);
+        if ((count ?? 0) > 0) continue;
+        eventRows.push(...cricketEvents(m.id, userId));
+      }
       if (eventRows.length > 0) {
         for (let i = 0; i < eventRows.length; i += 100) {
           const chunk = eventRows.slice(i, i + 100);

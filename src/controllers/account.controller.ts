@@ -21,50 +21,65 @@ export async function deleteAccount(req: Request, res: Response) {
   });
 }
 
-// GET /account/sessions
-// GET /account/sessions — returns the caller's active sessions.
+// GET /account/sessions — returns the caller's active sessions, deduped
+// per device.
 //
-// There's a `sessions` table in the schema but nothing actually writes to
-// it — the real source of truth for who's signed in is `refresh_tokens`,
-// which gets a row on every login. We read from there and synthesise a
-// session shape the frontend can render: id, device label, last-used time,
-// and a "This device" flag for the token that matches the current request.
+// refresh_tokens accumulates a new row every time the app rotates its
+// token (which happens on every login and on every silent refresh), so a
+// single device can easily have dozens of rows. We read all rows for the
+// user ordered newest-first, then keep only the MOST RECENT row for each
+// unique device. The device key is `device_info`/`device_name`/`user_agent`
+// if any of them exist, else the last 8 chars of the token as a stable
+// fallback. Capped at 10 sessions.
 export async function getSessions(req: Request, res: Response) {
   const userId = req.userId!;
   const currentRefreshToken =
     (req.headers['x-refresh-token'] as string | undefined) ?? null;
 
-  const { data, error } = await supabase
-    .from('refresh_tokens')
-    .select('id, token, created_at, user_agent, device_name, last_used_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    // If any of those optional columns don't exist, retry with just id/token/
-    // created_at so the endpoint still works on older schemas.
-    const fallback = await supabase
+  // Try the rich schema first. If some of the optional columns don't
+  // exist, fall back to the minimal id/token/created_at set.
+  let rows: any[] = [];
+  {
+    const rich = await supabase
       .from('refresh_tokens')
-      .select('id, token, created_at')
+      .select('id, token, created_at, user_agent, device_name, device_info, last_used_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
-    if (fallback.error) return res.status(500).json({ error: fallback.error.message });
-    const sessions = (fallback.data ?? []).map((row) => ({
-      id: row.id,
-      device_name: 'Mobile',
-      device_os: null,
-      ip_address: null,
-      location: null,
-      is_current: currentRefreshToken ? row.token === currentRefreshToken : false,
-      last_active: row.created_at,
-      created_at: row.created_at,
-    }));
-    return res.json({ sessions });
+    if (!rich.error) {
+      rows = rich.data ?? [];
+    } else {
+      const fallback = await supabase
+        .from('refresh_tokens')
+        .select('id, token, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+      if (fallback.error) return res.status(500).json({ error: fallback.error.message });
+      rows = fallback.data ?? [];
+    }
   }
 
-  const sessions = (data ?? []).map((row: any) => ({
+  // Dedup newest-first per device key. We iterate in order (already desc
+  // by created_at) and keep the first occurrence for each device.
+  const seen = new Set<string>();
+  const deduped: any[] = [];
+  for (const row of rows) {
+    const deviceKey: string =
+      (row.device_info && String(row.device_info)) ||
+      (row.device_name && String(row.device_name)) ||
+      (row.user_agent && String(row.user_agent)) ||
+      // Fallback: use the last 8 chars of the token. Unique enough per
+      // device since tokens are 100+ chars and rotate frequently.
+      `tok_${String(row.token ?? '').slice(-8) || row.id}`;
+    if (seen.has(deviceKey)) continue;
+    seen.add(deviceKey);
+    deduped.push({ ...row, _deviceKey: deviceKey });
+    if (deduped.length >= 10) break;
+  }
+
+  const sessions = deduped.map((row) => ({
     id: row.id,
-    device_name: row.device_name ?? row.user_agent ?? 'Mobile',
+    device_name:
+      row.device_info ?? row.device_name ?? row.user_agent ?? 'Mobile device',
     device_os: null,
     ip_address: null,
     location: null,
@@ -74,8 +89,8 @@ export async function getSessions(req: Request, res: Response) {
   }));
 
   // If we couldn't identify "this device" by the refresh token header, mark
-  // the most recent row as current — that's the session the user is most
-  // likely sitting in right now.
+  // the most recently used row as current — that's almost always the
+  // session the user is sitting in right now.
   if (!sessions.some((s) => s.is_current) && sessions.length > 0) {
     sessions[0].is_current = true;
   }

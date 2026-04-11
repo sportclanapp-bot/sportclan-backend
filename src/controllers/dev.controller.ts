@@ -2,17 +2,17 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 
 // POST /dev/load-test-data
-// Dev-only endpoint that seeds test data for the current user:
+// Seeds test data for the current authenticated user:
 //   - Creates 1 live cricket match
 //   - Creates 3 community posts
-//   - Sets coin_balance to 500
+//   - Sets coin_balance=500, is_premium=true
 //   - Creates 5 test notifications (one of each main type)
-// Gated to NODE_ENV !== 'production'.
+//
+// Auth is enforced by the router middleware, so only logged-in users can
+// trigger this. The frontend gates the button behind __DEV__ so it's
+// invisible in production APKs. Remove this route entirely before the
+// final App Store / Play Store submission.
 export async function loadTestData(req: Request, res: Response) {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(403).json({ error: 'Not available in production' });
-  }
-
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 

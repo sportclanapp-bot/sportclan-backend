@@ -460,6 +460,7 @@ export async function loadFullData(req: Request, res: Response) {
     challenges_created: 0, user_challenges_created: 0,
     coin_events_created: 0,
     match_participants_created: 0,
+    errors: [] as string[],
   };
 
   try {
@@ -975,14 +976,18 @@ export async function loadFullData(req: Request, res: Response) {
     const insertedMatchIds: string[] = [];
     for (let i = 0; i < matchRows.length; i += 100) {
       const chunk = matchRows.slice(i, i + 100);
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('matches')
         .insert(chunk)
         .select('id, sport_id, tournament_id, status');
+      if (error) summary.errors.push(`matches[${i}]: ${error.message}`);
       if (data) {
         summary.matches_created += data.length;
         for (const m of data) insertedMatchIds.push(m.id);
       }
+    }
+    if (matchRows.length === 0) {
+      summary.errors.push(`match_planner: matchRows empty (allTourneys=${(allTourneys ?? []).length}, newTourneyIds=${newTourneyIds.size}, teamsBySport.size=${teamsBySport.size})`);
     }
 
     // ── STEP 9: Match events for first 3 completed cricket matches ───────
@@ -1151,7 +1156,8 @@ export async function loadFullData(req: Request, res: Response) {
       });
     }
     if (kudosRows.length > 0) {
-      const { data } = await supabase.from('kudos').insert(kudosRows).select('id');
+      const { data, error } = await supabase.from('kudos').insert(kudosRows).select('id');
+      if (error) summary.errors.push(`kudos: ${error.message}`);
       summary.kudos_created = data?.length ?? 0;
     }
 

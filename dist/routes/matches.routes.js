@@ -27,5 +27,6 @@ router.patch('/:id/availability', auth_middleware_1.authenticateToken, matchFeat
 router.post('/:id/dls', auth_middleware_1.authenticateToken, matchFeatures_controller_1.applyDLS);
 router.post('/:id/edit-event', auth_middleware_1.authenticateToken, matchFeatures_controller_1.editMatchEvent);
 router.delete('/:id/events/:eventId', auth_middleware_1.authenticateToken, matchFeatures_controller_1.deleteMatchEvent);
+router.post('/:id/innings-stats', auth_middleware_1.authenticateToken, matchFeatures_controller_1.upsertInningsStats);
 exports.default = router;
 //# sourceMappingURL=matches.routes.js.map

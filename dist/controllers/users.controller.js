@@ -817,64 +817,108 @@ async function getSportProfile(req, res) {
             .select('match_id')
             .eq('user_id', id);
         const matchIds = (parts ?? []).map((mp) => mp.match_id);
-        if (matchIds.length > 0 && ['cricket', 'football', 'basketball'].includes(slug)) {
-            // Fetch events for these matches
-            const { data: events } = await supabase_1.supabase
-                .from('match_events')
-                .select('event_type, payload, created_by')
-                .in('match_id', matchIds.slice(0, 100)); // cap for performance
-            const myEvents = (events ?? []).filter((e) => e.created_by === id);
-            if (slug === 'cricket') {
-                let runs = 0, balls = 0, fours = 0, sixes = 0, wickets = 0;
-                let hs = 0, inningsRuns = 0;
-                for (const e of myEvents) {
+        if (slug === 'cricket') {
+            // Use innings_stats table for accurate per-innings aggregates
+            const { data: innings } = await supabase_1.supabase
+                .from('innings_stats')
+                .select('runs, balls_faced, fours, sixes, is_out, bowling_overs, bowling_runs, bowling_wickets, catches, runouts')
+                .eq('user_id', id);
+            if (innings && innings.length > 0) {
+                const totalRuns = innings.reduce((s, i) => s + (i.runs ?? 0), 0);
+                const totalBalls = innings.reduce((s, i) => s + (i.balls_faced ?? 0), 0);
+                const totalFours = innings.reduce((s, i) => s + (i.fours ?? 0), 0);
+                const totalSixes = innings.reduce((s, i) => s + (i.sixes ?? 0), 0);
+                const dismissals = innings.filter((i) => i.is_out).length;
+                const hs = Math.max(...innings.map((i) => i.runs ?? 0));
+                const fifties = innings.filter((i) => (i.runs ?? 0) >= 50 && (i.runs ?? 0) < 100).length;
+                const hundreds = innings.filter((i) => (i.runs ?? 0) >= 100).length;
+                const bowlOvers = innings.reduce((s, i) => s + Number(i.bowling_overs ?? 0), 0);
+                const bowlRuns = innings.reduce((s, i) => s + (i.bowling_runs ?? 0), 0);
+                const bowlWickets = innings.reduce((s, i) => s + (i.bowling_wickets ?? 0), 0);
+                const totalCatches = innings.reduce((s, i) => s + (i.catches ?? 0), 0);
+                const totalRunouts = innings.reduce((s, i) => s + (i.runouts ?? 0), 0);
+                sportStats = {
+                    total_runs: totalRuns,
+                    batting_average: dismissals > 0 ? Math.round((totalRuns / dismissals) * 100) / 100 : totalRuns,
+                    strike_rate: totalBalls > 0 ? Math.round((totalRuns / totalBalls) * 10000) / 100 : 0,
+                    highest_score: hs,
+                    balls_faced: totalBalls,
+                    fours: totalFours,
+                    sixes: totalSixes,
+                    fifties,
+                    hundreds,
+                    total_wickets: bowlWickets,
+                    bowling_economy: bowlOvers > 0 ? Math.round((bowlRuns / bowlOvers) * 100) / 100 : 0,
+                    bowling_average: bowlWickets > 0 ? Math.round((bowlRuns / bowlWickets) * 100) / 100 : 0,
+                    catches: totalCatches,
+                    runouts: totalRunouts,
+                };
+            }
+            else {
+                // Fallback to match_events aggregation
+                const { data: events } = await supabase_1.supabase.from('match_events').select('event_type, payload, created_by').in('match_id', matchIds.slice(0, 100));
+                const myEvts = (events ?? []).filter((e) => e.created_by === id);
+                let runs = 0, balls = 0, f4 = 0, s6 = 0, wkts = 0, hs2 = 0;
+                for (const e of myEvts) {
                     const pay = e.payload ?? {};
                     if (e.event_type === 'ball') {
                         const r = Number(pay.runs ?? 0);
                         runs += r;
                         balls++;
-                        inningsRuns += r;
                         if (r === 4)
-                            fours++;
+                            f4++;
                         if (r === 6)
-                            sixes++;
-                        if (inningsRuns > hs)
-                            hs = inningsRuns;
+                            s6++;
+                        if (runs > hs2)
+                            hs2 = runs;
                     }
                     if (e.event_type === 'wicket' || pay.wicket)
-                        wickets++;
+                        wkts++;
                 }
-                sportStats = {
-                    total_runs: runs, total_wickets: wickets, balls_faced: balls,
-                    strike_rate: balls > 0 ? Math.round((runs / balls) * 100) : 0,
-                    highest_score: hs, fours, sixes,
-                    fifties: 0, hundreds: 0, // would need innings-level tracking
-                };
+                sportStats = { total_runs: runs, total_wickets: wkts, balls_faced: balls, strike_rate: balls > 0 ? Math.round((runs / balls) * 100) : 0, highest_score: hs2, fours: f4, sixes: s6, fifties: 0, hundreds: 0 };
             }
-            else if (slug === 'football') {
-                let goals = 0, assists = 0, yellows = 0, reds = 0;
-                for (const e of myEvents) {
-                    if (e.event_type === 'goal')
-                        goals++;
-                    if (e.event_type === 'assist')
-                        assists++;
-                    if (e.event_type === 'yellow_card')
-                        yellows++;
-                    if (e.event_type === 'red_card')
-                        reds++;
-                }
-                sportStats = { goals, assists, yellow_cards: yellows, red_cards: reds };
-            }
-            else if (slug === 'basketball') {
-                let points = 0, fouls = 0;
-                for (const e of myEvents) {
-                    if (e.event_type === 'basket' || e.event_type === 'score')
-                        points += Number(e.payload?.points ?? 2);
-                    if (e.event_type === 'foul')
-                        fouls++;
-                }
-                sportStats = { total_points: points, fouls };
-            }
+        }
+        else if (slug === 'football' && matchIds.length > 0) {
+            const { data: events } = await supabase_1.supabase.from('match_events').select('event_type, created_by').in('match_id', matchIds.slice(0, 100));
+            const my = (events ?? []).filter((e) => e.created_by === id);
+            sportStats = {
+                goals: my.filter((e) => e.event_type === 'goal').length,
+                assists: my.filter((e) => e.event_type === 'assist').length,
+                yellow_cards: my.filter((e) => e.event_type === 'yellow_card').length,
+                red_cards: my.filter((e) => e.event_type === 'red_card').length,
+            };
+        }
+        else if (slug === 'basketball' && matchIds.length > 0) {
+            const { data: events } = await supabase_1.supabase.from('match_events').select('event_type, payload, created_by').in('match_id', matchIds.slice(0, 100));
+            const my = (events ?? []).filter((e) => e.created_by === id);
+            sportStats = {
+                total_points: my.filter((e) => ['basket', 'score'].includes(e.event_type)).reduce((s, e) => s + Number(e.payload?.points ?? 2), 0),
+                fouls: my.filter((e) => e.event_type === 'foul').length,
+            };
+        }
+        else if (['tennis', 'badminton', 'tabletennis', 'pickleball'].includes(slug) && matchIds.length > 0) {
+            // Serve stats from match_participants + point stats from events
+            const { data: myParts } = await supabase_1.supabase
+                .from('match_participants')
+                .select('aces, double_faults, first_serve_in, first_serve_total, break_points_won, break_points_faced')
+                .eq('user_id', id)
+                .in('match_id', matchIds.slice(0, 100));
+            const totalAces = (myParts ?? []).reduce((s, p) => s + (p.aces ?? 0), 0);
+            const totalDF = (myParts ?? []).reduce((s, p) => s + (p.double_faults ?? 0), 0);
+            const fsIn = (myParts ?? []).reduce((s, p) => s + (p.first_serve_in ?? 0), 0);
+            const fsTotal = (myParts ?? []).reduce((s, p) => s + (p.first_serve_total ?? 0), 0);
+            const bpWon = (myParts ?? []).reduce((s, p) => s + (p.break_points_won ?? 0), 0);
+            const bpFaced = (myParts ?? []).reduce((s, p) => s + (p.break_points_faced ?? 0), 0);
+            // Point events
+            const { data: events } = await supabase_1.supabase.from('match_events').select('event_type, created_by').in('match_id', matchIds.slice(0, 100));
+            const pointsWon = (events ?? []).filter((e) => ['score', 'point'].includes(e.event_type) && e.created_by === id).length;
+            sportStats = {
+                total_aces: totalAces,
+                total_double_faults: totalDF,
+                first_serve_pct: fsTotal > 0 ? Math.round((fsIn / fsTotal) * 100) : 0,
+                break_points_pct: bpFaced > 0 ? Math.round((bpWon / bpFaced) * 100) : 0,
+                points_won: pointsWon,
+            };
         }
     }
     catch {

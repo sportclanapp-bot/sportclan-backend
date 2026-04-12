@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteMatchEvent = exports.editMatchEvent = exports.applyDLS = exports.setMatchAvailability = exports.getMatchAvailability = exports.getMatchMVP = exports.calculateAndSetMVP = void 0;
+exports.upsertInningsStats = exports.deleteMatchEvent = exports.editMatchEvent = exports.applyDLS = exports.setMatchAvailability = exports.getMatchAvailability = exports.getMatchMVP = exports.calculateAndSetMVP = void 0;
 const supabase_1 = require("../utils/supabase");
 const response_1 = require("../utils/response");
 const dls_1 = require("../utils/dls");
@@ -281,5 +281,50 @@ async function deleteMatchEvent(req, res) {
     }
 }
 exports.deleteMatchEvent = deleteMatchEvent;
-// AI Commentary feature removed — kept manual CommentaryFeed only.
+// ────────────────────────────────────────────────────────────────────────────
+// INNINGS STATS — per-innings cricket batting/bowling/fielding
+// POST /matches/:id/innings-stats
+// ────────────────────────────────────────────────────────────────────────────
+async function upsertInningsStats(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const { id } = req.params;
+        const { stats } = req.body || {};
+        if (!Array.isArray(stats) || stats.length === 0) {
+            return res.status(400).json({ error: 'stats array required' });
+        }
+        const rows = stats.map((s) => ({
+            match_id: id,
+            user_id: s.user_id,
+            team_id: s.team_id ?? null,
+            innings_number: s.innings_number ?? 1,
+            runs: s.runs ?? 0,
+            balls_faced: s.balls_faced ?? 0,
+            fours: s.fours ?? 0,
+            sixes: s.sixes ?? 0,
+            is_out: !!s.is_out,
+            dismissal_type: s.dismissal_type ?? null,
+            bowling_overs: s.bowling_overs ?? 0,
+            bowling_runs: s.bowling_runs ?? 0,
+            bowling_wickets: s.bowling_wickets ?? 0,
+            bowling_maidens: s.bowling_maidens ?? 0,
+            catches: s.catches ?? 0,
+            runouts: s.runouts ?? 0,
+            stumpings: s.stumpings ?? 0,
+        }));
+        const { data, error } = await supabase_1.supabase
+            .from('innings_stats')
+            .upsert(rows, { onConflict: 'match_id,user_id,innings_number' })
+            .select('id');
+        if (error)
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
+        return res.json({ success: true, count: data?.length ?? 0 });
+    }
+    catch {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.upsertInningsStats = upsertInningsStats;
 //# sourceMappingURL=matchFeatures.controller.js.map

@@ -4,6 +4,239 @@ import { sanitizeError } from '../utils/response';
 import { notifyUser } from '../utils/notify';
 
 // ────────────────────────────────────────────────────────────────────────────
+// TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
+// GET /tournaments/:id/standings
+// ────────────────────────────────────────────────────────────────────────────
+
+export async function getTournamentStandings(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const { data: tournament } = await supabase
+      .from('tournaments')
+      .select('id, sport_id, format')
+      .eq('id', id)
+      .maybeSingle();
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+
+    // Get all entries with team names
+    const { data: entries } = await supabase
+      .from('tournament_entries')
+      .select('team_id, group_label, team:teams!team_id(id, name)')
+      .eq('tournament_id', id)
+      .in('status', ['approved', 'pending']);
+
+    // Get completed matches
+    const { data: matches } = await supabase
+      .from('matches')
+      .select('id, team_a_id, team_b_id, winner_team_id, score_summary, status')
+      .eq('tournament_id', id)
+      .eq('status', 'completed');
+
+    // Check if cricket for NRR
+    const { data: sport } = await supabase.from('sports').select('slug').eq('id', tournament.sport_id).maybeSingle();
+    const isCricket = sport?.slug === 'cricket';
+
+    // Build standings map
+    const table = new Map<string, {
+      teamId: string; team: string; groupLabel: string | null;
+      played: number; won: number; lost: number; drawn: number; points: number;
+      nrr: number; runsScored: number; oversFaced: number; runsConceded: number; oversBowled: number;
+    }>();
+
+    for (const e of entries ?? []) {
+      const t = e.team as any;
+      table.set(e.team_id, {
+        teamId: e.team_id, team: t?.name ?? 'TBD', groupLabel: e.group_label ?? null,
+        played: 0, won: 0, lost: 0, drawn: 0, points: 0,
+        nrr: 0, runsScored: 0, oversFaced: 0, runsConceded: 0, oversBowled: 0,
+      });
+    }
+
+    for (const m of matches ?? []) {
+      const a = table.get(m.team_a_id);
+      const b = table.get(m.team_b_id);
+      if (a) a.played++;
+      if (b) b.played++;
+
+      if (m.winner_team_id) {
+        const winner = table.get(m.winner_team_id);
+        const loserId = m.winner_team_id === m.team_a_id ? m.team_b_id : m.team_a_id;
+        const loser = table.get(loserId);
+        if (winner) { winner.won++; winner.points += 3; }
+        if (loser) { loser.lost++; }
+      } else {
+        // Draw
+        if (a) { a.drawn++; a.points += 1; }
+        if (b) { b.drawn++; b.points += 1; }
+      }
+
+      // NRR for cricket
+      if (isCricket && m.score_summary) {
+        const ss: any = m.score_summary;
+        const parseScore = (s: string) => {
+          const m2 = String(s).match(/^(\d+)/);
+          return m2 ? parseInt(m2[1], 10) : 0;
+        };
+        const parseOvers = (s: string) => {
+          const o = parseFloat(String(s));
+          return isNaN(o) ? 0 : o;
+        };
+        if (a && ss.team_a_score) {
+          a.runsScored += parseScore(ss.team_a_score);
+          a.oversFaced += parseOvers(ss.team_a_overs ?? '20');
+          a.runsConceded += parseScore(ss.team_b_score ?? '0');
+          a.oversBowled += parseOvers(ss.team_b_overs ?? '20');
+        }
+        if (b && ss.team_b_score) {
+          b.runsScored += parseScore(ss.team_b_score);
+          b.oversFaced += parseOvers(ss.team_b_overs ?? '20');
+          b.runsConceded += parseScore(ss.team_a_score ?? '0');
+          b.oversBowled += parseOvers(ss.team_a_overs ?? '20');
+        }
+      }
+    }
+
+    // Calculate NRR
+    for (const row of table.values()) {
+      if (isCricket && row.oversFaced > 0 && row.oversBowled > 0) {
+        row.nrr = parseFloat(((row.runsScored / row.oversFaced) - (row.runsConceded / row.oversBowled)).toFixed(3));
+      }
+    }
+
+    // Sort: points DESC, NRR DESC, wins DESC
+    const standings = Array.from(table.values()).sort((a, b) =>
+      b.points - a.points || b.nrr - a.nrr || b.won - a.won
+    );
+
+    // Mark top 2 per group as qualified (for groups_knockout)
+    if (tournament.format === 'groups_knockout') {
+      const groups = new Map<string, typeof standings>();
+      for (const row of standings) {
+        const g = row.groupLabel ?? 'default';
+        const arr = groups.get(g) ?? [];
+        arr.push(row);
+        groups.set(g, arr);
+      }
+      for (const grp of groups.values()) {
+        grp.slice(0, 2).forEach((r) => (r as any).qualified = true);
+      }
+    }
+
+    return res.json({ standings, isCricket });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TOURNAMENT TOP PERFORMERS
+// GET /tournaments/:id/top-performers
+// ────────────────────────────────────────────────────────────────────────────
+
+export async function getTournamentTopPerformers(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const { data: tournament } = await supabase
+      .from('tournaments')
+      .select('sport_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+
+    // Get all completed matches
+    const { data: matches } = await supabase
+      .from('matches')
+      .select('id, team_a_id, team_b_id, winner_team_id')
+      .eq('tournament_id', id)
+      .eq('status', 'completed');
+
+    // Count wins per team
+    const winCount = new Map<string, number>();
+    for (const m of matches ?? []) {
+      if (m.winner_team_id) {
+        winCount.set(m.winner_team_id, (winCount.get(m.winner_team_id) ?? 0) + 1);
+      }
+    }
+
+    // Get team names
+    const teamIds = Array.from(winCount.keys());
+    const { data: teams } = await supabase
+      .from('teams')
+      .select('id, name')
+      .in('id', teamIds.length > 0 ? teamIds : ['__none__']);
+    const teamMap = new Map((teams ?? []).map((t: any) => [t.id, t.name]));
+
+    const topWins = Array.from(winCount.entries())
+      .map(([teamId, wins]) => ({ teamId, teamName: teamMap.get(teamId) ?? 'Unknown', wins }))
+      .sort((a, b) => b.wins - a.wins)
+      .slice(0, 3);
+
+    return res.json({ topWins });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TOURNAMENT OFFICIALS
+// ────────────────────────────────────────────────────────────────────────────
+
+export async function addTournamentOfficial(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { user_id, role } = req.body || {};
+    if (!user_id || !role) return res.status(400).json({ error: 'user_id and role required' });
+
+    const { data: tournament } = await supabase.from('tournaments').select('created_by').eq('id', id).maybeSingle();
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+    if (tournament.created_by !== userId) return res.status(403).json({ error: 'Only organiser can add officials' });
+
+    const { data, error } = await supabase
+      .from('tournament_officials')
+      .insert({ tournament_id: id, user_id, role })
+      .select('*')
+      .single();
+    if (error?.code === '23505') return res.json({ success: true, alreadyAdded: true });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    return res.json({ official: data });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function removeTournamentOfficial(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id, officialId } = req.params;
+    const { data: tournament } = await supabase.from('tournaments').select('created_by').eq('id', id).maybeSingle();
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+    if (tournament.created_by !== userId) return res.status(403).json({ error: 'Only organiser can remove officials' });
+
+    await supabase.from('tournament_officials').delete().eq('id', officialId).eq('tournament_id', id);
+    return res.json({ success: true });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function getTournamentOfficials(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from('tournament_officials')
+      .select('id, role, created_at, user:users!user_id(id, name, username, profile_picture_url)')
+      .eq('tournament_id', id);
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    return res.json({ officials: data ?? [] });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // FEATURE 20 — Tournament Analytics
 // GET /tournaments/:id/analytics
 // ────────────────────────────────────────────────────────────────────────────

@@ -20,6 +20,8 @@ export async function getLeaderboard(req: Request, res: Response) {
     const { sport_id, limit = '20' } = req.query as Record<string, string | undefined>;
     const scope = ((req.query.scope as string) || 'global').toLowerCase();
     const period = ((req.query.period as string) || 'alltime').toLowerCase();
+    // Gender category filter: men, women, or open (default=all)
+    const genderCategory = (req.query.gender_category as string | undefined) || null;
     if (!sport_id) return res.status(400).json({ error: 'sport_id is required' });
 
     const pageSize = Math.min(parseInt(limit, 10) || 20, 50);
@@ -75,12 +77,15 @@ export async function getLeaderboard(req: Request, res: Response) {
         }))
         .sort((a, b) => b.rating - a.rating);
     } else {
-      const { data: rows, error } = await supabase
+      let query = supabase
         .from('user_sport_profiles')
         .select('user_id, rating, matches_played, wins')
         .eq('sport_id', sport_id)
         .gt('matches_played', 0)
         .order('rating', { ascending: false });
+      // Filter by gender category if specified (men/women/open)
+      if (genderCategory) query = query.eq('gender_category', genderCategory);
+      const { data: rows, error } = await query;
       if (error) return res.status(500).json({ error: error.message });
       profiles = (rows ?? []) as Row[];
     }

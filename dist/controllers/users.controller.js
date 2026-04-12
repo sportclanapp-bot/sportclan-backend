@@ -196,14 +196,31 @@ async function getUserById(req, res) {
         safeUser.isPremiumRequired = true;
     }
     // Counts (followers/following) — best-effort, never fail the request.
-    const [followersRes, followingRes] = await Promise.all([
+    const [followersRes, followingRes, giftsRes] = await Promise.all([
         supabase_1.supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('following_id', id),
         supabase_1.supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('follower_id', id),
+        // Aggregate gifts received grouped by gift type for the profile display
+        supabase_1.supabase.from('gift_transactions')
+            .select('gift_id, gift_emoji, gift_name')
+            .eq('receiver_id', id)
+            .order('created_at', { ascending: false })
+            .limit(100),
     ]);
+    // Group gifts by type with count
+    const giftMap = new Map();
+    for (const g of giftsRes.data ?? []) {
+        const existing = giftMap.get(g.gift_id);
+        if (existing)
+            existing.count++;
+        else
+            giftMap.set(g.gift_id, { emoji: g.gift_emoji, name: g.gift_name, count: 1 });
+    }
     return res.json({
         user: safeUser,
         followers: followersRes.count ?? 0,
         following: followingRes.count ?? 0,
+        gifts: Array.from(giftMap.values()),
+        totalGifts: giftsRes.data?.length ?? 0,
     });
 }
 exports.getUserById = getUserById;
@@ -427,7 +444,7 @@ async function discoverPlayers(req, res) {
     const userId = req.userId;
     if (!userId)
         return res.status(401).json({ error: 'Unauthorized' });
-    const { sport_id, mode } = req.query;
+    const { sport_id, mode, match_type } = req.query;
     if (!sport_id)
         return res.status(400).json({ error: 'sport_id is required' });
     // Get requesting user's city and sport profile
@@ -465,12 +482,16 @@ async function discoverPlayers(req, res) {
     // Query user_sport_profiles within rating range for this sport
     let query = supabase_1.supabase
         .from('user_sport_profiles')
-        .select('user_id, rating, matches_played, wins, last_match_at')
+        .select('user_id, rating, matches_played, wins, last_match_at, play_type')
         .eq('sport_id', sport_id)
         .gte('rating', ratingLow)
         .lte('rating', ratingHigh)
         .order('last_match_at', { ascending: false, nullsFirst: false })
         .limit(50);
+    // Doubles partner filter: only show players with Doubles/Mixed play_type
+    if (match_type === 'doubles') {
+        query = query.overlaps('play_type', ['Doubles', 'Mixed']);
+    }
     const { data: profiles, error } = await query;
     if (error)
         return res.status(500).json({ error: error.message });

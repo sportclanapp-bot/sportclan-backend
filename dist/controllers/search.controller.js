@@ -20,10 +20,14 @@ async function search(req, res) {
             return searchTournaments(res, query, sport_id, pageSize);
         case 'umpires':
             return searchUmpires(res, query, sport_id, pageSize);
+        case 'coaches':
+            return searchByAccountType(res, query, 'Trainer-Coach', pageSize);
         case 'posts':
             return searchPosts(res, query, sport_id, pageSize);
         case 'businesses':
             return searchBusinesses(res, query, pageSize);
+        case 'associations':
+            return searchByAccountType(res, query, 'Association', pageSize);
         case 'clubs':
             return searchClubs(res, query, pageSize);
         default:
@@ -148,6 +152,20 @@ async function searchBusinesses(res, q, limit) {
     const bizIds = new Set((accountTypes || []).map((a) => a.user_id));
     const filtered = (users || []).filter((u) => bizIds.has(u.id));
     return res.json({ data: filtered });
+}
+// Generic account-type search — used for Coaches, Associations, etc.
+async function searchByAccountType(res, q, accountType, limit) {
+    let query = supabase_1.supabase
+        .from('users')
+        .select('id, name, username, profile_picture_url, bio, is_premium, account_type, city:cities!city_id(id, name)')
+        .ilike('account_type', `%${accountType}%`)
+        .limit(limit);
+    if (q)
+        query = query.ilike('name', `%${q}%`);
+    const { data, error } = await query;
+    if (error)
+        return res.status(500).json({ error: error.message });
+    return res.json({ data: data || [] });
 }
 async function searchClubs(res, q, limit) {
     // Clubs/associations use teams table with type = 'club' or 'association'

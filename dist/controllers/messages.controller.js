@@ -338,8 +338,9 @@ const MAX_MESSAGE_LENGTH = 1000;
 async function sendMessage(req, res) {
     const userId = req.userId;
     const { id } = req.params;
-    const { content, image_url, reply_to_id } = req.body;
-    if (!content && !image_url) {
+    const { content, reply_to_id } = req.body;
+    // Per PRD: messages are text + links only — image_url intentionally not accepted.
+    if (!content) {
         return res.status(400).json({ error: 'Content or image required' });
     }
     if (typeof content === 'string' && content.length > MAX_MESSAGE_LENGTH) {
@@ -360,7 +361,7 @@ async function sendMessage(req, res) {
         chat_id: id,
         sender_id: userId,
         content: content?.trim() || null,
-        image_url: image_url || null,
+        image_url: null, // PRD: text + links only
         reply_to_id: reply_to_id || null,
     })
         .select(`

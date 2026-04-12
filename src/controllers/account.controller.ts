@@ -10,10 +10,12 @@ export async function deleteAccount(req: Request, res: Response) {
     return res.status(400).json({ error: 'Type "DELETE" to confirm' });
   }
 
-  await supabase.from('users').update({
+  const { error } = await supabase.from('users').update({
     deleted_at: new Date().toISOString(),
     is_premium: false,
   }).eq('id', userId);
+
+  if (error) return res.status(500).json({ error: 'Could not deactivate account' });
 
   return res.json({
     success: true,

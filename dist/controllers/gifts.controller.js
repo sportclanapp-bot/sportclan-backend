@@ -52,11 +52,13 @@ async function sendGift(req, res) {
     const { data: receiver } = await supabase_1.supabase.from('users').select('id').eq('id', receiverId).single();
     if (!receiver)
         return res.status(404).json({ error: 'Receiver not found' });
-    // Deduct coins
-    await supabase_1.supabase
+    // Deduct coins — check for error so we don't give away free gifts
+    const { error: deductErr } = await supabase_1.supabase
         .from('users')
         .update({ coin_balance: sender.coin_balance - gift.cost })
         .eq('id', senderId);
+    if (deductErr)
+        return res.status(500).json({ error: 'Could not deduct coins' });
     // Record gift transaction
     const { data: giftTx, error } = await supabase_1.supabase
         .from('gift_transactions')

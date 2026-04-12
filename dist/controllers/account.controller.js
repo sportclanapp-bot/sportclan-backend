@@ -9,10 +9,12 @@ async function deleteAccount(req, res) {
     if (confirmation !== 'DELETE') {
         return res.status(400).json({ error: 'Type "DELETE" to confirm' });
     }
-    await supabase_1.supabase.from('users').update({
+    const { error } = await supabase_1.supabase.from('users').update({
         deleted_at: new Date().toISOString(),
         is_premium: false,
     }).eq('id', userId);
+    if (error)
+        return res.status(500).json({ error: 'Could not deactivate account' });
     return res.json({
         success: true,
         message: 'Account deactivated. Log in within 30 days to restore. Permanent deletion after 30 days.',

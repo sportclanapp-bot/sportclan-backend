@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getTournamentChat = exports.updateFixtures = exports.joinByCode = exports.getBracket = exports.updateTournament = exports.updateEntry = exports.createEntry = exports.getTournament = exports.listTournaments = exports.createTournament = void 0;
+exports.generateFixtures = exports.getTournamentChat = exports.updateFixtures = exports.joinByCode = exports.getBracket = exports.updateTournament = exports.updateEntry = exports.createEntry = exports.getTournament = exports.listTournaments = exports.createTournament = void 0;
 const supabase_1 = require("../utils/supabase");
 const sportId_1 = require("../utils/sportId");
 const response_1 = require("../utils/response");
@@ -30,7 +30,7 @@ async function createTournament(req, res) {
                 code: 'PREMIUM_REQUIRED',
             });
         }
-        const { sport_id, name, description, format, city_id, venue, start_date, end_date, entry_fee, max_teams, prize_pool, banner_url, tiebreaker_rules, sport_metadata, sponsor_name, sponsor_logo_url, } = req.body || {};
+        const { sport_id, name, description, format, city_id, venue, start_date, end_date, entry_fee, max_teams, prize_pool, banner_url, logo_url, tiebreaker_rules, sport_metadata, sponsor_name, sponsor_logo_url, organiser_name, organiser_mobile, registration_deadline, } = req.body || {};
         if (!sport_id || !name || !format) {
             return res.status(400).json({ error: 'sport_id, name, format are required' });
         }
@@ -71,12 +71,16 @@ async function createTournament(req, res) {
             max_teams: max_teams ?? null,
             prize_pool: prize_pool ?? null,
             banner_url: banner_url || null,
+            logo_url: logo_url || null,
             entry_code,
             created_by: userId,
             tiebreaker_rules: tiebreaker_rules ?? [],
             sport_metadata: metadata,
             sponsor_name: sponsor_name || null,
             sponsor_logo_url: sponsor_logo_url || null,
+            organiser_name: organiser_name || null,
+            organiser_mobile: organiser_mobile || null,
+            registration_deadline: registration_deadline || null,
         })
             .select('*')
             .single();
@@ -174,6 +178,25 @@ async function createEntry(req, res) {
             .maybeSingle();
         if (membership?.role !== 'captain') {
             return res.status(403).json({ error: 'Only the team captain can enter a tournament' });
+        }
+        // Check registration deadline and max_teams cap
+        const { data: tournament } = await supabase_1.supabase
+            .from('tournaments')
+            .select('max_teams, registration_deadline')
+            .eq('id', id)
+            .maybeSingle();
+        if (tournament?.registration_deadline && new Date(tournament.registration_deadline) < new Date()) {
+            return res.status(400).json({ error: 'Registration closed', code: 'REGISTRATION_CLOSED' });
+        }
+        if (tournament?.max_teams) {
+            const { count } = await supabase_1.supabase
+                .from('tournament_entries')
+                .select('id', { count: 'exact', head: true })
+                .eq('tournament_id', id)
+                .in('status', ['pending', 'approved']);
+            if ((count ?? 0) >= tournament.max_teams) {
+                return res.status(400).json({ error: 'Tournament is full', code: 'TOURNAMENT_FULL' });
+            }
         }
         const { data, error } = await supabase_1.supabase
             .from('tournament_entries')
@@ -287,8 +310,13 @@ async function updateTournament(req, res) {
             'banner_url',
             'status',
             'tiebreaker_rules',
+            'sport_metadata',
             'sponsor_name',
             'sponsor_logo_url',
+            'organiser_name',
+            'organiser_mobile',
+            'registration_deadline',
+            'logo_url',
         ];
         const update = {};
         for (const key of allowedKeys) {
@@ -534,4 +562,180 @@ async function getTournamentChat(req, res) {
     }
 }
 exports.getTournamentChat = getTournamentChat;
+// POST /tournaments/:id/generate-fixtures
+// Auto-generates match fixtures from approved entries. Supports:
+//   knockout → single elimination bracket (N-1 matches)
+//   round_robin → every team plays every other team (N*(N-1)/2 matches)
+//   groups_knockout → split into groups of 4, top 2 advance to KO
+async function generateFixtures(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const { id } = req.params;
+        const { data: tournament } = await supabase_1.supabase
+            .from('tournaments')
+            .select('id, sport_id, format, city_id, venue, start_date, created_by')
+            .eq('id', id)
+            .maybeSingle();
+        if (!tournament)
+            return res.status(404).json({ error: 'Tournament not found' });
+        if (tournament.created_by !== userId) {
+            return res.status(403).json({ error: 'Only the organiser can generate fixtures' });
+        }
+        // Get approved entries with team info
+        const { data: entries } = await supabase_1.supabase
+            .from('tournament_entries')
+            .select('team_id, team:teams!team_id(id, name)')
+            .eq('tournament_id', id)
+            .eq('status', 'approved');
+        const teams = (entries ?? []).map((e) => ({
+            id: e.team_id,
+            name: e.team?.name ?? 'TBD',
+        }));
+        if (teams.length < 2) {
+            return res.status(400).json({ error: 'At least 2 approved teams required' });
+        }
+        // Check for existing matches — don't duplicate
+        const { count: existingCount } = await supabase_1.supabase
+            .from('matches')
+            .select('id', { count: 'exact', head: true })
+            .eq('tournament_id', id);
+        if ((existingCount ?? 0) > 0) {
+            return res.status(400).json({ error: 'Fixtures already generated. Delete existing matches first.' });
+        }
+        const matchRows = [];
+        const startDate = tournament.start_date ? new Date(tournament.start_date) : new Date();
+        const dayMs = 86400000;
+        const format = (tournament.format ?? 'knockout').toLowerCase();
+        if (format === 'knockout') {
+            // Single elimination: pair teams 0v1, 2v3, ...; winners advance.
+            // Total matches = teams.length - 1 (but we only create first round here).
+            for (let i = 0; i < teams.length - 1; i += 2) {
+                const a = teams[i];
+                const b = teams[i + 1] ?? { id: null, name: 'BYE' };
+                matchRows.push({
+                    sport_id: tournament.sport_id,
+                    tournament_id: id,
+                    team_a_id: a.id,
+                    team_b_id: b.id,
+                    team_a_name: a.name,
+                    team_b_name: b.name,
+                    scheduled_at: new Date(startDate.getTime() + Math.floor(i / 2) * dayMs).toISOString(),
+                    venue: tournament.venue ?? null,
+                    city_id: tournament.city_id ?? null,
+                    status: 'scheduled',
+                    score_summary: {},
+                    created_by: userId,
+                });
+            }
+            // Add semifinal and final placeholders
+            const semis = Math.floor(teams.length / 4);
+            for (let i = 0; i < semis; i++) {
+                matchRows.push({
+                    sport_id: tournament.sport_id,
+                    tournament_id: id,
+                    team_a_name: 'TBD', team_b_name: 'TBD',
+                    scheduled_at: new Date(startDate.getTime() + (matchRows.length + 1) * dayMs).toISOString(),
+                    venue: tournament.venue ?? null,
+                    city_id: tournament.city_id ?? null,
+                    status: 'scheduled', score_summary: {},
+                    created_by: userId,
+                });
+            }
+            // Final
+            matchRows.push({
+                sport_id: tournament.sport_id,
+                tournament_id: id,
+                team_a_name: 'TBD', team_b_name: 'TBD',
+                scheduled_at: new Date(startDate.getTime() + (matchRows.length + 1) * dayMs).toISOString(),
+                venue: tournament.venue ?? null,
+                city_id: tournament.city_id ?? null,
+                status: 'scheduled', score_summary: {},
+                created_by: userId,
+            });
+        }
+        else if (format === 'round_robin' || format === 'league') {
+            // Every team plays every other team
+            for (let i = 0; i < teams.length; i++) {
+                for (let j = i + 1; j < teams.length; j++) {
+                    matchRows.push({
+                        sport_id: tournament.sport_id,
+                        tournament_id: id,
+                        team_a_id: teams[i].id,
+                        team_b_id: teams[j].id,
+                        team_a_name: teams[i].name,
+                        team_b_name: teams[j].name,
+                        scheduled_at: new Date(startDate.getTime() + matchRows.length * dayMs).toISOString(),
+                        venue: tournament.venue ?? null,
+                        city_id: tournament.city_id ?? null,
+                        status: 'scheduled', score_summary: {},
+                        created_by: userId,
+                    });
+                }
+            }
+        }
+        else if (format === 'groups_knockout') {
+            // Split into groups of 4, round-robin within groups
+            const groupSize = 4;
+            const numGroups = Math.ceil(teams.length / groupSize);
+            const groups = Array.from({ length: numGroups }, () => []);
+            teams.forEach((t, i) => groups[i % numGroups].push(t));
+            // Group stage
+            for (let g = 0; g < groups.length; g++) {
+                const label = String.fromCharCode(65 + g); // A, B, C...
+                const grp = groups[g];
+                // Update group_label on entries
+                for (const t of grp) {
+                    await supabase_1.supabase.from('tournament_entries').update({ group_label: label }).eq('tournament_id', id).eq('team_id', t.id);
+                }
+                for (let i = 0; i < grp.length; i++) {
+                    for (let j = i + 1; j < grp.length; j++) {
+                        matchRows.push({
+                            sport_id: tournament.sport_id,
+                            tournament_id: id,
+                            team_a_id: grp[i].id,
+                            team_b_id: grp[j].id,
+                            team_a_name: grp[i].name,
+                            team_b_name: grp[j].name,
+                            scheduled_at: new Date(startDate.getTime() + matchRows.length * dayMs).toISOString(),
+                            venue: tournament.venue ?? null,
+                            city_id: tournament.city_id ?? null,
+                            status: 'scheduled', score_summary: {},
+                            created_by: userId,
+                        });
+                    }
+                }
+            }
+            // KO phase (semifinals + final) — TBD placeholders
+            const koMatches = Math.min(numGroups, 4);
+            for (let i = 0; i < koMatches; i++) {
+                matchRows.push({
+                    sport_id: tournament.sport_id,
+                    tournament_id: id,
+                    team_a_name: 'TBD', team_b_name: 'TBD',
+                    scheduled_at: new Date(startDate.getTime() + (matchRows.length + 1) * dayMs).toISOString(),
+                    venue: tournament.venue ?? null,
+                    city_id: tournament.city_id ?? null,
+                    status: 'scheduled', score_summary: {},
+                    created_by: userId,
+                });
+            }
+        }
+        // Insert all matches
+        if (matchRows.length > 0) {
+            const { data, error } = await supabase_1.supabase.from('matches').insert(matchRows).select('id');
+            if (error)
+                return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
+            // Update tournament status to live
+            await supabase_1.supabase.from('tournaments').update({ status: 'live' }).eq('id', id);
+            return res.json({ success: true, matchesCreated: data?.length ?? 0, format });
+        }
+        return res.json({ success: true, matchesCreated: 0 });
+    }
+    catch {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.generateFixtures = generateFixtures;
 //# sourceMappingURL=tournaments.controller.js.map

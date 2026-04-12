@@ -4,6 +4,7 @@ import {
   triggerSmartMatchNotifications,
   triggerReEngagement,
   triggerWeeklyDigest,
+  publishScheduledPosts,
 } from '../controllers/features.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -17,5 +18,6 @@ router.post('/load-full-data', authenticateToken, loadFullData);
 router.get('/trigger-smart-match-notifications', authenticateToken, triggerSmartMatchNotifications);
 router.get('/trigger-reengagement', authenticateToken, triggerReEngagement);
 router.get('/trigger-weekly-digest', authenticateToken, triggerWeeklyDigest);
+router.get('/publish-scheduled-posts', authenticateToken, publishScheduledPosts);
 
 export default router;

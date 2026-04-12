@@ -4,6 +4,62 @@ import { sanitizeError } from '../utils/response';
 import { notifyUser } from '../utils/notify';
 
 // ────────────────────────────────────────────────────────────────────────────
+// FEATURE 20 — Tournament Analytics
+// GET /tournaments/:id/analytics
+// ────────────────────────────────────────────────────────────────────────────
+
+export async function getTournamentAnalytics(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data: t } = await supabase.from('tournaments').select('created_by').eq('id', id).maybeSingle();
+    if (!t) return res.status(404).json({ error: 'Tournament not found' });
+    if (t.created_by !== userId) return res.status(403).json({ error: 'Only the organiser can view analytics' });
+
+    const [entriesRes, matchesRes] = await Promise.all([
+      supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id),
+      supabase.from('matches').select('id, status').eq('tournament_id', id),
+    ]);
+
+    const matches = matchesRes.data ?? [];
+    const completed = matches.filter((m) => m.status === 'completed').length;
+    const pending = matches.filter((m) => m.status === 'scheduled' || m.status === 'live').length;
+    const total = matches.length || 1;
+
+    return res.json({
+      registrations_count: entriesRes.count ?? 0,
+      matches_completed: completed,
+      matches_pending: pending,
+      completion_percentage: Math.round((completed / total) * 100),
+    });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// FEATURE 18 — Publish Scheduled Posts
+// GET /dev/publish-scheduled-posts
+// ────────────────────────────────────────────────────────────────────────────
+
+export async function publishScheduledPosts(req: Request, res: Response) {
+  try {
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('community_posts')
+      .update({ scheduled_at: null })
+      .lte('scheduled_at', now)
+      .not('scheduled_at', 'is', null)
+      .select('id');
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    return res.json({ published: data?.length ?? 0 });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // FEATURE 1 — Season Recap
 // GET /users/:id/season-recap
 // ────────────────────────────────────────────────────────────────────────────

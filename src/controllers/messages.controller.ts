@@ -419,6 +419,29 @@ export async function sendMessage(req: Request, res: Response) {
     .single();
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+  // Parse @mentions and create notifications (fire-and-forget)
+  if (content && typeof content === 'string') {
+    const mentionMatches = content.match(/@([a-zA-Z0-9_]+)/g);
+    if (mentionMatches && mentionMatches.length > 0) {
+      const usernames = mentionMatches.map((m) => m.slice(1).toLowerCase());
+      const { data: mentioned } = await supabase
+        .from('users')
+        .select('id, username')
+        .in('username', usernames);
+      for (const u of mentioned ?? []) {
+        if (u.id === userId) continue; // don't notify self
+        supabase.from('notifications').insert({
+          user_id: u.id,
+          type: 'mention_in_chat',
+          title: 'You were mentioned',
+          body: `${data?.sender?.full_name ?? 'Someone'} mentioned you in a chat`,
+          data: { chatId: id, messageId: data?.id },
+        }).then(() => {});
+      }
+    }
+  }
+
   return res.status(201).json({ data });
 }
 

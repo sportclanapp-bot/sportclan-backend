@@ -12,5 +12,6 @@ router.post('/load-full-data', auth_middleware_1.authenticateToken, dev_controll
 router.get('/trigger-smart-match-notifications', auth_middleware_1.authenticateToken, features_controller_1.triggerSmartMatchNotifications);
 router.get('/trigger-reengagement', auth_middleware_1.authenticateToken, features_controller_1.triggerReEngagement);
 router.get('/trigger-weekly-digest', auth_middleware_1.authenticateToken, features_controller_1.triggerWeeklyDigest);
+router.get('/publish-scheduled-posts', auth_middleware_1.authenticateToken, features_controller_1.publishScheduledPosts);
 exports.default = router;
 //# sourceMappingURL=dev.routes.js.map

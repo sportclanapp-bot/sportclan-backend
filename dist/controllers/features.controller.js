@@ -1,9 +1,66 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.triggerWeeklyDigest = exports.triggerReEngagement = exports.checkRatingMilestone = exports.triggerSmartMatchNotifications = exports.getNearbyMatches = exports.getPlayerOfWeek = exports.getSeasonRecap = void 0;
+exports.triggerWeeklyDigest = exports.triggerReEngagement = exports.checkRatingMilestone = exports.triggerSmartMatchNotifications = exports.getNearbyMatches = exports.getPlayerOfWeek = exports.getSeasonRecap = exports.publishScheduledPosts = exports.getTournamentAnalytics = void 0;
 const supabase_1 = require("../utils/supabase");
 const response_1 = require("../utils/response");
 const notify_1 = require("../utils/notify");
+// ────────────────────────────────────────────────────────────────────────────
+// FEATURE 20 — Tournament Analytics
+// GET /tournaments/:id/analytics
+// ────────────────────────────────────────────────────────────────────────────
+async function getTournamentAnalytics(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const { id } = req.params;
+        const { data: t } = await supabase_1.supabase.from('tournaments').select('created_by').eq('id', id).maybeSingle();
+        if (!t)
+            return res.status(404).json({ error: 'Tournament not found' });
+        if (t.created_by !== userId)
+            return res.status(403).json({ error: 'Only the organiser can view analytics' });
+        const [entriesRes, matchesRes] = await Promise.all([
+            supabase_1.supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id),
+            supabase_1.supabase.from('matches').select('id, status').eq('tournament_id', id),
+        ]);
+        const matches = matchesRes.data ?? [];
+        const completed = matches.filter((m) => m.status === 'completed').length;
+        const pending = matches.filter((m) => m.status === 'scheduled' || m.status === 'live').length;
+        const total = matches.length || 1;
+        return res.json({
+            registrations_count: entriesRes.count ?? 0,
+            matches_completed: completed,
+            matches_pending: pending,
+            completion_percentage: Math.round((completed / total) * 100),
+        });
+    }
+    catch {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.getTournamentAnalytics = getTournamentAnalytics;
+// ────────────────────────────────────────────────────────────────────────────
+// FEATURE 18 — Publish Scheduled Posts
+// GET /dev/publish-scheduled-posts
+// ────────────────────────────────────────────────────────────────────────────
+async function publishScheduledPosts(req, res) {
+    try {
+        const now = new Date().toISOString();
+        const { data, error } = await supabase_1.supabase
+            .from('community_posts')
+            .update({ scheduled_at: null })
+            .lte('scheduled_at', now)
+            .not('scheduled_at', 'is', null)
+            .select('id');
+        if (error)
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
+        return res.json({ published: data?.length ?? 0 });
+    }
+    catch {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.publishScheduledPosts = publishScheduledPosts;
 // ────────────────────────────────────────────────────────────────────────────
 // FEATURE 1 — Season Recap
 // GET /users/:id/season-recap

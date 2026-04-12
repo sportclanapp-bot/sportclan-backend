@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const tournaments_controller_1 = require("../controllers/tournaments.controller");
+const features_controller_1 = require("../controllers/features.controller");
 const auth_middleware_1 = require("../middleware/auth.middleware");
 const router = (0, express_1.Router)();
 router.post('/', auth_middleware_1.authenticateToken, tournaments_controller_1.createTournament);
@@ -11,6 +12,7 @@ router.get('/:id', auth_middleware_1.authenticateToken, tournaments_controller_1
 router.get('/:id/bracket', auth_middleware_1.authenticateToken, tournaments_controller_1.getBracket);
 router.patch('/:id', auth_middleware_1.authenticateToken, tournaments_controller_1.updateTournament);
 router.patch('/:id/fixtures', auth_middleware_1.authenticateToken, tournaments_controller_1.updateFixtures);
+router.get('/:id/analytics', auth_middleware_1.authenticateToken, features_controller_1.getTournamentAnalytics);
 router.post('/:id/entries', auth_middleware_1.authenticateToken, tournaments_controller_1.createEntry);
 router.patch('/:id/entries/:entryId', auth_middleware_1.authenticateToken, tournaments_controller_1.updateEntry);
 exports.default = router;

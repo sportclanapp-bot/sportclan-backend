@@ -44,6 +44,9 @@ async function searchPlayers(res, q, sportId, limit) {
       sports:user_sports(sport:sports(id, name, emoji))
     `)
         .or(`username.ilike.%${q}%,full_name.ilike.%${q}%`)
+        // Premium users appear first — delivers the "Boosted ranking" promise
+        .order('is_premium', { ascending: false })
+        .order('full_name', { ascending: true })
         .limit(limit);
     if (error)
         return res.status(500).json({ error: error.message });
@@ -159,6 +162,9 @@ async function searchByAccountType(res, q, accountType, limit) {
         .from('users')
         .select('id, name, username, profile_picture_url, bio, is_premium, account_type, city:cities!city_id(id, name)')
         .ilike('account_type', `%${accountType}%`)
+        // Premium service accounts appear first — "Featured listing"
+        .order('is_premium', { ascending: false })
+        .order('name', { ascending: true })
         .limit(limit);
     if (q)
         query = query.ilike('name', `%${q}%`);

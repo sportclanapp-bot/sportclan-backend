@@ -505,10 +505,15 @@ export async function discoverPlayers(req: Request, res: Response) {
     })
     .filter(Boolean) as any[];
 
-  // Available players rank first; ties break by rating desc.
+  // Premium users appear first (ComparisonScreen: "Higher priority"),
+  // then available players, then sort by rating similarity.
   players.sort((a, b) => {
+    if (a.is_premium !== b.is_premium) return a.is_premium ? -1 : 1;
     if (a.is_available !== b.is_available) return a.is_available ? -1 : 1;
-    return (b.rating ?? 0) - (a.rating ?? 0);
+    // Closest rating to the requesting user ranks higher
+    const diffA = Math.abs((a.rating ?? 1200) - myRating);
+    const diffB = Math.abs((b.rating ?? 1200) - myRating);
+    return diffA - diffB;
   });
 
   return res.json({ players, mode: mode || 'singles' });

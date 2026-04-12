@@ -560,3 +560,43 @@ export async function getGroupMembers(req: Request, res: Response) {
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ data: data || [] });
 }
+
+// ─── REACT TO MESSAGE ───────────────────────────────────────────────────────
+// PATCH /messages/:messageId/react  { emoji }
+// Toggles the current user's reaction: if they already reacted with the
+// given emoji it removes theirs, otherwise it adds. Reactions are stored
+// in a JSONB column: { "👍": ["user-id-1", "user-id-2"], ... }
+export async function reactToMessage(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { messageId } = req.params;
+    const { emoji } = req.body || {};
+    if (!emoji) return res.status(400).json({ error: 'emoji is required' });
+
+    const { data: msg, error } = await supabase
+      .from('messages')
+      .select('id, reactions')
+      .eq('id', messageId)
+      .maybeSingle();
+    if (error || !msg) return res.status(404).json({ error: 'Message not found' });
+
+    const reactions: Record<string, string[]> = msg.reactions ?? {};
+    const current = reactions[emoji] ?? [];
+    if (current.includes(userId)) {
+      reactions[emoji] = current.filter((id: string) => id !== userId);
+      if (reactions[emoji].length === 0) delete reactions[emoji];
+    } else {
+      reactions[emoji] = [...current, userId];
+    }
+
+    await supabase
+      .from('messages')
+      .update({ reactions })
+      .eq('id', messageId);
+
+    return res.json({ reactions });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}

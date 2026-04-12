@@ -124,8 +124,23 @@ async function register(req, res) {
     // Phone must be free
     const { data: existingPhone } = await supabase_1.supabase
         .from('users').select('id').eq('phone', p).maybeSingle();
-    if (existingPhone)
-        return res.status(409).json({ error: 'Phone already registered' });
+    if (existingPhone) {
+        return res.status(400).json({
+            code: 'PHONE_ALREADY_REGISTERED',
+            error: 'This mobile number is already registered. Please login instead.',
+        });
+    }
+    // Email must be free (if provided)
+    if (email) {
+        const { data: existingEmail } = await supabase_1.supabase
+            .from('users').select('id').eq('email', email).maybeSingle();
+        if (existingEmail) {
+            return res.status(400).json({
+                code: 'EMAIL_ALREADY_REGISTERED',
+                error: 'This email is already registered.',
+            });
+        }
+    }
     // Username must be free (case-insensitive)
     const { data: existingUsername } = await supabase_1.supabase
         .from('users').select('id').ilike('username', username).maybeSingle();

@@ -3,7 +3,7 @@ import {
   listChats, getOrCreateDM, createGroup, updateGroup,
   addMember, removeMember, promoteMember, leaveGroup, deleteGroup,
   getMessages, sendMessage, deleteMessage, forwardMessage,
-  markAsRead, getGroupMembers, batchMarkRead,
+  markAsRead, getGroupMembers, batchMarkRead, reactToMessage,
 } from '../controllers/messages.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -32,6 +32,7 @@ router.post('/chats/:id/messages', sendMessage);
 router.post('/chats/:id/read', markAsRead);
 router.post('/read', batchMarkRead);
 router.delete('/messages/:messageId', deleteMessage);
+router.patch('/messages/:messageId/react', reactToMessage);
 router.post('/forward', forwardMessage);
 
 export default router;

@@ -85,14 +85,21 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 // Stricter limit on /auth/send-otp must be mounted BEFORE the general /auth limiter
+// Cache-Control middleware for static / near-static endpoints. These
+// payloads change infrequently and benefit from edge/client caching.
+const cacheFor = (seconds: number) => (_req: any, res: any, next: any) => {
+  res.set('Cache-Control', `public, max-age=${seconds}`);
+  next();
+};
+
 app.use('/auth/send-otp', sendOtpLimiter);
 app.use('/auth', authLimiter, authRoutes);
-app.use('/cities', citiesRoutes);
-app.use('/sports', sportsRoutes);
+app.use('/cities', cacheFor(86400), citiesRoutes);      // 24h
+app.use('/sports', cacheFor(86400), sportsRoutes);      // 24h
 app.use('/users', usersRoutes);
 app.use('/notifications', notificationsRoutes);
 app.use('/uploads', uploadsRoutes);
-app.use('/app', appRoutes);
+app.use('/app', cacheFor(300), appRoutes);             // 5m
 app.use('/invites', invitesRoutes);
 app.use('/services', servicesRoutes);
 app.use('/teams', teamsRoutes);
@@ -105,7 +112,7 @@ app.use('/messages', messagesRoutes);
 app.use('/search', searchRoutes);
 app.use('/availability', availabilityRoutes);
 app.use('/subscriptions', subscriptionsRoutes);
-app.use('/gifts', giftsRoutes);
+app.use('/gifts', cacheFor(3600), giftsRoutes);         // 1h
 app.use('/transactions', transactionsRoutes);
 app.use('/account', accountRoutes);
 app.use('/webhooks', webhooksRoutes);

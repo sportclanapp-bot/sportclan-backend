@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getGroupMembers = exports.markAsRead = exports.batchMarkRead = exports.forwardMessage = exports.deleteMessage = exports.sendMessage = exports.getMessages = exports.deleteGroup = exports.leaveGroup = exports.promoteMember = exports.removeMember = exports.addMember = exports.updateGroup = exports.createGroup = exports.getOrCreateDM = exports.listChats = void 0;
+exports.reactToMessage = exports.getGroupMembers = exports.markAsRead = exports.batchMarkRead = exports.forwardMessage = exports.deleteMessage = exports.sendMessage = exports.getMessages = exports.deleteGroup = exports.leaveGroup = exports.promoteMember = exports.removeMember = exports.addMember = exports.updateGroup = exports.createGroup = exports.getOrCreateDM = exports.listChats = void 0;
 const supabase_1 = require("../utils/supabase");
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
 async function listChats(req, res) {
@@ -501,4 +501,46 @@ async function getGroupMembers(req, res) {
     return res.json({ data: data || [] });
 }
 exports.getGroupMembers = getGroupMembers;
+// ─── REACT TO MESSAGE ───────────────────────────────────────────────────────
+// PATCH /messages/:messageId/react  { emoji }
+// Toggles the current user's reaction: if they already reacted with the
+// given emoji it removes theirs, otherwise it adds. Reactions are stored
+// in a JSONB column: { "👍": ["user-id-1", "user-id-2"], ... }
+async function reactToMessage(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const { messageId } = req.params;
+        const { emoji } = req.body || {};
+        if (!emoji)
+            return res.status(400).json({ error: 'emoji is required' });
+        const { data: msg, error } = await supabase_1.supabase
+            .from('messages')
+            .select('id, reactions')
+            .eq('id', messageId)
+            .maybeSingle();
+        if (error || !msg)
+            return res.status(404).json({ error: 'Message not found' });
+        const reactions = msg.reactions ?? {};
+        const current = reactions[emoji] ?? [];
+        if (current.includes(userId)) {
+            reactions[emoji] = current.filter((id) => id !== userId);
+            if (reactions[emoji].length === 0)
+                delete reactions[emoji];
+        }
+        else {
+            reactions[emoji] = [...current, userId];
+        }
+        await supabase_1.supabase
+            .from('messages')
+            .update({ reactions })
+            .eq('id', messageId);
+        return res.json({ reactions });
+    }
+    catch {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.reactToMessage = reactToMessage;
 //# sourceMappingURL=messages.controller.js.map

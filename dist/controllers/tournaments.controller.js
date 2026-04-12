@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.joinByCode = exports.getBracket = exports.updateTournament = exports.updateEntry = exports.createEntry = exports.getTournament = exports.listTournaments = exports.createTournament = void 0;
+exports.updateFixtures = exports.joinByCode = exports.getBracket = exports.updateTournament = exports.updateEntry = exports.createEntry = exports.getTournament = exports.listTournaments = exports.createTournament = void 0;
 const supabase_1 = require("../utils/supabase");
 const sportId_1 = require("../utils/sportId");
 function generateEntryCode() {
@@ -399,4 +399,63 @@ async function joinByCode(req, res) {
     }
 }
 exports.joinByCode = joinByCode;
+// PATCH /tournaments/:id/fixtures — bulk-update scheduled match times.
+// Only the tournament creator can modify, and only scheduled matches.
+async function updateFixtures(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const { id } = req.params;
+        const { matches: updates } = req.body || {};
+        if (!Array.isArray(updates) || updates.length === 0) {
+            return res.status(400).json({ error: 'matches array is required' });
+        }
+        const { data: tournament } = await supabase_1.supabase
+            .from('tournaments')
+            .select('created_by')
+            .eq('id', id)
+            .maybeSingle();
+        if (!tournament)
+            return res.status(404).json({ error: 'Tournament not found' });
+        if (tournament.created_by !== userId) {
+            return res.status(403).json({ error: 'Only the creator can update fixtures' });
+        }
+        const results = [];
+        for (const upd of updates) {
+            if (!upd.id)
+                continue;
+            const patch = {};
+            if (upd.scheduled_at)
+                patch.scheduled_at = upd.scheduled_at;
+            if (upd.venue)
+                patch.venue = upd.venue;
+            if (upd.team_a_id)
+                patch.team_a_id = upd.team_a_id;
+            if (upd.team_b_id)
+                patch.team_b_id = upd.team_b_id;
+            if (upd.team_a_name)
+                patch.team_a_name = upd.team_a_name;
+            if (upd.team_b_name)
+                patch.team_b_name = upd.team_b_name;
+            if (Object.keys(patch).length === 0)
+                continue;
+            const { data, error } = await supabase_1.supabase
+                .from('matches')
+                .update(patch)
+                .eq('id', upd.id)
+                .eq('tournament_id', id)
+                .eq('status', 'scheduled')
+                .select('*')
+                .single();
+            if (!error && data)
+                results.push(data);
+        }
+        return res.json({ updated: results.length, fixtures: results });
+    }
+    catch {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.updateFixtures = updateFixtures;
 //# sourceMappingURL=tournaments.controller.js.map

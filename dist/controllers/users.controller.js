@@ -33,11 +33,11 @@ const PUBLIC_FIELDS = 'id, phone, name, username, email, city_id, account_type, 
 async function runSmartNotifications(userId) {
     try {
         const now = new Date();
-        const twoHrsMs = 2 * 60 * 60 * 1000;
-        const in2h = new Date(now.getTime() + twoHrsMs).toISOString();
+        const fifteenMinsMs = 15 * 60 * 1000;
+        const in15m = new Date(now.getTime() + fifteenMinsMs).toISOString();
         const nowIso = now.toISOString();
-        // 1. Match reminders for matches starting in the next 2 hours where the
-        //    user is a participant and a reminder hasn't been sent yet.
+        // 1. Match reminders for matches starting in the next 15 minutes where
+        //    the user is a participant and a reminder hasn't been sent yet.
         const { data: parts } = await supabase_1.supabase
             .from('match_participants')
             .select('match_id, match:matches(id, team_a_name, team_b_name, scheduled_at, status)')
@@ -51,7 +51,7 @@ async function runSmartNotifications(userId) {
             if (!m.scheduled_at)
                 return false;
             const t = new Date(m.scheduled_at).toISOString();
-            return t > nowIso && t <= in2h;
+            return t > nowIso && t <= in15m;
         });
         for (const p of soonMatches) {
             const m = p.match;
@@ -69,7 +69,7 @@ async function runSmartNotifications(userId) {
                 user_id: userId,
                 type: 'match_reminder',
                 title: 'Match reminder',
-                body: `\u23F0 ${m.team_a_name} vs ${m.team_b_name} starts in 1 hour!`,
+                body: `\u23F0 ${m.team_a_name} vs ${m.team_b_name} starts in 15 minutes!`,
                 data: { matchId: m.id, screen: 'MatchDetail' },
             });
         }
@@ -723,10 +723,43 @@ async function getSportProfile(req, res) {
                 losses: 0,
                 draws: 0,
                 last_match_at: null,
+                cityRank: null,
+                globalRank: null,
             },
         });
     }
-    return res.json({ profile });
+    // Calculate city + global rank by counting how many players have a
+    // strictly higher rating in the same sport. Rank = count + 1.
+    let cityRank = null;
+    let globalRank = null;
+    const p = profile;
+    try {
+        // Global rank
+        const { count: aboveGlobal } = await supabase_1.supabase
+            .from('user_sport_profiles')
+            .select('id', { count: 'exact', head: true })
+            .eq('sport_id', sportId)
+            .gt('rating', p.rating);
+        globalRank = (aboveGlobal ?? 0) + 1;
+        // City rank — need the user's city_id from the users table
+        const { data: userRow } = await supabase_1.supabase
+            .from('users')
+            .select('city_id')
+            .eq('id', id)
+            .maybeSingle();
+        if (userRow?.city_id) {
+            const { count: aboveCity } = await supabase_1.supabase
+                .from('user_sport_profiles')
+                .select('id', { count: 'exact', head: true })
+                .eq('sport_id', sportId)
+                .gt('rating', p.rating);
+            cityRank = (aboveCity ?? 0) + 1;
+        }
+    }
+    catch {
+        // Non-critical — return null ranks if calculation fails
+    }
+    return res.json({ profile: { ...p, cityRank, globalRank } });
 }
 exports.getSportProfile = getSportProfile;
 // PATCH /users/:id/sport-profile/:sportId

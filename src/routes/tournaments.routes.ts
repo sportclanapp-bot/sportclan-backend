@@ -8,6 +8,7 @@ import {
   updateTournament,
   joinByCode,
   getBracket,
+  updateFixtures,
 } from '../controllers/tournaments.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -19,6 +20,7 @@ router.post('/join', authenticateToken, joinByCode);
 router.get('/:id', authenticateToken, getTournament);
 router.get('/:id/bracket', authenticateToken, getBracket);
 router.patch('/:id', authenticateToken, updateTournament);
+router.patch('/:id/fixtures', authenticateToken, updateFixtures);
 router.post('/:id/entries', authenticateToken, createEntry);
 router.patch('/:id/entries/:entryId', authenticateToken, updateEntry);
 

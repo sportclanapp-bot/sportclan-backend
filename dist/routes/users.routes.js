@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const users_controller_1 = require("../controllers/users.controller");
 const features_controller_1 = require("../controllers/features.controller");
+const insights_controller_1 = require("../controllers/insights.controller");
 const auth_middleware_1 = require("../middleware/auth.middleware");
 const router = (0, express_1.Router)();
 // Self routes — must be declared before /:id so they don't get captured.
@@ -20,6 +21,7 @@ router.get('/:id/activity-heatmap', users_controller_1.getActivityHeatmap);
 router.get('/:id/rating-history', auth_middleware_1.authenticateToken, users_controller_1.getRatingHistory);
 router.get('/:id/rival', auth_middleware_1.authenticateToken, users_controller_1.getRival);
 router.get('/:id/season-recap', features_controller_1.getSeasonRecap);
+router.get('/:id/insights', insights_controller_1.getUserInsights);
 router.post('/:id/follow', auth_middleware_1.authenticateToken, users_controller_1.followUser);
 router.delete('/:id/follow', auth_middleware_1.authenticateToken, users_controller_1.unfollowUser);
 router.post('/:id/block', auth_middleware_1.authenticateToken, users_controller_1.blockUser);

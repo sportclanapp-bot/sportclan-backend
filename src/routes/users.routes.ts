@@ -19,6 +19,7 @@ import {
   getRatingHistory,
 } from '../controllers/users.controller';
 import { getSeasonRecap } from '../controllers/features.controller';
+import { getUserInsights } from '../controllers/insights.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -39,6 +40,7 @@ router.get('/:id/activity-heatmap', getActivityHeatmap);
 router.get('/:id/rating-history', authenticateToken, getRatingHistory);
 router.get('/:id/rival', authenticateToken, getRival);
 router.get('/:id/season-recap', getSeasonRecap);
+router.get('/:id/insights', getUserInsights);
 
 router.post('/:id/follow', authenticateToken, followUser);
 router.delete('/:id/follow', authenticateToken, unfollowUser);

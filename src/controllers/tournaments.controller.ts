@@ -51,6 +51,7 @@ export async function createTournament(req: Request, res: Response) {
       organiser_name,
       organiser_mobile,
       registration_deadline,
+      home_away,
     } = req.body || {};
     if (!sport_id || !name || !format) {
       return res.status(400).json({ error: 'sport_id, name, format are required' });
@@ -103,6 +104,7 @@ export async function createTournament(req: Request, res: Response) {
         organiser_name: organiser_name || null,
         organiser_mobile: organiser_mobile || null,
         registration_deadline: registration_deadline || null,
+        home_away: !!home_away,
       })
       .select('*')
       .single();
@@ -316,6 +318,7 @@ export async function updateTournament(req: Request, res: Response) {
       'organiser_mobile',
       'registration_deadline',
       'logo_url',
+      'home_away',
     ];
     const update: Record<string, any> = {};
     for (const key of allowedKeys) {

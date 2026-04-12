@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const teams_controller_1 = require("../controllers/teams.controller");
+const teamExpenses_controller_1 = require("../controllers/teamExpenses.controller");
 const auth_middleware_1 = require("../middleware/auth.middleware");
 const router = (0, express_1.Router)();
 router.post('/', auth_middleware_1.authenticateToken, teams_controller_1.createTeam);
@@ -10,5 +11,9 @@ router.get('/:id', auth_middleware_1.authenticateToken, teams_controller_1.getTe
 router.post('/:id/members', auth_middleware_1.authenticateToken, teams_controller_1.addTeamMember);
 router.delete('/:id/members/:userId', auth_middleware_1.authenticateToken, teams_controller_1.removeTeamMember);
 router.patch('/:id', auth_middleware_1.authenticateToken, teams_controller_1.updateTeam);
+router.get('/:id/expenses', auth_middleware_1.authenticateToken, teamExpenses_controller_1.listExpenses);
+router.get('/:id/expenses/summary', auth_middleware_1.authenticateToken, teamExpenses_controller_1.getExpenseSummary);
+router.post('/:id/expenses', auth_middleware_1.authenticateToken, teamExpenses_controller_1.addExpense);
+router.delete('/:id/expenses/:expenseId', auth_middleware_1.authenticateToken, teamExpenses_controller_1.deleteExpense);
 exports.default = router;
 //# sourceMappingURL=teams.routes.js.map

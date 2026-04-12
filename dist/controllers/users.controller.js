@@ -805,7 +805,82 @@ async function getSportProfile(req, res) {
     catch {
         // Non-critical — return null ranks if calculation fails
     }
-    return res.json({ profile: { ...p, cityRank, globalRank } });
+    // Sport-specific stats aggregated from match_events. Best-effort —
+    // if the query fails or no events exist we just omit sportStats.
+    let sportStats = null;
+    try {
+        const { data: sportRow } = await supabase_1.supabase.from('sports').select('slug').eq('id', sportId).maybeSingle();
+        const slug = sportRow?.slug ?? '';
+        // Get user's match IDs
+        const { data: parts } = await supabase_1.supabase
+            .from('match_participants')
+            .select('match_id')
+            .eq('user_id', id);
+        const matchIds = (parts ?? []).map((mp) => mp.match_id);
+        if (matchIds.length > 0 && ['cricket', 'football', 'basketball'].includes(slug)) {
+            // Fetch events for these matches
+            const { data: events } = await supabase_1.supabase
+                .from('match_events')
+                .select('event_type, payload, created_by')
+                .in('match_id', matchIds.slice(0, 100)); // cap for performance
+            const myEvents = (events ?? []).filter((e) => e.created_by === id);
+            if (slug === 'cricket') {
+                let runs = 0, balls = 0, fours = 0, sixes = 0, wickets = 0;
+                let hs = 0, inningsRuns = 0;
+                for (const e of myEvents) {
+                    const pay = e.payload ?? {};
+                    if (e.event_type === 'ball') {
+                        const r = Number(pay.runs ?? 0);
+                        runs += r;
+                        balls++;
+                        inningsRuns += r;
+                        if (r === 4)
+                            fours++;
+                        if (r === 6)
+                            sixes++;
+                        if (inningsRuns > hs)
+                            hs = inningsRuns;
+                    }
+                    if (e.event_type === 'wicket' || pay.wicket)
+                        wickets++;
+                }
+                sportStats = {
+                    total_runs: runs, total_wickets: wickets, balls_faced: balls,
+                    strike_rate: balls > 0 ? Math.round((runs / balls) * 100) : 0,
+                    highest_score: hs, fours, sixes,
+                    fifties: 0, hundreds: 0, // would need innings-level tracking
+                };
+            }
+            else if (slug === 'football') {
+                let goals = 0, assists = 0, yellows = 0, reds = 0;
+                for (const e of myEvents) {
+                    if (e.event_type === 'goal')
+                        goals++;
+                    if (e.event_type === 'assist')
+                        assists++;
+                    if (e.event_type === 'yellow_card')
+                        yellows++;
+                    if (e.event_type === 'red_card')
+                        reds++;
+                }
+                sportStats = { goals, assists, yellow_cards: yellows, red_cards: reds };
+            }
+            else if (slug === 'basketball') {
+                let points = 0, fouls = 0;
+                for (const e of myEvents) {
+                    if (e.event_type === 'basket' || e.event_type === 'score')
+                        points += Number(e.payload?.points ?? 2);
+                    if (e.event_type === 'foul')
+                        fouls++;
+                }
+                sportStats = { total_points: points, fouls };
+            }
+        }
+    }
+    catch {
+        // Non-critical — sportStats stays null
+    }
+    return res.json({ profile: { ...p, cityRank, globalRank, sportStats } });
 }
 exports.getSportProfile = getSportProfile;
 // PATCH /users/:id/sport-profile/:sportId

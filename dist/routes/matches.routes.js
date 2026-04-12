@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const matches_controller_1 = require("../controllers/matches.controller");
 const features_controller_1 = require("../controllers/features.controller");
+const matchFeatures_controller_1 = require("../controllers/matchFeatures.controller");
 const auth_middleware_1 = require("../middleware/auth.middleware");
 const router = (0, express_1.Router)();
 router.post('/', auth_middleware_1.authenticateToken, matches_controller_1.createMatch);
@@ -20,5 +21,12 @@ router.post('/:id/complete', auth_middleware_1.authenticateToken, matches_contro
 router.post('/:id/join', auth_middleware_1.authenticateToken, matches_controller_1.joinOpenMatch);
 router.post('/:id/rate', auth_middleware_1.authenticateToken, matches_controller_1.rateMatchHandler);
 router.patch('/:id/toss', auth_middleware_1.authenticateToken, matches_controller_1.setMatchTossHandler);
+router.get('/:id/mvp', auth_middleware_1.authenticateToken, matchFeatures_controller_1.getMatchMVP);
+router.get('/:id/availability', auth_middleware_1.authenticateToken, matchFeatures_controller_1.getMatchAvailability);
+router.patch('/:id/availability', auth_middleware_1.authenticateToken, matchFeatures_controller_1.setMatchAvailability);
+router.post('/:id/dls', auth_middleware_1.authenticateToken, matchFeatures_controller_1.applyDLS);
+router.post('/:id/edit-event', auth_middleware_1.authenticateToken, matchFeatures_controller_1.editMatchEvent);
+router.delete('/:id/events/:eventId', auth_middleware_1.authenticateToken, matchFeatures_controller_1.deleteMatchEvent);
+router.get('/:id/ai-commentary', auth_middleware_1.authenticateToken, matchFeatures_controller_1.getAICommentary);
 exports.default = router;
 //# sourceMappingURL=matches.routes.js.map

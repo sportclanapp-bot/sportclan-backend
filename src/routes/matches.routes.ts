@@ -15,6 +15,10 @@ import {
   getCommentary,
 } from '../controllers/matches.controller';
 import { getNearbyMatches } from '../controllers/features.controller';
+import {
+  getMatchMVP, getMatchAvailability, setMatchAvailability,
+  applyDLS, editMatchEvent, deleteMatchEvent, getAICommentary,
+} from '../controllers/matchFeatures.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -34,5 +38,12 @@ router.post('/:id/complete', authenticateToken, completeMatch);
 router.post('/:id/join', authenticateToken, joinOpenMatch);
 router.post('/:id/rate', authenticateToken, rateMatchHandler);
 router.patch('/:id/toss', authenticateToken, setMatchTossHandler);
+router.get('/:id/mvp', authenticateToken, getMatchMVP);
+router.get('/:id/availability', authenticateToken, getMatchAvailability);
+router.patch('/:id/availability', authenticateToken, setMatchAvailability);
+router.post('/:id/dls', authenticateToken, applyDLS);
+router.post('/:id/edit-event', authenticateToken, editMatchEvent);
+router.delete('/:id/events/:eventId', authenticateToken, deleteMatchEvent);
+router.get('/:id/ai-commentary', authenticateToken, getAICommentary);
 
 export default router;

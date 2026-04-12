@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
+import { sanitizeError } from '../utils/response';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -93,7 +94,7 @@ export async function createTournament(req: Request, res: Response) {
       })
       .select('*')
       .single();
-    if (error || !tournament) return res.status(500).json({ error: error?.message || 'Failed to create tournament' });
+    if (error || !tournament) return res.status(500).json({ error: sanitizeError(error) || 'Failed to create tournament' });
     return res.json({ tournament });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -113,7 +114,7 @@ export async function listTournaments(req: Request, res: Response) {
     if (status) query = query.eq('status', status);
     if (mine === '1') query = query.eq('created_by', userId);
     const { data, error } = await query;
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ tournaments: data || [] });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -164,7 +165,7 @@ export async function createEntry(req: Request, res: Response) {
       .insert({ tournament_id: id, team_id, status: 'pending' })
       .select('*')
       .single();
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ entry: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -224,7 +225,7 @@ export async function updateEntry(req: Request, res: Response) {
       .eq('id', entryId)
       .select('*')
       .single();
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ entry: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -271,7 +272,7 @@ export async function updateTournament(req: Request, res: Response) {
       .eq('id', id)
       .select('*')
       .single();
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ tournament: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -302,7 +303,7 @@ export async function getBracket(req: Request, res: Response) {
       .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at')
       .eq('tournament_id', id)
       .order('scheduled_at', { ascending: true });
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
 
     // Infer round structure. We walk the match list in chronological order
     // and split into standard knockout round sizes (1 final, 2 semis, 4 QFs
@@ -371,7 +372,7 @@ export async function joinByCode(req: Request, res: Response) {
       .insert({ tournament_id: tournament.id, team_id, status: 'pending' })
       .select('*')
       .single();
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ entry: data, tournament_id: tournament.id });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

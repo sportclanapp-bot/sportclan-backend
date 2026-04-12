@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { sanitizeError } from '../utils/response';
 
 // ─── Basic profanity word list ───────────────────────────────────────────────
 const PROFANITY_LIST = [
@@ -79,7 +80,7 @@ export async function listPosts(req: Request, res: Response) {
 
   const result = await q;
 
-  if (result.error) return res.status(500).json({ error: result.error.message });
+  if (result.error) return res.status(500).json({ error: sanitizeError(result.error) });
 
   const items = result.data || [];
   return res.json({
@@ -103,7 +104,7 @@ export async function getSportStoryCounts(req: Request, res: Response) {
     .gt('created_at', since)
     .not('sport_id', 'is', null);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   const counts = new Map<string, { sport_id: string; name: string; emoji: string; count: number }>();
   for (const row of data || []) {
@@ -208,7 +209,7 @@ export async function createPost(req: Request, res: Response) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   // Award coins: 2 per post, capped at 5/day via a date-scoped event type.
   try {
@@ -304,7 +305,7 @@ export async function likePost(req: Request, res: Response) {
     .insert({ post_id: id, user_id: userId });
 
   if (error?.code === '23505') return res.json({ liked: true }); // already liked
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.json({ liked: true });
 }
 
@@ -334,7 +335,7 @@ export async function listComments(req: Request, res: Response) {
     .eq('post_id', id)
     .order('created_at', { ascending: true });
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.json({ data: data || [] });
 }
 
@@ -367,7 +368,7 @@ export async function createComment(req: Request, res: Response) {
     `)
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.status(201).json({ data });
 }
 
@@ -419,7 +420,7 @@ export async function reactToComment(req: Request, res: Response) {
     .update({ reactions })
     .eq('id', commentId);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.json({ reactions });
 }
 
@@ -442,7 +443,7 @@ export async function reportContent(req: Request, res: Response) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.status(201).json({ data });
 }
 
@@ -489,6 +490,6 @@ export async function searchMentions(req: Request, res: Response) {
     .or(`username.ilike.%${q}%,full_name.ilike.%${q}%`)
     .limit(10);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.json({ data: data || [] });
 }

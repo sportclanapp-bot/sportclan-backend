@@ -25,6 +25,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.searchMentions = exports.checkLiked = exports.getMyPostCount = exports.reportContent = exports.reactToComment = exports.deleteComment = exports.createComment = exports.listComments = exports.unlikePost = exports.likePost = exports.closePost = exports.deletePost = exports.updatePost = exports.createPost = exports.getPost = exports.getSportStoryCounts = exports.listPosts = void 0;
 const supabase_1 = require("../utils/supabase");
+const response_1 = require("../utils/response");
 // ─── Basic profanity word list ───────────────────────────────────────────────
 const PROFANITY_LIST = [
     'fuck', 'shit', 'ass', 'bitch', 'damn', 'crap', 'dick', 'bastard',
@@ -106,7 +107,7 @@ async function listPosts(req, res) {
         q = q.lt('created_at', cursor);
     const result = await q;
     if (result.error)
-        return res.status(500).json({ error: result.error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(result.error) });
     const items = result.data || [];
     return res.json({
         items,
@@ -128,7 +129,7 @@ async function getSportStoryCounts(req, res) {
         .gt('created_at', since)
         .not('sport_id', 'is', null);
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     const counts = new Map();
     for (const row of data || []) {
         const sport = row.sport;
@@ -224,7 +225,7 @@ async function createPost(req, res) {
         .select()
         .single();
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     // Award coins: 2 per post, capped at 5/day via a date-scoped event type.
     try {
         const { awardCoins } = await Promise.resolve().then(() => __importStar(require('../utils/coins')));
@@ -315,7 +316,7 @@ async function likePost(req, res) {
     if (error?.code === '23505')
         return res.json({ liked: true }); // already liked
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ liked: true });
 }
 exports.likePost = likePost;
@@ -342,7 +343,7 @@ async function listComments(req, res) {
         .eq('post_id', id)
         .order('created_at', { ascending: true });
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ data: data || [] });
 }
 exports.listComments = listComments;
@@ -372,7 +373,7 @@ async function createComment(req, res) {
     `)
         .single();
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.status(201).json({ data });
 }
 exports.createComment = createComment;
@@ -420,7 +421,7 @@ async function reactToComment(req, res) {
         .update({ reactions })
         .eq('id', commentId);
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ reactions });
 }
 exports.reactToComment = reactToComment;
@@ -442,7 +443,7 @@ async function reportContent(req, res) {
         .select()
         .single();
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.status(201).json({ data });
 }
 exports.reportContent = reportContent;
@@ -484,7 +485,7 @@ async function searchMentions(req, res) {
         .or(`username.ilike.%${q}%,full_name.ilike.%${q}%`)
         .limit(10);
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ data: data || [] });
 }
 exports.searchMentions = searchMentions;

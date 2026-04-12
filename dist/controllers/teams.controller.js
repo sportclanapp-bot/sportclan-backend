@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateTeam = exports.removeTeamMember = exports.addTeamMember = exports.getTeam = exports.listTeams = exports.createTeam = void 0;
 const supabase_1 = require("../utils/supabase");
 const sportId_1 = require("../utils/sportId");
+const response_1 = require("../utils/response");
 // POST /teams — create a team. FREE for all users (Change #6).
 async function createTeam(req, res) {
     const userId = req.userId;
@@ -19,7 +20,7 @@ async function createTeam(req, res) {
             .select('*')
             .single();
         if (error || !team)
-            return res.status(500).json({ error: error?.message || 'Failed to create team' });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) || 'Failed to create team' });
         const { error: memberErr } = await supabase_1.supabase
             .from('team_members')
             .insert({ team_id: team.id, user_id: userId, role: 'captain' });
@@ -62,7 +63,7 @@ async function listTeams(req, res) {
             query = query.in('id', teamIdsFilter);
         const { data, error } = await query;
         if (error)
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
         return res.json({ teams: data || [] });
     }
     catch (e) {
@@ -119,7 +120,7 @@ async function addTeamMember(req, res) {
             .select('*')
             .single();
         if (error)
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
         return res.json({ member: data });
     }
     catch (e) {
@@ -144,7 +145,7 @@ async function removeTeamMember(req, res) {
             .eq('team_id', id)
             .eq('user_id', targetUserId);
         if (error)
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
         return res.json({ removed: true });
     }
     catch (e) {
@@ -175,7 +176,7 @@ async function updateTeam(req, res) {
         allowed.updated_at = new Date().toISOString();
         const { data, error } = await supabase_1.supabase.from('teams').update(allowed).eq('id', id).select('*').single();
         if (error)
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
         return res.json({ team: data });
     }
     catch (e) {

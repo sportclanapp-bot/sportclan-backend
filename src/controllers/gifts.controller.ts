@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { sanitizeError } from '../utils/response';
 
 // ─── Change #7 CRITICAL: ALL 10 PRD gifts ──────────────────────────────────────
 const GIFT_CATALOGUE = [
@@ -74,7 +75,7 @@ export async function sendGift(req: Request, res: Response) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   // Record in transactions table
   await supabase.from('transactions').insert([
@@ -114,7 +115,7 @@ export async function getReceivedGifts(req: Request, res: Response) {
     .order('created_at', { ascending: false })
     .limit(50);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.json({ gifts: data ?? [] });
 }
 
@@ -129,6 +130,6 @@ export async function getSentGifts(req: Request, res: Response) {
     .order('created_at', { ascending: false })
     .limit(50);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.json({ gifts: data ?? [] });
 }

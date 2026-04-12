@@ -5,6 +5,7 @@ import { notifyUser, notifyUsers } from '../utils/notify';
 import { upsertVenue } from './venues.controller';
 import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
+import { sanitizeError } from '../utils/response';
 
 // POST /matches — create. FREE for all (Change #6).
 export async function createMatch(req: Request, res: Response) {
@@ -48,7 +49,7 @@ export async function createMatch(req: Request, res: Response) {
       })
       .select('*')
       .single();
-    if (error || !data) return res.status(500).json({ error: error?.message || 'Failed to create match' });
+    if (error || !data) return res.status(500).json({ error: sanitizeError(error) || 'Failed to create match' });
 
     // Best-effort venue upsert — tracks frequently-used venues for the
     // autocomplete in CreateMatchScreen. Errors are swallowed.
@@ -81,7 +82,7 @@ export async function listOpenMatches(req: Request, res: Response) {
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
     const { data, error } = await query;
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ matches: data ?? [] });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -122,7 +123,7 @@ export async function rateMatchHandler(req: Request, res: Response) {
     })
     .select('*')
     .single();
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   return res.json({ success: true, rating: data });
 }
@@ -157,7 +158,7 @@ export async function setMatchTossHandler(req: Request, res: Response) {
     .eq('id', id)
     .select('*')
     .single();
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   return res.json({ match: data });
 }
@@ -193,7 +194,7 @@ export async function joinOpenMatch(req: Request, res: Response) {
     const { error } = await supabase
       .from('match_participants')
       .insert({ match_id: id, user_id: userId, team_side: 'A' });
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
 
     // Decrement players_needed (never below 0). If it hits 0, close the match.
     const nextNeeded = Math.max(0, (match.players_needed ?? 0) - 1);
@@ -228,7 +229,7 @@ export async function listMatches(req: Request, res: Response) {
     if (team_id) query = query.or(`team_a_id.eq.${team_id},team_b_id.eq.${team_id}`);
     if (mine === '1') query = query.eq('created_by', userId);
     const { data, error } = await query;
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ matches: data || [] });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -254,7 +255,7 @@ export async function getCommentary(req: Request, res: Response) {
       .select('id, event_type, period, clock_seconds, payload, created_at')
       .eq('match_id', id)
       .order('created_at', { ascending: true });
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
 
     const isCricket = !!match.sport_id && String(match.sport_id).toLowerCase().includes('cric');
     let legalBalls = 0;
@@ -413,7 +414,7 @@ export async function updateMatch(req: Request, res: Response) {
     }
     update.updated_at = new Date().toISOString();
     const { data, error } = await supabase.from('matches').update(update).eq('id', id).select('*').single();
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ match: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -448,7 +449,7 @@ export async function addParticipants(req: Request, res: Response) {
       batting_order: p.batting_order ?? null,
     }));
     const { data, error } = await supabase.from('match_participants').insert(rows).select('*');
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ participants: data || [] });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -474,7 +475,7 @@ export async function selfAssignUmpire(req: Request, res: Response) {
       .eq('id', id)
       .select('*')
       .single();
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ match: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -500,7 +501,7 @@ export async function cancelMatch(req: Request, res: Response) {
       .eq('id', id)
       .select('*')
       .single();
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
 
     // PRD Addition #17: notify every participant of the cancellation.
     try {
@@ -710,7 +711,7 @@ export async function completeMatch(req: Request, res: Response) {
       .select('*')
       .single();
 
-    if (updateErr) return res.status(500).json({ error: updateErr.message });
+    if (updateErr) return res.status(500).json({ error: sanitizeError(updateErr) });
 
     // Resolve sport name for nicer notification copy — falls back to ID.
     let sportName = 'rating';

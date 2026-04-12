@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getSentGifts = exports.getReceivedGifts = exports.sendGift = exports.getCatalogue = void 0;
 const supabase_1 = require("../utils/supabase");
+const response_1 = require("../utils/response");
 // ─── Change #7 CRITICAL: ALL 10 PRD gifts ──────────────────────────────────────
 const GIFT_CATALOGUE = [
     { id: 'gold_trophy', emoji: '\u{1F3C6}', name: 'Gold Trophy', cost: 15 },
@@ -74,7 +75,7 @@ async function sendGift(req, res) {
         .select()
         .single();
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     // Record in transactions table
     await supabase_1.supabase.from('transactions').insert([
         {
@@ -111,7 +112,7 @@ async function getReceivedGifts(req, res) {
         .order('created_at', { ascending: false })
         .limit(50);
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ gifts: data ?? [] });
 }
 exports.getReceivedGifts = getReceivedGifts;
@@ -125,7 +126,7 @@ async function getSentGifts(req, res) {
         .order('created_at', { ascending: false })
         .limit(50);
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ gifts: data ?? [] });
 }
 exports.getSentGifts = getSentGifts;

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.reactToMessage = exports.getGroupMembers = exports.markAsRead = exports.batchMarkRead = exports.forwardMessage = exports.deleteMessage = exports.sendMessage = exports.getMessages = exports.deleteGroup = exports.leaveGroup = exports.promoteMember = exports.removeMember = exports.addMember = exports.updateGroup = exports.createGroup = exports.getOrCreateDM = exports.listChats = void 0;
 const supabase_1 = require("../utils/supabase");
+const response_1 = require("../utils/response");
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
 async function listChats(req, res) {
     const userId = req.userId;
@@ -11,7 +12,7 @@ async function listChats(req, res) {
         .select('chat_id')
         .eq('user_id', userId);
     if (pErr)
-        return res.status(500).json({ error: pErr.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(pErr) });
     const chatIds = (participations || []).map((p) => p.chat_id);
     if (chatIds.length === 0)
         return res.json({ data: [] });
@@ -21,7 +22,7 @@ async function listChats(req, res) {
         .in('id', chatIds)
         .order('last_message_at', { ascending: false, nullsFirst: false });
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     // Enrich with participants and last message
     const enriched = await Promise.all((chats || []).map(async (chat) => {
         const { data: participants } = await supabase_1.supabase
@@ -95,7 +96,7 @@ async function getOrCreateDM(req, res) {
         .select()
         .single();
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     await supabase_1.supabase.from('chat_participants').insert([
         { chat_id: chat.id, user_id: userId, role: 'admin' },
         { chat_id: chat.id, user_id: other_user_id, role: 'member' },
@@ -126,7 +127,7 @@ async function createGroup(req, res) {
         .select()
         .single();
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     // Add creator as admin + all members
     const participants = [
         { chat_id: chat.id, user_id: userId, role: 'admin' },
@@ -172,7 +173,7 @@ async function updateGroup(req, res) {
         .select()
         .single();
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ data });
 }
 exports.updateGroup = updateGroup;
@@ -205,7 +206,7 @@ async function addMember(req, res) {
     if (error?.code === '23505')
         return res.json({ success: true }); // already a member
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     // System message
     const { data: addedUser } = await supabase_1.supabase
         .from('users')
@@ -261,7 +262,7 @@ async function promoteMember(req, res) {
         .eq('chat_id', id)
         .eq('user_id', memberId);
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ success: true });
 }
 exports.promoteMember = promoteMember;
@@ -322,7 +323,7 @@ async function getMessages(req, res) {
         query = query.lt('created_at', cursor);
     const { data, error } = await query;
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     const items = data || [];
     return res.json({
         items: items.reverse(),
@@ -368,7 +369,7 @@ async function sendMessage(req, res) {
     `)
         .single();
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.status(201).json({ data });
 }
 exports.sendMessage = sendMessage;
@@ -399,7 +400,7 @@ async function deleteMessage(req, res) {
         .update({ is_deleted: true, content: null, image_url: null })
         .eq('id', messageId);
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ success: true });
 }
 exports.deleteMessage = deleteMessage;
@@ -426,7 +427,7 @@ async function forwardMessage(req, res) {
     }));
     const { error } = await supabase_1.supabase.from('messages').insert(inserts);
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ success: true, forwarded_to: chat_ids.length });
 }
 exports.forwardMessage = forwardMessage;
@@ -447,7 +448,7 @@ async function batchMarkRead(req, res) {
         .select('id, read_by, sender_id')
         .in('id', messageIds);
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     const updates = [];
     for (const r of rows ?? []) {
         if (r.sender_id === userId)
@@ -467,6 +468,15 @@ exports.batchMarkRead = batchMarkRead;
 async function markAsRead(req, res) {
     const userId = req.userId;
     const { id } = req.params;
+    // Verify participant
+    const { data: participant } = await supabase_1.supabase
+        .from('chat_participants')
+        .select('id')
+        .eq('chat_id', id)
+        .eq('user_id', userId)
+        .maybeSingle();
+    if (!participant)
+        return res.status(403).json({ error: 'Not a member of this chat' });
     // Get unread messages in this chat not sent by me
     const { data: unread } = await supabase_1.supabase
         .from('messages')
@@ -497,7 +507,7 @@ async function getGroupMembers(req, res) {
     `)
         .eq('chat_id', id);
     if (error)
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ data: data || [] });
 }
 exports.getGroupMembers = getGroupMembers;

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
+import { sanitizeError } from '../utils/response';
 
 // POST /teams — create a team. FREE for all users (Change #6).
 export async function createTeam(req: Request, res: Response) {
@@ -16,7 +17,7 @@ export async function createTeam(req: Request, res: Response) {
       .insert({ sport_id, name, logo_url: logo_url || null, city_id: city_id || null, created_by: userId })
       .select('*')
       .single();
-    if (error || !team) return res.status(500).json({ error: error?.message || 'Failed to create team' });
+    if (error || !team) return res.status(500).json({ error: sanitizeError(error) || 'Failed to create team' });
 
     const { error: memberErr } = await supabase
       .from('team_members')
@@ -55,7 +56,7 @@ export async function listTeams(req: Request, res: Response) {
     if (teamIdsFilter) query = query.in('id', teamIdsFilter);
 
     const { data, error } = await query;
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ teams: data || [] });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -106,7 +107,7 @@ export async function addTeamMember(req: Request, res: Response) {
       .insert({ team_id: id, user_id, role: role || 'player', jersey_number: jersey_number ?? null })
       .select('*')
       .single();
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ member: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -128,7 +129,7 @@ export async function removeTeamMember(req: Request, res: Response) {
       .delete()
       .eq('team_id', id)
       .eq('user_id', targetUserId);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ removed: true });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -152,7 +153,7 @@ export async function updateTeam(req: Request, res: Response) {
     if (is_public !== undefined) allowed.is_public = is_public;
     allowed.updated_at = new Date().toISOString();
     const { data, error } = await supabase.from('teams').update(allowed).eq('id', id).select('*').single();
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ team: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

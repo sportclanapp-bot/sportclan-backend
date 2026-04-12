@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateFixtures = exports.joinByCode = exports.getBracket = exports.updateTournament = exports.updateEntry = exports.createEntry = exports.getTournament = exports.listTournaments = exports.createTournament = void 0;
 const supabase_1 = require("../utils/supabase");
 const sportId_1 = require("../utils/sportId");
+const response_1 = require("../utils/response");
 function generateEntryCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let out = '';
@@ -78,7 +79,7 @@ async function createTournament(req, res) {
             .select('*')
             .single();
         if (error || !tournament)
-            return res.status(500).json({ error: error?.message || 'Failed to create tournament' });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) || 'Failed to create tournament' });
         return res.json({ tournament });
     }
     catch (e) {
@@ -105,7 +106,7 @@ async function listTournaments(req, res) {
             query = query.eq('created_by', userId);
         const { data, error } = await query;
         if (error)
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
         return res.json({ tournaments: data || [] });
     }
     catch (e) {
@@ -163,7 +164,7 @@ async function createEntry(req, res) {
             .select('*')
             .single();
         if (error)
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
         return res.json({ entry: data });
     }
     catch (e) {
@@ -231,7 +232,7 @@ async function updateEntry(req, res) {
             .select('*')
             .single();
         if (error)
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
         return res.json({ entry: data });
     }
     catch (e) {
@@ -283,7 +284,7 @@ async function updateTournament(req, res) {
             .select('*')
             .single();
         if (error)
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
         return res.json({ tournament: data });
     }
     catch (e) {
@@ -317,7 +318,7 @@ async function getBracket(req, res) {
             .eq('tournament_id', id)
             .order('scheduled_at', { ascending: true });
         if (error)
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
         // Infer round structure. We walk the match list in chronological order
         // and split into standard knockout round sizes (1 final, 2 semis, 4 QFs
         // etc). Anything that doesn't fit falls into a final "Round 1" bucket.
@@ -391,7 +392,7 @@ async function joinByCode(req, res) {
             .select('*')
             .single();
         if (error)
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
         return res.json({ entry: data, tournament_id: tournament.id });
     }
     catch (e) {

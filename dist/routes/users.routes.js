@@ -22,6 +22,8 @@ router.get('/:id/rating-history', auth_middleware_1.authenticateToken, users_con
 router.get('/:id/rival', auth_middleware_1.authenticateToken, users_controller_1.getRival);
 router.get('/:id/season-recap', features_controller_1.getSeasonRecap);
 router.get('/:id/insights', insights_controller_1.getUserInsights);
+router.get('/:id/reviews', users_controller_1.getReviews);
+router.post('/:id/reviews', auth_middleware_1.authenticateToken, users_controller_1.submitReview);
 router.post('/:id/follow', auth_middleware_1.authenticateToken, users_controller_1.followUser);
 router.delete('/:id/follow', auth_middleware_1.authenticateToken, users_controller_1.unfollowUser);
 router.post('/:id/block', auth_middleware_1.authenticateToken, users_controller_1.blockUser);

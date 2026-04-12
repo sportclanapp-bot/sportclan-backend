@@ -23,8 +23,9 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateSportProfile = exports.getSportProfile = exports.getRatingHistory = exports.getRival = exports.getActivityHeatmap = exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = exports.getMe = void 0;
+exports.submitReview = exports.getReviews = exports.updateSportProfile = exports.getSportProfile = exports.getRatingHistory = exports.getRival = exports.getActivityHeatmap = exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = exports.getMe = void 0;
 const supabase_1 = require("../utils/supabase");
+const response_1 = require("../utils/response");
 const subscriptions_controller_1 = require("./subscriptions.controller");
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS = 'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, created_at';
@@ -215,10 +216,23 @@ async function getUserById(req, res) {
         else
             giftMap.set(g.gift_id, { emoji: g.gift_emoji, name: g.gift_name, count: 1 });
     }
+    // Check if the caller follows this user (for isFollowing state on frontend)
+    let isFollowing = false;
+    const callerId = req.userId;
+    if (callerId && callerId !== id) {
+        const { data: followRow } = await supabase_1.supabase
+            .from('follow_relationships')
+            .select('id')
+            .eq('follower_id', callerId)
+            .eq('following_id', id)
+            .maybeSingle();
+        isFollowing = !!followRow;
+    }
     return res.json({
         user: safeUser,
         followers: followersRes.count ?? 0,
         following: followingRes.count ?? 0,
+        isFollowing,
         gifts: Array.from(giftMap.values()),
         totalGifts: giftsRes.data?.length ?? 0,
     });
@@ -982,4 +996,50 @@ async function updateSportProfile(req, res) {
     return res.json({ profile });
 }
 exports.updateSportProfile = updateSportProfile;
+// ── Reviews for service accounts ────────────────────────────────────────────
+async function getReviews(req, res) {
+    const { id } = req.params;
+    try {
+        const { data, error } = await supabase_1.supabase
+            .from('user_reviews')
+            .select('id, rating, comment, created_at, reviewer:users!reviewer_id(id, name, profile_picture_url)')
+            .eq('reviewed_id', id)
+            .order('created_at', { ascending: false })
+            .limit(50);
+        if (error)
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
+        const ratings = (data ?? []).map((r) => r.rating);
+        const avgRating = ratings.length > 0 ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10 : null;
+        return res.json({ reviews: data ?? [], avgRating, count: ratings.length });
+    }
+    catch {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.getReviews = getReviews;
+async function submitReview(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const { id } = req.params;
+        if (id === userId)
+            return res.status(400).json({ error: 'Cannot review yourself' });
+        const { rating, comment } = req.body || {};
+        if (!rating || rating < 1 || rating > 5)
+            return res.status(400).json({ error: 'rating 1-5 required' });
+        const { data, error } = await supabase_1.supabase
+            .from('user_reviews')
+            .upsert({ reviewer_id: userId, reviewed_id: id, rating, comment: comment ?? null }, { onConflict: 'reviewer_id,reviewed_id' })
+            .select('*')
+            .single();
+        if (error)
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
+        return res.json({ review: data });
+    }
+    catch {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.submitReview = submitReview;
 //# sourceMappingURL=users.controller.js.map

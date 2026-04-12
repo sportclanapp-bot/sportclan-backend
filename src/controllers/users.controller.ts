@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { sanitizeError } from '../utils/response';
 import { checkExpiredSubscriptions } from './subscriptions.controller';
 
 // Public-safe user fields. Never returns password_hash.
@@ -195,10 +196,24 @@ export async function getUserById(req: Request, res: Response) {
     else giftMap.set(g.gift_id, { emoji: g.gift_emoji, name: g.gift_name, count: 1 });
   }
 
+  // Check if the caller follows this user (for isFollowing state on frontend)
+  let isFollowing = false;
+  const callerId = req.userId;
+  if (callerId && callerId !== id) {
+    const { data: followRow } = await supabase
+      .from('follow_relationships')
+      .select('id')
+      .eq('follower_id', callerId)
+      .eq('following_id', id)
+      .maybeSingle();
+    isFollowing = !!followRow;
+  }
+
   return res.json({
     user: safeUser,
     followers: followersRes.count ?? 0,
     following: followingRes.count ?? 0,
+    isFollowing,
     gifts: Array.from(giftMap.values()),
     totalGifts: giftsRes.data?.length ?? 0,
   });
@@ -948,4 +963,44 @@ export async function updateSportProfile(req: Request, res: Response) {
     .maybeSingle();
 
   return res.json({ profile });
+}
+
+// ── Reviews for service accounts ────────────────────────────────────────────
+
+export async function getReviews(req: Request, res: Response) {
+  const { id } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('user_reviews')
+      .select('id, rating, comment, created_at, reviewer:users!reviewer_id(id, name, profile_picture_url)')
+      .eq('reviewed_id', id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    const ratings = (data ?? []).map((r: any) => r.rating as number);
+    const avgRating = ratings.length > 0 ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10 : null;
+    return res.json({ reviews: data ?? [], avgRating, count: ratings.length });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function submitReview(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    if (id === userId) return res.status(400).json({ error: 'Cannot review yourself' });
+    const { rating, comment } = req.body || {};
+    if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: 'rating 1-5 required' });
+    const { data, error } = await supabase
+      .from('user_reviews')
+      .upsert({ reviewer_id: userId, reviewed_id: id, rating, comment: comment ?? null }, { onConflict: 'reviewer_id,reviewed_id' })
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    return res.json({ review: data });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
 }

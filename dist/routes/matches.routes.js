@@ -15,6 +15,7 @@ router.get('/:id/commentary', auth_middleware_1.authenticateToken, matches_contr
 router.get('/:id', auth_middleware_1.authenticateToken, matches_controller_1.getMatch);
 router.patch('/:id', auth_middleware_1.authenticateToken, matches_controller_1.updateMatch);
 router.delete('/:id', auth_middleware_1.authenticateToken, matches_controller_1.cancelMatch);
+router.post('/:id/cancel', auth_middleware_1.authenticateToken, matches_controller_1.cancelMatch); // alias for frontend compatibility
 router.post('/:id/participants', auth_middleware_1.authenticateToken, matches_controller_1.addParticipants);
 router.post('/:id/umpire/self-assign', auth_middleware_1.authenticateToken, matches_controller_1.selfAssignUmpire);
 router.post('/:id/complete', auth_middleware_1.authenticateToken, matches_controller_1.completeMatch);

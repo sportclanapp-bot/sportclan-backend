@@ -176,6 +176,25 @@ async function getUserById(req, res) {
     if (safeUser.show_dob === false) {
         safeUser.dob = null;
     }
+    // Service account premium gating: Umpires, Coaches, Businesses etc.
+    // must be Premium for their full profile to appear. Non-premium service
+    // accounts get a masked response so the viewer knows they need to upgrade.
+    const SERVICE_TYPES = [
+        'Umpire-Referee', 'Trainer-Coach', 'Business-Vendor',
+        'Association', 'Club', 'Leagues', 'Commentator', 'Organiser',
+    ];
+    if (SERVICE_TYPES.some((t) => safeUser.account_type?.includes(t)) &&
+        !safeUser.is_premium) {
+        // Mask sensitive fields — return just enough for the card UI to
+        // render a "Premium Required" overlay.
+        safeUser.name = 'Premium Account';
+        safeUser.profile_picture_url = null;
+        safeUser.bio = null;
+        safeUser.email = null;
+        safeUser.phone = null;
+        safeUser.link = null;
+        safeUser.isPremiumRequired = true;
+    }
     // Counts (followers/following) — best-effort, never fail the request.
     const [followersRes, followingRes] = await Promise.all([
         supabase_1.supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('following_id', id),

@@ -6,6 +6,7 @@ import {
   addTeamMember,
   removeTeamMember,
   updateTeam,
+  joinTeamByCode,
 } from '../controllers/teams.controller';
 import { listExpenses, addExpense, deleteExpense, getExpenseSummary } from '../controllers/teamExpenses.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
@@ -13,6 +14,7 @@ import { authenticateToken } from '../middleware/auth.middleware';
 const router = Router();
 
 router.post('/', authenticateToken, createTeam);
+router.post('/join', authenticateToken, joinTeamByCode);
 router.get('/', authenticateToken, listTeams);
 router.get('/:id', authenticateToken, getTeam);
 router.post('/:id/members', authenticateToken, addTeamMember);

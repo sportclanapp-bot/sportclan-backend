@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getAICommentary = exports.deleteMatchEvent = exports.editMatchEvent = exports.applyDLS = exports.setMatchAvailability = exports.getMatchAvailability = exports.getMatchMVP = exports.calculateAndSetMVP = void 0;
+exports.deleteMatchEvent = exports.editMatchEvent = exports.applyDLS = exports.setMatchAvailability = exports.getMatchAvailability = exports.getMatchMVP = exports.calculateAndSetMVP = void 0;
 const supabase_1 = require("../utils/supabase");
 const response_1 = require("../utils/response");
 const dls_1 = require("../utils/dls");
@@ -232,70 +232,5 @@ async function deleteMatchEvent(req, res) {
     }
 }
 exports.deleteMatchEvent = deleteMatchEvent;
-// ────────────────────────────────────────────────────────────────────────────
-// FEATURE 4 — AI Commentary (stub — requires ANTHROPIC_API_KEY)
-// GET /matches/:id/ai-commentary
-// ────────────────────────────────────────────────────────────────────────────
-async function getAICommentary(req, res) {
-    try {
-        const { id } = req.params;
-        // Get recent events
-        const { data: events } = await supabase_1.supabase
-            .from('match_events')
-            .select('event_type, payload, created_at')
-            .eq('match_id', id)
-            .order('created_at', { ascending: false })
-            .limit(20);
-        if (!events?.length)
-            return res.json({ commentary: [] });
-        const apiKey = process.env.ANTHROPIC_API_KEY;
-        if (!apiKey) {
-            // No API key — return formatted events as basic commentary
-            const basic = (events ?? []).reverse().map((e) => {
-                const p = e.payload ?? {};
-                const runs = p.runs ?? 0;
-                const wicket = p.wicket ? ' WICKET!' : '';
-                return `Ball: ${runs} run${runs !== 1 ? 's' : ''}${wicket}`;
-            });
-            return res.json({ commentary: basic, aiPowered: false });
-        }
-        // Call Claude API
-        const { data: match } = await supabase_1.supabase
-            .from('matches')
-            .select('team_a_name, team_b_name, sport_id')
-            .eq('id', id)
-            .maybeSingle();
-        const eventsText = (events ?? []).reverse().map((e, i) => {
-            const p = e.payload ?? {};
-            return `Ball ${i + 1}: ${JSON.stringify(p)}`;
-        }).join('\n');
-        const prompt = `You are an exciting cricket commentator. Generate ball-by-ball commentary for these match events between ${match?.team_a_name ?? 'Team A'} and ${match?.team_b_name ?? 'Team B'}. Each line should be 1-2 sentences, exciting and professional like Sky Sports commentary.\n\nEvents:\n${eventsText}\n\nReturn ONLY the commentary lines, one per event, no numbering.`;
-        try {
-            const resp = await fetch('https://api.anthropic.com/v1/messages', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-key': apiKey,
-                    'anthropic-version': '2023-06-01',
-                },
-                body: JSON.stringify({
-                    model: 'claude-sonnet-4-20250514',
-                    max_tokens: 1024,
-                    messages: [{ role: 'user', content: prompt }],
-                }),
-            });
-            const data = await resp.json();
-            const text = data?.content?.[0]?.text ?? '';
-            const lines = text.split('\n').filter((l) => l.trim());
-            return res.json({ commentary: lines, aiPowered: true });
-        }
-        catch {
-            return res.json({ commentary: [], aiPowered: false });
-        }
-    }
-    catch {
-        return res.status(500).json({ error: 'Internal server error' });
-    }
-}
-exports.getAICommentary = getAICommentary;
+// AI Commentary feature removed — kept manual CommentaryFeed only.
 //# sourceMappingURL=matchFeatures.controller.js.map

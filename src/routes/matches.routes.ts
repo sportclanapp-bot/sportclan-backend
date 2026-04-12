@@ -17,7 +17,7 @@ import {
 import { getNearbyMatches } from '../controllers/features.controller';
 import {
   getMatchMVP, getMatchAvailability, setMatchAvailability,
-  applyDLS, editMatchEvent, deleteMatchEvent, getAICommentary,
+  applyDLS, editMatchEvent, deleteMatchEvent,
 } from '../controllers/matchFeatures.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -44,6 +44,4 @@ router.patch('/:id/availability', authenticateToken, setMatchAvailability);
 router.post('/:id/dls', authenticateToken, applyDLS);
 router.post('/:id/edit-event', authenticateToken, editMatchEvent);
 router.delete('/:id/events/:eventId', authenticateToken, deleteMatchEvent);
-router.get('/:id/ai-commentary', authenticateToken, getAICommentary);
-
 export default router;

@@ -111,10 +111,11 @@ export async function getOrCreateDM(req: Request, res: Response) {
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
-  await supabase.from('chat_participants').insert([
+  const { error: partErr } = await supabase.from('chat_participants').insert([
     { chat_id: chat.id, user_id: userId, role: 'admin' },
     { chat_id: chat.id, user_id: other_user_id, role: 'member' },
   ]);
+  if (partErr) console.error('DM chat_participants insert failed:', partErr.message);
 
   return res.status(201).json({ data: chat });
 }
@@ -155,15 +156,17 @@ export async function createGroup(req: Request, res: Response) {
     })),
   ];
 
-  await supabase.from('chat_participants').insert(participants);
+  const { error: partErr } = await supabase.from('chat_participants').insert(participants);
+  if (partErr) console.error('Group chat_participants insert failed:', partErr.message);
 
   // System message
-  await supabase.from('messages').insert({
+  const { error: sysErr } = await supabase.from('messages').insert({
     chat_id: chat.id,
     sender_id: userId,
     content: `Group "${name}" created`,
     is_system: true,
   });
+  if (sysErr) console.error('Group system message insert failed:', sysErr.message);
 
   return res.status(201).json({ data: chat });
 }
@@ -242,12 +245,13 @@ export async function addMember(req: Request, res: Response) {
     .eq('id', user_id)
     .single();
 
-  await supabase.from('messages').insert({
+  const { error: sysErr } = await supabase.from('messages').insert({
     chat_id: id,
     sender_id: userId,
     content: `${addedUser?.full_name || 'A user'} was added to the group`,
     is_system: true,
   });
+  if (sysErr) console.error('Add-member system message failed:', sysErr.message);
 
   return res.json({ success: true });
 }
@@ -332,7 +336,8 @@ export async function deleteGroup(req: Request, res: Response) {
     return res.status(403).json({ error: 'Only the creator can delete the group' });
   }
 
-  await supabase.from('chats').delete().eq('id', id);
+  const { error: delErr } = await supabase.from('chats').delete().eq('id', id);
+  if (delErr) return res.status(500).json({ error: 'Failed to delete group' });
   return res.json({ success: true });
 }
 

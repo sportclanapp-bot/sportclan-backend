@@ -708,7 +708,9 @@ async function completeMatch(req, res) {
         }
         // Insert rating history
         if (ratingHistoryRows.length > 0) {
-            await supabase_1.supabase.from('rating_history').insert(ratingHistoryRows);
+            const { error: rhErr } = await supabase_1.supabase.from('rating_history').insert(ratingHistoryRows);
+            if (rhErr)
+                console.error('rating_history insert failed:', rhErr.message);
         }
         // Award 5 coins to every player on the winning team. Idempotent per
         // (user, match) via awardCoins' unique key on coin_events.

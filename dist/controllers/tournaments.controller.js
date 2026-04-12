@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateFixtures = exports.joinByCode = exports.getBracket = exports.updateTournament = exports.updateEntry = exports.createEntry = exports.getTournament = exports.listTournaments = exports.createTournament = void 0;
+exports.getTournamentChat = exports.updateFixtures = exports.joinByCode = exports.getBracket = exports.updateTournament = exports.updateEntry = exports.createEntry = exports.getTournament = exports.listTournaments = exports.createTournament = void 0;
 const supabase_1 = require("../utils/supabase");
 const sportId_1 = require("../utils/sportId");
 const response_1 = require("../utils/response");
@@ -82,6 +82,21 @@ async function createTournament(req, res) {
             .single();
         if (error || !tournament)
             return res.status(500).json({ error: (0, response_1.sanitizeError)(error) || 'Failed to create tournament' });
+        // Auto-create tournament group chat (best-effort)
+        try {
+            const { data: chat } = await supabase_1.supabase
+                .from('chats')
+                .insert({ is_group: true, name: `${name} Chat`, created_by: userId })
+                .select('id')
+                .single();
+            if (chat) {
+                await supabase_1.supabase.from('chat_participants').insert({ chat_id: chat.id, user_id: userId, role: 'admin' });
+                // Store the chat reference on the tournament — we use a loose
+                // metadata approach since there's no dedicated FK column yet.
+                await supabase_1.supabase.from('tournaments').update({ sport_metadata: { ...metadata, _chat_id: chat.id } }).eq('id', tournament.id);
+            }
+        }
+        catch { /* chat creation is best-effort */ }
         return res.json({ tournament });
     }
     catch (e) {
@@ -463,4 +478,60 @@ async function updateFixtures(req, res) {
     }
 }
 exports.updateFixtures = updateFixtures;
+// GET /tournaments/:id/chat — returns the tournament's group chat ID.
+// Creates the chat lazily if it wasn't created at tournament-creation time
+// (e.g. tournaments created before this feature shipped).
+async function getTournamentChat(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const { id } = req.params;
+        const { data: tournament } = await supabase_1.supabase
+            .from('tournaments')
+            .select('id, name, sport_metadata, created_by')
+            .eq('id', id)
+            .maybeSingle();
+        if (!tournament)
+            return res.status(404).json({ error: 'Tournament not found' });
+        // Check if a chat already exists via sport_metadata._chat_id
+        const meta = tournament.sport_metadata ?? {};
+        let chatId = meta._chat_id ?? null;
+        if (chatId) {
+            // Verify the chat still exists
+            const { data: existing } = await supabase_1.supabase.from('chats').select('id').eq('id', chatId).maybeSingle();
+            if (!existing)
+                chatId = null;
+        }
+        if (!chatId) {
+            // Create the chat on-demand
+            const { data: chat } = await supabase_1.supabase
+                .from('chats')
+                .insert({ is_group: true, name: `${tournament.name} Chat`, created_by: tournament.created_by })
+                .select('id')
+                .single();
+            if (!chat)
+                return res.status(500).json({ error: 'Could not create tournament chat' });
+            chatId = chat.id;
+            await supabase_1.supabase.from('chat_participants').insert({ chat_id: chatId, user_id: tournament.created_by, role: 'admin' });
+            // Persist the reference
+            await supabase_1.supabase.from('tournaments').update({ sport_metadata: { ...meta, _chat_id: chatId } }).eq('id', id);
+        }
+        // Ensure the requesting user is a participant (add them if not)
+        const { data: participant } = await supabase_1.supabase
+            .from('chat_participants')
+            .select('id')
+            .eq('chat_id', chatId)
+            .eq('user_id', userId)
+            .maybeSingle();
+        if (!participant) {
+            await supabase_1.supabase.from('chat_participants').insert({ chat_id: chatId, user_id: userId, role: 'member' });
+        }
+        return res.json({ conversationId: chatId });
+    }
+    catch {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.getTournamentChat = getTournamentChat;
 //# sourceMappingURL=tournaments.controller.js.map

@@ -14,14 +14,16 @@ import {
   setMatchTossHandler,
   getCommentary,
 } from '../controllers/matches.controller';
+import { getNearbyMatches } from '../controllers/features.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
 const router = Router();
 
 router.post('/', authenticateToken, createMatch);
 router.get('/', authenticateToken, listMatches);
-// /open must come before /:id so it isn't captured as a match id.
+// /open and /nearby must come before /:id so they aren't captured as a match id.
 router.get('/open', authenticateToken, listOpenMatches);
+router.get('/nearby', authenticateToken, getNearbyMatches);
 router.get('/:id/commentary', authenticateToken, getCommentary);
 router.get('/:id', authenticateToken, getMatch);
 router.patch('/:id', authenticateToken, updateMatch);

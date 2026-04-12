@@ -18,6 +18,7 @@ import {
   getRival,
   getRatingHistory,
 } from '../controllers/users.controller';
+import { getSeasonRecap } from '../controllers/features.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -37,6 +38,7 @@ router.patch('/:id/sport-profile/:sportId', authenticateToken, updateSportProfil
 router.get('/:id/activity-heatmap', getActivityHeatmap);
 router.get('/:id/rating-history', authenticateToken, getRatingHistory);
 router.get('/:id/rival', authenticateToken, getRival);
+router.get('/:id/season-recap', getSeasonRecap);
 
 router.post('/:id/follow', authenticateToken, followUser);
 router.delete('/:id/follow', authenticateToken, unfollowUser);

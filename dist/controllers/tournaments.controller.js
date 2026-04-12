@@ -30,7 +30,7 @@ async function createTournament(req, res) {
                 code: 'PREMIUM_REQUIRED',
             });
         }
-        const { sport_id, name, description, format, city_id, venue, start_date, end_date, entry_fee, max_teams, prize_pool, banner_url, tiebreaker_rules, sport_metadata, } = req.body || {};
+        const { sport_id, name, description, format, city_id, venue, start_date, end_date, entry_fee, max_teams, prize_pool, banner_url, tiebreaker_rules, sport_metadata, sponsor_name, sponsor_logo_url, } = req.body || {};
         if (!sport_id || !name || !format) {
             return res.status(400).json({ error: 'sport_id, name, format are required' });
         }
@@ -75,6 +75,8 @@ async function createTournament(req, res) {
             created_by: userId,
             tiebreaker_rules: tiebreaker_rules ?? [],
             sport_metadata: metadata,
+            sponsor_name: sponsor_name || null,
+            sponsor_logo_url: sponsor_logo_url || null,
         })
             .select('*')
             .single();
@@ -270,6 +272,8 @@ async function updateTournament(req, res) {
             'banner_url',
             'status',
             'tiebreaker_rules',
+            'sponsor_name',
+            'sponsor_logo_url',
         ];
         const update = {};
         for (const key of allowedKeys) {

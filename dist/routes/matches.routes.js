@@ -2,12 +2,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const matches_controller_1 = require("../controllers/matches.controller");
+const features_controller_1 = require("../controllers/features.controller");
 const auth_middleware_1 = require("../middleware/auth.middleware");
 const router = (0, express_1.Router)();
 router.post('/', auth_middleware_1.authenticateToken, matches_controller_1.createMatch);
 router.get('/', auth_middleware_1.authenticateToken, matches_controller_1.listMatches);
-// /open must come before /:id so it isn't captured as a match id.
+// /open and /nearby must come before /:id so they aren't captured as a match id.
 router.get('/open', auth_middleware_1.authenticateToken, matches_controller_1.listOpenMatches);
+router.get('/nearby', auth_middleware_1.authenticateToken, features_controller_1.getNearbyMatches);
 router.get('/:id/commentary', auth_middleware_1.authenticateToken, matches_controller_1.getCommentary);
 router.get('/:id', auth_middleware_1.authenticateToken, matches_controller_1.getMatch);
 router.patch('/:id', auth_middleware_1.authenticateToken, matches_controller_1.updateMatch);

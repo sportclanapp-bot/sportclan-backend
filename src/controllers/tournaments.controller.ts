@@ -45,6 +45,8 @@ export async function createTournament(req: Request, res: Response) {
       banner_url,
       tiebreaker_rules,
       sport_metadata,
+      sponsor_name,
+      sponsor_logo_url,
     } = req.body || {};
     if (!sport_id || !name || !format) {
       return res.status(400).json({ error: 'sport_id, name, format are required' });
@@ -91,6 +93,8 @@ export async function createTournament(req: Request, res: Response) {
         created_by: userId,
         tiebreaker_rules: tiebreaker_rules ?? [],
         sport_metadata: metadata,
+        sponsor_name: sponsor_name || null,
+        sponsor_logo_url: sponsor_logo_url || null,
       })
       .select('*')
       .single();
@@ -260,6 +264,8 @@ export async function updateTournament(req: Request, res: Response) {
       'banner_url',
       'status',
       'tiebreaker_rules',
+      'sponsor_name',
+      'sponsor_logo_url',
     ];
     const update: Record<string, any> = {};
     for (const key of allowedKeys) {

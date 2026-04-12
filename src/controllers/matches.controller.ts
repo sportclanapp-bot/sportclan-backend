@@ -4,6 +4,7 @@ import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers } from '../utils/notify';
 import { upsertVenue } from './venues.controller';
 import { awardCoins } from '../utils/coins';
+import { resolveSportId } from '../utils/sportId';
 
 // POST /matches — create. FREE for all (Change #6).
 export async function createMatch(req: Request, res: Response) {
@@ -69,6 +70,7 @@ export async function listOpenMatches(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { sport_id, city_id } = req.query as Record<string, string | undefined>;
+    const resolvedSportId = await resolveSportId(sport_id);
     let query = supabase
       .from('matches')
       .select('*')
@@ -76,7 +78,7 @@ export async function listOpenMatches(req: Request, res: Response) {
       .in('status', ['scheduled', 'upcoming'])
       .order('scheduled_at', { ascending: true })
       .limit(100);
-    if (sport_id) query = query.eq('sport_id', sport_id);
+    if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
@@ -216,8 +218,11 @@ export async function listMatches(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { sport_id, status, tournament_id, team_id, mine } = req.query as Record<string, string | undefined>;
+    // Accept either a UUID or a slug/name for sport_id — the mobile app
+    // has some legacy call sites that still pass 'cricket' / 'badminton'.
+    const resolvedSportId = await resolveSportId(sport_id);
     let query = supabase.from('matches').select('*').order('scheduled_at', { ascending: false }).limit(100);
-    if (sport_id) query = query.eq('sport_id', sport_id);
+    if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (status) query = query.eq('status', status);
     if (tournament_id) query = query.eq('tournament_id', tournament_id);
     if (team_id) query = query.or(`team_a_id.eq.${team_id},team_b_id.eq.${team_id}`);

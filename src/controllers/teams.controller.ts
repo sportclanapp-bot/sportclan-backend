@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { resolveSportId } from '../utils/sportId';
 
 // POST /teams — create a team. FREE for all users (Change #6).
 export async function createTeam(req: Request, res: Response) {
@@ -46,8 +47,9 @@ export async function listTeams(req: Request, res: Response) {
       if (teamIdsFilter.length === 0) return res.json({ teams: [] });
     }
 
+    const resolvedSportId = await resolveSportId(sport_id);
     let query = supabase.from('teams').select('*').order('created_at', { ascending: false }).limit(100);
-    if (sport_id) query = query.eq('sport_id', sport_id);
+    if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
     if (q) query = query.ilike('name', `%${q}%`);
     if (teamIdsFilter) query = query.in('id', teamIdsFilter);

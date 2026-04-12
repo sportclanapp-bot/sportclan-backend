@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateTeam = exports.removeTeamMember = exports.addTeamMember = exports.getTeam = exports.listTeams = exports.createTeam = void 0;
 const supabase_1 = require("../utils/supabase");
+const sportId_1 = require("../utils/sportId");
 // POST /teams — create a team. FREE for all users (Change #6).
 async function createTeam(req, res) {
     const userId = req.userId;
@@ -49,9 +50,10 @@ async function listTeams(req, res) {
             if (teamIdsFilter.length === 0)
                 return res.json({ teams: [] });
         }
+        const resolvedSportId = await (0, sportId_1.resolveSportId)(sport_id);
         let query = supabase_1.supabase.from('teams').select('*').order('created_at', { ascending: false }).limit(100);
-        if (sport_id)
-            query = query.eq('sport_id', sport_id);
+        if (resolvedSportId)
+            query = query.eq('sport_id', resolvedSportId);
         if (city_id)
             query = query.eq('city_id', city_id);
         if (q)

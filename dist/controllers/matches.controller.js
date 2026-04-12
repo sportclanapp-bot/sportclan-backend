@@ -6,6 +6,7 @@ const ratingEngine_1 = require("../utils/ratingEngine");
 const notify_1 = require("../utils/notify");
 const venues_controller_1 = require("./venues.controller");
 const coins_1 = require("../utils/coins");
+const sportId_1 = require("../utils/sportId");
 // POST /matches — create. FREE for all (Change #6).
 async function createMatch(req, res) {
     const userId = req.userId;
@@ -59,6 +60,7 @@ async function listOpenMatches(req, res) {
         return res.status(401).json({ error: 'Unauthorized' });
     try {
         const { sport_id, city_id } = req.query;
+        const resolvedSportId = await (0, sportId_1.resolveSportId)(sport_id);
         let query = supabase_1.supabase
             .from('matches')
             .select('*')
@@ -66,8 +68,8 @@ async function listOpenMatches(req, res) {
             .in('status', ['scheduled', 'upcoming'])
             .order('scheduled_at', { ascending: true })
             .limit(100);
-        if (sport_id)
-            query = query.eq('sport_id', sport_id);
+        if (resolvedSportId)
+            query = query.eq('sport_id', resolvedSportId);
         if (city_id)
             query = query.eq('city_id', city_id);
         const { data, error } = await query;
@@ -214,9 +216,12 @@ async function listMatches(req, res) {
         return res.status(401).json({ error: 'Unauthorized' });
     try {
         const { sport_id, status, tournament_id, team_id, mine } = req.query;
+        // Accept either a UUID or a slug/name for sport_id — the mobile app
+        // has some legacy call sites that still pass 'cricket' / 'badminton'.
+        const resolvedSportId = await (0, sportId_1.resolveSportId)(sport_id);
         let query = supabase_1.supabase.from('matches').select('*').order('scheduled_at', { ascending: false }).limit(100);
-        if (sport_id)
-            query = query.eq('sport_id', sport_id);
+        if (resolvedSportId)
+            query = query.eq('sport_id', resolvedSportId);
         if (status)
             query = query.eq('status', status);
         if (tournament_id)

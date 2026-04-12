@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.joinByCode = exports.getBracket = exports.updateTournament = exports.updateEntry = exports.createEntry = exports.getTournament = exports.listTournaments = exports.createTournament = void 0;
 const supabase_1 = require("../utils/supabase");
+const sportId_1 = require("../utils/sportId");
 function generateEntryCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let out = '';
@@ -92,9 +93,10 @@ async function listTournaments(req, res) {
         return res.status(401).json({ error: 'Unauthorized' });
     try {
         const { sport_id, city_id, status, mine } = req.query;
+        const resolvedSportId = await (0, sportId_1.resolveSportId)(sport_id);
         let query = supabase_1.supabase.from('tournaments').select('*').order('created_at', { ascending: false }).limit(100);
-        if (sport_id)
-            query = query.eq('sport_id', sport_id);
+        if (resolvedSportId)
+            query = query.eq('sport_id', resolvedSportId);
         if (city_id)
             query = query.eq('city_id', city_id);
         if (status)

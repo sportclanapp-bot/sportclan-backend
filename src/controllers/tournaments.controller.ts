@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { resolveSportId } from '../utils/sportId';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -105,8 +106,9 @@ export async function listTournaments(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { sport_id, city_id, status, mine } = req.query as Record<string, string | undefined>;
+    const resolvedSportId = await resolveSportId(sport_id);
     let query = supabase.from('tournaments').select('*').order('created_at', { ascending: false }).limit(100);
-    if (sport_id) query = query.eq('sport_id', sport_id);
+    if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
     if (status) query = query.eq('status', status);
     if (mine === '1') query = query.eq('created_by', userId);

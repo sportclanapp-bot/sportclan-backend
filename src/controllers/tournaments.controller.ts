@@ -175,6 +175,58 @@ export async function getTournament(req: Request, res: Response) {
   }
 }
 
+// POST /tournaments/:id/entries/direct — organiser directly adds a team (auto-approved)
+export async function directAddTeam(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { team_id } = req.body || {};
+    if (!team_id) return res.status(400).json({ error: 'team_id is required' });
+
+    const { data: tournament } = await supabase
+      .from('tournaments')
+      .select('created_by, max_teams')
+      .eq('id', id)
+      .maybeSingle();
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+    if (tournament.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the organiser can directly add teams' });
+    }
+
+    // Check max_teams cap
+    if (tournament.max_teams) {
+      const { count } = await supabase
+        .from('tournament_entries')
+        .select('id', { count: 'exact', head: true })
+        .eq('tournament_id', id)
+        .in('status', ['approved']);
+      if ((count ?? 0) >= tournament.max_teams) {
+        return res.status(400).json({ error: 'Tournament is full', code: 'TOURNAMENT_FULL' });
+      }
+    }
+
+    // Check not already entered
+    const { data: existing } = await supabase
+      .from('tournament_entries')
+      .select('id')
+      .eq('tournament_id', id)
+      .eq('team_id', team_id)
+      .maybeSingle();
+    if (existing) return res.status(400).json({ error: 'Team already registered' });
+
+    const { data, error } = await supabase
+      .from('tournament_entries')
+      .insert({ tournament_id: id, team_id, status: 'approved' })
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    return res.json({ entry: data });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 // POST /tournaments/:id/entries — captain enters their team
 export async function createEntry(req: Request, res: Response) {
   const userId = req.userId;

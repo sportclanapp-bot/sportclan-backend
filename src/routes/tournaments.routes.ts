@@ -4,6 +4,7 @@ import {
   listTournaments,
   getTournament,
   createEntry,
+  directAddTeam,
   updateEntry,
   updateTournament,
   joinByCode,
@@ -39,6 +40,7 @@ router.get('/:id/chat', authenticateToken, getTournamentChat);
 router.get('/:id/officials', authenticateToken, getTournamentOfficials);
 router.post('/:id/officials', authenticateToken, addTournamentOfficial);
 router.delete('/:id/officials/:officialId', authenticateToken, removeTournamentOfficial);
+router.post('/:id/entries/direct', authenticateToken, directAddTeam);
 router.post('/:id/entries', authenticateToken, createEntry);
 router.patch('/:id/entries/:entryId', authenticateToken, updateEntry);
 

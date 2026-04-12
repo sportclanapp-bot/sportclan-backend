@@ -8,30 +8,79 @@ const dls_1 = require("../utils/dls");
 // FEATURE 1 — MVP / Player of the Match
 // ────────────────────────────────────────────────────────────────────────────
 async function calculateAndSetMVP(matchId) {
-    // Get match events and participants
+    // Get match + sport + events + participants
+    const { data: match } = await supabase_1.supabase
+        .from('matches')
+        .select('sport_id, winner_team_id')
+        .eq('id', matchId)
+        .maybeSingle();
+    if (!match)
+        return null;
+    const { data: sportRow } = await supabase_1.supabase.from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
+    const slug = sportRow?.slug ?? '';
     const { data: events } = await supabase_1.supabase
         .from('match_events')
-        .select('payload, created_by')
+        .select('event_type, payload, created_by')
         .eq('match_id', matchId);
     const { data: participants } = await supabase_1.supabase
         .from('match_participants')
-        .select('user_id')
+        .select('user_id, team_side')
         .eq('match_id', matchId);
-    if (!events?.length || !participants?.length)
+    if (!participants?.length)
         return null;
-    // Score each participant based on events
+    // Score each participant based on sport-specific formula
     const scores = new Map();
     for (const p of participants)
         scores.set(p.user_id, 0);
-    for (const ev of events) {
-        const payload = ev.payload ?? {};
-        const userId = ev.created_by;
-        if (!userId || !scores.has(userId))
+    for (const ev of events ?? []) {
+        const p = (ev.payload ?? {});
+        const uid = ev.created_by;
+        if (!uid || !scores.has(uid))
             continue;
-        const current = scores.get(userId) ?? 0;
-        const runs = payload.runs ?? 0;
-        const wicket = payload.wicket ? 25 : 0;
-        scores.set(userId, current + runs + wicket);
+        const cur = scores.get(uid) ?? 0;
+        if (slug === 'cricket') {
+            // Runs + wickets×25
+            scores.set(uid, cur + (Number(p.runs ?? 0)) + (p.wicket ? 25 : 0));
+        }
+        else if (slug === 'football' || slug === 'hockey') {
+            // Goals×30 + assists×15
+            if (ev.event_type === 'goal')
+                scores.set(uid, cur + 30);
+            else if (ev.event_type === 'assist')
+                scores.set(uid, cur + 15);
+        }
+        else if (slug === 'basketball') {
+            // Points×1 + assists×3
+            const pts = Number(p.points ?? 0);
+            if (ev.event_type === 'basket' || ev.event_type === 'score')
+                scores.set(uid, cur + pts);
+            else if (ev.event_type === 'assist')
+                scores.set(uid, cur + 3);
+        }
+        else if (['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball'].includes(slug)) {
+            // Points won
+            if (ev.event_type === 'score' || ev.event_type === 'point')
+                scores.set(uid, cur + 1);
+        }
+        else if (slug === 'carrom') {
+            // Points pocketed
+            const pts = Number(p.points ?? p.runs ?? 1);
+            scores.set(uid, cur + pts);
+        }
+        else if (slug === 'chess') {
+            // Winner gets MVP — handled below
+        }
+        else {
+            // Generic: any scoring event
+            scores.set(uid, cur + Number(p.runs ?? p.points ?? 1));
+        }
+    }
+    // Chess special: winner auto-MVP
+    if (slug === 'chess' && match.winner_team_id) {
+        const winner = participants.find((p2) => (p2.team_side === 'A' && match.winner_team_id === match.winner_team_id) ||
+            (p2.team_side === 'B'));
+        if (winner)
+            scores.set(winner.user_id, 9999);
     }
     // Find top scorer
     let mvpId = null;

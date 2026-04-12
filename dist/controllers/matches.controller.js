@@ -327,6 +327,38 @@ async function getCommentary(req, res) {
                 commentary = `\uD83D\uDFE5 Red card${p.player ? ` for ${p.player}` : ''}`;
                 isWicket = true;
             }
+            else if (ev.event_type === 'score' || ev.event_type === 'point') {
+                // Generic point-based sports (badminton, TT, pickleball, volleyball)
+                const team = p.team_name || `Team ${p.team_side ?? '?'}`;
+                const pts = p.points ?? p.runs ?? 1;
+                commentary = `${pts === 1 ? 'Point' : `${pts} points`} to ${team}`;
+            }
+            else if (ev.event_type === 'basket') {
+                const pts = p.points ?? 2;
+                const team = p.team_name || `Team ${p.team_side ?? '?'}`;
+                commentary = `\uD83C\uDFC0 ${pts}-pointer! ${team}`;
+            }
+            else if (ev.event_type === 'foul') {
+                const team = p.team_name || `Team ${p.team_side ?? '?'}`;
+                commentary = `Foul by ${team}${p.bonus ? ' — BONUS free throws' : ''}`;
+            }
+            else if (ev.event_type === 'move') {
+                // Chess
+                commentary = `\u265F\uFE0F Move ${p.moveNumber ?? ''} — game in progress`;
+            }
+            else if (ev.event_type === 'timeout') {
+                commentary = `\u23F8\uFE0F Timeout called by ${p.team_name ?? 'team'}`;
+            }
+            else if (ev.event_type === 'assist') {
+                commentary = `\uD83C\uDD70\uFE0F Assist${p.player ? ` by ${p.player}` : ''}`;
+            }
+            else if (ev.event_type === 'sub') {
+                commentary = `\uD83D\uDD04 Substitution${p.player ? ` — ${p.player}` : ''}`;
+            }
+            else if (ev.event_type === 'queen') {
+                // Carrom
+                commentary = `\uD83D\uDC51 Queen pocketed! +5 points`;
+            }
             else {
                 commentary = `${ev.event_type}${p && Object.keys(p).length > 0 ? ` ${JSON.stringify(p).slice(0, 80)}` : ''}`;
             }
@@ -732,6 +764,56 @@ async function completeMatch(req, res) {
             .single();
         if (updateErr)
             return res.status(500).json({ error: (0, response_1.sanitizeError)(updateErr) });
+        // FIX 5: Auto-generate sport-specific result text and store in score_summary
+        try {
+            const { data: sportRow } = await supabase_1.supabase.from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
+            const slug = sportRow?.slug ?? '';
+            const ss = (updatedMatch?.score_summary ?? {});
+            const aName = match.team_a_name ?? 'Team A';
+            const bName = match.team_b_name ?? 'Team B';
+            const aScore = ss.team_a_score ?? '';
+            const bScore = ss.team_b_score ?? '';
+            let resultText = '';
+            if (winner_team_id) {
+                const winnerName = winner_team_id === match.team_a_id ? aName : bName;
+                if (slug === 'cricket') {
+                    const diff = Math.abs(Number(String(aScore).split('/')[0]) - Number(String(bScore).split('/')[0]));
+                    resultText = winner_team_id === match.team_a_id
+                        ? `${winnerName} won by ${diff} runs`
+                        : `${winnerName} won by ${10 - Number(String(bScore).split('/')[1] ?? 0)} wickets`;
+                }
+                else if (['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball'].includes(slug)) {
+                    const setsA = (ss.team_a_sets ?? ss.team_a_games ?? []);
+                    const setsB = (ss.team_b_sets ?? ss.team_b_games ?? []);
+                    const wA = setsA.filter((_, i) => (setsA[i] ?? 0) > (setsB[i] ?? 0)).length;
+                    const wB = setsB.filter((_, i) => (setsB[i] ?? 0) > (setsA[i] ?? 0)).length;
+                    resultText = `${winnerName} won ${Math.max(wA, wB)}-${Math.min(wA, wB)}`;
+                }
+                else if (['football', 'hockey'].includes(slug)) {
+                    resultText = `${winnerName} won ${aScore}-${bScore}`;
+                }
+                else if (slug === 'basketball') {
+                    resultText = `${winnerName} won ${aScore}-${bScore}`;
+                }
+                else if (slug === 'chess') {
+                    resultText = `${winnerName} won`;
+                }
+                else if (slug === 'carrom') {
+                    resultText = `${winnerName} won ${aScore}-${bScore}`;
+                }
+                else {
+                    resultText = `${winnerName} won`;
+                }
+            }
+            else {
+                resultText = ['football', 'hockey'].includes(slug) ? `Match Draw ${aScore}-${bScore}` : 'Match Draw';
+            }
+            if (resultText) {
+                ss.result = resultText;
+                await supabase_1.supabase.from('matches').update({ score_summary: ss }).eq('id', id);
+            }
+        }
+        catch { /* best effort */ }
         // Resolve sport name for nicer notification copy — falls back to ID.
         let sportName = 'rating';
         try {

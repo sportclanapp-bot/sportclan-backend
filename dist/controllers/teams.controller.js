@@ -1,9 +1,16 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateTeam = exports.removeTeamMember = exports.addTeamMember = exports.getTeam = exports.listTeams = exports.createTeam = void 0;
+exports.joinTeamByCode = exports.updateTeam = exports.removeTeamMember = exports.addTeamMember = exports.getTeam = exports.listTeams = exports.createTeam = void 0;
 const supabase_1 = require("../utils/supabase");
 const sportId_1 = require("../utils/sportId");
 const response_1 = require("../utils/response");
+function generateJoinCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let out = '';
+    for (let i = 0; i < 6; i++)
+        out += chars[Math.floor(Math.random() * chars.length)];
+    return out;
+}
 // POST /teams — create a team. FREE for all users (Change #6).
 async function createTeam(req, res) {
     const userId = req.userId;
@@ -14,9 +21,17 @@ async function createTeam(req, res) {
         if (!sport_id || !name) {
             return res.status(400).json({ error: 'sport_id and name are required' });
         }
+        // Generate a unique join code
+        let join_code = generateJoinCode();
+        for (let i = 0; i < 5; i++) {
+            const { data: existing } = await supabase_1.supabase.from('teams').select('id').eq('join_code', join_code).maybeSingle();
+            if (!existing)
+                break;
+            join_code = generateJoinCode();
+        }
         const { data: team, error } = await supabase_1.supabase
             .from('teams')
-            .insert({ sport_id, name, logo_url: logo_url || null, city_id: city_id || null, created_by: userId })
+            .insert({ sport_id, name, logo_url: logo_url || null, city_id: city_id || null, created_by: userId, join_code })
             .select('*')
             .single();
         if (error || !team)
@@ -184,4 +199,43 @@ async function updateTeam(req, res) {
     }
 }
 exports.updateTeam = updateTeam;
+// POST /teams/join  { join_code }
+async function joinTeamByCode(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const { join_code } = req.body || {};
+        if (!join_code)
+            return res.status(400).json({ error: 'join_code is required' });
+        const { data: team } = await supabase_1.supabase
+            .from('teams')
+            .select('id, name, sport_id')
+            .eq('join_code', join_code.toUpperCase())
+            .maybeSingle();
+        if (!team)
+            return res.status(404).json({ error: 'Invalid team code' });
+        // Check not already a member
+        const { data: existing } = await supabase_1.supabase
+            .from('team_members')
+            .select('id')
+            .eq('team_id', team.id)
+            .eq('user_id', userId)
+            .maybeSingle();
+        if (existing)
+            return res.status(400).json({ error: 'Already a member of this team' });
+        const { data: member, error } = await supabase_1.supabase
+            .from('team_members')
+            .insert({ team_id: team.id, user_id: userId, role: 'player' })
+            .select('*')
+            .single();
+        if (error)
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
+        return res.json({ team, member });
+    }
+    catch {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.joinTeamByCode = joinTeamByCode;
 //# sourceMappingURL=teams.controller.js.map

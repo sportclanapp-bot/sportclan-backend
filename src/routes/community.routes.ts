@@ -10,7 +10,7 @@ import { authenticateToken } from '../middleware/auth.middleware';
 const router = Router();
 
 // Posts
-router.get('/posts', listPosts);
+router.get('/posts', authenticateToken, listPosts);
 router.get('/posts/my-count', authenticateToken, getMyPostCount);
 router.get('/sport-story-counts', authenticateToken, getSportStoryCounts);
 router.get('/posts/:id', getPost);

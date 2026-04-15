@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.generateFixtures = exports.getTournamentChat = exports.updateFixtures = exports.joinByCode = exports.getBracket = exports.updateTournament = exports.updateEntry = exports.createEntry = exports.getTournament = exports.listTournaments = exports.createTournament = void 0;
+exports.generateFixtures = exports.getTournamentChat = exports.updateFixtures = exports.joinByCode = exports.getBracket = exports.updateTournament = exports.updateEntry = exports.createEntry = exports.directAddTeam = exports.getTournament = exports.listTournaments = exports.createTournament = void 0;
 const supabase_1 = require("../utils/supabase");
 const sportId_1 = require("../utils/sportId");
 const response_1 = require("../utils/response");
@@ -30,7 +30,7 @@ async function createTournament(req, res) {
                 code: 'PREMIUM_REQUIRED',
             });
         }
-        const { sport_id, name, description, format, city_id, venue, start_date, end_date, entry_fee, max_teams, prize_pool, banner_url, logo_url, tiebreaker_rules, sport_metadata, sponsor_name, sponsor_logo_url, organiser_name, organiser_mobile, registration_deadline, home_away, } = req.body || {};
+        const { sport_id, name, description, format, city_id, city, venue, start_date, end_date, entry_fee, max_teams, prize_pool, banner_url, logo_url, tiebreaker_rules, sport_metadata, sponsor_name, sponsor_logo_url, organiser_name, organiser_mobile, registration_deadline, home_away, } = req.body || {};
         if (!sport_id || !name || !format) {
             return res.status(400).json({ error: 'sport_id, name, format are required' });
         }
@@ -64,6 +64,7 @@ async function createTournament(req, res) {
             description: description || null,
             format,
             city_id: city_id || null,
+            city: city || null,
             venue: venue || null,
             start_date: start_date || null,
             end_date: end_date || null,
@@ -161,6 +162,60 @@ async function getTournament(req, res) {
     }
 }
 exports.getTournament = getTournament;
+// POST /tournaments/:id/entries/direct — organiser directly adds a team (auto-approved)
+async function directAddTeam(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    try {
+        const { id } = req.params;
+        const { team_id } = req.body || {};
+        if (!team_id)
+            return res.status(400).json({ error: 'team_id is required' });
+        const { data: tournament } = await supabase_1.supabase
+            .from('tournaments')
+            .select('created_by, max_teams')
+            .eq('id', id)
+            .maybeSingle();
+        if (!tournament)
+            return res.status(404).json({ error: 'Tournament not found' });
+        if (tournament.created_by !== userId) {
+            return res.status(403).json({ error: 'Only the organiser can directly add teams' });
+        }
+        // Check max_teams cap
+        if (tournament.max_teams) {
+            const { count } = await supabase_1.supabase
+                .from('tournament_entries')
+                .select('id', { count: 'exact', head: true })
+                .eq('tournament_id', id)
+                .in('status', ['approved']);
+            if ((count ?? 0) >= tournament.max_teams) {
+                return res.status(400).json({ error: 'Tournament is full', code: 'TOURNAMENT_FULL' });
+            }
+        }
+        // Check not already entered
+        const { data: existing } = await supabase_1.supabase
+            .from('tournament_entries')
+            .select('id')
+            .eq('tournament_id', id)
+            .eq('team_id', team_id)
+            .maybeSingle();
+        if (existing)
+            return res.status(400).json({ error: 'Team already registered' });
+        const { data, error } = await supabase_1.supabase
+            .from('tournament_entries')
+            .insert({ tournament_id: id, team_id, status: 'approved' })
+            .select('*')
+            .single();
+        if (error)
+            return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
+        return res.json({ entry: data });
+    }
+    catch {
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+exports.directAddTeam = directAddTeam;
 // POST /tournaments/:id/entries — captain enters their team
 async function createEntry(req, res) {
     const userId = req.userId;
@@ -302,6 +357,7 @@ async function updateTournament(req, res) {
             'description',
             'format',
             'city_id',
+            'city',
             'venue',
             'start_date',
             'end_date',

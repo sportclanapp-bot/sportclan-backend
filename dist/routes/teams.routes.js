@@ -6,6 +6,7 @@ const teamExpenses_controller_1 = require("../controllers/teamExpenses.controlle
 const auth_middleware_1 = require("../middleware/auth.middleware");
 const router = (0, express_1.Router)();
 router.post('/', auth_middleware_1.authenticateToken, teams_controller_1.createTeam);
+router.post('/join', auth_middleware_1.authenticateToken, teams_controller_1.joinTeamByCode);
 router.get('/', auth_middleware_1.authenticateToken, teams_controller_1.listTeams);
 router.get('/:id', auth_middleware_1.authenticateToken, teams_controller_1.getTeam);
 router.post('/:id/members', auth_middleware_1.authenticateToken, teams_controller_1.addTeamMember);

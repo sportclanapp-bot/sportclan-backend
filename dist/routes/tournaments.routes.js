@@ -20,6 +20,7 @@ router.get('/:id/chat', auth_middleware_1.authenticateToken, tournaments_control
 router.get('/:id/officials', auth_middleware_1.authenticateToken, features_controller_1.getTournamentOfficials);
 router.post('/:id/officials', auth_middleware_1.authenticateToken, features_controller_1.addTournamentOfficial);
 router.delete('/:id/officials/:officialId', auth_middleware_1.authenticateToken, features_controller_1.removeTournamentOfficial);
+router.post('/:id/entries/direct', auth_middleware_1.authenticateToken, tournaments_controller_1.directAddTeam);
 router.post('/:id/entries', auth_middleware_1.authenticateToken, tournaments_controller_1.createEntry);
 router.patch('/:id/entries/:entryId', auth_middleware_1.authenticateToken, tournaments_controller_1.updateEntry);
 exports.default = router;

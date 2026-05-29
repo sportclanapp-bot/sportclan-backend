@@ -151,6 +151,7 @@ export async function getPost(req: Request, res: Response) {
 // ─── CREATE POST ────────────────────────────────────────────────────────────
 export async function createPost(req: Request, res: Response) {
   const userId = req.userId!;
+  console.log('[createPost DEBUG] userId=', userId, 'body=', JSON.stringify(req.body));
   const {
     content,
     text: textAlias, // frontend historically sends `text`
@@ -173,12 +174,14 @@ export async function createPost(req: Request, res: Response) {
     | undefined;
 
   if (!bodyContent || bodyContent.trim().length === 0) {
+    console.log('[createPost DEBUG] exit=content-missing');
     return res.status(400).json({ error: 'Content is required' });
   }
 
   // Profanity check
   const detected = detectProfanity(bodyContent);
   if (detected.length > 0) {
+    console.log('[createPost DEBUG] exit=profanity detected=', detected);
     return res.status(400).json({
       error: 'PROFANITY_DETECTED',
       detected_words: detected,
@@ -190,6 +193,7 @@ export async function createPost(req: Request, res: Response) {
   let pollOptions: { id: string; text: string; vote_count: number }[] | null = null;
   if (type === 'poll' || Array.isArray(rawPollOptions)) {
     if (!Array.isArray(rawPollOptions) || rawPollOptions.length < 2 || rawPollOptions.length > 5) {
+      console.log('[createPost DEBUG] exit=poll-options-bad type=', type, 'rawPollOptions=', rawPollOptions);
       return res.status(400).json({ error: 'Polls need 2-5 options' });
     }
     pollOptions = rawPollOptions.map((text: string, i: number) => ({
@@ -258,9 +262,11 @@ export async function createPost(req: Request, res: Response) {
     }
     const when = new Date(scheduled_at);
     if (Number.isNaN(when.getTime())) {
+      console.log('[createPost DEBUG] exit=scheduled_at-invalid scheduled_at=', scheduled_at);
       return res.status(400).json({ error: 'Invalid scheduled_at' });
     }
     if (when.getTime() <= Date.now()) {
+      console.log('[createPost DEBUG] exit=scheduled_at-past scheduled_at=', scheduled_at);
       return res.status(400).json({ error: 'scheduled_at must be in the future' });
     }
     insertPayload.scheduled_at = when.toISOString();

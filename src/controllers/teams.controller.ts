@@ -209,3 +209,48 @@ export async function joinTeamByCode(req: Request, res: Response) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+// DELETE /teams/:id — disband a team (captain only).
+// Removes members + the team row. Refuses if the team has any matches or
+// tournament entries tied to it, to avoid orphaning historical records.
+export async function disbandTeam(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const id = String(req.params.id);
+    if (!(await isCaptain(id, userId))) {
+      return res.status(403).json({ error: 'Only the captain can disband the team' });
+    }
+
+    // Block disband if the team is referenced by any match (as A or B).
+    const { count: matchCount } = await supabase
+      .from('matches')
+      .select('id', { count: 'exact', head: true })
+      .or(`team_a_id.eq.${id},team_b_id.eq.${id}`);
+    if ((matchCount ?? 0) > 0) {
+      return res.status(409).json({
+        error: 'This team has match history and can\u2019t be disbanded. Remove it from matches first.',
+      });
+    }
+
+    // Block disband if the team has tournament entries.
+    const { count: entryCount } = await supabase
+      .from('tournament_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', id);
+    if ((entryCount ?? 0) > 0) {
+      return res.status(409).json({
+        error: 'This team is entered in a tournament and can\u2019t be disbanded yet.',
+      });
+    }
+
+    // Clean up dependent rows, then the team itself.
+    await supabase.from('team_members').delete().eq('team_id', id);
+    await supabase.from('team_expenses').delete().eq('team_id', id);
+    const { error } = await supabase.from('teams').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    return res.json({ success: true });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}

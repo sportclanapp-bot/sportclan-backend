@@ -78,6 +78,13 @@ export async function listPosts(req: Request, res: Response) {
   if (author_id) q = q.eq('author_id', author_id as string);
   if (cursor && sortMode !== 'trending') q = q.lt('created_at', cursor as string);
 
+  // Hide not-yet-published scheduled posts from everyone EXCEPT the author
+  // viewing their own profile grid (author_id === the requester).
+  const viewingOwn = author_id && author_id === req.userId;
+  if (!viewingOwn) {
+    q = q.is('scheduled_at', null);
+  }
+
   const result = await q;
 
   if (result.error) return res.status(500).json({ error: sanitizeError(result.error) });
@@ -85,6 +92,7 @@ export async function listPosts(req: Request, res: Response) {
   const items = result.data || [];
   return res.json({
     items,
+    posts: items,
     nextCursor: items.length === pageSize ? items[items.length - 1]?.created_at : null,
     hasMore: items.length === pageSize,
   });
@@ -136,21 +144,40 @@ export async function getPost(req: Request, res: Response) {
     .eq('id', id)
     .single();
 
-  if (error) return res.status(404).json({ error: 'Post not found' });
-  return res.json({ data });
+  return res.json({ data, post: data });
+  return res.json({ data, post: data });
 }
 
 // ─── CREATE POST ────────────────────────────────────────────────────────────
 export async function createPost(req: Request, res: Response) {
   const userId = req.userId!;
-  const { content, image_url, link_url, sport_id, city_id, post_type, mentions } = req.body;
+  const {
+    content,
+    text: textAlias, // frontend historically sends `text`
+    image_url,
+    media_urls, // frontend historically sends `media_urls: string[]`
+    link_url,
+    sport_id,
+    city_id,
+    post_type,
+    mentions,
+    poll_options: rawPollOptions,
+    type, // frontend sends 'type' which can be 'poll', 'general', etc.
+    scheduled_at, // optional ISO string · Premium-only scheduled publishing
+  } = req.body;
 
-  if (!content || content.trim().length === 0) {
+  // Normalise frontend field names to the columns we store.
+  const bodyContent = (content ?? textAlias) as string | undefined;
+  const bodyImage = (image_url ?? (Array.isArray(media_urls) ? media_urls[0] : undefined)) as
+    | string
+    | undefined;
+
+  if (!bodyContent || bodyContent.trim().length === 0) {
     return res.status(400).json({ error: 'Content is required' });
   }
 
   // Profanity check
-  const detected = detectProfanity(content);
+  const detected = detectProfanity(bodyContent);
   if (detected.length > 0) {
     return res.status(400).json({
       error: 'PROFANITY_DETECTED',
@@ -158,8 +185,22 @@ export async function createPost(req: Request, res: Response) {
     });
   }
 
+  // Poll validation: accept string[] from frontend; convert to JSONB with
+  // generated option_id + zero votes.
+  let pollOptions: { id: string; text: string; vote_count: number }[] | null = null;
+  if (type === 'poll' || Array.isArray(rawPollOptions)) {
+    if (!Array.isArray(rawPollOptions) || rawPollOptions.length < 2 || rawPollOptions.length > 5) {
+      return res.status(400).json({ error: 'Polls need 2-5 options' });
+    }
+    pollOptions = rawPollOptions.map((text: string, i: number) => ({
+      id: `opt_${i + 1}`,
+      text: String(text).trim().slice(0, 80),
+      vote_count: 0,
+    }));
+  }
+
   // Check premium for image posts
-  if (image_url) {
+  if (bodyImage) {
     const { data: user } = await supabase
       .from('users')
       .select('is_premium')
@@ -194,18 +235,40 @@ export async function createPost(req: Request, res: Response) {
     }
   }
 
+  const insertPayload: Record<string, unknown> = {
+    author_id: userId,
+    content: bodyContent.trim(),
+    image_url: bodyImage || null,
+    link_url: link_url || null,
+    sport_id: sport_id || null,
+    city_id: city_id || null,
+    post_type: type || post_type || 'general',
+    mentions: mentions || [],
+  };
+  if (pollOptions) {
+    insertPayload.poll_options = pollOptions;
+  }
+
+  // Scheduled publishing · Premium-only, must be a future timestamp.
+  // The publishScheduledPosts job clears scheduled_at once the time passes,
+  // at which point the post becomes visible in the normal feed query.
+  if (scheduled_at) {
+    if (!user?.is_premium) {
+      return res.status(403).json({ error: 'SCHEDULING_PREMIUM' });
+    }
+    const when = new Date(scheduled_at);
+    if (Number.isNaN(when.getTime())) {
+      return res.status(400).json({ error: 'Invalid scheduled_at' });
+    }
+    if (when.getTime() <= Date.now()) {
+      return res.status(400).json({ error: 'scheduled_at must be in the future' });
+    }
+    insertPayload.scheduled_at = when.toISOString();
+  }
+
   const { data, error } = await supabase
     .from('community_posts')
-    .insert({
-      author_id: userId,
-      content: content.trim(),
-      image_url: image_url || null,
-      link_url: link_url || null,
-      sport_id: sport_id || null,
-      city_id: city_id || null,
-      post_type: post_type || 'Player',
-      mentions: mentions || [],
-    })
+    .insert(insertPayload)
     .select()
     .single();
 
@@ -227,8 +290,8 @@ export async function createPost(req: Request, res: Response) {
   } catch {
     // best-effort
   }
-
-  return res.status(201).json({ data });
+  return res.status(201).json({ data, post: data });
+  return res.status(201).json({ data, post: data });
 }
 
 // ─── UPDATE POST ────────────────────────────────────────────────────────────
@@ -259,8 +322,8 @@ export async function updatePost(req: Request, res: Response) {
     .select()
     .single();
 
-  if (error) return res.status(404).json({ error: 'Post not found or not yours' });
-  return res.json({ data });
+  return res.json({ data, post: data });
+  return res.json({ data, post: data });
 }
 
 // ─── DELETE POST ────────────────────────────────────────────────────────────
@@ -336,7 +399,7 @@ export async function listComments(req: Request, res: Response) {
     .order('created_at', { ascending: true });
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
-  return res.json({ data: data || [] });
+  return res.json({ data: data || [], comments: data || [] });
 }
 
 export async function createComment(req: Request, res: Response) {
@@ -369,7 +432,7 @@ export async function createComment(req: Request, res: Response) {
     .single();
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
-  return res.status(201).json({ data });
+  return res.status(201).json({ data, comment: data });
 }
 
 export async function deleteComment(req: Request, res: Response) {
@@ -461,7 +524,9 @@ export async function getMyPostCount(req: Request, res: Response) {
     .eq('author_id', userId)
     .gte('created_at', startOfMonth.toISOString());
 
-  return res.json({ count: count ?? 0, limit: 5 });
+  const used = count ?? 0;
+  const limit = 5;
+  return res.json({ count: used, limit, remaining: Math.max(0, limit - used) });
 }
 
 // ─── CHECK IF USER LIKED ────────────────────────────────────────────────────
@@ -482,7 +547,7 @@ export async function checkLiked(req: Request, res: Response) {
 // ─── MENTION SEARCH ─────────────────────────────────────────────────────────
 export async function searchMentions(req: Request, res: Response) {
   const { q } = req.query;
-  if (!q || (q as string).length < 1) return res.json({ data: [] });
+  if (!q || (q as string).length < 1) return res.json({ data: [], candidates: [] });
 
   const { data, error } = await supabase
     .from('users')
@@ -491,5 +556,93 @@ export async function searchMentions(req: Request, res: Response) {
     .limit(10);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
-  return res.json({ data: data || [] });
+  // Frontend uses { id, name, username, avatar_url } shape; map full_name → name
+  const candidates = (data || []).map((u: any) => ({
+    id: u.id,
+    name: u.full_name,
+    username: u.username,
+    avatar_url: u.profile_picture_url,
+  }));
+  return res.json({ data: data || [], candidates });
+}
+
+// ─── VOTE ON POLL ───────────────────────────────────────────────────────────
+export async function votePoll(req: Request, res: Response) {
+  const userId = req.userId!;
+  const { id } = req.params;
+  const { option_id } = req.body;
+
+  if (!option_id || typeof option_id !== 'string') {
+    return res.status(400).json({ error: 'option_id is required' });
+  }
+
+  // 1. Fetch post; verify it's a poll
+  const { data: post, error: fetchErr } = await supabase
+    .from('community_posts')
+    .select('id, poll_options, post_type')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (fetchErr) return res.status(500).json({ error: sanitizeError(fetchErr) });
+  if (!post) return res.status(404).json({ error: 'Post not found' });
+  if (!post.poll_options) return res.status(400).json({ error: 'Not a poll post' });
+
+  const options = post.poll_options as Array<{ id: string; text: string; vote_count: number }>;
+  if (!options.find((o) => o.id === option_id)) {
+    return res.status(400).json({ error: 'Invalid option_id' });
+  }
+
+  // 2. Get existing vote (if any) to know what to decrement
+  const { data: existing } = await supabase
+    .from('poll_votes')
+    .select('option_id')
+    .eq('post_id', id)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  const previousOptionId = existing?.option_id ?? null;
+  if (previousOptionId === option_id) {
+    // No change — still return current state
+    return res.json({ post });
+  }
+
+  // 3. Upsert the vote
+  const { error: upsertErr } = await supabase
+    .from('poll_votes')
+    .upsert({
+      post_id: id,
+      user_id: userId,
+      option_id,
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'post_id,user_id' });
+
+  if (upsertErr) return res.status(500).json({ error: sanitizeError(upsertErr) });
+
+  // 4. Recompute counts from poll_votes (authoritative)
+  const { data: counts } = await supabase
+    .from('poll_votes')
+    .select('option_id')
+    .eq('post_id', id);
+
+  const tally: Record<string, number> = {};
+  for (const r of counts ?? []) {
+    tally[(r as { option_id: string }).option_id] = (tally[(r as { option_id: string }).option_id] ?? 0) + 1;
+  }
+
+  const updatedOptions = options.map((o) => ({
+    ...o,
+    vote_count: tally[o.id] ?? 0,
+  }));
+
+  // 5. Persist counts back onto the post for fast reads
+  const { data: updated, error: updateErr } = await supabase
+    .from('community_posts')
+    .update({ poll_options: updatedOptions })
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (updateErr) return res.status(500).json({ error: sanitizeError(updateErr) });
+
+  return res.json({ post: { ...updated, my_vote_option_id: option_id } });
 }

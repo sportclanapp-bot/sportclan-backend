@@ -36,6 +36,7 @@ import kudosRoutes from './routes/kudos.routes';
 import venuesRoutes from './routes/venues.routes';
 import referralsRoutes from './routes/referrals.routes';
 import devRoutes from './routes/dev.routes';
+import adminRoutes from './routes/admin.routes';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -123,6 +124,7 @@ app.use('/kudos', kudosRoutes);
 app.use('/venues', venuesRoutes);
 app.use('/referrals', referralsRoutes);
 app.use('/dev', devRoutes);
+app.use('/admin', adminRoutes);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {

@@ -3,6 +3,7 @@ import {
   getMe,
   getUserById,
   updateMe,
+  updateAccountTypes,
   followUser,
   unfollowUser,
   getFollowers,
@@ -29,6 +30,7 @@ const router = Router();
 // Self routes — must be declared before /:id so they don't get captured.
 router.get('/me', authenticateToken, getMe);
 router.patch('/me', authenticateToken, updateMe);
+router.patch('/me/account-types', authenticateToken, updateAccountTypes);
 router.get('/me/blocked', authenticateToken, getBlockedUsers);
 router.get('/me/profile-completeness', authenticateToken, getProfileCompleteness);
 router.get('/discover', authenticateToken, discoverPlayers);

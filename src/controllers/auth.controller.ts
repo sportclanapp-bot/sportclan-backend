@@ -21,42 +21,64 @@ function normalizePhone(phone: string): string {
   return phone.trim().replace(/\s+/g, '');
 }
 
-// Send SMS via 2Factor.in API
-async function sendSmsOtp(phone: string, code: string): Promise<boolean> {
+// Send OTP via 2Factor.in — choose between voice call and WhatsApp.
+// Voice is the default (per product spec for India to dodge SMS deliverability).
+// WhatsApp is the fallback when voice fails (carrier block, SIM issue, voice
+// rate limits). On dev with no API key, both fall through to console.
+async function sendOtpViaChannel(
+  phone: string,
+  code: string,
+  channel: 'voice' | 'whatsapp',
+): Promise<boolean> {
   const apiKey = process.env.TWOFACTOR_API_KEY;
   if (!apiKey) {
-    // Fallback to console in dev when API key is not configured
     // eslint-disable-next-line no-console
-    console.log(`[OTP DEV] phone=${phone} code=${code}`);
+    console.log(`[OTP DEV] channel=${channel} phone=${phone} code=${code}`);
     return true;
   }
   try {
-    // 2Factor.in SMS OTP API — phone must be 10-digit Indian number or with +91 prefix
     const cleanPhone = phone.replace(/^\+91/, '');
+    if (channel === 'whatsapp') {
+      // 2Factor.in WhatsApp template: requires a pre-approved template ID.
+      // ENV: TWOFACTOR_WHATSAPP_TEMPLATE_ID (e.g. "SportClanOTP")
+      // Falls back to AUTOGEN2 (transactional WhatsApp) if template not set.
+      const tpl = process.env.TWOFACTOR_WHATSAPP_TEMPLATE_ID || 'AUTOGEN2';
+      const url = `https://2factor.in/API/V1/${apiKey}/ADDON_SERVICES/SEND/WAPI/${cleanPhone}/${tpl}/${code}`;
+      await axios.get(url);
+      return true;
+    }
+    // Voice call (default)
     const url = `https://2factor.in/API/V1/${apiKey}/VOICE/${cleanPhone}/${code}`;
-    const { data } = await axios.get(url);
+    await axios.get(url);
     return true;
   } catch (err: any) {
     // eslint-disable-next-line no-console
-    console.error('[2Factor.in] SMS send failed:', err?.message);
+    console.error(`[2Factor.in] ${channel} send failed:`, err?.message);
     return false;
   }
 }
 
-// POST /auth/send-otp  { phone, purpose? }
+// Legacy alias retained so other call sites don't break
+async function sendSmsOtp(phone: string, code: string): Promise<boolean> {
+  return sendOtpViaChannel(phone, code, 'voice');
+}
+
+// POST /auth/send-otp  { phone, purpose?, channel? }
 export async function sendOtp(req: Request, res: Response) {
-  const { phone, purpose = 'login' } = req.body || {};
+  const { phone, purpose = 'login', channel: rawChannel } = req.body || {};
   if (!phone) return res.status(400).json({ error: 'phone is required' });
+  const channel: 'voice' | 'whatsapp' =
+    rawChannel === 'whatsapp' ? 'whatsapp' : 'voice';
   const p = normalizePhone(phone);
   const code = generateOtp();
 
   await setOtp(p, code, purpose, OTP_TTL_SECONDS);
 
-  const sent = await sendSmsOtp(p, code);
+  const sent = await sendOtpViaChannel(p, code, channel);
   if (!sent) {
     return res.status(500).json({ error: 'Failed to send OTP. Please try again.' });
   }
-  return res.json({ success: true, message: 'OTP sent' });
+  return res.json({ success: true, message: 'OTP sent', channel });
 }
 
 // POST /auth/verify-otp  { phone, code }
@@ -466,13 +488,19 @@ export async function googleAuth(req: Request, res: Response) {
           email: payload.email,
           google_id: payload.sub ?? null,
           profile_picture_url: payload.picture ?? null,
-          account_type: 'Player',
+          account_type: 'player',
           is_premium: false,
           coin_balance: 0,
         })
         .select('id, phone, name, username, email, google_id, is_premium, coin_balance, referral_code, created_at')
         .single();
       if (error || !newUser) return res.status(500).json({ error: 'Could not create account' });
+      // Seed the multi-type join table so the new account is consistent with
+      // phone signups (which populate user_account_types).
+      await supabase
+        .from('user_account_types')
+        .insert({ user_id: newUser.id, account_type: 'player' })
+        .then(undefined, () => undefined);
       user = newUser;
     }
 

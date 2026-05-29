@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import {
   listPosts, getPost, createPost, updatePost, deletePost, closePost,
-  likePost, unlikePost, checkLiked,
+  likePost, unlikePost, checkLiked, votePoll,
   listComments, createComment, deleteComment, reactToComment,
   reportContent, getMyPostCount, searchMentions, getSportStoryCounts,
 } from '../controllers/community.controller';
@@ -23,6 +23,7 @@ router.post('/posts/:id/close', authenticateToken, closePost);
 router.post('/posts/:id/like', authenticateToken, likePost);
 router.delete('/posts/:id/like', authenticateToken, unlikePost);
 router.get('/posts/:id/liked', authenticateToken, checkLiked);
+router.post('/posts/:id/vote', authenticateToken, votePoll);
 
 // Comments
 router.get('/posts/:id/comments', listComments);

@@ -7,6 +7,7 @@ import {
   removeTeamMember,
   updateTeam,
   joinTeamByCode,
+  disbandTeam,
 } from '../controllers/teams.controller';
 import { listExpenses, addExpense, deleteExpense, getExpenseSummary } from '../controllers/teamExpenses.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
@@ -20,6 +21,7 @@ router.get('/:id', authenticateToken, getTeam);
 router.post('/:id/members', authenticateToken, addTeamMember);
 router.delete('/:id/members/:userId', authenticateToken, removeTeamMember);
 router.patch('/:id', authenticateToken, updateTeam);
+router.delete('/:id', authenticateToken, disbandTeam);
 router.get('/:id/expenses', authenticateToken, listExpenses);
 router.get('/:id/expenses/summary', authenticateToken, getExpenseSummary);
 router.post('/:id/expenses', authenticateToken, addExpense);

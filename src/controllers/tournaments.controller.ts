@@ -500,9 +500,11 @@ export async function updateFixtures(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
-    const { matches: updates } = req.body || {};
-    if (!Array.isArray(updates) || updates.length === 0) {
-      return res.status(400).json({ error: 'matches array is required' });
+    // Accept either `{ matches: [...] }` (legacy) or `{ updates: [...] }` (frontend).
+    // Each item can use `id` or `fixture_id` as the identifier.
+    const items = req.body?.updates ?? req.body?.matches;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'updates array is required' });
     }
 
     const { data: tournament } = await supabase
@@ -516,25 +518,31 @@ export async function updateFixtures(req: Request, res: Response) {
     }
 
     const results: any[] = [];
-    for (const upd of updates) {
-      if (!upd.id) continue;
+    for (const upd of items) {
+      const fixtureId = upd.id ?? upd.fixture_id;
+      if (!fixtureId) continue;
       const patch: Record<string, any> = {};
       if (upd.scheduled_at) patch.scheduled_at = upd.scheduled_at;
       if (upd.venue) patch.venue = upd.venue;
-      if (upd.team_a_id) patch.team_a_id = upd.team_a_id;
-      if (upd.team_b_id) patch.team_b_id = upd.team_b_id;
+      if ('team_a_id' in upd) patch.team_a_id = upd.team_a_id;
+      if ('team_b_id' in upd) patch.team_b_id = upd.team_b_id;
       if (upd.team_a_name) patch.team_a_name = upd.team_a_name;
       if (upd.team_b_name) patch.team_b_name = upd.team_b_name;
+      if (upd.winner_team_id !== undefined) patch.winner_team_id = upd.winner_team_id;
+      if (upd.status) patch.status = upd.status;
       if (Object.keys(patch).length === 0) continue;
 
-      const { data, error } = await supabase
+      // Allow updates even when status isn't 'scheduled' if explicitly setting
+      // a new status (e.g. organizer marking 'completed' for an offline match)
+      let query = supabase
         .from('matches')
         .update(patch)
-        .eq('id', upd.id)
-        .eq('tournament_id', id)
-        .eq('status', 'scheduled')
-        .select('*')
-        .single();
+        .eq('id', fixtureId)
+        .eq('tournament_id', id);
+      if (!upd.status && !upd.winner_team_id) {
+        query = query.eq('status', 'scheduled');
+      }
+      const { data, error } = await query.select('*').single();
       if (!error && data) results.push(data);
     }
 
@@ -594,7 +602,7 @@ export async function getTournamentChat(req: Request, res: Response) {
       await supabase.from('chat_participants').insert({ chat_id: chatId, user_id: userId, role: 'member' });
     }
 
-    return res.json({ conversationId: chatId });
+    return res.json({ chat_id: chatId, name: `${tournament.name} Chat`, conversationId: chatId });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

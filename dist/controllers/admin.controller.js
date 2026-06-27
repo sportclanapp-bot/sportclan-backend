@@ -1,6 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.broadcastAnnouncement = exports.resolveReport = exports.getReports = exports.getStats = void 0;
+exports.getStats = getStats;
+exports.getReports = getReports;
+exports.resolveReport = resolveReport;
+exports.broadcastAnnouncement = broadcastAnnouncement;
 const supabase_1 = require("../utils/supabase");
 /**
  * Admin controller · stats + moderation + broadcast.
@@ -9,43 +12,48 @@ const supabase_1 = require("../utils/supabase");
  * trust req.userId to be an admin. Failures here return 5xx; missing
  * tables return zeros rather than crashing the dashboard.
  */
+/**
+ * Count rows for a Supabase `head:true` count query, tolerating failures
+ * (missing table, network error) by returning 0. Supabase query builders are
+ * PromiseLike (thenable) but not real Promises, so they have no `.catch()` —
+ * we await inside try/catch instead of chaining `.then().catch()`.
+ */
+async function safeCount(query) {
+    try {
+        const { count } = await query;
+        return count ?? 0;
+    }
+    catch {
+        return 0;
+    }
+}
 // GET /admin/stats
 async function getStats(_req, res) {
     try {
         const oneWeekAgoIso = new Date(Date.now() - 7 * 86400000).toISOString();
         // Run all counts in parallel; tolerate individual failures.
         const [users, premium, posts, matches, tournaments, reports] = await Promise.all([
-            supabase_1.supabase.from('users').select('id', { count: 'exact', head: true }).then((r) => r.count ?? 0).catch(() => 0),
-            supabase_1.supabase
+            safeCount(supabase_1.supabase.from('users').select('id', { count: 'exact', head: true })),
+            safeCount(supabase_1.supabase
                 .from('subscriptions')
                 .select('id', { count: 'exact', head: true })
-                .eq('status', 'active')
-                .then((r) => r.count ?? 0)
-                .catch(() => 0),
-            supabase_1.supabase
+                .eq('status', 'active')),
+            safeCount(supabase_1.supabase
                 .from('community_posts')
                 .select('id', { count: 'exact', head: true })
-                .gte('created_at', oneWeekAgoIso)
-                .then((r) => r.count ?? 0)
-                .catch(() => 0),
-            supabase_1.supabase
+                .gte('created_at', oneWeekAgoIso)),
+            safeCount(supabase_1.supabase
                 .from('matches')
                 .select('id', { count: 'exact', head: true })
-                .gte('created_at', oneWeekAgoIso)
-                .then((r) => r.count ?? 0)
-                .catch(() => 0),
-            supabase_1.supabase
+                .gte('created_at', oneWeekAgoIso)),
+            safeCount(supabase_1.supabase
                 .from('tournaments')
                 .select('id', { count: 'exact', head: true })
-                .eq('status', 'live')
-                .then((r) => r.count ?? 0)
-                .catch(() => 0),
-            supabase_1.supabase
+                .eq('status', 'live')),
+            safeCount(supabase_1.supabase
                 .from('content_reports')
                 .select('id', { count: 'exact', head: true })
-                .eq('resolved', false)
-                .then((r) => r.count ?? 0)
-                .catch(() => 0),
+                .eq('resolved', false)),
         ]);
         return res.json({
             user_count: users,
@@ -60,7 +68,6 @@ async function getStats(_req, res) {
         return res.status(500).json({ error: err?.message || 'Failed to load stats' });
     }
 }
-exports.getStats = getStats;
 // GET /admin/reports
 async function getReports(_req, res) {
     try {
@@ -80,7 +87,6 @@ async function getReports(_req, res) {
         return res.json({ reports: [] });
     }
 }
-exports.getReports = getReports;
 // PATCH /admin/reports/:id
 async function resolveReport(req, res) {
     const { id } = req.params;
@@ -97,7 +103,6 @@ async function resolveReport(req, res) {
         return res.status(500).json({ error: err?.message || 'Failed' });
     }
 }
-exports.resolveReport = resolveReport;
 // POST /admin/broadcast
 // Body: { title, body }
 // Inserts one notification row per active user. For now this is a simple
@@ -143,5 +148,4 @@ async function broadcastAnnouncement(req, res) {
         return res.status(500).json({ error: err?.message || 'Broadcast failed' });
     }
 }
-exports.broadcastAnnouncement = broadcastAnnouncement;
 //# sourceMappingURL=admin.controller.js.map

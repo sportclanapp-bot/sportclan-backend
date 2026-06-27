@@ -46,8 +46,14 @@ export async function deleteAccount(req: Request, res: Response) {
   // Revoke all sessions so the user can't keep using the app on other devices
   // during the 30-day grace.
   await supabase.from('refresh_tokens').delete().eq('user_id', userId);
-  // Also remove push tokens — no more notifications.
-  await supabase.from('push_tokens').delete().eq('user_id', userId).catch(() => null);
+  // Also remove push tokens — no more notifications. Best-effort: don't fail
+  // account deactivation if this cleanup errors. (Supabase builders are
+  // PromiseLike with no `.catch()`, so await inside try/catch.)
+  try {
+    await supabase.from('push_tokens').delete().eq('user_id', userId);
+  } catch {
+    // ignore push-token cleanup failures
+  }
 
   return res.json({
     success: true,

@@ -1,6 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.submitFeedback = exports.exportData = exports.revokeAllSessions = exports.revokeSession = exports.getSessions = exports.purgeExpiredAccounts = exports.deleteAccount = void 0;
+exports.deleteAccount = deleteAccount;
+exports.purgeExpiredAccounts = purgeExpiredAccounts;
+exports.getSessions = getSessions;
+exports.revokeSession = revokeSession;
+exports.revokeAllSessions = revokeAllSessions;
+exports.exportData = exportData;
+exports.submitFeedback = submitFeedback;
 const supabase_1 = require("../utils/supabase");
 // POST /account/delete — soft-delete with 30-day grace + immediate PII scrub
 //
@@ -44,14 +50,20 @@ async function deleteAccount(req, res) {
     // Revoke all sessions so the user can't keep using the app on other devices
     // during the 30-day grace.
     await supabase_1.supabase.from('refresh_tokens').delete().eq('user_id', userId);
-    // Also remove push tokens — no more notifications.
-    await supabase_1.supabase.from('push_tokens').delete().eq('user_id', userId).catch(() => null);
+    // Also remove push tokens — no more notifications. Best-effort: don't fail
+    // account deactivation if this cleanup errors. (Supabase builders are
+    // PromiseLike with no `.catch()`, so await inside try/catch.)
+    try {
+        await supabase_1.supabase.from('push_tokens').delete().eq('user_id', userId);
+    }
+    catch {
+        // ignore push-token cleanup failures
+    }
     return res.json({
         success: true,
         message: 'Account deactivated and personal data scrubbed. Sign in within 30 days with the same phone to restore. After 30 days, the account is permanently deleted.',
     });
 }
-exports.deleteAccount = deleteAccount;
 // POST /account/purge-expired — cron-callable endpoint (must include
 // X-Cron-Secret header matching CRON_SECRET env). Hard-deletes accounts
 // whose deleted_at is older than 30 days.
@@ -82,7 +94,6 @@ async function purgeExpiredAccounts(req, res) {
         return res.status(500).json({ error: delErr.message });
     return res.json({ purged: ids.length, ids });
 }
-exports.purgeExpiredAccounts = purgeExpiredAccounts;
 // GET /account/sessions — returns the caller's active sessions, deduped
 // per device.
 //
@@ -155,7 +166,6 @@ async function getSessions(req, res) {
     }
     return res.json({ sessions });
 }
-exports.getSessions = getSessions;
 // DELETE /account/sessions/:sessionId — delete a single refresh_tokens row.
 async function revokeSession(req, res) {
     const userId = req.userId;
@@ -169,7 +179,6 @@ async function revokeSession(req, res) {
         return res.status(500).json({ error: error.message });
     return res.json({ success: true });
 }
-exports.revokeSession = revokeSession;
 // DELETE /account/sessions/all — revoke all other refresh tokens.
 // The caller's current token (X-Refresh-Token header) is preserved so they
 // stay logged in on this device.
@@ -188,7 +197,6 @@ async function revokeAllSessions(req, res) {
         return res.status(500).json({ error: error.message });
     return res.json({ success: true, message: 'All other sessions revoked' });
 }
-exports.revokeAllSessions = revokeAllSessions;
 // POST /account/export-data — DPDP Act right-to-portability.
 // Assembles a JSON bundle of everything we store about the authenticated user
 // that they've actually produced (profile, posts, matches, messages, txns,
@@ -246,7 +254,6 @@ async function exportData(req, res) {
         following: followingRes.data ?? [],
     });
 }
-exports.exportData = exportData;
 // POST /account/feedback  { category, message, rating?, email? }
 async function submitFeedback(req, res) {
     const userId = req.userId;
@@ -265,5 +272,4 @@ async function submitFeedback(req, res) {
         return res.status(500).json({ error: error.message });
     return res.json({ success: true, message: 'Feedback submitted. We reply within 48h.' });
 }
-exports.submitFeedback = submitFeedback;
 //# sourceMappingURL=account.controller.js.map

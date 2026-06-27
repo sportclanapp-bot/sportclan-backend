@@ -9,6 +9,21 @@ import { supabase } from '../utils/supabase';
  * tables return zeros rather than crashing the dashboard.
  */
 
+/**
+ * Count rows for a Supabase `head:true` count query, tolerating failures
+ * (missing table, network error) by returning 0. Supabase query builders are
+ * PromiseLike (thenable) but not real Promises, so they have no `.catch()` —
+ * we await inside try/catch instead of chaining `.then().catch()`.
+ */
+async function safeCount(query: PromiseLike<{ count: number | null }>): Promise<number> {
+  try {
+    const { count } = await query;
+    return count ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 // GET /admin/stats
 export async function getStats(_req: Request, res: Response) {
   try {
@@ -16,37 +31,37 @@ export async function getStats(_req: Request, res: Response) {
 
     // Run all counts in parallel; tolerate individual failures.
     const [users, premium, posts, matches, tournaments, reports] = await Promise.all([
-      supabase.from('users').select('id', { count: 'exact', head: true }).then((r) => r.count ?? 0).catch(() => 0),
-      supabase
-        .from('subscriptions')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'active')
-        .then((r) => r.count ?? 0)
-        .catch(() => 0),
-      supabase
-        .from('community_posts')
-        .select('id', { count: 'exact', head: true })
-        .gte('created_at', oneWeekAgoIso)
-        .then((r) => r.count ?? 0)
-        .catch(() => 0),
-      supabase
-        .from('matches')
-        .select('id', { count: 'exact', head: true })
-        .gte('created_at', oneWeekAgoIso)
-        .then((r) => r.count ?? 0)
-        .catch(() => 0),
-      supabase
-        .from('tournaments')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'live')
-        .then((r) => r.count ?? 0)
-        .catch(() => 0),
-      supabase
-        .from('content_reports')
-        .select('id', { count: 'exact', head: true })
-        .eq('resolved', false)
-        .then((r) => r.count ?? 0)
-        .catch(() => 0),
+      safeCount(supabase.from('users').select('id', { count: 'exact', head: true })),
+      safeCount(
+        supabase
+          .from('subscriptions')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'active'),
+      ),
+      safeCount(
+        supabase
+          .from('community_posts')
+          .select('id', { count: 'exact', head: true })
+          .gte('created_at', oneWeekAgoIso),
+      ),
+      safeCount(
+        supabase
+          .from('matches')
+          .select('id', { count: 'exact', head: true })
+          .gte('created_at', oneWeekAgoIso),
+      ),
+      safeCount(
+        supabase
+          .from('tournaments')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'live'),
+      ),
+      safeCount(
+        supabase
+          .from('content_reports')
+          .select('id', { count: 'exact', head: true })
+          .eq('resolved', false),
+      ),
     ]);
 
     return res.json({

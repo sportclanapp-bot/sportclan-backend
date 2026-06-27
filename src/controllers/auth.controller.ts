@@ -13,6 +13,26 @@ type OtpPurpose = 'login' | 'register' | 'reset' | 'change_phone';
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
 
+// ─── Dev-only test OTP bypass ────────────────────────────────────────────────
+// Lets QA / automated walkthroughs sign into seeded accounts without a real SMS
+// (SportClan is OTP-only; seeded accounts have no email/password to fall back on).
+//
+// STRICT double gate — isTestOtp() returns false, and the bypass is a complete
+// no-op, unless BOTH of these hold:
+//   1. ALLOW_TEST_OTP === 'true'   — explicit opt-in env flag (off by default)
+//   2. NODE_ENV !== 'production'   — fail-safe: never active in prod even if (1)
+//                                    is accidentally left set there.
+// When active, TEST_OTP_CODE is accepted for ANY phone on /auth/verify-otp and
+// /auth/otp/login. Keep it OFF (flag unset) on the production service.
+const TEST_OTP_CODE = '123456';
+function isTestOtp(code: string): boolean {
+  return (
+    process.env.ALLOW_TEST_OTP === 'true' &&
+    process.env.NODE_ENV !== 'production' &&
+    code === TEST_OTP_CODE
+  );
+}
+
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
@@ -86,6 +106,11 @@ export async function verifyOtp(req: Request, res: Response) {
   const { phone, code } = req.body || {};
   if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
   const p = normalizePhone(phone);
+  // Dev-only bypass (see isTestOtp): accept the fixed test code without a real OTP.
+  if (isTestOtp(code)) {
+    await setOtp(p, 'VERIFIED', 'login', OTP_TTL_SECONDS);
+    return res.json({ success: true, verified: true });
+  }
   const entry = await getOtp(p);
   if (!entry) return res.status(400).json({ error: 'No OTP requested or OTP expired' });
   if (entry.code !== code) return res.status(400).json({ error: 'Invalid OTP' });
@@ -263,12 +288,16 @@ export async function otpLogin(req: Request, res: Response) {
   const { phone, code } = req.body || {};
   if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
   const p = normalizePhone(phone);
-  const entry = await getOtp(p);
-  if (!entry) return res.status(400).json({ error: 'No OTP requested or OTP expired' });
-  // Accept either the original code or the VERIFIED marker (verify-otp may
-  // have already been called separately by the client).
-  if (entry.code !== code && entry.code !== 'VERIFIED') {
-    return res.status(400).json({ error: 'Invalid OTP' });
+  // Dev-only bypass (see isTestOtp): skip OTP validation for the fixed test code.
+  // The user must still exist (seeded) — otherwise we fall through to the 404 below.
+  if (!isTestOtp(code)) {
+    const entry = await getOtp(p);
+    if (!entry) return res.status(400).json({ error: 'No OTP requested or OTP expired' });
+    // Accept either the original code or the VERIFIED marker (verify-otp may
+    // have already been called separately by the client).
+    if (entry.code !== code && entry.code !== 'VERIFIED') {
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
   }
 
   const { data: user, error } = await supabase

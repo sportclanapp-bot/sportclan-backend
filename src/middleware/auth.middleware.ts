@@ -25,3 +25,22 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 }
+
+/**
+ * Like authenticateToken, but never rejects: if a valid Bearer token is
+ * present, populate req.userId; otherwise continue anonymously. Use on public
+ * endpoints that still want viewer-relative fields (e.g. isFollowing on a
+ * profile) when a logged-in user views them.
+ */
+export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (token) {
+    try {
+      req.userId = verifyAccessToken(token).userId;
+    } catch {
+      // Invalid token → treat as anonymous, don't fail the request.
+    }
+  }
+  return next();
+}

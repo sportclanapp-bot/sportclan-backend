@@ -23,7 +23,7 @@ import {
 } from '../controllers/users.controller';
 import { getSeasonRecap } from '../controllers/features.controller';
 import { getUserInsights } from '../controllers/insights.controller';
-import { authenticateToken } from '../middleware/auth.middleware';
+import { authenticateToken, optionalAuth } from '../middleware/auth.middleware';
 
 const router = Router();
 
@@ -35,7 +35,7 @@ router.get('/me/blocked', authenticateToken, getBlockedUsers);
 router.get('/me/profile-completeness', authenticateToken, getProfileCompleteness);
 router.get('/discover', authenticateToken, discoverPlayers);
 
-router.get('/:id', getUserById);
+router.get('/:id', optionalAuth, getUserById);
 router.get('/:id/followers', getFollowers);
 router.get('/:id/following', getFollowing);
 router.get('/:id/sport-profile/:sportId', getSportProfile);

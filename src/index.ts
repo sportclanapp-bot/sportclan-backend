@@ -82,7 +82,9 @@ app.get('/', (_req: Request, res: Response) => {
 });
 
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok' });
+  // `build` is a deploy marker — lets us confirm which commit is actually
+  // live (build-from-source verification).
+  res.json({ status: 'ok', build: 'optauth-2026-06-28' });
 });
 
 // Stricter limit on /auth/send-otp must be mounted BEFORE the general /auth limiter

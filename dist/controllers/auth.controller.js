@@ -26,7 +26,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.changePhone = exports.resetPassword = exports.googleAuth = exports.validateCoupon = exports.checkUsername = exports.logout = exports.refresh = exports.registerEmail = exports.login = exports.otpLogin = exports.register = exports.verifyOtp = exports.sendOtp = exports.isTestOtp = exports.TEST_OTP_CODE = void 0;
+exports.changePhone = exports.resetPassword = exports.googleAuth = exports.validateCoupon = exports.checkUsername = exports.logout = exports.refresh = exports.registerEmail = exports.login = exports.otpLogin = exports.register = exports.verifyOtp = exports.sendOtp = void 0;
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const axios_1 = __importDefault(require("axios"));
 const supabase_1 = require("../utils/supabase");
@@ -44,13 +44,12 @@ const OTP_TTL_SECONDS = 300; // 5 minutes
 //                                    is accidentally left set there.
 // When active, TEST_OTP_CODE is accepted for ANY phone on /auth/verify-otp and
 // /auth/otp/login. Keep it OFF (flag unset) on the production service.
-exports.TEST_OTP_CODE = '123456';
+const TEST_OTP_CODE = '123456';
 function isTestOtp(code) {
     return (process.env.ALLOW_TEST_OTP === 'true' &&
         process.env.NODE_ENV !== 'production' &&
-        code === exports.TEST_OTP_CODE);
+        code === TEST_OTP_CODE);
 }
-exports.isTestOtp = isTestOtp;
 function generateOtp() {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }

@@ -10,7 +10,6 @@ const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
-const auth_controller_1 = require("./controllers/auth.controller");
 const cities_routes_1 = __importDefault(require("./routes/cities.routes"));
 const sports_routes_1 = __importDefault(require("./routes/sports.routes"));
 const users_routes_1 = __importDefault(require("./routes/users.routes"));
@@ -79,17 +78,7 @@ app.get('/', (_req, res) => {
     res.json({ ok: true, service: 'sportclan-backend' });
 });
 app.get('/health', (_req, res) => {
-    // TEMP diagnostic — confirms which build is live and what the running process
-    // sees for the test-OTP gates. Remove once the OTP bypass is verified working.
-    res.json({
-        status: 'ok',
-        build: 'otp-bypass-diag',
-        testOtp: {
-            allowFlag: process.env.ALLOW_TEST_OTP === 'true',
-            nodeEnv: process.env.NODE_ENV ?? null,
-            active: (0, auth_controller_1.isTestOtp)(auth_controller_1.TEST_OTP_CODE),
-        },
-    });
+    res.json({ status: 'ok' });
 });
 // Stricter limit on /auth/send-otp must be mounted BEFORE the general /auth limiter
 // Cache-Control middleware for static / near-static endpoints. These

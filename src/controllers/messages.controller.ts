@@ -32,7 +32,7 @@ export async function listChats(req: Request, res: Response) {
         .from('chat_participants')
         .select(`
           user_id, role,
-          user:users!user_id(id, full_name, username, profile_picture_url, is_premium)
+          user:users!user_id(id, name, username, profile_picture_url, is_premium)
         `)
         .eq('chat_id', chat.id);
 
@@ -40,7 +40,7 @@ export async function listChats(req: Request, res: Response) {
         .from('messages')
         .select(`
           id, content, sender_id, created_at, is_system,
-          sender:users!sender_id(id, full_name, username)
+          sender:users!sender_id(id, name, username)
         `)
         .eq('chat_id', chat.id)
         .eq('is_deleted', false)
@@ -242,14 +242,14 @@ export async function addMember(req: Request, res: Response) {
   // System message
   const { data: addedUser } = await supabase
     .from('users')
-    .select('full_name')
+    .select('name')
     .eq('id', user_id)
     .single();
 
   const { error: sysErr } = await supabase.from('messages').insert({
     chat_id: id,
     sender_id: userId,
-    content: `${addedUser?.full_name || 'A user'} was added to the group`,
+    content: `${addedUser?.name || 'A user'} was added to the group`,
     is_system: true,
   });
   if (sysErr) console.error('Add-member system message failed:', sysErr.message);
@@ -363,8 +363,8 @@ export async function getMessages(req: Request, res: Response) {
     .from('messages')
     .select(`
       *,
-      sender:users!sender_id(id, full_name, username, profile_picture_url),
-      reply_to:messages!reply_to_id(id, content, sender:users!sender_id(id, full_name))
+      sender:users!sender_id(id, name, username, profile_picture_url),
+      reply_to:messages!reply_to_id(id, content, sender:users!sender_id(id, name))
     `)
     .eq('chat_id', id)
     .order('created_at', { ascending: false })
@@ -450,7 +450,7 @@ export async function sendMessage(req: Request, res: Response) {
     .insert(insertPayload)
     .select(`
       *,
-      sender:users!sender_id(id, full_name, username, profile_picture_url)
+      sender:users!sender_id(id, name, username, profile_picture_url)
     `)
     .single();
 
@@ -471,7 +471,7 @@ export async function sendMessage(req: Request, res: Response) {
           user_id: u.id,
           type: 'mention_in_chat',
           title: 'You were mentioned',
-          body: `${data?.sender?.full_name ?? 'Someone'} mentioned you in a chat`,
+          body: `${data?.sender?.name ?? 'Someone'} mentioned you in a chat`,
           data: { chatId: id, messageId: data?.id },
         }).then(() => {});
       }
@@ -622,7 +622,7 @@ export async function getGroupMembers(req: Request, res: Response) {
     .from('chat_participants')
     .select(`
       user_id, role, joined_at,
-      user:users!user_id(id, full_name, username, profile_picture_url, is_premium)
+      user:users!user_id(id, name, username, profile_picture_url, is_premium)
     `)
     .eq('chat_id', id);
 

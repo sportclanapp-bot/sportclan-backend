@@ -108,7 +108,7 @@ export async function getReceivedGifts(req: Request, res: Response) {
 
   const { data, error } = await supabase
     .from('gift_transactions')
-    .select('*, sender:sender_id(id, full_name, username, profile_picture_url)')
+    .select('*, sender:sender_id(id, name, username, profile_picture_url)')
     .eq('receiver_id', userId)
     .order('created_at', { ascending: false })
     .limit(50);
@@ -123,7 +123,7 @@ export async function getSentGifts(req: Request, res: Response) {
 
   const { data, error } = await supabase
     .from('gift_transactions')
-    .select('*, receiver:receiver_id(id, full_name, username, profile_picture_url)')
+    .select('*, receiver:receiver_id(id, name, username, profile_picture_url)')
     .eq('sender_id', userId)
     .order('created_at', { ascending: false })
     .limit(50);

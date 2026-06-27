@@ -1,6 +1,22 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.reactToMessage = exports.getGroupMembers = exports.markAsRead = exports.batchMarkRead = exports.forwardMessage = exports.deleteMessage = exports.sendMessage = exports.getMessages = exports.deleteGroup = exports.leaveGroup = exports.promoteMember = exports.removeMember = exports.addMember = exports.updateGroup = exports.createGroup = exports.getOrCreateDM = exports.listChats = void 0;
+exports.listChats = listChats;
+exports.getOrCreateDM = getOrCreateDM;
+exports.createGroup = createGroup;
+exports.updateGroup = updateGroup;
+exports.addMember = addMember;
+exports.removeMember = removeMember;
+exports.promoteMember = promoteMember;
+exports.leaveGroup = leaveGroup;
+exports.deleteGroup = deleteGroup;
+exports.getMessages = getMessages;
+exports.sendMessage = sendMessage;
+exports.deleteMessage = deleteMessage;
+exports.forwardMessage = forwardMessage;
+exports.batchMarkRead = batchMarkRead;
+exports.markAsRead = markAsRead;
+exports.getGroupMembers = getGroupMembers;
+exports.reactToMessage = reactToMessage;
 const supabase_1 = require("../utils/supabase");
 const response_1 = require("../utils/response");
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
@@ -29,14 +45,14 @@ async function listChats(req, res) {
             .from('chat_participants')
             .select(`
           user_id, role,
-          user:users!user_id(id, full_name, username, profile_picture_url, is_premium)
+          user:users!user_id(id, name, username, profile_picture_url, is_premium)
         `)
             .eq('chat_id', chat.id);
         const { data: lastMsg } = await supabase_1.supabase
             .from('messages')
             .select(`
           id, content, sender_id, created_at, is_system,
-          sender:users!sender_id(id, full_name, username)
+          sender:users!sender_id(id, name, username)
         `)
             .eq('chat_id', chat.id)
             .eq('is_deleted', false)
@@ -59,7 +75,6 @@ async function listChats(req, res) {
     }));
     return res.json({ data: enriched, chats: enriched });
 }
-exports.listChats = listChats;
 // ─── GET OR CREATE DM CHAT ─────────────────────────────────────────────────
 async function getOrCreateDM(req, res) {
     const userId = req.userId;
@@ -106,7 +121,6 @@ async function getOrCreateDM(req, res) {
         console.error('DM chat_participants insert failed:', partErr.message);
     return res.status(201).json({ data: chat, chat });
 }
-exports.getOrCreateDM = getOrCreateDM;
 // ─── CREATE GROUP CHAT ──────────────────────────────────────────────────────
 async function createGroup(req, res) {
     const userId = req.userId;
@@ -154,7 +168,6 @@ async function createGroup(req, res) {
         console.error('Group system message insert failed:', sysErr.message);
     return res.status(201).json({ data: chat, chat });
 }
-exports.createGroup = createGroup;
 // ─── UPDATE GROUP ───────────────────────────────────────────────────────────
 async function updateGroup(req, res) {
     const userId = req.userId;
@@ -183,7 +196,6 @@ async function updateGroup(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ data, chat: data });
 }
-exports.updateGroup = updateGroup;
 // ─── ADD MEMBER ─────────────────────────────────────────────────────────────
 async function addMember(req, res) {
     const userId = req.userId;
@@ -217,20 +229,19 @@ async function addMember(req, res) {
     // System message
     const { data: addedUser } = await supabase_1.supabase
         .from('users')
-        .select('full_name')
+        .select('name')
         .eq('id', user_id)
         .single();
     const { error: sysErr } = await supabase_1.supabase.from('messages').insert({
         chat_id: id,
         sender_id: userId,
-        content: `${addedUser?.full_name || 'A user'} was added to the group`,
+        content: `${addedUser?.name || 'A user'} was added to the group`,
         is_system: true,
     });
     if (sysErr)
         console.error('Add-member system message failed:', sysErr.message);
     return res.json({ success: true });
 }
-exports.addMember = addMember;
 // ─── REMOVE MEMBER ──────────────────────────────────────────────────────────
 async function removeMember(req, res) {
     const userId = req.userId;
@@ -251,7 +262,6 @@ async function removeMember(req, res) {
         .eq('user_id', memberId);
     return res.json({ success: true });
 }
-exports.removeMember = removeMember;
 // ─── PROMOTE MEMBER ─────────────────────────────────────────────────────────
 async function promoteMember(req, res) {
     const userId = req.userId;
@@ -274,7 +284,6 @@ async function promoteMember(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ success: true });
 }
-exports.promoteMember = promoteMember;
 // ─── LEAVE GROUP ────────────────────────────────────────────────────────────
 async function leaveGroup(req, res) {
     const userId = req.userId;
@@ -286,7 +295,6 @@ async function leaveGroup(req, res) {
         .eq('user_id', userId);
     return res.json({ success: true });
 }
-exports.leaveGroup = leaveGroup;
 // ─── DELETE GROUP ───────────────────────────────────────────────────────────
 async function deleteGroup(req, res) {
     const userId = req.userId;
@@ -304,7 +312,6 @@ async function deleteGroup(req, res) {
         return res.status(500).json({ error: 'Failed to delete group' });
     return res.json({ success: true });
 }
-exports.deleteGroup = deleteGroup;
 // ─── GET MESSAGES ───────────────────────────────────────────────────────────
 async function getMessages(req, res) {
     const userId = req.userId;
@@ -324,8 +331,8 @@ async function getMessages(req, res) {
         .from('messages')
         .select(`
       *,
-      sender:users!sender_id(id, full_name, username, profile_picture_url),
-      reply_to:messages!reply_to_id(id, content, sender:users!sender_id(id, full_name))
+      sender:users!sender_id(id, name, username, profile_picture_url),
+      reply_to:messages!reply_to_id(id, content, sender:users!sender_id(id, name))
     `)
         .eq('chat_id', id)
         .order('created_at', { ascending: false })
@@ -344,7 +351,6 @@ async function getMessages(req, res) {
         hasMore: items.length === pageSize,
     });
 }
-exports.getMessages = getMessages;
 // PRD Addition #14 — hard cap on chat message length.
 const MAX_MESSAGE_LENGTH = 1000;
 // ─── SEND MESSAGE ───────────────────────────────────────────────────────────
@@ -397,7 +403,7 @@ async function sendMessage(req, res) {
         .insert(insertPayload)
         .select(`
       *,
-      sender:users!sender_id(id, full_name, username, profile_picture_url)
+      sender:users!sender_id(id, name, username, profile_picture_url)
     `)
         .single();
     if (error)
@@ -418,7 +424,7 @@ async function sendMessage(req, res) {
                     user_id: u.id,
                     type: 'mention_in_chat',
                     title: 'You were mentioned',
-                    body: `${data?.sender?.full_name ?? 'Someone'} mentioned you in a chat`,
+                    body: `${data?.sender?.name ?? 'Someone'} mentioned you in a chat`,
                     data: { chatId: id, messageId: data?.id },
                 }).then(() => { });
             }
@@ -426,7 +432,6 @@ async function sendMessage(req, res) {
     }
     return res.status(201).json({ data, message: data });
 }
-exports.sendMessage = sendMessage;
 // ─── DELETE MESSAGE ─────────────────────────────────────────────────────────
 async function deleteMessage(req, res) {
     const userId = req.userId;
@@ -457,7 +462,6 @@ async function deleteMessage(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ success: true });
 }
-exports.deleteMessage = deleteMessage;
 // ─── FORWARD MESSAGE ────────────────────────────────────────────────────────
 async function forwardMessage(req, res) {
     const userId = req.userId;
@@ -484,7 +488,6 @@ async function forwardMessage(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ success: true, forwarded_to: chat_ids.length });
 }
-exports.forwardMessage = forwardMessage;
 // POST /messages/read  { messageIds: string[] }
 // Batch-append the caller's id to each message's read_by array if it isn't
 // already present. Idempotent and cheap — PostgREST's array_append via
@@ -517,7 +520,6 @@ async function batchMarkRead(req, res) {
     }
     return res.json({ success: true, updated: updates.length });
 }
-exports.batchMarkRead = batchMarkRead;
 // ─── MARK AS READ ───────────────────────────────────────────────────────────
 async function markAsRead(req, res) {
     const userId = req.userId;
@@ -549,7 +551,6 @@ async function markAsRead(req, res) {
     }
     return res.json({ success: true });
 }
-exports.markAsRead = markAsRead;
 // ─── GET GROUP MEMBERS ──────────────────────────────────────────────────────
 async function getGroupMembers(req, res) {
     const { id } = req.params;
@@ -557,14 +558,13 @@ async function getGroupMembers(req, res) {
         .from('chat_participants')
         .select(`
       user_id, role, joined_at,
-      user:users!user_id(id, full_name, username, profile_picture_url, is_premium)
+      user:users!user_id(id, name, username, profile_picture_url, is_premium)
     `)
         .eq('chat_id', id);
     if (error)
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ data: data || [] });
 }
-exports.getGroupMembers = getGroupMembers;
 // ─── REACT TO MESSAGE ───────────────────────────────────────────────────────
 // PATCH /messages/:messageId/react  { emoji }
 // Toggles the current user's reaction: if they already reacted with the
@@ -606,5 +606,4 @@ async function reactToMessage(req, res) {
         return res.status(500).json({ error: 'Internal server error' });
     }
 }
-exports.reactToMessage = reactToMessage;
 //# sourceMappingURL=messages.controller.js.map

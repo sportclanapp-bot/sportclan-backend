@@ -15,15 +15,42 @@ var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (
 }) : function(o, v) {
     o["default"] = v;
 });
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.votePoll = exports.searchMentions = exports.checkLiked = exports.getMyPostCount = exports.reportContent = exports.reactToComment = exports.deleteComment = exports.createComment = exports.listComments = exports.unlikePost = exports.likePost = exports.closePost = exports.deletePost = exports.updatePost = exports.createPost = exports.getPost = exports.getSportStoryCounts = exports.listPosts = void 0;
+exports.listPosts = listPosts;
+exports.getSportStoryCounts = getSportStoryCounts;
+exports.getPost = getPost;
+exports.createPost = createPost;
+exports.updatePost = updatePost;
+exports.deletePost = deletePost;
+exports.closePost = closePost;
+exports.likePost = likePost;
+exports.unlikePost = unlikePost;
+exports.listComments = listComments;
+exports.createComment = createComment;
+exports.deleteComment = deleteComment;
+exports.reactToComment = reactToComment;
+exports.reportContent = reportContent;
+exports.getMyPostCount = getMyPostCount;
+exports.checkLiked = checkLiked;
+exports.searchMentions = searchMentions;
+exports.votePoll = votePoll;
 const supabase_1 = require("../utils/supabase");
 const response_1 = require("../utils/response");
 // ─── Basic profanity word list ───────────────────────────────────────────────
@@ -48,7 +75,7 @@ async function listPosts(req, res) {
         .from('community_posts')
         .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium),
+      author:users!author_id(id, name, username, profile_picture_url, is_premium),
       author_types:user_account_types!inner(account_type),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
@@ -72,7 +99,7 @@ async function listPosts(req, res) {
         .from('community_posts')
         .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium),
+      author:users!author_id(id, name, username, profile_picture_url, is_premium),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
     `)
@@ -84,7 +111,7 @@ async function listPosts(req, res) {
         .from('community_posts')
         .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium),
+      author:users!author_id(id, name, username, profile_picture_url, is_premium),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
     `)
@@ -122,7 +149,6 @@ async function listPosts(req, res) {
         hasMore: items.length === pageSize,
     });
 }
-exports.listPosts = listPosts;
 // ─── GET SPORT STORY COUNTS ─────────────────────────────────────────────────
 // Powers the "Stories row" at the top of the community feed. Returns, per
 // sport, how many posts exist newer than `since` (defaults to 7 days ago).
@@ -153,7 +179,6 @@ async function getSportStoryCounts(req, res) {
     const result = Array.from(counts.values()).sort((a, b) => b.count - a.count);
     return res.json({ sports: result });
 }
-exports.getSportStoryCounts = getSportStoryCounts;
 // ─── GET SINGLE POST ────────────────────────────────────────────────────────
 async function getPost(req, res) {
     const { id } = req.params;
@@ -161,7 +186,7 @@ async function getPost(req, res) {
         .from('community_posts')
         .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium),
+      author:users!author_id(id, name, username, profile_picture_url, is_premium),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
     `)
@@ -170,11 +195,9 @@ async function getPost(req, res) {
     return res.json({ data, post: data });
     return res.json({ data, post: data });
 }
-exports.getPost = getPost;
 // ─── CREATE POST ────────────────────────────────────────────────────────────
 async function createPost(req, res) {
     const userId = req.userId;
-    console.log('[createPost DEBUG] userId=', userId, 'body=', JSON.stringify(req.body));
     const { content, text: textAlias, // frontend historically sends `text`
     image_url, media_urls, // frontend historically sends `media_urls: string[]`
     link_url, sport_id, city_id, post_type, mentions, poll_options: rawPollOptions, type, // frontend sends 'type' which can be 'poll', 'general', etc.
@@ -184,13 +207,11 @@ async function createPost(req, res) {
     const bodyContent = (content ?? textAlias);
     const bodyImage = (image_url ?? (Array.isArray(media_urls) ? media_urls[0] : undefined));
     if (!bodyContent || bodyContent.trim().length === 0) {
-        console.log('[createPost DEBUG] exit=content-missing');
         return res.status(400).json({ error: 'Content is required' });
     }
     // Profanity check
     const detected = detectProfanity(bodyContent);
     if (detected.length > 0) {
-        console.log('[createPost DEBUG] exit=profanity detected=', detected);
         return res.status(400).json({
             error: 'PROFANITY_DETECTED',
             detected_words: detected,
@@ -201,7 +222,6 @@ async function createPost(req, res) {
     let pollOptions = null;
     if (type === 'poll' || Array.isArray(rawPollOptions)) {
         if (!Array.isArray(rawPollOptions) || rawPollOptions.length < 2 || rawPollOptions.length > 5) {
-            console.log('[createPost DEBUG] exit=poll-options-bad type=', type, 'rawPollOptions=', rawPollOptions);
             return res.status(400).json({ error: 'Polls need 2-5 options' });
         }
         pollOptions = rawPollOptions.map((text, i) => ({
@@ -262,11 +282,9 @@ async function createPost(req, res) {
         }
         const when = new Date(scheduled_at);
         if (Number.isNaN(when.getTime())) {
-            console.log('[createPost DEBUG] exit=scheduled_at-invalid scheduled_at=', scheduled_at);
             return res.status(400).json({ error: 'Invalid scheduled_at' });
         }
         if (when.getTime() <= Date.now()) {
-            console.log('[createPost DEBUG] exit=scheduled_at-past scheduled_at=', scheduled_at);
             return res.status(400).json({ error: 'scheduled_at must be in the future' });
         }
         insertPayload.scheduled_at = when.toISOString();
@@ -298,7 +316,6 @@ async function createPost(req, res) {
     return res.status(201).json({ data, post: data });
     return res.status(201).json({ data, post: data });
 }
-exports.createPost = createPost;
 // ─── UPDATE POST ────────────────────────────────────────────────────────────
 async function updatePost(req, res) {
     const userId = req.userId;
@@ -327,7 +344,6 @@ async function updatePost(req, res) {
     return res.json({ data, post: data });
     return res.json({ data, post: data });
 }
-exports.updatePost = updatePost;
 // ─── DELETE POST ────────────────────────────────────────────────────────────
 async function deletePost(req, res) {
     const userId = req.userId;
@@ -341,7 +357,6 @@ async function deletePost(req, res) {
         return res.status(404).json({ error: 'Post not found or not yours' });
     return res.json({ success: true });
 }
-exports.deletePost = deletePost;
 // ─── CLOSE POST ─────────────────────────────────────────────────────────────
 async function closePost(req, res) {
     const userId = req.userId;
@@ -357,7 +372,6 @@ async function closePost(req, res) {
         return res.status(404).json({ error: 'Post not found or not yours' });
     return res.json({ data });
 }
-exports.closePost = closePost;
 // ─── LIKE / UNLIKE ──────────────────────────────────────────────────────────
 async function likePost(req, res) {
     const userId = req.userId;
@@ -371,7 +385,6 @@ async function likePost(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ liked: true });
 }
-exports.likePost = likePost;
 async function unlikePost(req, res) {
     const userId = req.userId;
     const { id } = req.params;
@@ -382,7 +395,6 @@ async function unlikePost(req, res) {
         .eq('user_id', userId);
     return res.json({ liked: false });
 }
-exports.unlikePost = unlikePost;
 // ─── COMMENTS ───────────────────────────────────────────────────────────────
 async function listComments(req, res) {
     const { id } = req.params;
@@ -390,7 +402,7 @@ async function listComments(req, res) {
         .from('post_comments')
         .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium)
+      author:users!author_id(id, name, username, profile_picture_url, is_premium)
     `)
         .eq('post_id', id)
         .order('created_at', { ascending: true });
@@ -398,7 +410,6 @@ async function listComments(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ data: data || [], comments: data || [] });
 }
-exports.listComments = listComments;
 async function createComment(req, res) {
     const userId = req.userId;
     const { id } = req.params;
@@ -421,14 +432,13 @@ async function createComment(req, res) {
     })
         .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium)
+      author:users!author_id(id, name, username, profile_picture_url, is_premium)
     `)
         .single();
     if (error)
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.status(201).json({ data, comment: data });
 }
-exports.createComment = createComment;
 async function deleteComment(req, res) {
     const userId = req.userId;
     const { commentId } = req.params;
@@ -441,7 +451,6 @@ async function deleteComment(req, res) {
         return res.status(404).json({ error: 'Comment not found or not yours' });
     return res.json({ success: true });
 }
-exports.deleteComment = deleteComment;
 async function reactToComment(req, res) {
     const userId = req.userId;
     const { commentId } = req.params;
@@ -476,7 +485,6 @@ async function reactToComment(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ reactions });
 }
-exports.reactToComment = reactToComment;
 // ─── REPORT ─────────────────────────────────────────────────────────────────
 async function reportContent(req, res) {
     const userId = req.userId;
@@ -498,7 +506,6 @@ async function reportContent(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.status(201).json({ data });
 }
-exports.reportContent = reportContent;
 // ─── MY POST COUNT THIS MONTH ───────────────────────────────────────────────
 async function getMyPostCount(req, res) {
     const userId = req.userId;
@@ -514,7 +521,6 @@ async function getMyPostCount(req, res) {
     const limit = 5;
     return res.json({ count: used, limit, remaining: Math.max(0, limit - used) });
 }
-exports.getMyPostCount = getMyPostCount;
 // ─── CHECK IF USER LIKED ────────────────────────────────────────────────────
 async function checkLiked(req, res) {
     const userId = req.userId;
@@ -527,7 +533,6 @@ async function checkLiked(req, res) {
         .maybeSingle();
     return res.json({ liked: !!data });
 }
-exports.checkLiked = checkLiked;
 // ─── MENTION SEARCH ─────────────────────────────────────────────────────────
 async function searchMentions(req, res) {
     const { q } = req.query;
@@ -535,21 +540,20 @@ async function searchMentions(req, res) {
         return res.json({ data: [], candidates: [] });
     const { data, error } = await supabase_1.supabase
         .from('users')
-        .select('id, full_name, username, profile_picture_url, is_premium')
-        .or(`username.ilike.%${q}%,full_name.ilike.%${q}%`)
+        .select('id, name, username, profile_picture_url, is_premium')
+        .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
         .limit(10);
     if (error)
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
-    // Frontend uses { id, name, username, avatar_url } shape; map full_name → name
+    // Frontend uses { id, name, username, avatar_url } shape; map name → name
     const candidates = (data || []).map((u) => ({
         id: u.id,
-        name: u.full_name,
+        name: u.name,
         username: u.username,
         avatar_url: u.profile_picture_url,
     }));
     return res.json({ data: data || [], candidates });
 }
-exports.searchMentions = searchMentions;
 // ─── VOTE ON POLL ───────────────────────────────────────────────────────────
 async function votePoll(req, res) {
     const userId = req.userId;
@@ -621,5 +625,4 @@ async function votePoll(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(updateErr) });
     return res.json({ post: { ...updated, my_vote_option_id: option_id } });
 }
-exports.votePoll = votePoll;
 //# sourceMappingURL=community.controller.js.map

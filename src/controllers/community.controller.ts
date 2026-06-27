@@ -27,7 +27,7 @@ export async function listPosts(req: Request, res: Response) {
     .from('community_posts')
     .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium),
+      author:users!author_id(id, name, username, profile_picture_url, is_premium),
       author_types:user_account_types!inner(account_type),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
@@ -48,7 +48,7 @@ export async function listPosts(req: Request, res: Response) {
     .from('community_posts')
     .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium),
+      author:users!author_id(id, name, username, profile_picture_url, is_premium),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
     `)
@@ -61,7 +61,7 @@ export async function listPosts(req: Request, res: Response) {
     .from('community_posts')
     .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium),
+      author:users!author_id(id, name, username, profile_picture_url, is_premium),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
     `)
@@ -137,7 +137,7 @@ export async function getPost(req: Request, res: Response) {
     .from('community_posts')
     .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium),
+      author:users!author_id(id, name, username, profile_picture_url, is_premium),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
     `)
@@ -151,7 +151,6 @@ export async function getPost(req: Request, res: Response) {
 // ─── CREATE POST ────────────────────────────────────────────────────────────
 export async function createPost(req: Request, res: Response) {
   const userId = req.userId!;
-  console.log('[createPost DEBUG] userId=', userId, 'body=', JSON.stringify(req.body));
   const {
     content,
     text: textAlias, // frontend historically sends `text`
@@ -174,14 +173,12 @@ export async function createPost(req: Request, res: Response) {
     | undefined;
 
   if (!bodyContent || bodyContent.trim().length === 0) {
-    console.log('[createPost DEBUG] exit=content-missing');
     return res.status(400).json({ error: 'Content is required' });
   }
 
   // Profanity check
   const detected = detectProfanity(bodyContent);
   if (detected.length > 0) {
-    console.log('[createPost DEBUG] exit=profanity detected=', detected);
     return res.status(400).json({
       error: 'PROFANITY_DETECTED',
       detected_words: detected,
@@ -193,7 +190,6 @@ export async function createPost(req: Request, res: Response) {
   let pollOptions: { id: string; text: string; vote_count: number }[] | null = null;
   if (type === 'poll' || Array.isArray(rawPollOptions)) {
     if (!Array.isArray(rawPollOptions) || rawPollOptions.length < 2 || rawPollOptions.length > 5) {
-      console.log('[createPost DEBUG] exit=poll-options-bad type=', type, 'rawPollOptions=', rawPollOptions);
       return res.status(400).json({ error: 'Polls need 2-5 options' });
     }
     pollOptions = rawPollOptions.map((text: string, i: number) => ({
@@ -262,11 +258,9 @@ export async function createPost(req: Request, res: Response) {
     }
     const when = new Date(scheduled_at);
     if (Number.isNaN(when.getTime())) {
-      console.log('[createPost DEBUG] exit=scheduled_at-invalid scheduled_at=', scheduled_at);
       return res.status(400).json({ error: 'Invalid scheduled_at' });
     }
     if (when.getTime() <= Date.now()) {
-      console.log('[createPost DEBUG] exit=scheduled_at-past scheduled_at=', scheduled_at);
       return res.status(400).json({ error: 'scheduled_at must be in the future' });
     }
     insertPayload.scheduled_at = when.toISOString();
@@ -399,7 +393,7 @@ export async function listComments(req: Request, res: Response) {
     .from('post_comments')
     .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium)
+      author:users!author_id(id, name, username, profile_picture_url, is_premium)
     `)
     .eq('post_id', id)
     .order('created_at', { ascending: true });
@@ -433,7 +427,7 @@ export async function createComment(req: Request, res: Response) {
     })
     .select(`
       *,
-      author:users!author_id(id, full_name, username, profile_picture_url, is_premium)
+      author:users!author_id(id, name, username, profile_picture_url, is_premium)
     `)
     .single();
 
@@ -557,15 +551,15 @@ export async function searchMentions(req: Request, res: Response) {
 
   const { data, error } = await supabase
     .from('users')
-    .select('id, full_name, username, profile_picture_url, is_premium')
-    .or(`username.ilike.%${q}%,full_name.ilike.%${q}%`)
+    .select('id, name, username, profile_picture_url, is_premium')
+    .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
     .limit(10);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
-  // Frontend uses { id, name, username, avatar_url } shape; map full_name → name
+  // Frontend uses { id, name, username, avatar_url } shape; map name → name
   const candidates = (data || []).map((u: any) => ({
     id: u.id,
-    name: u.full_name,
+    name: u.name,
     username: u.username,
     avatar_url: u.profile_picture_url,
   }));

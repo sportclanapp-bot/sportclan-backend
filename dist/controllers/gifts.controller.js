@@ -1,6 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getSentGifts = exports.getReceivedGifts = exports.sendGift = exports.getCatalogue = void 0;
+exports.getCatalogue = getCatalogue;
+exports.sendGift = sendGift;
+exports.getReceivedGifts = getReceivedGifts;
+exports.getSentGifts = getSentGifts;
 const supabase_1 = require("../utils/supabase");
 const response_1 = require("../utils/response");
 // ─── Change #7 CRITICAL: ALL 10 PRD gifts ──────────────────────────────────────
@@ -20,7 +23,6 @@ const GIFT_CATALOGUE = [
 async function getCatalogue(_req, res) {
     return res.json({ gifts: GIFT_CATALOGUE });
 }
-exports.getCatalogue = getCatalogue;
 // POST /gifts/send  { receiverId, giftId, message? }
 async function sendGift(req, res) {
     const senderId = req.userId;
@@ -99,13 +101,12 @@ async function sendGift(req, res) {
         remainingBalance: sender.coin_balance - gift.cost,
     });
 }
-exports.sendGift = sendGift;
 // GET /gifts/received?userId=
 async function getReceivedGifts(req, res) {
     const userId = req.query.userId || req.userId;
     const { data, error } = await supabase_1.supabase
         .from('gift_transactions')
-        .select('*, sender:sender_id(id, full_name, username, profile_picture_url)')
+        .select('*, sender:sender_id(id, name, username, profile_picture_url)')
         .eq('receiver_id', userId)
         .order('created_at', { ascending: false })
         .limit(50);
@@ -113,13 +114,12 @@ async function getReceivedGifts(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ gifts: data ?? [] });
 }
-exports.getReceivedGifts = getReceivedGifts;
 // GET /gifts/sent
 async function getSentGifts(req, res) {
     const userId = req.userId;
     const { data, error } = await supabase_1.supabase
         .from('gift_transactions')
-        .select('*, receiver:receiver_id(id, full_name, username, profile_picture_url)')
+        .select('*, receiver:receiver_id(id, name, username, profile_picture_url)')
         .eq('sender_id', userId)
         .order('created_at', { ascending: false })
         .limit(50);
@@ -127,5 +127,4 @@ async function getSentGifts(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     return res.json({ gifts: data ?? [] });
 }
-exports.getSentGifts = getSentGifts;
 //# sourceMappingURL=gifts.controller.js.map

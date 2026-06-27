@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.search = void 0;
+exports.search = search;
 const supabase_1 = require("../utils/supabase");
 // ─── UNIFIED SEARCH ─────────────────────────────────────────────────────────
 async function search(req, res) {
@@ -34,19 +34,18 @@ async function search(req, res) {
             return res.status(400).json({ error: 'Invalid tab' });
     }
 }
-exports.search = search;
 async function searchPlayers(res, q, sportId, limit) {
     const { data, error } = await supabase_1.supabase
         .from('users')
         .select(`
-      id, full_name, username, profile_picture_url, is_premium,
+      id, name, username, profile_picture_url, is_premium,
       city:cities!city_id(id, name),
       sports:user_sports(sport:sports(id, name, emoji))
     `)
-        .or(`username.ilike.%${q}%,full_name.ilike.%${q}%`)
+        .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
         // Premium users appear first — delivers the "Boosted ranking" promise
         .order('is_premium', { ascending: false })
-        .order('full_name', { ascending: true })
+        .order('name', { ascending: true })
         .limit(limit);
     if (error)
         return res.status(500).json({ error: error.message });
@@ -92,11 +91,11 @@ async function searchUmpires(res, q, sportId, limit) {
     const { data, error } = await supabase_1.supabase
         .from('users')
         .select(`
-      id, full_name, username, profile_picture_url, is_premium,
+      id, name, username, profile_picture_url, is_premium,
       city:cities!city_id(id, name)
     `)
         .eq('is_premium', true)
-        .or(`username.ilike.%${q}%,full_name.ilike.%${q}%`)
+        .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
         .limit(limit);
     if (error)
         return res.status(500).json({ error: error.message });
@@ -118,7 +117,7 @@ async function searchPosts(res, q, sportId, limit) {
         .from('community_posts')
         .select(`
       id, content, created_at, likes_count, comments_count,
-      author:users!author_id(id, full_name, username, profile_picture_url),
+      author:users!author_id(id, name, username, profile_picture_url),
       sport:sports!sport_id(id, name, emoji)
     `)
         .ilike('content', `%${q}%`)
@@ -136,11 +135,11 @@ async function searchBusinesses(res, q, limit) {
     const { data: users, error } = await supabase_1.supabase
         .from('users')
         .select(`
-      id, full_name, username, profile_picture_url, is_premium,
+      id, name, username, profile_picture_url, is_premium,
       city:cities!city_id(id, name)
     `)
         .eq('is_premium', true)
-        .or(`username.ilike.%${q}%,full_name.ilike.%${q}%`)
+        .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
         .limit(limit);
     if (error)
         return res.status(500).json({ error: error.message });

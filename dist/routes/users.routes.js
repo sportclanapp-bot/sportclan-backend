@@ -9,6 +9,7 @@ const router = (0, express_1.Router)();
 // Self routes — must be declared before /:id so they don't get captured.
 router.get('/me', auth_middleware_1.authenticateToken, users_controller_1.getMe);
 router.patch('/me', auth_middleware_1.authenticateToken, users_controller_1.updateMe);
+router.patch('/me/account-types', auth_middleware_1.authenticateToken, users_controller_1.updateAccountTypes);
 router.get('/me/blocked', auth_middleware_1.authenticateToken, users_controller_1.getBlockedUsers);
 router.get('/me/profile-completeness', auth_middleware_1.authenticateToken, users_controller_1.getProfileCompleteness);
 router.get('/discover', auth_middleware_1.authenticateToken, users_controller_1.discoverPlayers);

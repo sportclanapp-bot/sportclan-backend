@@ -12,6 +12,7 @@ router.get('/:id', auth_middleware_1.authenticateToken, teams_controller_1.getTe
 router.post('/:id/members', auth_middleware_1.authenticateToken, teams_controller_1.addTeamMember);
 router.delete('/:id/members/:userId', auth_middleware_1.authenticateToken, teams_controller_1.removeTeamMember);
 router.patch('/:id', auth_middleware_1.authenticateToken, teams_controller_1.updateTeam);
+router.delete('/:id', auth_middleware_1.authenticateToken, teams_controller_1.disbandTeam);
 router.get('/:id/expenses', auth_middleware_1.authenticateToken, teamExpenses_controller_1.listExpenses);
 router.get('/:id/expenses/summary', auth_middleware_1.authenticateToken, teamExpenses_controller_1.getExpenseSummary);
 router.post('/:id/expenses', auth_middleware_1.authenticateToken, teamExpenses_controller_1.addExpense);

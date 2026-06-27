@@ -26,54 +26,88 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.changePhone = exports.resetPassword = exports.googleAuth = exports.validateCoupon = exports.checkUsername = exports.logout = exports.refresh = exports.registerEmail = exports.login = exports.otpLogin = exports.register = exports.verifyOtp = exports.sendOtp = void 0;
+exports.changePhone = exports.resetPassword = exports.googleAuth = exports.validateCoupon = exports.checkUsername = exports.logout = exports.refresh = exports.registerEmail = exports.login = exports.otpLogin = exports.register = exports.verifyOtp = exports.sendOtp = exports.isTestOtp = exports.TEST_OTP_CODE = void 0;
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const axios_1 = __importDefault(require("axios"));
 const supabase_1 = require("../utils/supabase");
 const jwt_1 = require("../utils/jwt");
 const redis_1 = require("../utils/redis");
 const OTP_TTL_SECONDS = 300; // 5 minutes
+// ─── Dev-only test OTP bypass ────────────────────────────────────────────────
+// Lets QA / automated walkthroughs sign into seeded accounts without a real SMS
+// (SportClan is OTP-only; seeded accounts have no email/password to fall back on).
+//
+// STRICT double gate — isTestOtp() returns false, and the bypass is a complete
+// no-op, unless BOTH of these hold:
+//   1. ALLOW_TEST_OTP === 'true'   — explicit opt-in env flag (off by default)
+//   2. NODE_ENV !== 'production'   — fail-safe: never active in prod even if (1)
+//                                    is accidentally left set there.
+// When active, TEST_OTP_CODE is accepted for ANY phone on /auth/verify-otp and
+// /auth/otp/login. Keep it OFF (flag unset) on the production service.
+exports.TEST_OTP_CODE = '123456';
+function isTestOtp(code) {
+    return (process.env.ALLOW_TEST_OTP === 'true' &&
+        process.env.NODE_ENV !== 'production' &&
+        code === exports.TEST_OTP_CODE);
+}
+exports.isTestOtp = isTestOtp;
 function generateOtp() {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }
 function normalizePhone(phone) {
     return phone.trim().replace(/\s+/g, '');
 }
-// Send SMS via 2Factor.in API
-async function sendSmsOtp(phone, code) {
+// Send OTP via 2Factor.in — choose between voice call and WhatsApp.
+// Voice is the default (per product spec for India to dodge SMS deliverability).
+// WhatsApp is the fallback when voice fails (carrier block, SIM issue, voice
+// rate limits). On dev with no API key, both fall through to console.
+async function sendOtpViaChannel(phone, code, channel) {
     const apiKey = process.env.TWOFACTOR_API_KEY;
     if (!apiKey) {
-        // Fallback to console in dev when API key is not configured
         // eslint-disable-next-line no-console
-        console.log(`[OTP DEV] phone=${phone} code=${code}`);
+        console.log(`[OTP DEV] channel=${channel} phone=${phone} code=${code}`);
         return true;
     }
     try {
-        // 2Factor.in SMS OTP API — phone must be 10-digit Indian number or with +91 prefix
         const cleanPhone = phone.replace(/^\+91/, '');
+        if (channel === 'whatsapp') {
+            // 2Factor.in WhatsApp template: requires a pre-approved template ID.
+            // ENV: TWOFACTOR_WHATSAPP_TEMPLATE_ID (e.g. "SportClanOTP")
+            // Falls back to AUTOGEN2 (transactional WhatsApp) if template not set.
+            const tpl = process.env.TWOFACTOR_WHATSAPP_TEMPLATE_ID || 'AUTOGEN2';
+            const url = `https://2factor.in/API/V1/${apiKey}/ADDON_SERVICES/SEND/WAPI/${cleanPhone}/${tpl}/${code}`;
+            await axios_1.default.get(url);
+            return true;
+        }
+        // Voice call (default)
         const url = `https://2factor.in/API/V1/${apiKey}/VOICE/${cleanPhone}/${code}`;
-        const { data } = await axios_1.default.get(url);
+        await axios_1.default.get(url);
         return true;
     }
     catch (err) {
         // eslint-disable-next-line no-console
-        console.error('[2Factor.in] SMS send failed:', err?.message);
+        console.error(`[2Factor.in] ${channel} send failed:`, err?.message);
         return false;
     }
 }
-// POST /auth/send-otp  { phone, purpose? }
+// Legacy alias retained so other call sites don't break
+async function sendSmsOtp(phone, code) {
+    return sendOtpViaChannel(phone, code, 'voice');
+}
+// POST /auth/send-otp  { phone, purpose?, channel? }
 async function sendOtp(req, res) {
-    const { phone, purpose = 'login' } = req.body || {};
+    const { phone, purpose = 'login', channel: rawChannel } = req.body || {};
     if (!phone)
         return res.status(400).json({ error: 'phone is required' });
+    const channel = rawChannel === 'whatsapp' ? 'whatsapp' : 'voice';
     const p = normalizePhone(phone);
     const code = generateOtp();
     await (0, redis_1.setOtp)(p, code, purpose, OTP_TTL_SECONDS);
-    const sent = await sendSmsOtp(p, code);
+    const sent = await sendOtpViaChannel(p, code, channel);
     if (!sent) {
         return res.status(500).json({ error: 'Failed to send OTP. Please try again.' });
     }
-    return res.json({ success: true, message: 'OTP sent' });
+    return res.json({ success: true, message: 'OTP sent', channel });
 }
 exports.sendOtp = sendOtp;
 // POST /auth/verify-otp  { phone, code }
@@ -82,6 +116,11 @@ async function verifyOtp(req, res) {
     if (!phone || !code)
         return res.status(400).json({ error: 'phone and code are required' });
     const p = normalizePhone(phone);
+    // Dev-only bypass (see isTestOtp): accept the fixed test code without a real OTP.
+    if (isTestOtp(code)) {
+        await (0, redis_1.setOtp)(p, 'VERIFIED', 'login', OTP_TTL_SECONDS);
+        return res.json({ success: true, verified: true });
+    }
     const entry = await (0, redis_1.getOtp)(p);
     if (!entry)
         return res.status(400).json({ error: 'No OTP requested or OTP expired' });
@@ -249,13 +288,17 @@ async function otpLogin(req, res) {
     if (!phone || !code)
         return res.status(400).json({ error: 'phone and code are required' });
     const p = normalizePhone(phone);
-    const entry = await (0, redis_1.getOtp)(p);
-    if (!entry)
-        return res.status(400).json({ error: 'No OTP requested or OTP expired' });
-    // Accept either the original code or the VERIFIED marker (verify-otp may
-    // have already been called separately by the client).
-    if (entry.code !== code && entry.code !== 'VERIFIED') {
-        return res.status(400).json({ error: 'Invalid OTP' });
+    // Dev-only bypass (see isTestOtp): skip OTP validation for the fixed test code.
+    // The user must still exist (seeded) — otherwise we fall through to the 404 below.
+    if (!isTestOtp(code)) {
+        const entry = await (0, redis_1.getOtp)(p);
+        if (!entry)
+            return res.status(400).json({ error: 'No OTP requested or OTP expired' });
+        // Accept either the original code or the VERIFIED marker (verify-otp may
+        // have already been called separately by the client).
+        if (entry.code !== code && entry.code !== 'VERIFIED') {
+            return res.status(400).json({ error: 'Invalid OTP' });
+        }
     }
     const { data: user, error } = await supabase_1.supabase
         .from('users')
@@ -477,7 +520,7 @@ async function googleAuth(req, res) {
                 email: payload.email,
                 google_id: payload.sub ?? null,
                 profile_picture_url: payload.picture ?? null,
-                account_type: 'Player',
+                account_type: 'player',
                 is_premium: false,
                 coin_balance: 0,
             })
@@ -485,6 +528,12 @@ async function googleAuth(req, res) {
                 .single();
             if (error || !newUser)
                 return res.status(500).json({ error: 'Could not create account' });
+            // Seed the multi-type join table so the new account is consistent with
+            // phone signups (which populate user_account_types).
+            await supabase_1.supabase
+                .from('user_account_types')
+                .insert({ user_id: newUser.id, account_type: 'player' })
+                .then(undefined, () => undefined);
             user = newUser;
         }
         const { generateAccessToken, generateRefreshToken } = await Promise.resolve().then(() => __importStar(require('../utils/jwt')));

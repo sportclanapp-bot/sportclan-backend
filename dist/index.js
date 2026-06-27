@@ -10,6 +10,7 @@ const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
+const auth_controller_1 = require("./controllers/auth.controller");
 const cities_routes_1 = __importDefault(require("./routes/cities.routes"));
 const sports_routes_1 = __importDefault(require("./routes/sports.routes"));
 const users_routes_1 = __importDefault(require("./routes/users.routes"));
@@ -39,6 +40,7 @@ const kudos_routes_1 = __importDefault(require("./routes/kudos.routes"));
 const venues_routes_1 = __importDefault(require("./routes/venues.routes"));
 const referrals_routes_1 = __importDefault(require("./routes/referrals.routes"));
 const dev_routes_1 = __importDefault(require("./routes/dev.routes"));
+const admin_routes_1 = __importDefault(require("./routes/admin.routes"));
 const app = (0, express_1.default)();
 app.set('trust proxy', 1);
 app.use((0, helmet_1.default)({
@@ -77,7 +79,17 @@ app.get('/', (_req, res) => {
     res.json({ ok: true, service: 'sportclan-backend' });
 });
 app.get('/health', (_req, res) => {
-    res.json({ status: 'ok' });
+    // TEMP diagnostic — confirms which build is live and what the running process
+    // sees for the test-OTP gates. Remove once the OTP bypass is verified working.
+    res.json({
+        status: 'ok',
+        build: 'otp-bypass-diag',
+        testOtp: {
+            allowFlag: process.env.ALLOW_TEST_OTP === 'true',
+            nodeEnv: process.env.NODE_ENV ?? null,
+            active: (0, auth_controller_1.isTestOtp)(auth_controller_1.TEST_OTP_CODE),
+        },
+    });
 });
 // Stricter limit on /auth/send-otp must be mounted BEFORE the general /auth limiter
 // Cache-Control middleware for static / near-static endpoints. These
@@ -117,6 +129,7 @@ app.use('/kudos', kudos_routes_1.default);
 app.use('/venues', venues_routes_1.default);
 app.use('/referrals', referrals_routes_1.default);
 app.use('/dev', dev_routes_1.default);
+app.use('/admin', admin_routes_1.default);
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {
     // eslint-disable-next-line no-console

@@ -15,7 +15,7 @@ async function listChats(req, res) {
         return res.status(500).json({ error: (0, response_1.sanitizeError)(pErr) });
     const chatIds = (participations || []).map((p) => p.chat_id);
     if (chatIds.length === 0)
-        return res.json({ data: [] });
+        return res.json({ data: [], chats: [] });
     const { data: chats, error } = await supabase_1.supabase
         .from('chats')
         .select('*')
@@ -57,15 +57,16 @@ async function listChats(req, res) {
             unreadCount: unreadCount ?? 0,
         };
     }));
-    return res.json({ data: enriched });
+    return res.json({ data: enriched, chats: enriched });
 }
 exports.listChats = listChats;
 // ─── GET OR CREATE DM CHAT ─────────────────────────────────────────────────
 async function getOrCreateDM(req, res) {
     const userId = req.userId;
-    const { other_user_id } = req.body;
+    // Accept either { other_user_id } (legacy) or { user_id } (frontend).
+    const other_user_id = req.body?.other_user_id ?? req.body?.user_id;
     if (!other_user_id)
-        return res.status(400).json({ error: 'other_user_id required' });
+        return res.status(400).json({ error: 'user_id required' });
     // Find existing DM
     const { data: myChats } = await supabase_1.supabase
         .from('chat_participants')
@@ -87,7 +88,7 @@ async function getOrCreateDM(req, res) {
             .limit(1)
             .maybeSingle();
         if (existing)
-            return res.json({ data: existing });
+            return res.json({ data: existing, chat: existing });
     }
     // Create new DM
     const { data: chat, error } = await supabase_1.supabase
@@ -103,7 +104,7 @@ async function getOrCreateDM(req, res) {
     ]);
     if (partErr)
         console.error('DM chat_participants insert failed:', partErr.message);
-    return res.status(201).json({ data: chat });
+    return res.status(201).json({ data: chat, chat });
 }
 exports.getOrCreateDM = getOrCreateDM;
 // ─── CREATE GROUP CHAT ──────────────────────────────────────────────────────
@@ -151,7 +152,7 @@ async function createGroup(req, res) {
     });
     if (sysErr)
         console.error('Group system message insert failed:', sysErr.message);
-    return res.status(201).json({ data: chat });
+    return res.status(201).json({ data: chat, chat });
 }
 exports.createGroup = createGroup;
 // ─── UPDATE GROUP ───────────────────────────────────────────────────────────
@@ -180,7 +181,7 @@ async function updateGroup(req, res) {
         .single();
     if (error)
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
-    return res.json({ data });
+    return res.json({ data, chat: data });
 }
 exports.updateGroup = updateGroup;
 // ─── ADD MEMBER ─────────────────────────────────────────────────────────────
@@ -335,8 +336,10 @@ async function getMessages(req, res) {
     if (error)
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     const items = data || [];
+    const reversed = items.reverse();
     return res.json({
-        items: items.reverse(),
+        items: reversed,
+        messages: reversed,
         nextCursor: items.length === pageSize ? items[0]?.created_at : null,
         hasMore: items.length === pageSize,
     });
@@ -348,13 +351,22 @@ const MAX_MESSAGE_LENGTH = 1000;
 async function sendMessage(req, res) {
     const userId = req.userId;
     const { id } = req.params;
-    const { content, reply_to_id } = req.body;
-    // Per PRD: messages are text + links only — image_url intentionally not accepted.
-    if (!content) {
-        return res.status(400).json({ error: 'Content or image required' });
+    // Frontend may send either { content } (legacy) or { text } (new).
+    // Media: image_url + audio_url + audio_duration_ms (polish-pass addition).
+    const { content, text, reply_to_id, image_url: imageUrl, audio_url: audioUrl, audio_duration_ms: audioDurationMs, } = req.body;
+    const body = (typeof text === 'string' && text) ? text : content;
+    // Validation: must have text OR image OR audio
+    if (!body && !imageUrl && !audioUrl) {
+        return res.status(400).json({ error: 'text, image_url, or audio_url is required' });
     }
-    if (typeof content === 'string' && content.length > MAX_MESSAGE_LENGTH) {
+    if (body && typeof body === 'string' && body.length > MAX_MESSAGE_LENGTH) {
         return res.status(400).json({ error: `Message exceeds ${MAX_MESSAGE_LENGTH} character limit` });
+    }
+    if (audioUrl && typeof audioUrl !== 'string') {
+        return res.status(400).json({ error: 'audio_url must be a string' });
+    }
+    if (imageUrl && typeof imageUrl !== 'string') {
+        return res.status(400).json({ error: 'image_url must be a string' });
     }
     // Verify participant
     const { data: participant } = await supabase_1.supabase
@@ -365,15 +377,24 @@ async function sendMessage(req, res) {
         .maybeSingle();
     if (!participant)
         return res.status(403).json({ error: 'Not a member of this chat' });
-    const { data, error } = await supabase_1.supabase
-        .from('messages')
-        .insert({
+    // Build insert payload. Some columns may not exist on older schemas;
+    // pgrest will surface an error if so, which we propagate.
+    const insertPayload = {
         chat_id: id,
         sender_id: userId,
-        content: content?.trim() || null,
-        image_url: null, // PRD: text + links only
+        content: (typeof body === 'string' ? body.trim() : null) || null,
+        image_url: imageUrl ?? null,
         reply_to_id: reply_to_id || null,
-    })
+    };
+    if (audioUrl) {
+        insertPayload.audio_url = audioUrl;
+        if (typeof audioDurationMs === 'number') {
+            insertPayload.audio_duration_ms = audioDurationMs;
+        }
+    }
+    const { data, error } = await supabase_1.supabase
+        .from('messages')
+        .insert(insertPayload)
         .select(`
       *,
       sender:users!sender_id(id, full_name, username, profile_picture_url)
@@ -382,8 +403,8 @@ async function sendMessage(req, res) {
     if (error)
         return res.status(500).json({ error: (0, response_1.sanitizeError)(error) });
     // Parse @mentions and create notifications (fire-and-forget)
-    if (content && typeof content === 'string') {
-        const mentionMatches = content.match(/@([a-zA-Z0-9_]+)/g);
+    if (body && typeof body === 'string') {
+        const mentionMatches = body.match(/@([a-zA-Z0-9_]+)/g);
         if (mentionMatches && mentionMatches.length > 0) {
             const usernames = mentionMatches.map((m) => m.slice(1).toLowerCase());
             const { data: mentioned } = await supabase_1.supabase
@@ -403,7 +424,7 @@ async function sendMessage(req, res) {
             }
         }
     }
-    return res.status(201).json({ data });
+    return res.status(201).json({ data, message: data });
 }
 exports.sendMessage = sendMessage;
 // ─── DELETE MESSAGE ─────────────────────────────────────────────────────────

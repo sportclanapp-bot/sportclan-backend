@@ -23,10 +23,11 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.submitReview = exports.getReviews = exports.updateSportProfile = exports.getSportProfile = exports.getRatingHistory = exports.getRival = exports.getActivityHeatmap = exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateMe = exports.getUserById = exports.getMe = void 0;
+exports.submitReview = exports.getReviews = exports.updateSportProfile = exports.getSportProfile = exports.getRatingHistory = exports.getRival = exports.getActivityHeatmap = exports.discoverPlayers = exports.getProfileCompleteness = exports.getBlockedUsers = exports.unblockUser = exports.blockUser = exports.getFollowing = exports.getFollowers = exports.unfollowUser = exports.followUser = exports.updateAccountTypes = exports.updateMe = exports.getUserById = exports.getMe = void 0;
 const supabase_1 = require("../utils/supabase");
 const response_1 = require("../utils/response");
 const subscriptions_controller_1 = require("./subscriptions.controller");
+const sportId_1 = require("../utils/sportId");
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS = 'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, created_at';
 // Fire smart engagement notifications lazily from /users/me. Best-effort,
@@ -155,7 +156,25 @@ async function getMe(req, res) {
     catch {
         // swallow
     }
-    return res.json({ user: data });
+    // Pull the user's full account-type set from the join table so the client
+    // can render & edit the complete list (the legacy users.account_type column
+    // only holds the primary type). Falls back to the legacy column if the join
+    // table is empty (e.g. older accounts created before multi-type support).
+    let accountTypes = [];
+    try {
+        const { data: atRows } = await supabase_1.supabase
+            .from('user_account_types')
+            .select('account_type')
+            .eq('user_id', userId);
+        accountTypes = (atRows ?? []).map((r) => r.account_type);
+    }
+    catch {
+        // swallow — fall back below
+    }
+    if (accountTypes.length === 0 && data.account_type) {
+        accountTypes = [data.account_type];
+    }
+    return res.json({ user: { ...data, account_types: accountTypes } });
 }
 exports.getMe = getMe;
 // GET /users/:id — public profile
@@ -303,6 +322,63 @@ async function updateMe(req, res) {
     return res.json({ user: data });
 }
 exports.updateMe = updateMe;
+// The 10 canonical account types (locked spec). Kept in sync with the
+// frontend constants/accountTypes.ts list.
+const VALID_ACCOUNT_TYPES = [
+    'player', 'umpire', 'coach', 'commentator', 'organiser',
+    'business', 'association', 'club', 'leagues', 'other',
+];
+// PATCH /users/me/account-types — replace the user's account-type set.
+// Body: { account_types: string[] }. Validates against the 10 allowed types,
+// rewrites the user_account_types join table, and keeps the legacy
+// users.account_type column pointed at the primary (first) type.
+async function updateAccountTypes(req, res) {
+    const userId = req.userId;
+    if (!userId)
+        return res.status(401).json({ error: 'Unauthorized' });
+    const incoming = (req.body || {}).account_types;
+    if (!Array.isArray(incoming)) {
+        return res.status(400).json({ error: 'account_types must be an array' });
+    }
+    // De-dupe, lowercase, and validate.
+    const cleaned = Array.from(new Set(incoming.map((t) => String(t).toLowerCase().trim())));
+    if (cleaned.length === 0) {
+        return res.status(400).json({ error: 'Select at least one account type' });
+    }
+    const invalid = cleaned.filter((t) => !VALID_ACCOUNT_TYPES.includes(t));
+    if (invalid.length > 0) {
+        return res.status(400).json({ error: `Invalid account type(s): ${invalid.join(', ')}` });
+    }
+    // Order the result to keep 'player' first if present, otherwise preserve the
+    // user's order; the primary (legacy) column gets the first entry.
+    const ordered = [
+        ...cleaned.filter((t) => t === 'player'),
+        ...cleaned.filter((t) => t !== 'player'),
+    ];
+    const primary = ordered[0];
+    // Rewrite the join table: delete existing rows, insert the new set.
+    const { error: delErr } = await supabase_1.supabase
+        .from('user_account_types')
+        .delete()
+        .eq('user_id', userId);
+    if (delErr)
+        return res.status(500).json({ error: delErr.message });
+    const rows = ordered.map((t) => ({ user_id: userId, account_type: t }));
+    const { error: insErr } = await supabase_1.supabase.from('user_account_types').insert(rows);
+    if (insErr)
+        return res.status(500).json({ error: insErr.message });
+    // Keep the legacy primary column in sync.
+    const { data, error } = await supabase_1.supabase
+        .from('users')
+        .update({ account_type: primary, updated_at: new Date().toISOString() })
+        .eq('id', userId)
+        .select(PUBLIC_FIELDS)
+        .single();
+    if (error)
+        return res.status(500).json({ error: error.message });
+    return res.json({ user: { ...data, account_types: ordered } });
+}
+exports.updateAccountTypes = updateAccountTypes;
 // POST /users/:id/follow
 async function followUser(req, res) {
     const userId = req.userId;
@@ -625,9 +701,10 @@ async function getRival(req, res) {
     if (!userId)
         return res.status(401).json({ error: 'Unauthorized' });
     const { id } = req.params;
-    const sportId = req.query.sport_id;
-    if (!sportId)
+    const rawSportId = req.query.sport_id;
+    if (!rawSportId)
         return res.status(400).json({ error: 'sport_id is required' });
+    const sportId = (await (0, sportId_1.resolveSportId)(rawSportId)) ?? rawSportId;
     // Get the requester's rating + location.
     const { data: myProfile } = await supabase_1.supabase
         .from('user_sport_profiles')
@@ -737,9 +814,10 @@ exports.getRival = getRival;
 // left→right without client-side reversal.
 async function getRatingHistory(req, res) {
     const { id } = req.params;
-    const sportId = req.query.sport_id;
-    if (!sportId)
+    const rawSportId = req.query.sport_id;
+    if (!rawSportId)
         return res.status(400).json({ error: 'sport_id is required' });
+    const sportId = (await (0, sportId_1.resolveSportId)(rawSportId)) ?? rawSportId;
     const { data, error } = await supabase_1.supabase
         .from('rating_history')
         .select('old_rating, new_rating, delta, created_at')
@@ -767,7 +845,9 @@ const SPORT_PROFILE_PREFS = [
 const SPORT_PROFILE_SELECT = 'rating, matches_played, wins, losses, draws, last_match_at, ' +
     SPORT_PROFILE_PREFS.join(', ');
 async function getSportProfile(req, res) {
-    const { id, sportId } = req.params;
+    const { id, sportId: rawSportId } = req.params;
+    // Accept either a slug ('cricket') or a UUID; the app passes slugs.
+    const sportId = (await (0, sportId_1.resolveSportId)(rawSportId)) ?? rawSportId;
     const { data: profile } = await supabase_1.supabase
         .from('user_sport_profiles')
         .select(SPORT_PROFILE_SELECT)
@@ -949,9 +1029,10 @@ async function updateSportProfile(req, res) {
     const callerId = req.userId;
     if (!callerId)
         return res.status(401).json({ error: 'Unauthorized' });
-    const { id, sportId } = req.params;
+    const { id, sportId: rawSportId } = req.params;
     if (id !== callerId)
         return res.status(403).json({ error: 'Can only update your own sport profile' });
+    const sportId = (await (0, sportId_1.resolveSportId)(rawSportId)) ?? rawSportId;
     // Whitelist the incoming patch against SPORT_PROFILE_PREFS so arbitrary
     // fields (like rating) can't be overwritten through this endpoint.
     const incoming = req.body ?? {};
@@ -1025,7 +1106,8 @@ async function submitReview(req, res) {
         const { id } = req.params;
         if (id === userId)
             return res.status(400).json({ error: 'Cannot review yourself' });
-        const { rating, comment } = req.body || {};
+        const { rating } = req.body || {};
+        const comment = req.body?.comment ?? req.body?.text;
         if (!rating || rating < 1 || rating > 5)
             return res.status(400).json({ error: 'rating 1-5 required' });
         const { data, error } = await supabase_1.supabase

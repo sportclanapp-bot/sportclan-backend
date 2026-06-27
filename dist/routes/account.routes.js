@@ -10,5 +10,7 @@ router.get('/sessions', auth_middleware_1.authenticateToken, account_controller_
 router.delete('/sessions/all', auth_middleware_1.authenticateToken, account_controller_1.revokeAllSessions);
 router.delete('/sessions/:sessionId', auth_middleware_1.authenticateToken, account_controller_1.revokeSession);
 router.post('/feedback', auth_middleware_1.authenticateToken, account_controller_1.submitFeedback);
+// Cron-callable purge (X-Cron-Secret header required, no JWT)
+router.post('/purge-expired', account_controller_1.purgeExpiredAccounts);
 exports.default = router;
 //# sourceMappingURL=account.routes.js.map

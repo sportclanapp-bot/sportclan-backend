@@ -1,26 +1,88 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.submitFeedback = exports.exportData = exports.revokeAllSessions = exports.revokeSession = exports.getSessions = exports.deleteAccount = void 0;
+exports.submitFeedback = exports.exportData = exports.revokeAllSessions = exports.revokeSession = exports.getSessions = exports.purgeExpiredAccounts = exports.deleteAccount = void 0;
 const supabase_1 = require("../utils/supabase");
-// POST /account/delete — soft-delete with 30-day grace
+// POST /account/delete — soft-delete with 30-day grace + immediate PII scrub
+//
+// Privacy posture: We keep the row alive for 30 days so the user can restore
+// by signing in again, but we scrub identifiable fields immediately to honor
+// the "delete on request" expectation from Play Data Safety / DPDP. After
+// 30 days, /account/purge-expired (cron-callable) hard-deletes the row.
+//
+// Scrubbed-now (so they vanish from any UI surface immediately):
+//   name → "Deleted User"
+//   username → "deleted_<short-uuid>" (preserves DB uniqueness constraint)
+//   email → null
+//   phone → still kept (needed to restore via OTP within the grace window)
+//   profile_picture_url → null
+//   bio → null
+//   gender, dob → null
+//
+// Kept until permanent purge: phone (for restore), user-id references on
+// content (so threads don't lose their structure during the grace period).
 async function deleteAccount(req, res) {
     const userId = req.userId;
     const { confirmation } = req.body || {};
     if (confirmation !== 'DELETE') {
         return res.status(400).json({ error: 'Type "DELETE" to confirm' });
     }
+    // Scrub identifiable fields immediately.
+    const shortId = userId.slice(0, 8);
     const { error } = await supabase_1.supabase.from('users').update({
         deleted_at: new Date().toISOString(),
         is_premium: false,
+        name: 'Deleted User',
+        username: `deleted_${shortId}`,
+        email: null,
+        profile_picture_url: null,
+        bio: null,
+        gender: null,
+        dob: null,
     }).eq('id', userId);
     if (error)
         return res.status(500).json({ error: 'Could not deactivate account' });
+    // Revoke all sessions so the user can't keep using the app on other devices
+    // during the 30-day grace.
+    await supabase_1.supabase.from('refresh_tokens').delete().eq('user_id', userId);
+    // Also remove push tokens — no more notifications.
+    await supabase_1.supabase.from('push_tokens').delete().eq('user_id', userId).catch(() => null);
     return res.json({
         success: true,
-        message: 'Account deactivated. Log in within 30 days to restore. Permanent deletion after 30 days.',
+        message: 'Account deactivated and personal data scrubbed. Sign in within 30 days with the same phone to restore. After 30 days, the account is permanently deleted.',
     });
 }
 exports.deleteAccount = deleteAccount;
+// POST /account/purge-expired — cron-callable endpoint (must include
+// X-Cron-Secret header matching CRON_SECRET env). Hard-deletes accounts
+// whose deleted_at is older than 30 days.
+//
+// Production: hook this up to a Render cron job or Supabase pg_cron to run
+// daily.
+async function purgeExpiredAccounts(req, res) {
+    const secret = req.headers['x-cron-secret'];
+    if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+        return res.status(403).json({ error: 'Forbidden' });
+    }
+    const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+    // Find users past the grace window
+    const { data: expired, error: fetchErr } = await supabase_1.supabase
+        .from('users')
+        .select('id')
+        .lt('deleted_at', cutoff)
+        .not('deleted_at', 'is', null);
+    if (fetchErr)
+        return res.status(500).json({ error: fetchErr.message });
+    if (!expired || expired.length === 0)
+        return res.json({ purged: 0 });
+    const ids = expired.map((u) => u.id);
+    // Hard-delete the user rows. FK cascades on user_id should clear content
+    // automatically; anything that's set to SET NULL will detach.
+    const { error: delErr } = await supabase_1.supabase.from('users').delete().in('id', ids);
+    if (delErr)
+        return res.status(500).json({ error: delErr.message });
+    return res.json({ purged: ids.length, ids });
+}
+exports.purgeExpiredAccounts = purgeExpiredAccounts;
 // GET /account/sessions — returns the caller's active sessions, deduped
 // per device.
 //

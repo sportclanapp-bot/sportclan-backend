@@ -5,7 +5,7 @@ const community_controller_1 = require("../controllers/community.controller");
 const auth_middleware_1 = require("../middleware/auth.middleware");
 const router = (0, express_1.Router)();
 // Posts
-router.get('/posts', community_controller_1.listPosts);
+router.get('/posts', auth_middleware_1.authenticateToken, community_controller_1.listPosts);
 router.get('/posts/my-count', auth_middleware_1.authenticateToken, community_controller_1.getMyPostCount);
 router.get('/sport-story-counts', auth_middleware_1.authenticateToken, community_controller_1.getSportStoryCounts);
 router.get('/posts/:id', community_controller_1.getPost);
@@ -17,6 +17,7 @@ router.post('/posts/:id/close', auth_middleware_1.authenticateToken, community_c
 router.post('/posts/:id/like', auth_middleware_1.authenticateToken, community_controller_1.likePost);
 router.delete('/posts/:id/like', auth_middleware_1.authenticateToken, community_controller_1.unlikePost);
 router.get('/posts/:id/liked', auth_middleware_1.authenticateToken, community_controller_1.checkLiked);
+router.post('/posts/:id/vote', auth_middleware_1.authenticateToken, community_controller_1.votePoll);
 // Comments
 router.get('/posts/:id/comments', community_controller_1.listComments);
 router.post('/posts/:id/comments', auth_middleware_1.authenticateToken, community_controller_1.createComment);

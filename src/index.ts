@@ -7,6 +7,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 
 import authRoutes from './routes/auth.routes';
+import { isTestOtp, TEST_OTP_CODE } from './controllers/auth.controller';
 import citiesRoutes from './routes/cities.routes';
 import sportsRoutes from './routes/sports.routes';
 import usersRoutes from './routes/users.routes';
@@ -82,7 +83,17 @@ app.get('/', (_req: Request, res: Response) => {
 });
 
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok' });
+  // TEMP diagnostic — confirms which build is live and what the running process
+  // sees for the test-OTP gates. Remove once the OTP bypass is verified working.
+  res.json({
+    status: 'ok',
+    build: 'otp-bypass-diag',
+    testOtp: {
+      allowFlag: process.env.ALLOW_TEST_OTP === 'true',
+      nodeEnv: process.env.NODE_ENV ?? null,
+      active: isTestOtp(TEST_OTP_CODE),
+    },
+  });
 });
 
 // Stricter limit on /auth/send-otp must be mounted BEFORE the general /auth limiter

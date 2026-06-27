@@ -24,8 +24,8 @@ const OTP_TTL_SECONDS = 300; // 5 minutes
 //                                    is accidentally left set there.
 // When active, TEST_OTP_CODE is accepted for ANY phone on /auth/verify-otp and
 // /auth/otp/login. Keep it OFF (flag unset) on the production service.
-const TEST_OTP_CODE = '123456';
-function isTestOtp(code: string): boolean {
+export const TEST_OTP_CODE = '123456';
+export function isTestOtp(code: string): boolean {
   return (
     process.env.ALLOW_TEST_OTP === 'true' &&
     process.env.NODE_ENV !== 'production' &&

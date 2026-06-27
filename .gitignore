@@ -3,3 +3,6 @@ node_modules
 .env.local
 *.log
 .DS_Store
+
+# Build output — Render builds from source (npm run build); no longer committed.
+dist/

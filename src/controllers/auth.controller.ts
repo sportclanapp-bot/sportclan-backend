@@ -148,9 +148,15 @@ export async function register(req: Request, res: Response) {
   if (!name || !username) return res.status(400).json({ error: 'name and username are required' });
 
   const p = normalizePhone(phone);
-  const entry = await getOtp(p);
-  if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
-    return res.status(400).json({ error: 'OTP not verified' });
+  // Honor the dev-only test bypass exactly as verifyOtp does: when ALLOW_TEST_OTP
+  // is on and the fixed test code is used, sendOtp has stored the *real* voice
+  // code (not 123456), so the entry.code check below would always fail. Skip it.
+  // In production isTestOtp() is always false, so the real OTP check still runs.
+  if (!isTestOtp(code)) {
+    const entry = await getOtp(p);
+    if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
+      return res.status(400).json({ error: 'OTP not verified' });
+    }
   }
 
   // Phone must be free

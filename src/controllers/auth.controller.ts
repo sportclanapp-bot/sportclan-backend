@@ -102,6 +102,20 @@ export async function sendOtp(req: Request, res: Response) {
   return res.json({ success: true, message: 'OTP sent', channel });
 }
 
+// Best-effort suspension check used by all login paths. Tolerates the
+// suspended_at column not existing yet (pre-migration 029) by treating any
+// query error as "not suspended", so login never breaks on a missing column.
+async function isSuspended(userId: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from('users').select('suspended_at').eq('id', userId).maybeSingle();
+    if (error) return false;
+    return !!(data && (data as { suspended_at?: string | null }).suspended_at);
+  } catch {
+    return false;
+  }
+}
+
 // POST /auth/verify-otp  { phone, code }
 export async function verifyOtp(req: Request, res: Response) {
   const { phone, code } = req.body || {};
@@ -320,6 +334,9 @@ export async function otpLogin(req: Request, res: Response) {
   if (!user) {
     return res.status(404).json({ error: 'Phone not registered', needsRegistration: true });
   }
+  if (await isSuspended(user.id)) {
+    return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
+  }
 
   await deleteOtp(p);
   const accessToken = generateAccessToken(user.id);
@@ -350,6 +367,9 @@ export async function login(req: Request, res: Response) {
   if (!user.password_hash) return res.status(401).json({ error: 'Account uses OTP login only' });
   const ok = await bcrypt.compare(password, user.password_hash);
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+  if (await isSuspended(user.id)) {
+    return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
+  }
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
   await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });

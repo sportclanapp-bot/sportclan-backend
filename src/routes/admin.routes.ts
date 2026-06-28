@@ -4,6 +4,8 @@ import {
   getReports,
   resolveReport,
   broadcastAnnouncement,
+  adminListUsers,
+  adminUpdateUser,
 } from '../controllers/admin.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 import { requireAdmin } from '../middleware/admin.middleware';
@@ -18,5 +20,7 @@ router.get('/stats', getStats);
 router.get('/reports', getReports);
 router.patch('/reports/:id', resolveReport);
 router.post('/broadcast', broadcastAnnouncement);
+router.get('/users', adminListUsers);
+router.patch('/users/:id', adminUpdateUser);
 
 export default router;

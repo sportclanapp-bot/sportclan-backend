@@ -8,6 +8,7 @@ import {
   verifyRefreshToken,
 } from '../utils/jwt';
 import { setOtp, getOtp, deleteOtp } from '../utils/redis';
+import { normalizeAccountTypes } from '../constants/accountTypes';
 
 type OtpPurpose = 'login' | 'register' | 'reset' | 'change_phone';
 
@@ -190,11 +191,15 @@ export async function register(req: Request, res: Response) {
     return res.status(400).json({ error: 'gender must be male, female, or other' });
   }
 
+  // Validate + normalize account types against the shared whitelist — the same
+  // contract PATCH /users/me/account-types enforces (lowercased, de-duped,
+  // invalid dropped, 'player' first). Empty/garbage input falls back to
+  // ['player']. (Registration previously stored the raw client strings
+  // unvalidated and defaulted to the non-canonical 'fan'.)
+  const normalizedAccountTypes = normalizeAccountTypes(account_types);
   // The legacy users.account_type column is kept for backward compat — store
-  // the first selected type so existing code that reads it still works.
-  const primaryAccountType = Array.isArray(account_types) && account_types.length > 0
-    ? account_types[0]
-    : 'fan';
+  // the primary (first) type so existing code that reads it still works.
+  const primaryAccountType = normalizedAccountTypes[0];
 
   // Generate a unique referral code (retry a couple of times on collision).
   const { generateReferralCode } = await import('./referrals.controller');
@@ -233,8 +238,8 @@ export async function register(req: Request, res: Response) {
   }
 
   // Best-effort multi-row inserts.
-  if (Array.isArray(account_types) && account_types.length > 0) {
-    const rows = account_types.map((t: string) => ({ user_id: user.id, account_type: t }));
+  {
+    const rows = normalizedAccountTypes.map((t) => ({ user_id: user.id, account_type: t }));
     await supabase.from('user_account_types').insert(rows);
   }
   if (Array.isArray(sport_ids) && sport_ids.length > 0) {

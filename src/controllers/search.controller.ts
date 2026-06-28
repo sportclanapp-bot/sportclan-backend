@@ -23,13 +23,13 @@ export async function search(req: Request, res: Response) {
     case 'umpires':
       return searchUmpires(res, query, sport_id as string, pageSize);
     case 'coaches':
-      return searchByAccountType(res, query, 'Trainer-Coach', pageSize);
+      return searchByAccountType(res, query, 'coach', pageSize);
     case 'posts':
       return searchPosts(res, query, sport_id as string, pageSize);
     case 'businesses':
       return searchBusinesses(res, query, pageSize);
     case 'associations':
-      return searchByAccountType(res, query, 'Association', pageSize);
+      return searchByAccountType(res, query, 'association', pageSize);
     case 'clubs':
       return searchClubs(res, query, pageSize);
     default:
@@ -112,7 +112,7 @@ async function searchUmpires(res: Response, q: string, sportId: string | undefin
     .from('user_account_types')
     .select('user_id, account_type')
     .in('user_id', userIds)
-    .in('account_type', ['Umpire', 'Referee']);
+    .in('account_type', ['umpire', 'referee']);
 
   const umpireIds = new Set((accountTypes || []).map((a) => a.user_id));
   const filtered = (data || []).filter((u) => umpireIds.has(u.id));
@@ -159,7 +159,7 @@ async function searchBusinesses(res: Response, q: string, limit: number) {
     .from('user_account_types')
     .select('user_id, account_type')
     .in('user_id', userIds)
-    .eq('account_type', 'Business');
+    .eq('account_type', 'business');
 
   const bizIds = new Set((accountTypes || []).map((a) => a.user_id));
   const filtered = (users || []).filter((u) => bizIds.has(u.id));

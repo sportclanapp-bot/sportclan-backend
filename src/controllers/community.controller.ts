@@ -490,18 +490,41 @@ export async function reactToComment(req: Request, res: Response) {
 // ─── REPORT ─────────────────────────────────────────────────────────────────
 export async function reportContent(req: Request, res: Response) {
   const userId = req.userId!;
-  const { comment_id, post_id, reason, details } = req.body;
+  // The app sends { target_type, target_id, reason }; older callers may send
+  // { comment_id | post_id }. Normalize both onto the unified content_reports
+  // shape that the admin moderation queue reads/resolves. (Previously this
+  // wrote to comment_reports, which no admin code ever reads — so filed
+  // reports never surfaced. Bridged here.)
+  const { target_type, target_id, comment_id, post_id, user_id, reason } = req.body || {};
 
   if (!reason) return res.status(400).json({ error: 'Reason is required' });
 
+  let resolvedType: 'post' | 'comment' | 'user' | null = null;
+  let resolvedId: string | null = null;
+  if (target_type && target_id) {
+    if (!['post', 'comment', 'user'].includes(target_type)) {
+      return res.status(400).json({ error: 'target_type must be post, comment, or user' });
+    }
+    resolvedType = target_type;
+    resolvedId = target_id;
+  } else if (comment_id) {
+    resolvedType = 'comment'; resolvedId = comment_id;
+  } else if (post_id) {
+    resolvedType = 'post'; resolvedId = post_id;
+  } else if (user_id) {
+    resolvedType = 'user'; resolvedId = user_id;
+  }
+  if (!resolvedType || !resolvedId) {
+    return res.status(400).json({ error: 'A target (post_id, comment_id, or user_id) is required' });
+  }
+
   const { data, error } = await supabase
-    .from('comment_reports')
+    .from('content_reports')
     .insert({
-      comment_id: comment_id || null,
-      post_id: post_id || null,
+      target_type: resolvedType,
+      target_id: resolvedId,
       reporter_id: userId,
       reason,
-      details: details || null,
     })
     .select()
     .single();

@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { checkExpiredSubscriptions } from './subscriptions.controller';
 import { resolveSportId } from '../utils/sportId';
+import { VALID_ACCOUNT_TYPES } from '../constants/accountTypes';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
@@ -173,27 +174,14 @@ export async function getUserById(req: Request, res: Response) {
     safeUser.dob = null;
   }
 
-  // Service account premium gating: Umpires, Coaches, Businesses etc.
-  // must be Premium for their full profile to appear. Non-premium service
-  // accounts get a masked response so the viewer knows they need to upgrade.
-  const SERVICE_TYPES = [
-    'Umpire-Referee', 'Trainer-Coach', 'Business-Vendor',
-    'Association', 'Club', 'Leagues', 'Commentator', 'Organiser',
-  ];
-  if (
-    SERVICE_TYPES.some((t) => safeUser.account_type?.includes(t)) &&
-    !safeUser.is_premium
-  ) {
-    // Mask sensitive fields — return just enough for the card UI to
-    // render a "Premium Required" overlay.
-    safeUser.name = 'Premium Account';
-    safeUser.profile_picture_url = null;
-    safeUser.bio = null;
-    safeUser.email = null;
-    safeUser.phone = null;
-    safeUser.link = null;
-    safeUser.isPremiumRequired = true;
-  }
+  // NOTE: a "service account premium gating" block used to live here that
+  // masked non-premium service profiles. It was dead code (it compared the
+  // lowercase stored account_type against capitalized compound strings like
+  // 'Umpire-Referee', so it never matched a real user) with no frontend
+  // consumer of its `isPremiumRequired` flag. It was also redundant with the
+  // /services directory, which already premium-gates provider discovery, and
+  // "fixing" the casing would have wrongly masked the profiles of users who
+  // self-assign a service type in Edit Profile without being premium. Removed.
 
   // Counts (followers/following) — best-effort, never fail the request.
   const [followersRes, followingRes, giftsRes] = await Promise.all([
@@ -303,13 +291,6 @@ export async function updateMe(req: Request, res: Response) {
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ user: data });
 }
-
-// The 10 canonical account types (locked spec). Kept in sync with the
-// frontend constants/accountTypes.ts list.
-const VALID_ACCOUNT_TYPES = [
-  'player', 'umpire', 'coach', 'commentator', 'organiser',
-  'business', 'association', 'club', 'leagues', 'other',
-] as const;
 
 // PATCH /users/me/account-types — replace the user's account-type set.
 // Body: { account_types: string[] }. Validates against the 10 allowed types,

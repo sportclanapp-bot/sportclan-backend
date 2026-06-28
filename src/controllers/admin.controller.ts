@@ -97,15 +97,53 @@ export async function getReports(_req: Request, res: Response) {
 }
 
 // PATCH /admin/reports/:id
+// Body: { action?: 'remove' | 'dismiss' }  (default 'dismiss')
+//   dismiss → mark the report resolved, leave the content untouched.
+//   remove  → delete the reported post/comment, then resolve this report AND
+//             any sibling reports targeting the same content.
 export async function resolveReport(req: Request, res: Response) {
   const { id } = req.params;
+  const action = (req.body || {}).action === 'remove' ? 'remove' : 'dismiss';
   try {
-    const { error } = await supabase
+    // Existence check — a missing/already-handled id is a 404, not a silent ok.
+    const { data: report, error: fetchErr } = await supabase
       .from('content_reports')
-      .update({ resolved: true, resolved_at: new Date().toISOString(), resolved_by: req.userId })
-      .eq('id', id);
-    if (error) return res.status(500).json({ error: error.message });
-    return res.json({ ok: true });
+      .select('id, target_type, target_id, resolved')
+      .eq('id', id)
+      .maybeSingle();
+    if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+
+    const now = new Date().toISOString();
+    let contentRemoved = false;
+
+    if (action === 'remove' && (report.target_type === 'post' || report.target_type === 'comment')) {
+      const table = report.target_type === 'post' ? 'community_posts' : 'post_comments';
+      const { error: delErr } = await supabase.from(table).delete().eq('id', report.target_id);
+      if (delErr) return res.status(500).json({ error: delErr.message });
+      contentRemoved = true;
+    }
+
+    // Resolve this report; if content was removed, also resolve any other
+    // open reports pointing at the same target so the queue stays clean.
+    const resolution = { resolved: true, resolved_at: now, resolved_by: req.userId };
+    if (contentRemoved) {
+      const { error: updErr } = await supabase
+        .from('content_reports')
+        .update(resolution)
+        .eq('target_type', report.target_type)
+        .eq('target_id', report.target_id)
+        .eq('resolved', false);
+      if (updErr) return res.status(500).json({ error: updErr.message });
+    } else {
+      const { error: updErr } = await supabase
+        .from('content_reports')
+        .update(resolution)
+        .eq('id', id);
+      if (updErr) return res.status(500).json({ error: updErr.message });
+    }
+
+    return res.json({ ok: true, action, contentRemoved });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed' });
   }

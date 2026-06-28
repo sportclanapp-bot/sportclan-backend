@@ -580,19 +580,23 @@ export async function completeMatch(req: Request, res: Response) {
       .from('match_participants')
       .select('user_id, team_side')
       .eq('match_id', id);
-    if (!participants || participants.length === 0) {
-      return res.status(400).json({ error: 'No participants in match' });
-    }
+    const now = new Date().toISOString();
+    const ratingHistoryRows: Array<{ user_id: string; sport_id: string; match_id: string; old_rating: number; new_rating: number; delta: number }> = [];
+    let allPlayerIds: string[] = [];
 
-    const teamA = participants.filter((p) => p.team_side === 'A').map((p) => p.user_id);
-    const teamB = participants.filter((p) => p.team_side === 'B').map((p) => p.user_id);
-    const allPlayerIds = [...teamA, ...teamB];
+    // A casual match created from just team names (no roster) has no
+    // participants — it can still be completed; we simply skip the ELO /
+    // profile / streak / coin updates that require real player IDs.
+    if (participants && participants.length > 0) {
+      const teamA = participants.filter((p) => p.team_side === 'A').map((p) => p.user_id);
+      const teamB = participants.filter((p) => p.team_side === 'B').map((p) => p.user_id);
+      allPlayerIds = [...teamA, ...teamB];
 
-    // Determine outcome: 1 = A wins, 0 = B wins, 0.5 = draw
-    let outcome: 1 | 0 | 0.5 = 0.5;
-    if (winner_team_id) {
-      outcome = winner_team_id === match.team_a_id ? 1 : 0;
-    }
+      // Determine outcome: 1 = A wins, 0 = B wins, 0.5 = draw
+      let outcome: 1 | 0 | 0.5 = 0.5;
+      if (winner_team_id) {
+        outcome = winner_team_id === match.team_a_id ? 1 : 0;
+      }
 
     // Fetch or create sport profiles for all participants
     const { data: existingProfiles } = await supabase
@@ -634,9 +638,6 @@ export async function completeMatch(req: Request, res: Response) {
       { rating: avgRating(teamB), matchesPlayed: avgMatches(teamB) },
       outcome,
     );
-
-    const now = new Date().toISOString();
-    const ratingHistoryRows: Array<{ user_id: string; sport_id: string; match_id: string; old_rating: number; new_rating: number; delta: number }> = [];
 
     // Update each player's profile
     for (const uid of allPlayerIds) {
@@ -723,6 +724,7 @@ export async function completeMatch(req: Request, res: Response) {
     } catch {
       // swallow — streaks are a nice-to-have
     }
+    } // end ELO / profile / streak updates (skipped when the match has no participants)
 
     // Mark match as completed
     const { data: updatedMatch, error: updateErr } = await supabase

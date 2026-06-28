@@ -93,6 +93,17 @@ export async function createEvent(req: Request, res: Response) {
           .from('matches')
           .update({ score_summary: summary, updated_at: new Date().toISOString() })
           .eq('id', matchId);
+      } else if (event_type === 'extra') {
+        // Wides / no-balls add runs but are NOT legal balls. This branch was
+        // missing, so extras were dropped from the summary (runs undercounted).
+        const side = (payload?.team_side as string) || 'A';
+        const inning = summary[side] || { runs: 0, balls: 0, wickets: 0 };
+        inning.runs = (inning.runs || 0) + Number(payload?.runs ?? 0);
+        summary[side] = inning;
+        await supabase
+          .from('matches')
+          .update({ score_summary: summary, updated_at: new Date().toISOString() })
+          .eq('id', matchId);
       }
     } catch {
       // ignore best-effort update errors
@@ -157,6 +168,38 @@ export async function listEvents(req: Request, res: Response) {
   }
 }
 
+// Recompute a cricket match's score_summary from the authoritative event log.
+// Used after an undo (and any time the summary may have drifted) so the stored
+// summary always agrees with the events. Handles ball / extra / wicket.
+async function recomputeCricketSummary(matchId: string): Promise<void> {
+  const { data: events } = await supabase
+    .from('match_events')
+    .select('event_type, payload')
+    .eq('match_id', matchId)
+    .order('created_at', { ascending: true });
+  const summary: Record<string, { runs: number; balls: number; wickets: number }> = {};
+  for (const e of events || []) {
+    const p: any = e.payload || {};
+    const side = (p.team_side as string) || 'A';
+    const inning = summary[side] || { runs: 0, balls: 0, wickets: 0 };
+    if (e.event_type === 'ball') {
+      inning.runs += Number(p.runs ?? 0);
+      if (!p.is_extra) inning.balls += 1;
+    } else if (e.event_type === 'extra') {
+      // Wides / no-balls add runs but are not legal balls.
+      inning.runs += Number(p.runs ?? 0);
+    } else if (e.event_type === 'wicket') {
+      inning.wickets += 1;
+      if (!p.is_extra) inning.balls += 1;
+    }
+    summary[side] = inning;
+  }
+  await supabase
+    .from('matches')
+    .update({ score_summary: summary, updated_at: new Date().toISOString() })
+    .eq('id', matchId);
+}
+
 // POST /scoring/:matchId/undo
 export async function undoEvent(req: Request, res: Response) {
   const userId = req.userId;
@@ -177,6 +220,13 @@ export async function undoEvent(req: Request, res: Response) {
     if (!latest) return res.status(404).json({ error: 'No event to undo' });
     const { error } = await supabase.from('match_events').delete().eq('id', latest.id);
     if (error) return res.status(500).json({ error: error.message });
+    // Recompute the summary from the remaining events so it can't drift out of
+    // sync with the event log (the old code left score_summary stale on undo).
+    try {
+      await recomputeCricketSummary(matchId);
+    } catch {
+      // best-effort — the event delete already succeeded
+    }
     return res.json({ deleted: true });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

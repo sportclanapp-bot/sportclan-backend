@@ -327,7 +327,7 @@ export async function otpLogin(req: Request, res: Response) {
 
   const { data: user, error } = await supabase
     .from('users')
-    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, created_at')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, is_admin, created_at')
     .eq('phone', p)
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });

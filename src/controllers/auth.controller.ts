@@ -559,9 +559,14 @@ export async function resetPassword(req: Request, res: Response) {
     return res.status(400).json({ error: 'phone, code, newPassword are required' });
   }
   const p = normalizePhone(phone);
-  const entry = await getOtp(p);
-  if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
-    return res.status(400).json({ error: 'OTP not verified or expired' });
+  // Honor the dev-only test bypass uniformly with verifyOtp/otpLogin/register
+  // (see isTestOtp). In production isTestOtp() is always false, so the real
+  // OTP check still runs.
+  if (!isTestOtp(code)) {
+    const entry = await getOtp(p);
+    if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
+      return res.status(400).json({ error: 'OTP not verified or expired' });
+    }
   }
   const password_hash = await bcrypt.hash(newPassword, 10);
   const { error } = await supabase.from('users').update({ password_hash }).eq('phone', p);
@@ -577,9 +582,13 @@ export async function changePhone(req: Request, res: Response) {
   const { newPhone, code } = req.body || {};
   if (!newPhone || !code) return res.status(400).json({ error: 'newPhone and code are required' });
   const p = normalizePhone(newPhone);
-  const entry = await getOtp(p);
-  if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
-    return res.status(400).json({ error: 'OTP not verified or expired' });
+  // Honor the dev-only test bypass uniformly (see isTestOtp). Production runs
+  // the real OTP check since isTestOtp() is always false there.
+  if (!isTestOtp(code)) {
+    const entry = await getOtp(p);
+    if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
+      return res.status(400).json({ error: 'OTP not verified or expired' });
+    }
   }
   const { data: existing } = await supabase
     .from('users')

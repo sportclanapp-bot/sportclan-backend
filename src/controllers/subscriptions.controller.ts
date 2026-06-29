@@ -13,8 +13,24 @@ import { sendPushToTokens } from '../utils/fcm';
 //    on every GET.
 export async function checkExpiredSubscriptions(userId: string): Promise<void> {
   const nowIso = new Date().toISOString();
+  const now = Date.now();
+  const msPerDay = 24 * 60 * 60 * 1000;
 
-  // 1. Expire lapsed active subscriptions for this user.
+  // Current premium state on the user row. This is the source of truth for BOTH
+  // subscription-backed premium and grant-backed premium (e.g. the early-bird
+  // grant, which has no subscription row).
+  const { data: user } = await supabase
+    .from('users')
+    .select('is_premium, premium_expires_at, last_premium_reminder_at')
+    .eq('id', userId)
+    .maybeSingle();
+
+  const userExpired =
+    !!user?.is_premium &&
+    !!user.premium_expires_at &&
+    new Date(user.premium_expires_at).getTime() <= now;
+
+  // 1. Find lapsed active subscriptions for this user (subscription-backed).
   const { data: lapsed } = await supabase
     .from('subscriptions')
     .select('id')
@@ -22,11 +38,15 @@ export async function checkExpiredSubscriptions(userId: string): Promise<void> {
     .eq('status', 'active')
     .lt('expires_at', nowIso);
 
-  if (lapsed && lapsed.length > 0) {
-    await supabase
-      .from('subscriptions')
-      .update({ status: 'expired', updated_at: nowIso })
-      .in('id', lapsed.map((s) => s.id));
+  // Drop to free tier if EITHER the user's premium window has passed (covers
+  // early-bird grants with no subscription row) OR a subscription has lapsed.
+  if (userExpired || (lapsed && lapsed.length > 0)) {
+    if (lapsed && lapsed.length > 0) {
+      await supabase
+        .from('subscriptions')
+        .update({ status: 'expired', updated_at: nowIso })
+        .in('id', lapsed.map((s) => s.id));
+    }
 
     await supabase
       .from('users')
@@ -60,17 +80,9 @@ export async function checkExpiredSubscriptions(userId: string): Promise<void> {
   }
 
   // 2. Warn 3 days before expiry, throttled to once per day.
-  const { data: user } = await supabase
-    .from('users')
-    .select('is_premium, premium_expires_at, last_premium_reminder_at')
-    .eq('id', userId)
-    .maybeSingle();
-
   if (!user?.is_premium || !user.premium_expires_at) return;
 
   const expiresAt = new Date(user.premium_expires_at).getTime();
-  const now = Date.now();
-  const msPerDay = 24 * 60 * 60 * 1000;
   const daysLeft = Math.ceil((expiresAt - now) / msPerDay);
   if (daysLeft > 3 || daysLeft < 0) return;
 

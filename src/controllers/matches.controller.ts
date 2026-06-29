@@ -140,7 +140,7 @@ export async function setMatchTossHandler(req: Request, res: Response) {
 
   const { data: match } = await supabase
     .from('matches')
-    .select('created_by, umpire_id')
+    .select('created_by, umpire_id, status')
     .eq('id', id)
     .maybeSingle();
   if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -148,13 +148,23 @@ export async function setMatchTossHandler(req: Request, res: Response) {
     return res.status(403).json({ error: 'Only the creator or umpire can record the toss' });
   }
 
+  // Recording the toss is the moment play begins, so flip the match to `live`
+  // here. Without this the match stayed `scheduled` while being actively
+  // scored — the live scoreboard / scorecard / timeline (status-gated) showed
+  // 0-0, and the hub listed it under "upcoming" instead of "live". Guard so we
+  // never downgrade an already completed/cancelled match.
+  const update: Record<string, unknown> = {
+    toss_winner_team_id: tossWinnerTeamId ?? null,
+    toss_choice: tossChoice,
+    updated_at: new Date().toISOString(),
+  };
+  if (match.status === 'scheduled' || match.status === 'upcoming') {
+    update.status = 'live';
+  }
+
   const { data, error } = await supabase
     .from('matches')
-    .update({
-      toss_winner_team_id: tossWinnerTeamId ?? null,
-      toss_choice: tossChoice,
-      updated_at: new Date().toISOString(),
-    })
+    .update(update)
     .eq('id', id)
     .select('*')
     .single();

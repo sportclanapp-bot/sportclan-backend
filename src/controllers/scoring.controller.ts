@@ -31,7 +31,7 @@ async function fanoutScoreUpdate(
 async function authorizeScorer(matchId: string, userId: string) {
   const { data: match } = await supabase
     .from('matches')
-    .select('id, created_by, umpire_id, score_summary, sport_id')
+    .select('id, created_by, umpire_id, score_summary, sport_id, status')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return { ok: false as const, status: 404, error: 'Match not found' };
@@ -53,6 +53,18 @@ export async function createEvent(req: Request, res: Response) {
     const auth = await authorizeScorer(matchId, userId);
     if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
     const match = auth.match;
+
+    // Catch-all: any scored event means the match is in progress, so promote it
+    // to `live`. The toss handler already does this for the normal flow; this
+    // covers the "skip toss" path where scoring starts without a recorded toss.
+    // Guard so we never downgrade a completed/cancelled match.
+    if (match.status === 'scheduled' || match.status === 'upcoming') {
+      try {
+        await supabase.from('matches').update({ status: 'live' }).eq('id', matchId);
+      } catch {
+        // best-effort — don't block scoring on the status flip
+      }
+    }
 
     const { data: event, error } = await supabase
       .from('match_events')

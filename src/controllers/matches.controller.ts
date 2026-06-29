@@ -352,7 +352,15 @@ export async function getCommentary(req: Request, res: Response) {
         id: ev.id,
         over_ball: overBallLabel,
         event_type: ev.event_type,
+        // The app's CommentaryLine reads `text` (and falls back to `payload`).
+        // We were only sending `commentary`, so the timeline never saw the
+        // computed string and recomputed it from a missing payload — every
+        // ball rendered as "Dot ball". Send `text` (the rich string) and the
+        // raw `payload` so both the primary path and the fallback are correct.
+        // `commentary` is kept for backwards-compatibility with any other reader.
         commentary,
+        text: commentary,
+        payload: p,
         timestamp: ev.created_at,
         is_wicket: isWicket,
         is_boundary: isBoundary,

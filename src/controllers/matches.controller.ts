@@ -6,6 +6,7 @@ import { upsertVenue } from './venues.controller';
 import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
 import { sanitizeError } from '../utils/response';
+import { calculateAndSetMVP } from './matchFeatures.controller';
 
 // POST /matches — create. FREE for all (Change #6).
 export async function createMatch(req: Request, res: Response) {
@@ -800,6 +801,16 @@ export async function completeMatch(req: Request, res: Response) {
         await supabase.from('matches').update({ score_summary: ss }).eq('id', id);
       }
     } catch { /* best effort */ }
+
+    // FEATURE 1 — Player of the Match. Compute + persist mvp_user_id now that
+    // the match is completed and all scoring events exist. Best-effort: a
+    // failure here must never block completion. Only matches with real
+    // participants + scored events yield an MVP (casual name-only matches won't).
+    try {
+      await calculateAndSetMVP(id);
+    } catch (mvpErr) {
+      console.error('MVP calculation failed:', mvpErr instanceof Error ? mvpErr.message : mvpErr);
+    }
 
     // Resolve sport name for nicer notification copy — falls back to ID.
     let sportName = 'rating';

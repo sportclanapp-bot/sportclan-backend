@@ -9,10 +9,38 @@ import {
 } from '../utils/jwt';
 import { setOtp, getOtp, deleteOtp } from '../utils/redis';
 import { normalizeAccountTypes } from '../constants/accountTypes';
+import { awardCoins } from '../utils/coins';
 
 type OtpPurpose = 'login' | 'register' | 'reset' | 'change_phone';
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
+
+// ─── Early-bird launch perk ──────────────────────────────────────────────────
+// Every NEW signup (any path: phone, email, Google) is granted Premium for
+// 3 calendar months + 50 coins, using the real premium machinery
+// (is_premium=true + premium_expires_at). This replaces the retired EARLYBIRDS
+// coupon. Premium is set in the user INSERT (so it only applies to brand-new
+// rows — existing users logging in are untouched). The 50 coins are awarded
+// via awardCoins('early_bird_grant') which is idempotent (unique coin_events
+// key) and logs a transaction — so it can never double-grant.
+const EARLY_BIRD_PREMIUM_MONTHS = 3;
+const EARLY_BIRD_COINS = 50;
+
+/** premium_expires_at = `from` + 3 calendar months, as an ISO string. */
+function earlyBirdExpiry(from: Date = new Date()): string {
+  const d = new Date(from);
+  d.setMonth(d.getMonth() + EARLY_BIRD_PREMIUM_MONTHS);
+  return d.toISOString();
+}
+
+/** Award the 50-coin early-bird grant to a freshly-created user. Best-effort. */
+async function grantEarlyBirdCoins(userId: string): Promise<void> {
+  try {
+    await awardCoins(userId, 'early_bird_grant', EARLY_BIRD_COINS);
+  } catch {
+    // non-critical — premium is already set on the row
+  }
+}
 
 // ─── Dev-only test OTP bypass ────────────────────────────────────────────────
 // Lets QA / automated walkthroughs sign into seeded accounts without a real SMS
@@ -241,11 +269,12 @@ export async function register(req: Request, res: Response) {
       bio: bio || null,
       city_id: city_id || null,
       account_type: primaryAccountType,
-      is_premium: false,
+      is_premium: true,
+      premium_expires_at: earlyBirdExpiry(),
       coin_balance: 0,
       referral_code: referralCode,
     })
-    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, coin_balance, referral_code, created_at')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, referral_code, created_at')
     .single();
   if (error || !user) {
     return res.status(500).json({ error: error?.message || 'Failed to create user' });
@@ -290,17 +319,19 @@ export async function register(req: Request, res: Response) {
   // Welcome bonus — 10 coins on first registration. Idempotent via
   // the (user_id, event_type) unique key on coin_events.
   try {
-    const { awardCoins } = await import('../utils/coins');
     await awardCoins(user.id, 'first_registration', 10);
   } catch {
     // non-critical
   }
 
+  // Early-bird launch perk: 50 coins (premium was set on the insert above).
+  await grantEarlyBirdCoins(user.id);
+
   await deleteOtp(p);
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
   await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
-  return res.json({ user, accessToken, refreshToken, isNewUser: true });
+  return res.json({ user, accessToken, refreshToken, isNewUser: true, earlyBird: true });
 }
 
 // POST /auth/otp/login  { phone, code }
@@ -412,19 +443,23 @@ export async function registerEmail(req: Request, res: Response) {
       username,
       password_hash,
       account_type: 'fan',
-      is_premium: false,
+      is_premium: true,
+      premium_expires_at: earlyBirdExpiry(),
       coin_balance: 0,
     })
-    .select('id, phone, name, username, email, city_id, account_type, profile_picture_url, is_premium, coin_balance, created_at')
+    .select('id, phone, name, username, email, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, created_at')
     .single();
   if (error || !user) {
     return res.status(500).json({ error: error?.message || 'Failed to create user' });
   }
 
+  // Early-bird launch perk: 50 coins (premium set on the insert above).
+  await grantEarlyBirdCoins(user.id);
+
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
   await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
-  return res.json({ user, accessToken, refreshToken, isNewUser: true });
+  return res.json({ user, accessToken, refreshToken, isNewUser: true, earlyBird: true });
 }
 
 // POST /auth/refresh  { refreshToken }
@@ -549,12 +584,15 @@ export async function googleAuth(req: Request, res: Response) {
           google_id: payload.sub ?? null,
           profile_picture_url: payload.picture ?? null,
           account_type: 'player',
-          is_premium: false,
+          is_premium: true,
+          premium_expires_at: earlyBirdExpiry(),
           coin_balance: 0,
         })
-        .select('id, phone, name, username, email, google_id, is_premium, coin_balance, referral_code, created_at')
+        .select('id, phone, name, username, email, google_id, is_premium, premium_expires_at, coin_balance, referral_code, created_at')
         .single();
       if (error || !newUser) return res.status(500).json({ error: 'Could not create account' });
+      // Early-bird launch perk: 50 coins (premium set on the insert above).
+      await grantEarlyBirdCoins(newUser.id);
       // Seed the multi-type join table so the new account is consistent with
       // phone signups (which populate user_account_types).
       await supabase
@@ -570,7 +608,7 @@ export async function googleAuth(req: Request, res: Response) {
 
     await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
 
-    return res.json({ accessToken, refreshToken, user });
+    return res.json({ accessToken, refreshToken, user, isNewUser: !existing, earlyBird: !existing });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Google auth failed';
     return res.status(500).json({ error: msg });

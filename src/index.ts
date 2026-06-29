@@ -37,6 +37,7 @@ import venuesRoutes from './routes/venues.routes';
 import referralsRoutes from './routes/referrals.routes';
 import devRoutes from './routes/dev.routes';
 import adminRoutes from './routes/admin.routes';
+import { sweepExpiredPremium } from './controllers/subscriptions.controller';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -140,5 +141,23 @@ app.listen(PORT, () => {
       'Add it to the hosting provider env (Render/Railway) before launch.',
     );
   }
+
+  // Premium expiry sweep — flips lapsed users to free tier in bulk so expiry
+  // doesn't depend on the user opening the app (lazy check in /users/me still
+  // runs too). Hourly; once on boot. Idempotent, so multiple instances are safe.
+  const runSweep = async () => {
+    try {
+      const { users, subs } = await sweepExpiredPremium();
+      if (users > 0 || subs > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`[premium-sweep] expired ${users} user(s), ${subs} subscription(s)`);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[premium-sweep] failed', e instanceof Error ? e.message : e);
+    }
+  };
+  void runSweep();
+  setInterval(runSweep, 60 * 60 * 1000).unref();
 });
 // Sat Apr 11 01:56:26 IST 2026

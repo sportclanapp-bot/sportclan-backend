@@ -110,6 +110,48 @@ export async function checkExpiredSubscriptions(userId: string): Promise<void> {
   }
 }
 
+// ─── Scheduled bulk expiry sweep ────────────────────────────────────────────────
+// checkExpiredSubscriptions() above only runs lazily (on /users/me &
+// /subscriptions/me), so a user who never opens the app would keep is_premium=true
+// past expiry — and others would still see them as premium in search/services.
+// This sweep flips ALL lapsed users in one pass and is run on an interval from
+// the server bootstrap (see src/index.ts). Idempotent + safe to run repeatedly.
+//
+// NOTE: only matches rows with a non-null premium_expires_at in the past, so
+// permanent-premium accounts (null expiry, e.g. admin-granted) are never touched.
+export async function sweepExpiredPremium(): Promise<{ users: number; subs: number }> {
+  const nowIso = new Date().toISOString();
+
+  // 1. Mark lapsed active subscriptions expired.
+  const { data: lapsedSubs } = await supabase
+    .from('subscriptions')
+    .select('id')
+    .eq('status', 'active')
+    .lt('expires_at', nowIso);
+  if (lapsedSubs && lapsedSubs.length > 0) {
+    await supabase
+      .from('subscriptions')
+      .update({ status: 'expired', updated_at: nowIso })
+      .in('id', lapsedSubs.map((s) => s.id));
+  }
+
+  // 2. Drop lapsed users to free tier.
+  const { data: lapsedUsers } = await supabase
+    .from('users')
+    .select('id')
+    .eq('is_premium', true)
+    .not('premium_expires_at', 'is', null)
+    .lt('premium_expires_at', nowIso);
+  if (lapsedUsers && lapsedUsers.length > 0) {
+    await supabase
+      .from('users')
+      .update({ is_premium: false, premium_expires_at: null })
+      .in('id', lapsedUsers.map((u) => u.id));
+  }
+
+  return { users: lapsedUsers?.length ?? 0, subs: lapsedSubs?.length ?? 0 };
+}
+
 // ─── Plan catalogue ────────────────────────────────────────────────────────────
 const PLANS = [
   { id: '1_month',  name: '1 Month',   months: 1,  price: 70,  badge: null },
@@ -120,9 +162,12 @@ const PLANS = [
   { id: 'coins_50', name: 'Coins Pack', months: 0, price: 50,  badge: null, coins: 50 },
 ];
 
-const COUPONS: Record<string, { months: number; coins: number; expiresAt: string }> = {
-  EARLYBIRDS: { months: 3, coins: 50, expiresAt: '2026-09-12T23:59:00+05:30' },
-};
+// Hard-coded coupon fallbacks. EARLYBIRDS was retired at launch — every new
+// signup now auto-receives 3 months Premium + 50 coins via the early-bird grant
+// in auth.controller (so the coupon would double-grant). The DB coupon_codes row
+// is also deactivated (see APPLY-retire-earlybirds.sql). Empty by design; the
+// coupon_codes table remains the source of truth for any future codes.
+const COUPONS: Record<string, { months: number; coins: number; expiresAt: string }> = {};
 
 // GET /subscriptions/plans
 export async function getPlans(_req: Request, res: Response) {

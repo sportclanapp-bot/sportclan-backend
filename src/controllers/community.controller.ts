@@ -16,7 +16,11 @@ function detectProfanity(text: string): string[] {
 
 // ─── LIST POSTS (feed) ──────────────────────────────────────────────────────
 export async function listPosts(req: Request, res: Response) {
-  const { sport_id, city_id, post_type, author_id, cursor, limit = '20', sort } = req.query;
+  const { sport_id, city_id, post_type, author_id, user_id, cursor, limit = '20', sort } = req.query;
+  // The app's profile grid sends `user_id`; the feed historically used
+  // `author_id`. Accept either so "My posts" filters to the profile owner
+  // instead of silently returning the whole feed.
+  const authorFilter = (author_id ?? user_id) as string | undefined;
   const pageSize = Math.min(parseInt(limit as string, 10) || 20, 50);
   const sortMode = (sort as string) || 'recent';
   // When trending, only consider posts from the last 24h and order by likes
@@ -75,12 +79,12 @@ export async function listPosts(req: Request, res: Response) {
   if (sport_id) q = q.eq('sport_id', sport_id as string);
   if (city_id) q = q.eq('city_id', city_id as string);
   if (post_type) q = q.eq('post_type', post_type as string);
-  if (author_id) q = q.eq('author_id', author_id as string);
+  if (authorFilter) q = q.eq('author_id', authorFilter);
   if (cursor && sortMode !== 'trending') q = q.lt('created_at', cursor as string);
 
   // Hide not-yet-published scheduled posts from everyone EXCEPT the author
   // viewing their own profile grid (author_id === the requester).
-  const viewingOwn = author_id && author_id === req.userId;
+  const viewingOwn = authorFilter && authorFilter === req.userId;
   if (!viewingOwn) {
     q = q.is('scheduled_at', null);
   }

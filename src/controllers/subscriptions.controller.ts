@@ -19,6 +19,15 @@ function paymentsDisabled(res: Response): boolean {
   return true;
 }
 
+// Calendar-month expiry (lands on the same day-of-month) rather than fixed
+// 30-day blocks, so "1 year" is actually 12 calendar months, matching
+// earlyBirdExpiry (A4-011).
+function monthsFromNow(months: number): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString();
+}
+
 // ─── Expiry auto-checker ──────────────────────────────────────────────────────
 // Runs on every hit to /users/me and /subscriptions/me so there's no cron
 // dependency. Cheap because it only scans the current user's rows.
@@ -235,9 +244,7 @@ export async function initiate(req: Request, res: Response) {
   if (!plan) return res.status(400).json({ error: 'Invalid plan' });
 
   // Create a pending subscription record
-  const expiresAt = plan.months > 0
-    ? new Date(Date.now() + plan.months * 30 * 24 * 60 * 60 * 1000).toISOString()
-    : null;
+  const expiresAt = plan.months > 0 ? monthsFromNow(plan.months) : null;
 
   const { data: sub, error } = await supabase
     .from('subscriptions')
@@ -330,9 +337,7 @@ export async function appleVerify(req: Request, res: Response) {
   if (!plan) return res.status(400).json({ error: 'Invalid plan' });
 
   // In production, verify Apple receipt with App Store. For now, auto-activate.
-  const expiresAt = plan.months > 0
-    ? new Date(Date.now() + plan.months * 30 * 24 * 60 * 60 * 1000).toISOString()
-    : null;
+  const expiresAt = plan.months > 0 ? monthsFromNow(plan.months) : null;
 
   const { data: sub } = await supabase
     .from('subscriptions')
@@ -436,7 +441,7 @@ export async function redeemCoupon(req: Request, res: Response) {
 
   if (existing) return res.status(400).json({ error: 'Coupon already used' });
 
-  const expiresAt = new Date(Date.now() + coupon.months * 30 * 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = monthsFromNow(coupon.months);
 
   // Create subscription
   await supabase.from('subscriptions').insert({

@@ -51,8 +51,17 @@ export async function awardCoins(
     return { awarded: false, newBalance: currentBalance };
   }
 
+  // Atomic increment via the DB function — avoids the read-modify-write drift
+  // (A4-006) where concurrent credits clobbered each other against the stored
+  // coin_balance column. The returned newBalance is informational only; the
+  // authoritative update happens atomically in Postgres.
+  const { error: incErr } = await supabase
+    .rpc('increment_coins', { target_user_id: userId, amount: coins });
+  if (incErr) {
+    // eslint-disable-next-line no-console
+    console.warn('[coins] increment_coins failed', eventType, incErr.message);
+  }
   const newBalance = currentBalance + coins;
-  await supabase.from('users').update({ coin_balance: newBalance }).eq('id', userId);
   await supabase.from('transactions').insert({
     user_id: userId,
     type: 'coins_earned',

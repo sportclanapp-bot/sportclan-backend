@@ -27,40 +27,10 @@ export async function listPosts(req: Request, res: Response) {
   // desc. `likes_count` already exists on the table (post_likes count cache).
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-  let query = supabase
-    .from('community_posts')
-    .select(`
-      *,
-      author:users!author_id(id, name, username, profile_picture_url, is_premium),
-      author_types:user_account_types!inner(account_type),
-      sport:sports!sport_id(id, name, emoji),
-      city:cities!city_id(id, name)
-    `)
-    .eq('is_closed', false)
-    .order('created_at', { ascending: false })
-    .limit(pageSize);
-
-  if (sport_id) query = query.eq('sport_id', sport_id as string);
-  if (city_id) query = query.eq('city_id', city_id as string);
-  if (post_type) query = query.eq('post_type', post_type as string);
-  if (author_id) query = query.eq('author_id', author_id as string);
-  if (cursor) query = query.lt('created_at', cursor as string);
-
-  // Fix: author_types inner join requires author_id match
-  // We actually need a different approach — join on author_id
-  const { data, error } = await supabase
-    .from('community_posts')
-    .select(`
-      *,
-      author:users!author_id(id, name, username, profile_picture_url, is_premium),
-      sport:sports!sport_id(id, name, emoji),
-      city:cities!city_id(id, name)
-    `)
-    .eq('is_closed', false)
-    .order('created_at', { ascending: false })
-    .limit(pageSize);
-
-  // Re-apply filters on the cleaner query
+  // NOTE: this used to build two extra queries — a dead `user_account_types!inner`
+  // builder that was never executed, and a second query whose result was
+  // discarded — before running the real `q` below (A6-011). Both removed; `q`
+  // is the single source of truth (and we no longer fire a wasted round-trip).
   let q = supabase
     .from('community_posts')
     .select(`

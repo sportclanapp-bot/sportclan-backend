@@ -311,9 +311,10 @@ export async function register(req: Request, res: Response) {
       if (coupon.coins) updates.coin_balance = coupon.coins;
       if (coupon.premium_months) {
         updates.is_premium = true;
-        updates.premium_expires_at = new Date(
-          Date.now() + coupon.premium_months * 30 * 24 * 60 * 60 * 1000,
-        ).toISOString();
+        // Calendar months, consistent with earlyBirdExpiry (A4-011).
+        const exp = new Date();
+        exp.setMonth(exp.getMonth() + coupon.premium_months);
+        updates.premium_expires_at = exp.toISOString();
       }
       if (Object.keys(updates).length > 0) {
         await supabase.from('users').update(updates).eq('id', user.id);

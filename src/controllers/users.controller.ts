@@ -3,7 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { checkExpiredSubscriptions } from './subscriptions.controller';
 import { resolveSportId } from '../utils/sportId';
-import { VALID_ACCOUNT_TYPES } from '../constants/accountTypes';
+import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
@@ -149,7 +149,9 @@ export async function getMe(req: Request, res: Response) {
     // swallow — fall back below
   }
   if (accountTypes.length === 0 && data.account_type) {
-    accountTypes = [data.account_type];
+    // Validate the legacy column before leaking it — older rows can hold the
+    // invalid 'fan' value, which we never want to surface to the client (A6-002).
+    accountTypes = isValidAccountType(data.account_type) ? [data.account_type] : ['player'];
   }
 
   return res.json({ user: { ...data, account_types: accountTypes } });
@@ -158,6 +160,10 @@ export async function getMe(req: Request, res: Response) {
 // GET /users/:id — public profile
 export async function getUserById(req: Request, res: Response) {
   const { id } = req.params;
+  // Guard non-UUID ids (e.g. a stray GET /users/search) so they 404 cleanly
+  // instead of 500ing on the Postgres uuid cast (A11-002).
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!UUID_RE.test(id)) return res.status(404).json({ error: 'User not found' });
   const { data, error } = await supabase
     .from('users')
     .select(PUBLIC_FIELDS)
@@ -325,7 +331,14 @@ export async function updateAccountTypes(req: Request, res: Response) {
   ];
   const primary = ordered[0];
 
-  // Rewrite the join table: delete existing rows, insert the new set.
+  // Rewrite the join table: snapshot → delete → insert, restoring the previous
+  // set if the insert fails so the user is never left with an empty join table
+  // (A6-010 — the old delete-then-insert had no rollback).
+  const { data: prevRows } = await supabase
+    .from('user_account_types')
+    .select('account_type')
+    .eq('user_id', userId);
+
   const { error: delErr } = await supabase
     .from('user_account_types')
     .delete()
@@ -334,7 +347,14 @@ export async function updateAccountTypes(req: Request, res: Response) {
 
   const rows = ordered.map((t) => ({ user_id: userId, account_type: t }));
   const { error: insErr } = await supabase.from('user_account_types').insert(rows);
-  if (insErr) return res.status(500).json({ error: insErr.message });
+  if (insErr) {
+    if (prevRows && prevRows.length > 0) {
+      await supabase
+        .from('user_account_types')
+        .insert(prevRows.map((r) => ({ user_id: userId, account_type: r.account_type })));
+    }
+    return res.status(500).json({ error: insErr.message });
+  }
 
   // Keep the legacy primary column in sync.
   const { data, error } = await supabase

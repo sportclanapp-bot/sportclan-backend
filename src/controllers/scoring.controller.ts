@@ -214,7 +214,7 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
       const inn = sides[sideOf(p)];
       if (e.event_type === 'ball') { inn.runs += Number(p.runs ?? 0); if (!p.is_extra) inn.balls += 1; }
       else if (e.event_type === 'extra') { inn.runs += Number(p.runs ?? 0); }
-      else if (e.event_type === 'wicket') { inn.wickets += 1; if (!p.is_extra) inn.balls += 1; }
+      else if (e.event_type === 'wicket') { inn.wickets = Math.min(10, inn.wickets + 1); if (!p.is_extra) inn.balls += 1; }
       inn.score = inn.runs;
     }
   } else if (slug === 'football' || slug === 'hockey') {

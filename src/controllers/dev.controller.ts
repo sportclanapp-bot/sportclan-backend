@@ -512,11 +512,13 @@ export async function loadFullData(req: Request, res: Response) {
       else if (pick >= 0.95) cityName = rand(['Hyderabad', 'Chennai']);
       const cityId = cityByName.get(cityName) ?? puneId;
 
-      // Role mix: 120 players, 15 umpires, 8 coaches, 7 businesses
-      let accountType = 'Player';
-      if (i >= 120 && i < 135) accountType = 'Umpire-Referee';
-      else if (i >= 135 && i < 143) accountType = 'Trainer-Coach';
-      else if (i >= 143) accountType = 'Business-Vendor';
+      // Role mix: 120 players, 15 umpires, 8 coaches, 7 businesses.
+      // Canonical lowercase slugs so seeded rows match the account-type filters
+      // (A6-012 — the old capitalized 'Umpire-Referee' etc. matched no filter).
+      let accountType = 'player';
+      if (i >= 120 && i < 135) accountType = 'umpire';
+      else if (i >= 135 && i < 143) accountType = 'coach';
+      else if (i >= 143) accountType = 'business';
 
       userRows.push({
         phone: `+91dummy${String(i + 1).padStart(3, '0')}`,

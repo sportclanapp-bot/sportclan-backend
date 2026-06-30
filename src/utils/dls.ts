@@ -41,6 +41,18 @@ export function calculateDLSTarget(
   const r1 = resourcesRemaining(totalOvers, 0); // Team 1 had full resources
   const r2 = resourcesRemaining(team2OversLeft, team2Wickets);
 
+  // Guard against zero/negative Team-1 resources (e.g. totalOvers=0) — the
+  // ratio would be NaN/Infinity and revisedTarget would come back NaN (A5-013).
+  // With no resources to scale against, fall back to "no reduction".
+  if (r1 <= 0) {
+    return {
+      revisedTarget: team1Score + 1,
+      resourcesTeam1: 0,
+      resourcesTeam2: Math.round(r2 * 100) / 100,
+      method: 'DLS',
+    };
+  }
+
   // DLS formula: if R2 < R1 → target reduced proportionally
   const ratio = r2 / r1;
   const revisedTarget = Math.ceil(team1Score * ratio) + 1; // +1 because target = score to beat

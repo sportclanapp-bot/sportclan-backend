@@ -7,7 +7,7 @@ import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTyp
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
-  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, is_admin, created_at';
+  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, is_admin, notification_preferences, created_at';
 
 // Fire smart engagement notifications lazily from /users/me. Best-effort,
 // never throws — failures here must not block the main profile response.
@@ -237,6 +237,8 @@ export async function getUserById(req: Request, res: Response) {
 const ALLOWED_FIELDS = [
   'name', 'username', 'email', 'city_id', 'profile_picture_url', 'bio',
   'link', 'gender', 'dob', 'show_dob', 'is_available',
+  // A16-006 · notification preference toggles (jsonb { category: boolean }).
+  'notification_preferences',
 ] as const;
 
 const USERNAME_COOLDOWN_DAYS = 30;

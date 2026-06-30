@@ -2,6 +2,23 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sendPushToTokens } from '../utils/fcm';
 
+// ─── Purchases kill-switch ────────────────────────────────────────────────────
+// Payment verification is MOCK (no real Razorpay/Apple charge or signature
+// check), so initiate/verify/apple-verify would grant premium + coins for free.
+// They stay OFF until real payments are wired. Premium is complimentary for
+// early users via the early-bird grant, so nothing of value is gated.
+// Flip on later with PAYMENTS_ENABLED=true once the gateway is live.
+const PAYMENTS_ENABLED = process.env.PAYMENTS_ENABLED === 'true';
+
+function paymentsDisabled(res: Response): boolean {
+  if (PAYMENTS_ENABLED) return false;
+  res.status(503).json({
+    error: 'Purchases are temporarily unavailable — Premium is complimentary for early users.',
+    code: 'payments_disabled',
+  });
+  return true;
+}
+
 // ─── Expiry auto-checker ──────────────────────────────────────────────────────
 // Runs on every hit to /users/me and /subscriptions/me so there's no cron
 // dependency. Cheap because it only scans the current user's rows.
@@ -211,6 +228,7 @@ export async function getMySubscription(req: Request, res: Response) {
 
 // POST /subscriptions/initiate  { planId }
 export async function initiate(req: Request, res: Response) {
+  if (paymentsDisabled(res)) return;
   const userId = req.userId!;
   const { planId } = req.body || {};
   const plan = PLANS.find((p) => p.id === planId);
@@ -248,6 +266,7 @@ export async function initiate(req: Request, res: Response) {
 
 // POST /subscriptions/verify  { subscriptionId, razorpayPaymentId, razorpayOrderId, razorpaySignature }
 export async function verify(req: Request, res: Response) {
+  if (paymentsDisabled(res)) return;
   const userId = req.userId!;
   const { subscriptionId, razorpayPaymentId, razorpayOrderId } = req.body || {};
 
@@ -304,6 +323,7 @@ export async function verify(req: Request, res: Response) {
 
 // POST /subscriptions/apple/verify  { receipt, planId }
 export async function appleVerify(req: Request, res: Response) {
+  if (paymentsDisabled(res)) return;
   const userId = req.userId!;
   const { planId } = req.body || {};
   const plan = PLANS.find((p) => p.id === planId);

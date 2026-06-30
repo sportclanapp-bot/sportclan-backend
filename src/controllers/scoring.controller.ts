@@ -178,6 +178,80 @@ function setWon(
   return null;
 }
 
+// Per-player cricket rollup (A5-003/004). Player identity rides in the event
+// payload (`batsman_id` / `bowler_id`, or `player_id` as a batting fallback) —
+// there are no dedicated columns on match_events. The batting `team_side` in
+// the payload is the batter's team; the bowler is always on the opposite side,
+// so a given user resolves to the same `side` whether batting or bowling.
+//
+// Returns a map keyed by user_id. Events without attribution simply don't
+// contribute here (the per-side totals in recomputeSummary still count them),
+// so casual/unattributed matches yield an empty map and behave as before.
+export interface CricketPlayerLine {
+  side: 'A' | 'B';
+  runs: number; balls: number; fours: number; sixes: number;
+  out: boolean; dismissal?: string;
+  bowl_balls: number; bowl_runs: number; bowl_wickets: number;
+}
+
+export function aggregateCricketPlayers(
+  events: { event_type: string; payload: any }[],
+): Record<string, CricketPlayerLine> {
+  const players: Record<string, CricketPlayerLine> = {};
+  const ensure = (id: string, side: 'A' | 'B'): CricketPlayerLine => {
+    if (!players[id]) {
+      players[id] = { side, runs: 0, balls: 0, fours: 0, sixes: 0, out: false, bowl_balls: 0, bowl_runs: 0, bowl_wickets: 0 };
+    }
+    return players[id]!;
+  };
+  for (const e of events) {
+    const p: any = e.payload || {};
+    const batSide: 'A' | 'B' = p.team_side === 'B' ? 'B' : 'A';
+    const bowlSide: 'A' | 'B' = batSide === 'A' ? 'B' : 'A';
+    const batId: string | undefined = p.batsman_id || p.player_id;
+    const bowlId: string | undefined = p.bowler_id;
+    if (e.event_type === 'ball') {
+      const runs = Number(p.runs ?? 0);
+      if (batId) {
+        const b = ensure(batId, batSide);
+        if (!p.is_extra) b.balls += 1;
+        b.runs += runs;
+        if (runs === 4) b.fours += 1;
+        if (runs === 6) b.sixes += 1;
+      }
+      if (bowlId) {
+        const w = ensure(bowlId, bowlSide);
+        if (!p.is_extra) w.bowl_balls += 1;
+        w.bowl_runs += runs;
+      }
+    } else if (e.event_type === 'extra') {
+      const runs = Number(p.runs ?? 0);
+      const legal = p.type === 'B' || p.type === 'Lb'; // byes/leg-byes are legal balls
+      if (batId && legal) ensure(batId, batSide).balls += 1; // ball faced, runs are extras (not the batter's)
+      if (bowlId) {
+        const w = ensure(bowlId, bowlSide);
+        if (legal) w.bowl_balls += 1; // byes/leg-byes NOT charged to the bowler
+        else w.bowl_runs += runs;     // wides/no-balls ARE charged to the bowler
+      }
+    } else if (e.event_type === 'wicket') {
+      if (batId) {
+        const b = ensure(batId, batSide);
+        if (!p.is_extra) b.balls += 1;
+        b.out = true;
+        b.dismissal = p.wicket_type || p.type || 'out';
+      }
+      if (bowlId) {
+        const w = ensure(bowlId, bowlSide);
+        if (!p.is_extra) w.bowl_balls += 1;
+        const wt = String(p.wicket_type || p.type || '').toLowerCase().replace(/[^a-z]/g, '');
+        // Run-outs / retirements aren't credited to the bowler.
+        if (wt !== 'runout' && wt !== 'retired' && wt !== 'retiredhurt') w.bowl_wickets += 1;
+      }
+    }
+  }
+  return players;
+}
+
 // Recompute a match's score_summary from the authoritative event log, for ALL
 // sports, into the canonical shape:
 //   { A: { score, …sport detail }, B: { … }, …preserved keys (result/winner_side) }
@@ -266,12 +340,70 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
     }
   }
 
-  const summary = { ...existing, A, B };
+  const summary: Record<string, any> = { ...existing, A, B };
+  // A5-003/004 · attach the additive per-player rollup for cricket so the
+  // scorecard/MVP can read real batting+bowling figures. Side totals (A/B)
+  // above are untouched, so results + the A7-002 results surface don't change.
+  if (slug === 'cricket') {
+    summary.players = aggregateCricketPlayers(events as any[]);
+  }
   await supabase
     .from('matches')
     .update({ score_summary: summary, updated_at: new Date().toISOString() })
     .eq('id', matchId);
   return summary;
+}
+
+// Decimal cricket overs from a ball count: 7 balls → 1.1 (NUMERIC(4,1)).
+function ballsToOvers(balls: number): number {
+  return Math.floor(balls / 6) + (balls % 6) / 10;
+}
+
+// A5-004 · derive per-player innings_stats from the attributed event log and
+// upsert them. Called at match completion (idempotent on the
+// (match_id,user_id,innings_number) unique key, so re-completing is safe).
+// One row per attributed player per match: their batting (in their innings)
+// plus their bowling figures are combined — getSportProfile sums across rows
+// for career stats, so the single-row-per-match shape aggregates correctly.
+// No-ops for non-cricket and for casual matches with no attribution.
+export async function writeCricketInningsStats(matchId: string): Promise<void> {
+  const { data: match } = await supabase
+    .from('matches').select('sport_id, team_a_id, team_b_id').eq('id', matchId).maybeSingle();
+  if (!match) return;
+  const { data: sportRow } = await supabase
+    .from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
+  if ((sportRow?.slug ?? '') !== 'cricket') return;
+  const { data: events } = await supabase
+    .from('match_events').select('event_type, payload').eq('match_id', matchId)
+    .order('created_at', { ascending: true });
+  if (!events || events.length === 0) return;
+
+  const players = aggregateCricketPlayers(events as any[]);
+  const teamId = (side: 'A' | 'B'): string | null =>
+    (side === 'A' ? match.team_a_id : match.team_b_id) ?? null;
+  const rows = Object.entries(players).map(([userId, line]) => ({
+    match_id: matchId,
+    user_id: userId,
+    team_id: teamId(line.side),
+    innings_number: line.side === 'A' ? 1 : 2,
+    runs: line.runs,
+    balls_faced: line.balls,
+    fours: line.fours,
+    sixes: line.sixes,
+    is_out: line.out,
+    dismissal_type: line.dismissal ?? null,
+    bowling_overs: ballsToOvers(line.bowl_balls),
+    bowling_runs: line.bowl_runs,
+    bowling_wickets: line.bowl_wickets,
+    bowling_maidens: 0,
+    catches: 0,
+    runouts: 0,
+    stumpings: 0,
+  }));
+  if (rows.length === 0) return;
+  await supabase
+    .from('innings_stats')
+    .upsert(rows, { onConflict: 'match_id,user_id,innings_number' });
 }
 
 // POST /scoring/:matchId/undo

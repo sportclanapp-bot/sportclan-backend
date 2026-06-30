@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { calculateDLSTarget } from '../utils/dls';
+import { aggregateCricketPlayers } from './scoring.controller';
 
 // ────────────────────────────────────────────────────────────────────────────
 // FEATURE 1 — MVP / Player of the Match
@@ -34,16 +35,27 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   const scores = new Map<string, number>();
   for (const p of participants) scores.set(p.user_id, 0);
 
+  // Cricket is attributed via the per-player rollup (batsman/bowler ids in the
+  // event payload), NOT created_by — A5-003. Runs + wickets×25, credited to the
+  // real striker/bowler. Attributed players who aren't in the participant list
+  // are still credited (attribution is authoritative).
+  if (slug === 'cricket') {
+    const roll = aggregateCricketPlayers((events ?? []) as { event_type: string; payload: any }[]);
+    for (const [uid, line] of Object.entries(roll)) {
+      scores.set(uid, (scores.get(uid) ?? 0) + line.runs + line.bowl_wickets * 25);
+    }
+  }
+
   for (const ev of events ?? []) {
+    if (slug === 'cricket') break; // handled by the rollup above
     const p: Record<string, unknown> = (ev.payload ?? {}) as Record<string, unknown>;
-    const uid = ev.created_by;
+    // Attribute to the actual player when the scorer credited one; fall back to
+    // created_by for legacy/unattributed events.
+    const uid = (p.player_id as string) || ev.created_by;
     if (!uid || !scores.has(uid)) continue;
     const cur = scores.get(uid) ?? 0;
 
-    if (slug === 'cricket') {
-      // Runs + wickets×25
-      scores.set(uid, cur + (Number(p.runs ?? 0)) + (p.wicket ? 25 : 0));
-    } else if (slug === 'football' || slug === 'hockey') {
+    if (slug === 'football' || slug === 'hockey') {
       // Goals×30 + assists×15. Rulesets emit event_type:'score' with
       // payload.kind:'goal' (not event_type:'goal') — A5-005.
       if (ev.event_type === 'score' && p.kind === 'goal') scores.set(uid, cur + 30);

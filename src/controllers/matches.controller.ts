@@ -7,7 +7,7 @@ import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
 import { sanitizeError } from '../utils/response';
 import { calculateAndSetMVP } from './matchFeatures.controller';
-import { recomputeSummary } from './scoring.controller';
+import { recomputeSummary, writeCricketInningsStats } from './scoring.controller';
 
 // POST /matches — create. FREE for all (Change #6).
 export async function createMatch(req: Request, res: Response) {
@@ -822,6 +822,15 @@ export async function completeMatch(req: Request, res: Response) {
       }
       await supabase.from('matches').update(patch).eq('id', id);
     } catch { /* best effort */ }
+
+    // A5-004 — derive per-player innings_stats from the attributed event log so
+    // career batting/bowling stats are real (not the scorer-aggregated fallback).
+    // Best-effort + idempotent; no-ops for non-cricket / unattributed matches.
+    try {
+      await writeCricketInningsStats(id);
+    } catch (statErr) {
+      console.error('innings_stats write failed:', statErr instanceof Error ? statErr.message : statErr);
+    }
 
     // FEATURE 1 — Player of the Match. Compute + persist mvp_user_id now that
     // the match is completed and all scoring events exist. Best-effort: a

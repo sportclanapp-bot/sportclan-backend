@@ -53,10 +53,19 @@ export async function sendGift(req: Request, res: Response) {
   const { data: receiver } = await supabase.from('users').select('id').eq('id', receiverId).single();
   if (!receiver) return res.status(404).json({ error: 'Receiver not found' });
 
-  // Deduct coins atomically — avoids race condition from read-then-write
-  const { error: deductErr } = await supabase
-    .rpc('increment_coins', { target_user_id: senderId, amount: -gift.cost });
+  // Deduct coins ATOMICALLY with a balance floor. The earlier read-then-check
+  // (sender.coin_balance < cost) is only a fast-fail; two concurrent sends can
+  // both pass it and then both deduct, driving the balance negative / double
+  // spending (A4-005). deduct_coins_if_sufficient performs the check and the
+  // decrement in one conditional UPDATE, so at most one of the racing requests
+  // succeeds. It returns the new balance, or NULL when the balance was
+  // insufficient at commit time. (Requires migration 030_atomic_gift_deduct.sql.)
+  const { data: newBalance, error: deductErr } = await supabase
+    .rpc('deduct_coins_if_sufficient', { target_user_id: senderId, amount: gift.cost });
   if (deductErr) return res.status(500).json({ error: 'Could not deduct coins' });
+  if (newBalance === null || newBalance === undefined) {
+    return res.status(400).json({ error: 'Insufficient coins', required: gift.cost });
+  }
 
   // Record gift transaction
   const { data: giftTx, error } = await supabase
@@ -73,7 +82,12 @@ export async function sendGift(req: Request, res: Response) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  if (error) {
+    // The coins were already debited — refund them so a failed insert can't
+    // silently burn the sender's balance.
+    await supabase.rpc('increment_coins', { target_user_id: senderId, amount: gift.cost });
+    return res.status(500).json({ error: sanitizeError(error) });
+  }
 
   // Record in transactions table
   await supabase.from('transactions').insert([
@@ -98,7 +112,7 @@ export async function sendGift(req: Request, res: Response) {
   return res.json({
     success: true,
     giftTransaction: giftTx,
-    remainingBalance: sender.coin_balance - gift.cost,
+    remainingBalance: newBalance,
   });
 }
 

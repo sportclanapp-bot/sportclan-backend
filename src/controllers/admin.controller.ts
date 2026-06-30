@@ -293,15 +293,32 @@ export async function adminListUsers(req: Request, res: Response) {
 export async function adminUpdateUser(req: Request, res: Response) {
   const { id } = req.params;
   const { suspended, is_premium, is_admin } = req.body || {};
+
+  // Fetch the target up front — needed to avoid clobbering a longer premium
+  // expiry (ADM-003) and to enforce the last-admin guard (ADM-002).
+  const { data: existing } = await supabase
+    .from('users')
+    .select('id, premium_expires_at, is_admin')
+    .eq('id', id)
+    .maybeSingle();
+  if (!existing) return res.status(404).json({ error: 'User not found' });
+
   const patch: Record<string, unknown> = {};
   if (typeof suspended === 'boolean') {
     patch.suspended_at = suspended ? new Date().toISOString() : null;
   }
   if (typeof is_premium === 'boolean') {
     patch.is_premium = is_premium;
-    patch.premium_expires_at = is_premium
-      ? new Date(Date.now() + 365 * 86400000).toISOString()
-      : null;
+    if (is_premium) {
+      // Grant/extend premium, but NEVER shorten an existing longer expiry. The
+      // old code reset premium_expires_at to now+1y unconditionally, so
+      // re-granting to an already-premium user clobbered a longer grant (ADM-003).
+      const oneYear = Date.now() + 365 * 86400000;
+      const current = existing.premium_expires_at ? new Date(existing.premium_expires_at).getTime() : 0;
+      patch.premium_expires_at = new Date(Math.max(oneYear, current)).toISOString();
+    } else {
+      patch.premium_expires_at = null;
+    }
   }
   if (typeof is_admin === 'boolean') {
     patch.is_admin = is_admin;
@@ -310,13 +327,22 @@ export async function adminUpdateUser(req: Request, res: Response) {
     return res.status(400).json({ error: 'Provide at least one of: suspended, is_premium, is_admin' });
   }
   // Guard: an admin must not strip their own admin or suspend themselves and
-  // lock the dashboard out from under their feet.
+  // lock the dashboard out from under their feet (ADM-002).
   if (id === req.userId && (patch.is_admin === false || patch.suspended_at)) {
     return res.status(400).json({ error: 'You cannot suspend or de-admin your own account here' });
   }
+  // Guard: don't remove admin from the LAST remaining admin (ADM-002) — that
+  // would leave the app with no one able to reach the admin dashboard.
+  if (patch.is_admin === false && existing.is_admin) {
+    const { count } = await supabase
+      .from('users')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_admin', true);
+    if ((count ?? 0) <= 1) {
+      return res.status(400).json({ error: 'Cannot remove the last remaining admin' });
+    }
+  }
   try {
-    const { data: existing } = await supabase.from('users').select('id').eq('id', id).maybeSingle();
-    if (!existing) return res.status(404).json({ error: 'User not found' });
     const { data, error } = await supabase
       .from('users')
       .update(patch)

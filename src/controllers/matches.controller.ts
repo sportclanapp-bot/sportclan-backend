@@ -7,6 +7,7 @@ import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
 import { sanitizeError } from '../utils/response';
 import { calculateAndSetMVP } from './matchFeatures.controller';
+import { recomputeSummary } from './scoring.controller';
 
 // POST /matches — create. FREE for all (Change #6).
 export async function createMatch(req: Request, res: Response) {
@@ -136,12 +137,12 @@ export async function setMatchTossHandler(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { id } = req.params;
-  const { tossWinnerTeamId, tossChoice } = req.body || {};
+  const { tossWinnerTeamId, tossWinnerSide, tossChoice } = req.body || {};
   if (!tossChoice) return res.status(400).json({ error: 'tossChoice is required' });
 
   const { data: match } = await supabase
     .from('matches')
-    .select('created_by, umpire_id, status')
+    .select('created_by, umpire_id, status, score_summary')
     .eq('id', id)
     .maybeSingle();
   if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -159,6 +160,14 @@ export async function setMatchTossHandler(req: Request, res: Response) {
     toss_choice: tossChoice,
     updated_at: new Date().toISOString(),
   };
+  // Persist the toss winner by SIDE inside score_summary (JSONB, no schema
+  // change) so the batting order is correct for free-text-team matches where
+  // toss_winner_team_id is null (L-003). recomputeSummary preserves this key.
+  if (tossWinnerSide === 'A' || tossWinnerSide === 'B') {
+    const ss = (match.score_summary as Record<string, unknown>) || {};
+    ss.toss_winner_side = tossWinnerSide;
+    update.score_summary = ss;
+  }
   if (match.status === 'scheduled' || match.status === 'upcoming') {
     update.status = 'live';
   }
@@ -759,47 +768,59 @@ export async function completeMatch(req: Request, res: Response) {
 
     if (updateErr) return res.status(500).json({ error: sanitizeError(updateErr) });
 
-    // FIX 5: Auto-generate sport-specific result text and store in score_summary
+    // Recompute the canonical summary from the event log, then derive the winner
+    // BY SIDE and a human result string from the canonical per-side `score`.
+    // The old code read seeded keys (ss.team_a_score/…) that the live scorer
+    // never writes → "Match Draw" for app-scored matches (A5-007); and it relied
+    // on winner_team_id, which is null for free-text-team matches → no winner
+    // recorded even with a clear winner (L-001/L-002). winner_side fixes both.
     try {
       const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
       const slug = sportRow?.slug ?? '';
-      const ss = (updatedMatch?.score_summary ?? {}) as Record<string, unknown>;
+      const setSports = ['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball'];
+      const ss = ((await recomputeSummary(id)) ?? updatedMatch?.score_summary ?? {}) as Record<string, any>;
       const aName = match.team_a_name ?? 'Team A';
       const bName = match.team_b_name ?? 'Team B';
-      const aScore = ss.team_a_score ?? '';
-      const bScore = ss.team_b_score ?? '';
-      let resultText = '';
+      const aScore = Number(ss?.A?.score ?? ss?.A?.runs ?? 0);
+      const bScore = Number(ss?.B?.score ?? ss?.B?.runs ?? 0);
+
+      // Authoritative winner by side (works without team ids). Prefer a
+      // client-supplied winner_team_id when it maps to a real team.
+      let winnerSide: 'A' | 'B' | null = aScore > bScore ? 'A' : bScore > aScore ? 'B' : null;
       if (winner_team_id) {
-        const winnerName = winner_team_id === match.team_a_id ? aName : bName;
+        if (winner_team_id === match.team_a_id) winnerSide = 'A';
+        else if (winner_team_id === match.team_b_id) winnerSide = 'B';
+      }
+
+      let resultText = '';
+      if (winnerSide) {
+        const winnerName = winnerSide === 'A' ? aName : bName;
+        const hi = Math.max(aScore, bScore);
+        const lo = Math.min(aScore, bScore);
         if (slug === 'cricket') {
-          const diff = Math.abs(Number(String(aScore).split('/')[0]) - Number(String(bScore).split('/')[0]));
-          resultText = winner_team_id === match.team_a_id
-            ? `${winnerName} won by ${diff} runs`
-            : `${winnerName} won by ${10 - Number(String(bScore).split('/')[1] ?? 0)} wickets`;
-        } else if (['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball'].includes(slug)) {
-          const setsA = (ss.team_a_sets ?? ss.team_a_games ?? []) as number[];
-          const setsB = (ss.team_b_sets ?? ss.team_b_games ?? []) as number[];
-          const wA = setsA.filter((_, i) => (setsA[i] ?? 0) > (setsB[i] ?? 0)).length;
-          const wB = setsB.filter((_, i) => (setsB[i] ?? 0) > (setsA[i] ?? 0)).length;
-          resultText = `${winnerName} won ${Math.max(wA, wB)}-${Math.min(wA, wB)}`;
-        } else if (['football', 'hockey'].includes(slug)) {
-          resultText = `${winnerName} won ${aScore}-${bScore}`;
-        } else if (slug === 'basketball') {
-          resultText = `${winnerName} won ${aScore}-${bScore}`;
+          resultText = `${winnerName} won by ${hi - lo} run${hi - lo === 1 ? '' : 's'}`;
         } else if (slug === 'chess') {
           resultText = `${winnerName} won`;
-        } else if (slug === 'carrom') {
-          resultText = `${winnerName} won ${aScore}-${bScore}`;
+        } else if (setSports.includes(slug)) {
+          resultText = `${winnerName} won ${hi}-${lo}`; // score = sets won
         } else {
-          resultText = `${winnerName} won`;
+          resultText = `${winnerName} won ${hi}-${lo}`; // goals / points / boards
         }
       } else {
-        resultText = ['football', 'hockey'].includes(slug) ? `Match Draw ${aScore}-${bScore}` : 'Match Draw';
+        resultText = slug === 'chess' ? 'Match Draw' : `Match Draw ${aScore}-${bScore}`;
       }
-      if (resultText) {
-        ss.result = resultText;
-        await supabase.from('matches').update({ score_summary: ss }).eq('id', id);
+
+      ss.result = resultText;
+      ss.winner_side = winnerSide;
+      const patch: Record<string, any> = { score_summary: ss };
+      // Backfill winner_team_id when the client didn't send it but a real team
+      // maps to the winning side. Free-text matches keep null team ids (winner
+      // is recorded via winner_side only).
+      if (!winner_team_id && winnerSide) {
+        const wid = winnerSide === 'A' ? match.team_a_id : match.team_b_id;
+        if (wid) patch.winner_team_id = wid;
       }
+      await supabase.from('matches').update(patch).eq('id', id);
     } catch { /* best effort */ }
 
     // FEATURE 1 — Player of the Match. Compute + persist mvp_user_id now that

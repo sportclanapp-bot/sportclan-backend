@@ -11,7 +11,7 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   // Get match + sport + events + participants
   const { data: match } = await supabase
     .from('matches')
-    .select('sport_id, winner_team_id')
+    .select('sport_id, winner_team_id, score_summary')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return null;
@@ -44,21 +44,21 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
       // Runs + wickets×25
       scores.set(uid, cur + (Number(p.runs ?? 0)) + (p.wicket ? 25 : 0));
     } else if (slug === 'football' || slug === 'hockey') {
-      // Goals×30 + assists×15
-      if (ev.event_type === 'goal') scores.set(uid, cur + 30);
+      // Goals×30 + assists×15. Rulesets emit event_type:'score' with
+      // payload.kind:'goal' (not event_type:'goal') — A5-005.
+      if (ev.event_type === 'score' && p.kind === 'goal') scores.set(uid, cur + 30);
       else if (ev.event_type === 'assist') scores.set(uid, cur + 15);
     } else if (slug === 'basketball') {
-      // Points×1 + assists×3
-      const pts = Number(p.points ?? 0);
-      if (ev.event_type === 'basket' || ev.event_type === 'score') scores.set(uid, cur + pts);
+      // Points (the basketball ruleset sends the value under payload.value,
+      // not payload.points — A5-006) + assists×3.
+      if (ev.event_type === 'basket' || ev.event_type === 'score') scores.set(uid, cur + Number(p.value ?? 0));
       else if (ev.event_type === 'assist') scores.set(uid, cur + 3);
     } else if (['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball'].includes(slug)) {
       // Points won
       if (ev.event_type === 'score' || ev.event_type === 'point') scores.set(uid, cur + 1);
     } else if (slug === 'carrom') {
-      // Points pocketed
-      const pts = Number(p.points ?? p.runs ?? 1);
-      scores.set(uid, cur + pts);
+      // Points pocketed — carrom sends the value under payload.value (A5-009).
+      scores.set(uid, cur + Number(p.value ?? 1));
     } else if (slug === 'chess') {
       // Winner gets MVP — handled below
     } else {
@@ -67,12 +67,12 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
     }
   }
 
-  // Chess special: winner auto-MVP
-  if (slug === 'chess' && match.winner_team_id) {
-    const winner = participants.find((p2) =>
-      (p2.team_side === 'A' && match.winner_team_id === match.winner_team_id) ||
-      (p2.team_side === 'B'),
-    );
+  // Chess special: winner auto-MVP. Pick the participant on the winning SIDE.
+  // (The old code compared match.winner_team_id to itself — always true — so it
+  // always returned the first team-A participant regardless of who won, A5-008.)
+  const winnerSide = (match.score_summary as { winner_side?: 'A' | 'B' })?.winner_side ?? null;
+  if (slug === 'chess' && winnerSide) {
+    const winner = participants.find((p2) => p2.team_side === winnerSide);
     if (winner) scores.set(winner.user_id, 9999);
   }
 

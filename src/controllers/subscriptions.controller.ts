@@ -372,6 +372,9 @@ export async function appleVerify(req: Request, res: Response) {
 
 // POST /subscriptions/coupon  { code }
 export async function redeemCoupon(req: Request, res: Response) {
+  // Coupons grant premium + coins for ₹0, so they're a paid-value path and must
+  // honour the same kill-switch as initiate/verify/apple-verify (A4-003).
+  if (paymentsDisabled(res)) return;
   const userId = req.userId!;
   const { code } = req.body || {};
   if (!code) return res.status(400).json({ error: 'code required' });
@@ -493,6 +496,10 @@ export async function redeemCoupon(req: Request, res: Response) {
 // to now+7 days, marks trial_used=true, and inserts a dummy subscription
 // row with amount=0 so transactions/history stay consistent.
 export async function startTrial(req: Request, res: Response) {
+  // A free trial self-grants premium, so it's gated by the same kill-switch as
+  // the other paid-value paths (A4-004). Premium is already complimentary via
+  // the early-bird grant while payments are off, so nothing of value is lost.
+  if (paymentsDisabled(res)) return;
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 

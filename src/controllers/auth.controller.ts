@@ -11,6 +11,11 @@ import { setOtp, getOtp, deleteOtp } from '../utils/redis';
 import { normalizeAccountTypes } from '../constants/accountTypes';
 import { awardCoins } from '../utils/coins';
 
+// Purchases kill-switch (mirrors subscriptions.controller). Register-time coupon
+// redemption grants premium + coins for ₹0, so it stays OFF until a real gateway
+// is wired (A4-003). Premium is complimentary via the early-bird grant meanwhile.
+const PAYMENTS_ENABLED = process.env.PAYMENTS_ENABLED === 'true';
+
 type OtpPurpose = 'login' | 'register' | 'reset' | 'change_phone';
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
@@ -290,8 +295,10 @@ export async function register(req: Request, res: Response) {
     await supabase.from('user_sports').insert(rows);
   }
 
-  // Apply coupon if present and valid.
-  if (coupon_code) {
+  // Apply coupon if present and valid. Gated by the purchases kill-switch
+  // (A4-003) — while payments are off the coupon is silently ignored rather
+  // than self-granting premium for free. Registration itself still succeeds.
+  if (coupon_code && PAYMENTS_ENABLED) {
     const { data: coupon } = await supabase
       .from('coupon_codes')
       .select('id, premium_months, coins, max_uses, uses_count, expires_at, active')
@@ -385,7 +392,7 @@ export async function login(req: Request, res: Response) {
 
   let query = supabase
     .from('users')
-    .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, created_at');
+    .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, is_admin, created_at');
 
   if (email) {
     query = query.ilike('email', email.trim());
@@ -408,15 +415,26 @@ export async function login(req: Request, res: Response) {
   return res.json({ user: safe, accessToken, refreshToken });
 }
 
-// POST /auth/register-email  { email, password, name, username }
-// Email+password registration for reviewer/test accounts.
+// POST /auth/register-email
+//   { email, password, name, username,
+//     gender?, dob?, link?, city_id?, bio?, account_types?, sport_ids? }
+// Email+password registration. This is now a first-class signup path (not just
+// for reviewer/test accounts) so the onboarding flow is reachable without a
+// verified phone — phone-OTP signup is the primary path but OTP delivery is a
+// known launch gate, and email signup unblocks onboarding regardless (A1-003).
 export async function registerEmail(req: Request, res: Response) {
-  const { email, password, name, username } = req.body || {};
+  const {
+    email, password, name, username,
+    gender, dob, link, city_id, bio, account_types, sport_ids,
+  } = req.body || {};
   if (!email || !password || !name || !username) {
     return res.status(400).json({ error: 'email, password, name, and username are required' });
   }
   if (password.length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+  if (gender && !['male', 'female', 'other'].includes(gender)) {
+    return res.status(400).json({ error: 'gender must be male, female, or other' });
   }
 
   // Email must be free
@@ -431,6 +449,24 @@ export async function registerEmail(req: Request, res: Response) {
 
   const password_hash = await bcrypt.hash(password, 10);
 
+  // Validate + normalize account types against the shared whitelist — same
+  // contract as phone register and PATCH /users/me/account-types. Empty/garbage
+  // falls back to ['player']. (Previously this path hardcoded the non-canonical
+  // 'fan' and skipped the join table — see A6-001.)
+  const normalizedAccountTypes = normalizeAccountTypes(account_types);
+  const primaryAccountType = normalizedAccountTypes[0];
+
+  // Generate a unique referral code (retry a couple of times on collision),
+  // matching the phone-register path so invite-a-friend works for email users.
+  const { generateReferralCode } = await import('./referrals.controller');
+  let referralCode = generateReferralCode();
+  for (let i = 0; i < 3; i++) {
+    const { data: existing } = await supabase
+      .from('users').select('id').eq('referral_code', referralCode).maybeSingle();
+    if (!existing) break;
+    referralCode = generateReferralCode();
+  }
+
   // phone is NOT NULL in the schema — generate a unique placeholder for email-only accounts
   const placeholderPhone = `+0${Date.now()}`;
 
@@ -442,15 +478,39 @@ export async function registerEmail(req: Request, res: Response) {
       name,
       username,
       password_hash,
-      account_type: 'fan',
+      gender: gender || null,
+      dob: dob || null,
+      link: link || null,
+      bio: bio || null,
+      city_id: city_id || null,
+      account_type: primaryAccountType,
       is_premium: true,
       premium_expires_at: earlyBirdExpiry(),
       coin_balance: 0,
+      referral_code: referralCode,
     })
-    .select('id, phone, name, username, email, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, created_at')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, referral_code, created_at')
     .single();
   if (error || !user) {
     return res.status(500).json({ error: error?.message || 'Failed to create user' });
+  }
+
+  // Best-effort multi-row inserts (mirrors phone register).
+  {
+    const rows = normalizedAccountTypes.map((t) => ({ user_id: user.id, account_type: t }));
+    await supabase.from('user_account_types').insert(rows);
+  }
+  if (Array.isArray(sport_ids) && sport_ids.length > 0) {
+    const rows = sport_ids.map((sid: string) => ({ user_id: user.id, sport_id: sid }));
+    await supabase.from('user_sports').insert(rows);
+  }
+
+  // Welcome bonus — 10 coins on first registration (parity with phone signup;
+  // previously missing on email/Google, see A4-008). Idempotent via coin_events.
+  try {
+    await awardCoins(user.id, 'first_registration', 10);
+  } catch {
+    // non-critical
   }
 
   // Early-bird launch perk: 50 coins (premium set on the insert above).
@@ -591,6 +651,14 @@ export async function googleAuth(req: Request, res: Response) {
         .select('id, phone, name, username, email, google_id, is_premium, premium_expires_at, coin_balance, referral_code, created_at')
         .single();
       if (error || !newUser) return res.status(500).json({ error: 'Could not create account' });
+      // Welcome bonus — 10 coins on first registration, for parity with the
+      // phone and email paths (Google previously got only the 50-coin early-bird
+      // grant = 50 instead of 60, A4-008). Idempotent via coin_events.
+      try {
+        await awardCoins(newUser.id, 'first_registration', 10);
+      } catch {
+        // non-critical
+      }
       // Early-bird launch perk: 50 coins (premium set on the insert above).
       await grantEarlyBirdCoins(newUser.id);
       // Seed the multi-type join table so the new account is consistent with

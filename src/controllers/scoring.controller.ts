@@ -80,43 +80,13 @@ export async function createEvent(req: Request, res: Response) {
       .single();
     if (error || !event) return res.status(500).json({ error: error?.message || 'Failed to log event' });
 
-    // Best-effort cricket score summary update
+    // Recompute the canonical score_summary from the full event log for ALL
+    // sports (cricket runs/balls/wickets, football/hockey goals, basketball
+    // points, rally/carrom sets/boards). Replaces the old cricket-only
+    // incremental update — non-cricket scores were never persisted before
+    // (A5-002), and recomputing from events kills drift entirely.
     try {
-      const summary: any = match.score_summary || {};
-      if (event_type === 'ball') {
-        const side = (payload?.team_side as string) || 'A';
-        const inning = summary[side] || { runs: 0, balls: 0, wickets: 0 };
-        const runs = Number(payload?.runs ?? 0);
-        const isExtra = !!payload?.is_extra;
-        inning.runs = (inning.runs || 0) + runs;
-        if (!isExtra) inning.balls = (inning.balls || 0) + 1;
-        summary[side] = inning;
-        await supabase
-          .from('matches')
-          .update({ score_summary: summary, updated_at: new Date().toISOString() })
-          .eq('id', matchId);
-      } else if (event_type === 'wicket') {
-        const side = (payload?.team_side as string) || 'A';
-        const inning = summary[side] || { runs: 0, balls: 0, wickets: 0 };
-        inning.wickets = (inning.wickets || 0) + 1;
-        if (!payload?.is_extra) inning.balls = (inning.balls || 0) + 1;
-        summary[side] = inning;
-        await supabase
-          .from('matches')
-          .update({ score_summary: summary, updated_at: new Date().toISOString() })
-          .eq('id', matchId);
-      } else if (event_type === 'extra') {
-        // Wides / no-balls add runs but are NOT legal balls. This branch was
-        // missing, so extras were dropped from the summary (runs undercounted).
-        const side = (payload?.team_side as string) || 'A';
-        const inning = summary[side] || { runs: 0, balls: 0, wickets: 0 };
-        inning.runs = (inning.runs || 0) + Number(payload?.runs ?? 0);
-        summary[side] = inning;
-        await supabase
-          .from('matches')
-          .update({ score_summary: summary, updated_at: new Date().toISOString() })
-          .eq('id', matchId);
-      }
+      await recomputeSummary(matchId);
     } catch {
       // ignore best-effort update errors
     }
@@ -180,36 +150,123 @@ export async function listEvents(req: Request, res: Response) {
   }
 }
 
-// Recompute a cricket match's score_summary from the authoritative event log.
-// Used after an undo (and any time the summary may have drifted) so the stored
-// summary always agrees with the events. Handles ball / extra / wicket.
-async function recomputeCricketSummary(matchId: string): Promise<void> {
-  const { data: events } = await supabase
-    .from('match_events')
-    .select('event_type, payload')
-    .eq('match_id', matchId)
-    .order('created_at', { ascending: true });
-  const summary: Record<string, { runs: number; balls: number; wickets: number }> = {};
-  for (const e of events || []) {
-    const p: any = e.payload || {};
-    const side = (p.team_side as string) || 'A';
-    const inning = summary[side] || { runs: 0, balls: 0, wickets: 0 };
-    if (e.event_type === 'ball') {
-      inning.runs += Number(p.runs ?? 0);
-      if (!p.is_extra) inning.balls += 1;
-    } else if (e.event_type === 'extra') {
-      // Wides / no-balls add runs but are not legal balls.
-      inning.runs += Number(p.runs ?? 0);
-    } else if (e.event_type === 'wicket') {
-      inning.wickets += 1;
-      if (!p.is_extra) inning.balls += 1;
-    }
-    summary[side] = inning;
+// Per-sport set/board config for rally + carrom replay (mirrors the frontend
+// rulesets in src/scoring/rules/*). target = points to win a set/board;
+// cap = hard ceiling that ends a set without a 2-lead (badminton 30); maxSets =
+// best-of; finalTarget = different target for the deciding set (volleyball 15);
+// winBy2 = needs a 2-point lead (false for carrom boards).
+const SET_CONFIG: Record<
+  string,
+  { target: number; cap?: number; maxSets: number; finalTarget?: number; winBy2: boolean }
+> = {
+  badminton:   { target: 21, cap: 30, maxSets: 3, winBy2: true },
+  tabletennis: { target: 11, maxSets: 5, winBy2: true },
+  pickleball:  { target: 11, maxSets: 3, winBy2: true },
+  volleyball:  { target: 25, maxSets: 5, finalTarget: 15, winBy2: true },
+  carrom:      { target: 25, maxSets: 3, winBy2: false }, // boards to 25, no 2-lead
+};
+
+function setWon(
+  a: number, b: number, target: number, cap: number | undefined, winBy2: boolean,
+): 'A' | 'B' | null {
+  if (cap != null) {
+    if (a >= cap) return 'A';
+    if (b >= cap) return 'B';
   }
+  if (a >= target && (!winBy2 || a - b >= 2)) return 'A';
+  if (b >= target && (!winBy2 || b - a >= 2)) return 'B';
+  return null;
+}
+
+// Recompute a match's score_summary from the authoritative event log, for ALL
+// sports, into the canonical shape:
+//   { A: { score, …sport detail }, B: { … }, …preserved keys (result/winner_side) }
+// `score` is the single cross-sport comparator (cricket: runs; football/hockey:
+// goals; basketball: points; rally/carrom: sets/boards won). Recomputing from
+// events (rather than incremental updates) means the stored summary can never
+// drift out of sync with the events. Used after every scored event, after an
+// undo, and at completion. Replaces the old cricket-only recompute.
+export async function recomputeSummary(matchId: string): Promise<Record<string, any> | null> {
+  const { data: match } = await supabase
+    .from('matches').select('sport_id, score_summary').eq('id', matchId).maybeSingle();
+  if (!match) return null;
+  const { data: sportRow } = await supabase
+    .from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
+  const slug = sportRow?.slug ?? '';
+  const { data: events } = await supabase
+    .from('match_events').select('event_type, payload').eq('match_id', matchId)
+    .order('created_at', { ascending: true });
+
+  const existing = (match.score_summary as Record<string, any>) || {};
+  // Never wipe a pre-existing summary (e.g. seeded/legacy data) when there are
+  // no scoring events to recompute from.
+  if (!events || events.length === 0) return existing;
+
+  const A: Record<string, any> = { score: 0 };
+  const B: Record<string, any> = { score: 0 };
+  const sides: Record<'A' | 'B', Record<string, any>> = { A, B };
+  const sideOf = (p: any): 'A' | 'B' => ((p?.team_side as 'A' | 'B') === 'B' ? 'B' : 'A');
+
+  if (slug === 'cricket') {
+    for (const s of ['A', 'B'] as const) Object.assign(sides[s], { runs: 0, balls: 0, wickets: 0 });
+    for (const e of events) {
+      const p: any = e.payload || {};
+      const inn = sides[sideOf(p)];
+      if (e.event_type === 'ball') { inn.runs += Number(p.runs ?? 0); if (!p.is_extra) inn.balls += 1; }
+      else if (e.event_type === 'extra') { inn.runs += Number(p.runs ?? 0); }
+      else if (e.event_type === 'wicket') { inn.wickets += 1; if (!p.is_extra) inn.balls += 1; }
+      inn.score = inn.runs;
+    }
+  } else if (slug === 'football' || slug === 'hockey') {
+    for (const e of events) {
+      const p: any = e.payload || {};
+      if (e.event_type === 'score' && p.kind === 'goal') sides[sideOf(p)].score += 1;
+    }
+    A.goals = A.score; B.goals = B.score;
+  } else if (slug === 'basketball') {
+    for (const e of events) {
+      const p: any = e.payload || {};
+      if (e.event_type === 'score') sides[sideOf(p)].score += Number(p.value ?? 0);
+    }
+    A.points = A.score; B.points = B.score;
+  } else if (SET_CONFIG[slug]) {
+    const cfg = SET_CONFIG[slug];
+    let curA = 0, curB = 0, setsA = 0, setsB = 0, period = 1;
+    const setScoresA: number[] = [], setScoresB: number[] = [];
+    for (const e of events) {
+      if (e.event_type !== 'score') continue;
+      const p: any = e.payload || {};
+      // Rally points are 1; carrom pieces/queen carry value (1 or 3).
+      const v = Number(p.value ?? 1);
+      if (sideOf(p) === 'A') curA += v; else curB += v;
+      const target = cfg.finalTarget && period === cfg.maxSets ? cfg.finalTarget : cfg.target;
+      const w = setWon(curA, curB, target, cfg.cap, cfg.winBy2);
+      if (w) {
+        setScoresA.push(curA); setScoresB.push(curB);
+        if (w === 'A') setsA += 1; else setsB += 1;
+        curA = 0; curB = 0; period += 1;
+      }
+    }
+    A.score = setsA; B.score = setsB;
+    A.sets = setScoresA; B.sets = setScoresB;
+    A.points = curA; B.points = curB; // current in-progress set/board
+  } else {
+    // Generic fallback: count scoring events per side so SOMETHING persists for
+    // sports without bespoke logic (no worse than today, where nothing did).
+    for (const e of events) {
+      const p: any = e.payload || {};
+      if (['score', 'point', 'basket', 'goal'].includes(e.event_type)) {
+        sides[sideOf(p)].score += Number(p.value ?? 1);
+      }
+    }
+  }
+
+  const summary = { ...existing, A, B };
   await supabase
     .from('matches')
     .update({ score_summary: summary, updated_at: new Date().toISOString() })
     .eq('id', matchId);
+  return summary;
 }
 
 // POST /scoring/:matchId/undo
@@ -235,7 +292,7 @@ export async function undoEvent(req: Request, res: Response) {
     // Recompute the summary from the remaining events so it can't drift out of
     // sync with the event log (the old code left score_summary stale on undo).
     try {
-      await recomputeCricketSummary(matchId);
+      await recomputeSummary(matchId);
     } catch {
       // best-effort — the event delete already succeeded
     }

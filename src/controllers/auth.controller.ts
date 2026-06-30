@@ -392,7 +392,7 @@ export async function login(req: Request, res: Response) {
 
   let query = supabase
     .from('users')
-    .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, created_at');
+    .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, is_admin, created_at');
 
   if (email) {
     query = query.ilike('email', email.trim());
@@ -651,6 +651,14 @@ export async function googleAuth(req: Request, res: Response) {
         .select('id, phone, name, username, email, google_id, is_premium, premium_expires_at, coin_balance, referral_code, created_at')
         .single();
       if (error || !newUser) return res.status(500).json({ error: 'Could not create account' });
+      // Welcome bonus — 10 coins on first registration, for parity with the
+      // phone and email paths (Google previously got only the 50-coin early-bird
+      // grant = 50 instead of 60, A4-008). Idempotent via coin_events.
+      try {
+        await awardCoins(newUser.id, 'first_registration', 10);
+      } catch {
+        // non-critical
+      }
       // Early-bird launch perk: 50 coins (premium set on the insert above).
       await grantEarlyBirdCoins(newUser.id);
       // Seed the multi-type join table so the new account is consistent with

@@ -917,7 +917,17 @@ export async function getSportProfile(req: Request, res: Response) {
         const hs = Math.max(...innings.map((i) => i.runs ?? 0));
         const fifties = innings.filter((i) => (i.runs ?? 0) >= 50 && (i.runs ?? 0) < 100).length;
         const hundreds = innings.filter((i) => (i.runs ?? 0) >= 100).length;
-        const bowlOvers = innings.reduce((s, i) => s + Number(i.bowling_overs ?? 0), 0);
+        // bowling_overs is stored in cricket ball-notation (e.g. 0.4 = 0 overs
+        // 4 balls, NOT 0.4 of an over). Convert each innings' notation to balls
+        // and sum the BALLS, so the economy = runs / real-overs (balls/6) — not
+        // runs / the literal decimal (which read 0.4 as 0.4 overs → inflated).
+        const oversNotationToBalls = (o: number): number => {
+          const whole = Math.floor(o);
+          const balls = Math.round((o - whole) * 10);
+          return whole * 6 + balls;
+        };
+        const bowlBalls = innings.reduce((s, i) => s + oversNotationToBalls(Number(i.bowling_overs ?? 0)), 0);
+        const bowlOvers = bowlBalls / 6; // real overs
         const bowlRuns = innings.reduce((s, i) => s + (i.bowling_runs ?? 0), 0);
         const bowlWickets = innings.reduce((s, i) => s + (i.bowling_wickets ?? 0), 0);
         const totalCatches = innings.reduce((s, i) => s + (i.catches ?? 0), 0);

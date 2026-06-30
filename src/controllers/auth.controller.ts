@@ -336,6 +336,13 @@ export async function register(req: Request, res: Response) {
   await grantEarlyBirdCoins(user.id);
 
   await deleteOtp(p);
+  // The `user` row was captured BEFORE the coin grants ran, so its coin_balance
+  // is still 0 — re-read it so the signup response reflects the real total (A4-009).
+  {
+    const { data: fb } = await supabase
+      .from('users').select('coin_balance, is_premium, premium_expires_at').eq('id', user.id).maybeSingle();
+    if (fb) Object.assign(user, fb);
+  }
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
   await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
@@ -517,6 +524,12 @@ export async function registerEmail(req: Request, res: Response) {
   // Early-bird launch perk: 50 coins (premium set on the insert above).
   await grantEarlyBirdCoins(user.id);
 
+  // Re-read post-grant balance so the response isn't a stale coin_balance:0 (A4-009).
+  {
+    const { data: fb } = await supabase
+      .from('users').select('coin_balance, is_premium, premium_expires_at').eq('id', user.id).maybeSingle();
+    if (fb) Object.assign(user, fb);
+  }
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
   await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
@@ -677,6 +690,13 @@ export async function googleAuth(req: Request, res: Response) {
 
     await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
 
+    // New Google users had their grants applied after `user` was captured —
+    // re-read so the response isn't a stale coin_balance:0 (A4-009).
+    {
+      const { data: fb } = await supabase
+        .from('users').select('coin_balance, is_premium, premium_expires_at').eq('id', user.id as string).maybeSingle();
+      if (fb) Object.assign(user, fb);
+    }
     return res.json({ accessToken, refreshToken, user, isNewUser: !existing, earlyBird: !existing });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Google auth failed';

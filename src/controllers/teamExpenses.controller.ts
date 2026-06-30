@@ -75,12 +75,14 @@ export async function getExpenseSummary(req: Request, res: Response) {
       .eq('team_id', id);
 
     const total = (expenses ?? []).reduce((s, e) => s + Number(e.amount ?? 0), 0);
-    // Count unique members across all splits
-    const members = new Set<string>();
-    for (const e of expenses ?? []) {
-      for (const uid of e.split_among ?? []) members.add(uid);
-    }
-    const memberCount = Math.max(1, members.size);
+    // Even-split denominator = the team's actual member count, not the union of
+    // members who happen to appear in existing expense splits — the old code
+    // returned "1 member" for a fully-rostered team with no/narrow expenses (A9-001).
+    const { count: teamMemberCount } = await supabase
+      .from('team_members')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', id);
+    const memberCount = Math.max(1, teamMemberCount ?? 0);
     const perMember = Math.ceil(total / memberCount);
 
     return res.json({ total, memberCount, perMember });

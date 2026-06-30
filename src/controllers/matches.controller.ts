@@ -28,8 +28,15 @@ export async function createMatch(req: Request, res: Response) {
       tournament_id,
       is_open,
       players_needed,
+      is_ranked,
     } = req.body || {};
     if (!sport_id) return res.status(400).json({ error: 'sport_id is required' });
+    // A ranked match counts toward ELO / leaderboards, so it must be played
+    // between two REGISTERED teams (free-text sides have no roster to attribute
+    // stats to). Per-side lineup (>=2) is enforced at completion (A5-003 P3).
+    if (is_ranked && (!team_a_id || !team_b_id)) {
+      return res.status(400).json({ error: 'Ranked matches require two registered teams.' });
+    }
     const { data, error } = await supabase
       .from('matches')
       .insert({
@@ -47,6 +54,7 @@ export async function createMatch(req: Request, res: Response) {
         status: 'scheduled',
         is_open: !!is_open,
         players_needed: players_needed ?? 0,
+        is_ranked: !!is_ranked,
         created_by: userId,
       })
       .select('*')
@@ -500,7 +508,12 @@ export async function addParticipants(req: Request, res: Response) {
       jersey_number: p.jersey_number ?? null,
       batting_order: p.batting_order ?? null,
     }));
-    const { data, error } = await supabase.from('match_participants').insert(rows).select('*');
+    // Upsert on the (match_id,user_id) unique key so re-saving a lineup (e.g.
+    // editing the playing XI) doesn't collide — A5-003 P3.
+    const { data, error } = await supabase
+      .from('match_participants')
+      .upsert(rows, { onConflict: 'match_id,user_id' })
+      .select('*');
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ participants: data || [] });
   } catch (e) {
@@ -594,7 +607,7 @@ export async function completeMatch(req: Request, res: Response) {
 
     const { data: match } = await supabase
       .from('matches')
-      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name')
+      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -612,10 +625,22 @@ export async function completeMatch(req: Request, res: Response) {
     const ratingHistoryRows: Array<{ user_id: string; sport_id: string; match_id: string; old_rating: number; new_rating: number; delta: number }> = [];
     let allPlayerIds: string[] = [];
 
-    // A casual match created from just team names (no roster) has no
-    // participants — it can still be completed; we simply skip the ELO /
-    // profile / streak / coin updates that require real player IDs.
-    if (participants && participants.length > 0) {
+    // Ranked matches must have a real lineup (>=2 per side) before they can
+    // close — otherwise the ELO/leaderboard impact would be meaningless (A5-003
+    // P3). Casual matches have no such requirement.
+    if (match.is_ranked) {
+      const aCount = (participants ?? []).filter((p) => p.team_side === 'A').length;
+      const bCount = (participants ?? []).filter((p) => p.team_side === 'B').length;
+      if (aCount < 2 || bCount < 2) {
+        return res.status(400).json({ error: 'Ranked matches need at least 2 players per side. Set the lineup first.' });
+      }
+    }
+
+    // ELO / profile / streak / coin updates run ONLY for ranked matches with a
+    // roster. Casual matches (and ranked matches with no participants) can still
+    // be completed — they just don't touch ratings (A5-003 P3 · ELO gated to
+    // ranked, so casual play stops inflating leaderboard ratings).
+    if (match.is_ranked && participants && participants.length > 0) {
       const teamA = participants.filter((p) => p.team_side === 'A').map((p) => p.user_id);
       const teamB = participants.filter((p) => p.team_side === 'B').map((p) => p.user_id);
       allPlayerIds = [...teamA, ...teamB];

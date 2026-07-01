@@ -164,6 +164,11 @@ const SET_CONFIG: Record<
   pickleball:  { target: 11, maxSets: 3, winBy2: true },
   volleyball:  { target: 25, maxSets: 5, finalTarget: 15, winBy2: true },
   carrom:      { target: 25, maxSets: 3, winBy2: false }, // boards to 25, no 2-lead
+  // Tennis scored at games→sets granularity (each 'score' event = a game won):
+  // 6 games to take a set with a 2-game lead, or 7-6 via the cap (tiebreak),
+  // best of 3 sets — consistent with its racket peers (SC-15). Previously tennis
+  // was absent here and fell through to the generic flat point tally.
+  tennis:      { target: 6, cap: 7, maxSets: 3, winBy2: true },
 };
 
 function setWon(

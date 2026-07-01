@@ -262,12 +262,17 @@ export async function initiate(req: Request, res: Response) {
   if (error) return res.status(500).json({ error: error.message });
 
   // In production, create Razorpay order here. For now return mock order.
+  // razorpayKeyId is what the FE hands to the Razorpay SDK — it MUST be present
+  // or the real checkout call has no key (harmless under the mock stub, breaks
+  // the live SDK). `plan` echoes the resolved plan for the FE receipt/renewal.
   return res.json({
     subscriptionId: sub.id,
     razorpayOrderId: `order_mock_${sub.id.slice(0, 8)}`,
+    razorpayKeyId: process.env.RAZORPAY_KEY_ID ?? '',
     amount: plan.price * 100, // paise
     currency: 'INR',
     planName: plan.name,
+    plan,
   });
 }
 
@@ -488,8 +493,17 @@ export async function redeemCoupon(req: Request, res: Response) {
     }
   }
 
+  // FE reads monthsAdded / coinsAdded / message (and shows a blank success
+  // toast without them). Keep the legacy months/coins/expiresAt too for any
+  // other consumer.
   return res.json({
     success: true,
+    message: `Coupon applied: +${coupon.months} month${coupon.months === 1 ? '' : 's'} · +${coupon.coins} coins`,
+    monthsAdded: coupon.months,
+    coinsAdded: coupon.coins,
+    premiumExpiresAt: expiresAt,
+    coinBalance: (usr?.coin_balance ?? 0) + coupon.coins,
+    // legacy fields (unchanged):
     months: coupon.months,
     coins: coupon.coins,
     expiresAt,

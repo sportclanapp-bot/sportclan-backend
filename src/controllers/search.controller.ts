@@ -31,7 +31,7 @@ export async function search(req: Request, res: Response) {
     case 'associations':
       return searchByAccountType(res, query, 'association', pageSize);
     case 'clubs':
-      return searchClubs(res, query, pageSize);
+      return searchByAccountType(res, query, 'club', pageSize);
     case 'leagues':
       return searchByAccountType(res, query, 'leagues', pageSize);
     case 'other':
@@ -200,19 +200,7 @@ async function searchByAccountType(res: Response, q: string, accountType: string
   return res.json({ data: (users || []).filter((u) => matchIds.has(u.id)) });
 }
 
-async function searchClubs(res: Response, q: string, limit: number) {
-  // Clubs/associations use teams table with type = 'club' or 'association'
-  // For now, search teams with larger member counts as proxy
-  const { data, error } = await supabase
-    .from('teams')
-    .select(`
-      id, name, logo_url,
-      sport:sports!sport_id(id, name, emoji),
-      city:cities!city_id(id, name)
-    `)
-    .ilike('name', `%${q}%`)
-    .limit(limit);
-
-  if (error) return res.status(500).json({ error: error.message });
-  return res.json({ data: data || [] });
-}
+// (searchClubs removed — clubs now route through searchByAccountType('club'),
+//  the same user_account_types join path as associations/coaches. The old
+//  teams-table proxy returned team-shaped rows, which broke the FE (club result
+//  → UserProfile got a team id → blank profile).

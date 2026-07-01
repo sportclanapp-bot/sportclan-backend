@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
+import { parsePagination, pageMeta } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 
 function generateJoinCode(): string {
@@ -64,15 +65,20 @@ export async function listTeams(req: Request, res: Response) {
     }
 
     const resolvedSportId = await resolveSportId(sport_id);
-    let query = supabase.from('teams').select('*').order('created_at', { ascending: false }).limit(100);
+    const p = parsePagination(req.query as Record<string, unknown>);
+    let query = supabase
+      .from('teams')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(p.from, p.to);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
     if (q) query = query.ilike('name', `%${q}%`);
     if (teamIdsFilter) query = query.in('id', teamIdsFilter);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ teams: data || [] });
+    return res.json({ teams: data || [], ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

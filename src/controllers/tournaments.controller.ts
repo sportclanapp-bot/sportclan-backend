@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
+import { parsePagination, pageMeta } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 
 function generateEntryCode(): string {
@@ -140,14 +141,19 @@ export async function listTournaments(req: Request, res: Response) {
   try {
     const { sport_id, city_id, status, mine } = req.query as Record<string, string | undefined>;
     const resolvedSportId = await resolveSportId(sport_id);
-    let query = supabase.from('tournaments').select('*').order('created_at', { ascending: false }).limit(100);
+    const p = parsePagination(req.query as Record<string, unknown>);
+    let query = supabase
+      .from('tournaments')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(p.from, p.to);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
     if (status) query = query.eq('status', status);
     if (mine === '1') query = query.eq('created_by', userId);
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ tournaments: data || [] });
+    return res.json({ tournaments: data || [], ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

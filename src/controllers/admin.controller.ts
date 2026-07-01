@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { parsePagination, pageMeta } from '../utils/pagination';
 
 /**
  * Admin controller · stats + moderation + broadcast.
@@ -81,17 +82,18 @@ export async function getStats(_req: Request, res: Response) {
 // Returns open reports enriched with a preview of the reported content and the
 // reporter's name, so the moderation queue can show what's being flagged
 // without a round-trip per row.
-export async function getReports(_req: Request, res: Response) {
+export async function getReports(req: Request, res: Response) {
+  const p = parsePagination(req.query as Record<string, unknown>);
   try {
-    const { data: reports, error } = await supabase
+    const { data: reports, error, count } = await supabase
       .from('content_reports')
-      .select('id, target_type, target_id, reason, reporter_id, resolved, created_at')
+      .select('id, target_type, target_id, reason, reporter_id, resolved, created_at', { count: 'exact' })
       .eq('resolved', false)
       .order('created_at', { ascending: false })
-      .limit(100);
-    if (error) return res.json({ reports: [] }); // table may not exist yet
+      .range(p.from, p.to);
+    if (error) return res.json({ reports: [], ...pageMeta(0, p) }); // table may not exist yet
     const rows = reports ?? [];
-    if (rows.length === 0) return res.json({ reports: [] });
+    if (rows.length === 0) return res.json({ reports: [], ...pageMeta(count, p) });
 
     const postIds = [...new Set(rows.filter((r) => r.target_type === 'post').map((r) => r.target_id))];
     const commentIds = [...new Set(rows.filter((r) => r.target_type === 'comment').map((r) => r.target_id))];
@@ -153,9 +155,9 @@ export async function getReports(_req: Request, res: Response) {
         content_author,
       };
     });
-    return res.json({ reports: enriched });
+    return res.json({ reports: enriched, ...pageMeta(count, p) });
   } catch {
-    return res.json({ reports: [] });
+    return res.json({ reports: [], ...pageMeta(0, p) });
   }
 }
 
@@ -246,16 +248,26 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
       return res.json({ ok: true, recipients: 0 });
     }
 
-    // Bulk insert in chunks of 500 to stay within Supabase limits
-    for (let i = 0; i < rows.length; i += 500) {
-      const chunk = rows.slice(i, i + 500);
-      const { error: insertErr } = await supabase.from('notifications').insert(chunk);
-      if (insertErr) {
-        return res.status(500).json({ error: insertErr.message, recipients: i });
-      }
-    }
+    // Fan-out is a per-user insert, which at scale (10k+ active users) far
+    // outlasts a single HTTP request and used to time out (SC-13). Acknowledge
+    // the admin immediately, then insert in the background in chunks of 500.
+    // NOTE: this is a pragmatic fix, not a durable queue — if the process
+    // restarts mid-fan-out some recipients are missed. A real job queue
+    // (BullMQ/Redis or a Supabase edge cron) is the proper long-term solution.
+    res.json({ ok: true, recipients: rows.length, queued: true });
 
-    return res.json({ ok: true, recipients: rows.length });
+    void (async () => {
+      for (let i = 0; i < rows.length; i += 500) {
+        const chunk = rows.slice(i, i + 500);
+        const { error: insertErr } = await supabase.from('notifications').insert(chunk);
+        if (insertErr) {
+          console.error(`[broadcast] insert failed at offset ${i}/${rows.length}:`, insertErr.message);
+          return;
+        }
+      }
+      console.log(`[broadcast] delivered "${title}" to ${rows.length} users`);
+    })();
+    return;
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Broadcast failed' });
   }
@@ -269,17 +281,17 @@ const ADMIN_USER_FIELDS =
 // Search users by name / username / phone (substring). No query → most recent.
 export async function adminListUsers(req: Request, res: Response) {
   const q = String(req.query.q ?? '').trim();
-  const limit = Math.min(parseInt(String(req.query.limit ?? '30'), 10) || 30, 100);
+  const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 30, maxLimit: 100 });
   try {
     let query = supabase
       .from('users')
-      .select(ADMIN_USER_FIELDS)
+      .select(ADMIN_USER_FIELDS, { count: 'exact' })
       .order('created_at', { ascending: false })
-      .limit(limit);
+      .range(p.from, p.to);
     if (q) query = query.or(`name.ilike.%${q}%,username.ilike.%${q}%,phone.ilike.%${q}%`);
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) return res.status(500).json({ error: error.message });
-    return res.json({ users: data ?? [] });
+    return res.json({ users: data ?? [], ...pageMeta(count, p) });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed to list users' });
   }

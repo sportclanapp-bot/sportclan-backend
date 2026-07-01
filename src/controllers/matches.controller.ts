@@ -556,18 +556,43 @@ export async function addParticipants(req: Request, res: Response) {
 }
 
 // POST /matches/:id/umpire/self-assign
+// Lets a user officiate a match they didn't create. Gated to accounts holding
+// the umpire/referee role, and only for matches still open for officiating
+// (not completed/cancelled/abandoned) that don't already have an umpire.
 export async function selfAssignUmpire(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
+
+    // Role gate: only umpire/referee accounts can officiate (SC-20 decision).
+    const { data: roles } = await supabase
+      .from('user_account_types')
+      .select('account_type')
+      .eq('user_id', userId)
+      .in('account_type', ['umpire', 'referee']);
+    if (!roles || roles.length === 0) {
+      return res.status(403).json({
+        error: 'Only umpire / referee accounts can officiate matches. Add the Umpire role in Edit profile.',
+        code: 'NOT_AN_UMPIRE',
+      });
+    }
+
     const { data: match } = await supabase
       .from('matches')
-      .select('id, umpire_id')
+      .select('id, umpire_id, created_by, status, team_a_name, team_b_name')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
-    if (match.umpire_id) return res.status(409).json({ error: 'Match already has an umpire' });
+    if (match.status === 'completed' || match.status === 'cancelled' || match.status === 'abandoned') {
+      return res.status(409).json({ error: 'This match is no longer open for officiating.' });
+    }
+    if (match.umpire_id) {
+      return res.status(409).json({
+        error: match.umpire_id === userId ? 'You are already officiating this match.' : 'Match already has an umpire',
+      });
+    }
+
     const { data, error } = await supabase
       .from('matches')
       .update({ umpire_id: userId, updated_at: new Date().toISOString() })
@@ -575,6 +600,25 @@ export async function selfAssignUmpire(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // Let the creator know someone picked up officiating (best-effort).
+    if (match.created_by && match.created_by !== userId) {
+      const matchLabel = (match.team_a_name && match.team_b_name)
+        ? `${match.team_a_name} vs ${match.team_b_name}`
+        : 'your match';
+      try {
+        await notifyUser({
+          userId: match.created_by,
+          type: 'match_umpire_assigned',
+          title: 'Umpire assigned',
+          body: `An umpire has taken up officiating for ${matchLabel}.`,
+          data: { matchId: id, screen: 'MatchDetail' },
+        });
+      } catch {
+        // best-effort
+      }
+    }
+
     return res.json({ match: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

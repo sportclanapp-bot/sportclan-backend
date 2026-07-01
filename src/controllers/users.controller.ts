@@ -1105,3 +1105,48 @@ export async function submitReview(req: Request, res: Response) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+// ── Daily check-in (SC-A1) ────────────────────────────────────────────────────
+// POST /users/me/check-in — grants CHECKIN_COINS once per IST calendar day
+// (idempotent via awardCoins' unique event key) and advances a check-in streak
+// (distinct from the match-play streak_count).
+const CHECKIN_COINS = 5;
+
+// Calendar day in IST (the app timezone) as YYYY-MM-DD.
+function istDay(d: Date = new Date()): string {
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+export async function checkIn(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const today = istDay();
+    const { awardCoins } = await import('../utils/coins');
+    const { awarded, newBalance } = await awardCoins(userId, `daily_checkin_${today}`, CHECKIN_COINS);
+
+    const { data: u } = await supabase
+      .from('users')
+      .select('checkin_streak, last_checkin_date')
+      .eq('id', userId)
+      .maybeSingle();
+    let streak = u?.checkin_streak ?? 0;
+
+    if (awarded) {
+      const yesterday = istDay(new Date(Date.now() - 86400000));
+      const last = u?.last_checkin_date ?? null;
+      streak = last === yesterday ? streak + 1 : 1;
+      await supabase.from('users').update({ checkin_streak: streak, last_checkin_date: today }).eq('id', userId);
+    }
+
+    return res.json({
+      awarded,
+      already_checked_in_today: !awarded,
+      reward: CHECKIN_COINS,
+      coin_balance: newBalance,
+      checkin_streak: streak,
+    });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}

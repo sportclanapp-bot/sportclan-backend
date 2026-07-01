@@ -11,11 +11,15 @@ async function fanoutScoreUpdate(
   body: string,
 ): Promise<void> {
   try {
-    const { data: participants } = await supabase
-      .from('match_participants')
-      .select('user_id')
-      .eq('match_id', matchId);
-    const userIds = (participants || []).map((p) => p.user_id);
+    // Participants + anyone who followed the match (SC-A1) — deduped.
+    const [{ data: participants }, { data: followers }] = await Promise.all([
+      supabase.from('match_participants').select('user_id').eq('match_id', matchId),
+      supabase.from('match_followers').select('user_id').eq('match_id', matchId),
+    ]);
+    const userIds = Array.from(new Set([
+      ...(participants || []).map((p) => p.user_id),
+      ...(followers || []).map((f) => f.user_id),
+    ]));
     if (userIds.length === 0) return;
     await notifyUsers(userIds, {
       type: 'score_update',

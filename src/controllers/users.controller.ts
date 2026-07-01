@@ -7,7 +7,7 @@ import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTyp
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
-  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, is_admin, notification_preferences, created_at';
+  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, is_admin, notification_preferences, discoverability, message_privacy, tag_privacy, created_at';
 
 // Fire smart engagement notifications lazily from /users/me. Best-effort,
 // never throws — failures here must not block the main profile response.
@@ -239,6 +239,8 @@ const ALLOWED_FIELDS = [
   'link', 'gender', 'dob', 'show_dob', 'is_available',
   // A16-006 · notification preference toggles (jsonb { category: boolean }).
   'notification_preferences',
+  // SC-A1 · privacy/visibility (everyone | followers | nobody).
+  'discoverability', 'message_privacy', 'tag_privacy',
 ] as const;
 
 const USERNAME_COOLDOWN_DAYS = 30;
@@ -576,11 +578,24 @@ export async function discoverPlayers(req: Request, res: Response) {
   const matchedIds = filteredProfiles.map((p) => p.user_id);
   const { data: users } = await supabase
     .from('users')
-    .select('id, name, username, profile_picture_url, city_id, is_premium, is_available, streak_count')
+    .select('id, name, username, profile_picture_url, city_id, is_premium, is_available, streak_count, discoverability')
     .in('id', matchedIds);
 
   const userMap = new Map<string, any>();
   for (const u of users || []) userMap.set(u.id, u);
+
+  // SC-A1 · "who can find me" — hide 'nobody'; 'followers' only shows to my
+  // own followers.
+  const restrictedIds = (users || []).filter((u) => u.discoverability === 'followers').map((u) => u.id);
+  const iFollow = new Set<string>();
+  if (restrictedIds.length > 0) {
+    const { data: fr } = await supabase
+      .from('follow_relationships')
+      .select('following_id')
+      .eq('follower_id', userId)
+      .in('following_id', restrictedIds);
+    for (const f of fr || []) iFollow.add(f.following_id);
+  }
 
   // Filter by same city if user has one, then rank by availability + rating.
   const players = filteredProfiles
@@ -588,6 +603,8 @@ export async function discoverPlayers(req: Request, res: Response) {
       const u = userMap.get(p.user_id);
       if (!u) return null;
       if (me.city_id && u.city_id && u.city_id !== me.city_id) return null;
+      const disc = u.discoverability ?? 'everyone';
+      if (u.id !== userId && (disc === 'nobody' || (disc === 'followers' && !iFollow.has(u.id)))) return null;
       return {
         user_id: p.user_id,
         name: u.name,
@@ -1101,6 +1118,51 @@ export async function submitReview(req: Request, res: Response) {
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ review: data });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ── Daily check-in (SC-A1) ────────────────────────────────────────────────────
+// POST /users/me/check-in — grants CHECKIN_COINS once per IST calendar day
+// (idempotent via awardCoins' unique event key) and advances a check-in streak
+// (distinct from the match-play streak_count).
+const CHECKIN_COINS = 5;
+
+// Calendar day in IST (the app timezone) as YYYY-MM-DD.
+function istDay(d: Date = new Date()): string {
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+export async function checkIn(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const today = istDay();
+    const { awardCoins } = await import('../utils/coins');
+    const { awarded, newBalance } = await awardCoins(userId, `daily_checkin_${today}`, CHECKIN_COINS);
+
+    const { data: u } = await supabase
+      .from('users')
+      .select('checkin_streak, last_checkin_date')
+      .eq('id', userId)
+      .maybeSingle();
+    let streak = u?.checkin_streak ?? 0;
+
+    if (awarded) {
+      const yesterday = istDay(new Date(Date.now() - 86400000));
+      const last = u?.last_checkin_date ?? null;
+      streak = last === yesterday ? streak + 1 : 1;
+      await supabase.from('users').update({ checkin_streak: streak, last_checkin_date: today }).eq('id', userId);
+    }
+
+    return res.json({
+      awarded,
+      already_checked_in_today: !awarded,
+      reward: CHECKIN_COINS,
+      coin_balance: newBalance,
+      checkin_streak: streak,
+    });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

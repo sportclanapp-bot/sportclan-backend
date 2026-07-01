@@ -12,10 +12,11 @@ export async function search(req: Request, res: Response) {
 
   const query = (q as string).trim();
   const activeTab = (tab as string) || 'players';
+  const callerId = req.userId;
 
   switch (activeTab) {
     case 'players':
-      return searchPlayers(res, query, sport_id as string, pageSize);
+      return searchPlayers(res, query, sport_id as string, pageSize, callerId);
     case 'teams':
       return searchTeams(res, query, sport_id as string, pageSize);
     case 'tournaments':
@@ -31,7 +32,7 @@ export async function search(req: Request, res: Response) {
     case 'associations':
       return searchByAccountType(res, query, 'association', pageSize);
     case 'clubs':
-      return searchClubs(res, query, pageSize);
+      return searchByAccountType(res, query, 'club', pageSize);
     case 'leagues':
       return searchByAccountType(res, query, 'leagues', pageSize);
     case 'other':
@@ -41,11 +42,11 @@ export async function search(req: Request, res: Response) {
   }
 }
 
-async function searchPlayers(res: Response, q: string, sportId: string | undefined, limit: number) {
+async function searchPlayers(res: Response, q: string, sportId: string | undefined, limit: number, callerId?: string) {
   const { data, error } = await supabase
     .from('users')
     .select(`
-      id, name, username, profile_picture_url, is_premium,
+      id, name, username, profile_picture_url, is_premium, discoverability,
       city:cities!city_id(id, name),
       sports:user_sports(sport:sports(id, name, emoji))
     `)
@@ -56,7 +57,35 @@ async function searchPlayers(res: Response, q: string, sportId: string | undefin
     .limit(limit);
 
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ data: data || [] });
+  return res.json({ data: await applyDiscoverability(data || [], callerId) });
+}
+
+// SC-A1 — respect the "who can find me" setting on the people-directory
+// surfaces (Players / Discover). 'nobody' is hidden; 'followers' shows only to
+// the caller's own followers. Strips the field from the response.
+async function applyDiscoverability<T extends { id: string; discoverability?: string }>(
+  rows: T[],
+  callerId?: string,
+): Promise<Omit<T, 'discoverability'>[]> {
+  const restricted = rows.filter((r) => r.discoverability === 'followers').map((r) => r.id);
+  let followed = new Set<string>();
+  if (callerId && restricted.length > 0) {
+    const { data } = await supabase
+      .from('follow_relationships')
+      .select('following_id')
+      .eq('follower_id', callerId)
+      .in('following_id', restricted);
+    followed = new Set((data || []).map((f) => f.following_id));
+  }
+  return rows
+    .filter((r) => {
+      const d = r.discoverability ?? 'everyone';
+      if (r.id === callerId) return true; // always find yourself
+      if (d === 'nobody') return false;
+      if (d === 'followers') return followed.has(r.id);
+      return true;
+    })
+    .map(({ discoverability, ...rest }) => rest);
 }
 
 async function searchTeams(res: Response, q: string, sportId: string | undefined, limit: number) {
@@ -200,19 +229,7 @@ async function searchByAccountType(res: Response, q: string, accountType: string
   return res.json({ data: (users || []).filter((u) => matchIds.has(u.id)) });
 }
 
-async function searchClubs(res: Response, q: string, limit: number) {
-  // Clubs/associations use teams table with type = 'club' or 'association'
-  // For now, search teams with larger member counts as proxy
-  const { data, error } = await supabase
-    .from('teams')
-    .select(`
-      id, name, logo_url,
-      sport:sports!sport_id(id, name, emoji),
-      city:cities!city_id(id, name)
-    `)
-    .ilike('name', `%${q}%`)
-    .limit(limit);
-
-  if (error) return res.status(500).json({ error: error.message });
-  return res.json({ data: data || [] });
-}
+// (searchClubs removed — clubs now route through searchByAccountType('club'),
+//  the same user_account_types join path as associations/coaches. The old
+//  teams-table proxy returned team-shaped rows, which broke the FE (club result
+//  → UserProfile got a team id → blank profile).

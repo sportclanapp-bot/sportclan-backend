@@ -285,17 +285,9 @@ export async function getTournamentAnalytics(req: Request, res: Response) {
 // GET /dev/publish-scheduled-posts
 // ────────────────────────────────────────────────────────────────────────────
 
-export async function publishScheduledPosts(req: Request, res: Response) {
+export async function publishScheduledPosts(_req: Request, res: Response) {
   try {
-    const now = new Date().toISOString();
-    const { data, error } = await supabase
-      .from('community_posts')
-      .update({ scheduled_at: null })
-      .lte('scheduled_at', now)
-      .not('scheduled_at', 'is', null)
-      .select('id');
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ published: data?.length ?? 0 });
+    return res.json(await runPublishScheduledPosts());
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -482,46 +474,84 @@ export async function getNearbyMatches(req: Request, res: Response) {
 // GET /dev/trigger-smart-match-notifications
 // ────────────────────────────────────────────────────────────────────────────
 
-export async function triggerSmartMatchNotifications(req: Request, res: Response) {
-  try {
-    const threeDaysAgo = new Date(Date.now() - 3 * 86400000).toISOString();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today.getTime() + 86400000);
+// The calendar day in IST (the app's timezone) as YYYY-MM-DD — used both for
+// the daily-check-in key and the scheduled-job dedupe so "once per day" never
+// drifts across the UTC midnight boundary.
+export function istDateStr(d: Date = new Date()): string {
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
 
-    // Users inactive for 3+ days
-    const { data: inactiveUsers } = await supabase
-      .from('users')
-      .select('id, city_id, name')
-      .lt('last_active_at', threeDaysAgo)
-      .limit(100);
+// Atomically claim "we're sending <jobType> to <userId> on <sentOn>". Returns
+// true if this call won the claim (safe to send), false if it was already sent
+// (unique violation on notification_sends). This makes the scheduled jobs safe
+// to double-fire (multi-instance / overlapping runs) without duplicate pushes.
+async function claimNotificationSend(userId: string, jobType: string, sentOn: string): Promise<boolean> {
+  const { error } = await supabase
+    .from('notification_sends')
+    .insert({ user_id: userId, job_type: jobType, sent_on: sentOn });
+  if (!error) return true;
+  if ((error as { code?: string }).code === '23505') return false; // already sent today
+  // On an unexpected error, fail closed (don't send) so we never risk a storm.
+  return false;
+}
 
-    let sent = 0;
-    for (const user of inactiveUsers ?? []) {
-      if (!user.city_id) continue;
-      // Find open matches in their city today
-      const { data: openMatches } = await supabase
-        .from('matches')
-        .select('id, team_a_name, venue, sport_id')
-        .eq('city_id', user.city_id)
-        .eq('is_open', true)
-        .gte('scheduled_at', today.toISOString())
-        .lt('scheduled_at', tomorrow.toISOString())
-        .limit(1);
+// ── Job: publish due scheduled posts (idempotent — nulling scheduled_at) ──────
+export async function runPublishScheduledPosts(): Promise<{ published: number }> {
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('community_posts')
+    .update({ scheduled_at: null })
+    .lte('scheduled_at', now)
+    .not('scheduled_at', 'is', null)
+    .select('id');
+  if (error) throw new Error(error.message);
+  return { published: data?.length ?? 0 };
+}
 
-      if (openMatches && openMatches.length > 0) {
-        const m = openMatches[0];
-        await supabase.from('notifications').insert({
-          user_id: user.id,
-          type: 'smart_match',
-          title: 'Match near you today!',
-          body: `🎮 ${m.team_a_name} is looking for players at ${m.venue ?? 'a venue nearby'}`,
-          data: { matchId: m.id, screen: 'MatchDetail' },
-        });
-        sent++;
-      }
+// ── Job: smart-match notifications (deduped per user/day) ─────────────────────
+export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
+  const threeDaysAgo = new Date(Date.now() - 3 * 86400000).toISOString();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today.getTime() + 86400000);
+  const sentOn = istDateStr();
+
+  const { data: inactiveUsers } = await supabase
+    .from('users')
+    .select('id, city_id, name')
+    .lt('last_active_at', threeDaysAgo)
+    .limit(100);
+
+  let sent = 0;
+  for (const user of inactiveUsers ?? []) {
+    if (!user.city_id) continue;
+    const { data: openMatches } = await supabase
+      .from('matches')
+      .select('id, team_a_name, venue, sport_id')
+      .eq('city_id', user.city_id)
+      .eq('is_open', true)
+      .gte('scheduled_at', today.toISOString())
+      .lt('scheduled_at', tomorrow.toISOString())
+      .limit(1);
+    if (openMatches && openMatches.length > 0) {
+      if (!(await claimNotificationSend(user.id, 'smart_match', sentOn))) continue;
+      const m = openMatches[0];
+      await supabase.from('notifications').insert({
+        user_id: user.id,
+        type: 'smart_match',
+        title: 'Match near you today!',
+        body: `🎮 ${m.team_a_name} is looking for players at ${m.venue ?? 'a venue nearby'}`,
+        data: { matchId: m.id, screen: 'MatchDetail' },
+      });
+      sent++;
     }
-    return res.json({ success: true, sent });
+  }
+  return { sent };
+}
+
+export async function triggerSmartMatchNotifications(_req: Request, res: Response) {
+  try {
+    return res.json({ success: true, ...(await runSmartMatchNotifications()) });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -570,17 +600,19 @@ export async function checkRatingMilestone(
 // GET /dev/trigger-reengagement
 // ────────────────────────────────────────────────────────────────────────────
 
-export async function triggerReEngagement(req: Request, res: Response) {
-  try {
-    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-    const { data: dormant } = await supabase
-      .from('users')
-      .select('id, name, city_id')
-      .lt('last_active_at', sevenDaysAgo)
-      .limit(200);
+export async function runReEngagement(): Promise<{ sent: number }> {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  const sentOn = istDateStr();
+  const { data: dormant } = await supabase
+    .from('users')
+    .select('id, name, city_id')
+    .lt('last_active_at', sevenDaysAgo)
+    .limit(200);
 
-    let sent = 0;
+  let sent = 0;
+  {
     for (const user of dormant ?? []) {
+      if (!(await claimNotificationSend(user.id, 'reengagement', sentOn))) continue;
       // Check for unread messages
       const { count: unread } = await supabase
         .from('notifications')
@@ -616,7 +648,13 @@ export async function triggerReEngagement(req: Request, res: Response) {
       } catch { /* best effort */ }
       sent++;
     }
-    return res.json({ success: true, sent });
+  }
+  return { sent };
+}
+
+export async function triggerReEngagement(_req: Request, res: Response) {
+  try {
+    return res.json({ success: true, ...(await runReEngagement()) });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -627,19 +665,20 @@ export async function triggerReEngagement(req: Request, res: Response) {
 // GET /dev/trigger-weekly-digest
 // ────────────────────────────────────────────────────────────────────────────
 
-export async function triggerWeeklyDigest(req: Request, res: Response) {
-  try {
-    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-    const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+export async function runWeeklyDigest(): Promise<{ sent: number }> {
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+  const sentOn = istDateStr();
 
-    // Active users = logged in within 30 days
-    const { data: activeUsers } = await supabase
-      .from('users')
-      .select('id, name')
-      .gte('last_active_at', monthAgo)
-      .limit(500);
+  // Active users = logged in within 30 days
+  const { data: activeUsers } = await supabase
+    .from('users')
+    .select('id, name')
+    .gte('last_active_at', monthAgo)
+    .limit(500);
 
-    let sent = 0;
+  let sent = 0;
+  {
     for (const user of activeUsers ?? []) {
       const [followsRes, matchesRes] = await Promise.all([
         supabase.from('follow_relationships')
@@ -655,6 +694,7 @@ export async function triggerWeeklyDigest(req: Request, res: Response) {
       const matchesPlayed = matchesRes.count ?? 0;
 
       if (newFollowers === 0 && matchesPlayed === 0) continue;
+      if (!(await claimNotificationSend(user.id, 'weekly_digest', sentOn))) continue;
 
       const body = `📊 Your week: +${newFollowers} followers, ${matchesPlayed} matches played`;
       await supabase.from('notifications').insert({
@@ -669,7 +709,13 @@ export async function triggerWeeklyDigest(req: Request, res: Response) {
       } catch { /* best effort */ }
       sent++;
     }
-    return res.json({ success: true, sent });
+  }
+  return { sent };
+}
+
+export async function triggerWeeklyDigest(_req: Request, res: Response) {
+  try {
+    return res.json({ success: true, ...(await runWeeklyDigest()) });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

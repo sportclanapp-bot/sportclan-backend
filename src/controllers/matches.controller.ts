@@ -466,6 +466,15 @@ export async function getMatch(req: Request, res: Response) {
       matchWithRating.rating_count = ratings.length;
     }
 
+    // Follow state (SC-A1) — is the caller following this match, and how many
+    // followers does it have.
+    const [{ count: followerCount }, { data: myFollow }] = await Promise.all([
+      supabase.from('match_followers').select('id', { count: 'exact', head: true }).eq('match_id', id),
+      supabase.from('match_followers').select('id').eq('match_id', id).eq('user_id', userId).maybeSingle(),
+    ]);
+    matchWithRating.follower_count = followerCount ?? 0;
+    matchWithRating.is_following = !!myFollow;
+
     return res.json({ match: matchWithRating, participants: participants || [], events_count: count || 0 });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -631,6 +640,168 @@ export async function selfAssignUmpire(req: Request, res: Response) {
 
     return res.json({ match: data });
   } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ── Follow a match (SC-A1) ────────────────────────────────────────────────────
+// POST /matches/:id/follow — get score/completion updates for a match.
+export async function followMatch(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data: match } = await supabase.from('matches').select('id').eq('id', id).maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    const { error } = await supabase.from('match_followers').insert({ match_id: id, user_id: userId });
+    // Unique violation = already following → treat as success (idempotent).
+    if (error && (error as { code?: string }).code !== '23505') {
+      return res.status(500).json({ error: sanitizeError(error) });
+    }
+    const { count } = await supabase
+      .from('match_followers').select('id', { count: 'exact', head: true }).eq('match_id', id);
+    return res.json({ is_following: true, follower_count: count ?? 0 });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// DELETE /matches/:id/follow
+export async function unfollowMatch(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    await supabase.from('match_followers').delete().eq('match_id', id).eq('user_id', userId);
+    const { count } = await supabase
+      .from('match_followers').select('id', { count: 'exact', head: true }).eq('match_id', id);
+    return res.json({ is_following: false, follower_count: count ?? 0 });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ── Match group chat (SC-A1) ──────────────────────────────────────────────────
+// GET /matches/:id/chat — lazily creates a group chat for the match and adds
+// the caller (mirrors the tournament-chat pattern; linkage via matches.chat_id).
+export async function getMatchChat(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data: match } = await supabase
+      .from('matches')
+      .select('id, chat_id, team_a_name, team_b_name, created_by')
+      .eq('id', id)
+      .maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+
+    const chatName = `${match.team_a_name ?? 'Team A'} vs ${match.team_b_name ?? 'Team B'} Chat`;
+    let chatId: string | null = match.chat_id ?? null;
+    if (chatId) {
+      const { data: existing } = await supabase.from('chats').select('id').eq('id', chatId).maybeSingle();
+      if (!existing) chatId = null;
+    }
+    if (!chatId) {
+      const { data: chat } = await supabase
+        .from('chats')
+        .insert({ is_group: true, name: chatName, created_by: match.created_by })
+        .select('id')
+        .single();
+      if (!chat) return res.status(500).json({ error: 'Could not create match chat' });
+      chatId = chat.id;
+      await supabase.from('chat_participants').insert({ chat_id: chatId, user_id: match.created_by, role: 'admin' });
+      await supabase.from('matches').update({ chat_id: chatId }).eq('id', id);
+    }
+    // Ensure the caller is a participant.
+    const { data: participant } = await supabase
+      .from('chat_participants').select('id').eq('chat_id', chatId).eq('user_id', userId).maybeSingle();
+    if (!participant) {
+      await supabase.from('chat_participants').insert({ chat_id: chatId, user_id: userId, role: 'member' });
+    }
+    return res.json({ chat_id: chatId, name: chatName, conversationId: chatId });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ── Abandon a match (SC-A1) ───────────────────────────────────────────────────
+// POST /matches/:id/abandon  { advancing_team_id? } — creator/umpire only.
+// Casual matches simply go 'abandoned' (no result). For a knockout bracket
+// match, a walkover is recorded: the non-forfeiting side (advancing_team_id)
+// is set as winner and routed through the SAME advanceTournamentWinner engine,
+// honouring the "can't rewrite once the next round started" guard.
+export async function abandonMatch(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { advancing_team_id } = req.body || {};
+    const { data: match } = await supabase
+      .from('matches')
+      .select('id, created_by, umpire_id, status, tournament_id, round, group_label, next_match_id, team_a_id, team_b_id, team_a_name, team_b_name')
+      .eq('id', id)
+      .maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (match.created_by !== userId && match.umpire_id !== userId) {
+      return res.status(403).json({ error: 'Only the creator or umpire can abandon' });
+    }
+    if (match.status !== 'scheduled' && match.status !== 'live') {
+      return res.status(409).json({ error: 'Only a scheduled or live match can be abandoned.' });
+    }
+
+    const isBracketMatch = !!match.tournament_id && match.round != null && match.round > 0 && !match.group_label;
+    let walkoverWinner: string | null = null;
+
+    if (isBracketMatch) {
+      // Walkover requires knowing who advances.
+      if (!advancing_team_id || (advancing_team_id !== match.team_a_id && advancing_team_id !== match.team_b_id)) {
+        return res.status(400).json({
+          error: 'A bracket match needs the advancing (non-forfeiting) team to walk over.',
+          code: 'WALKOVER_TEAM_REQUIRED',
+        });
+      }
+      // Honour the same guard as fixture edits: can't decide a result once the
+      // next round has already started.
+      if (match.next_match_id) {
+        const { data: child } = await supabase.from('matches').select('status').eq('id', match.next_match_id).maybeSingle();
+        if (child && child.status !== 'scheduled') {
+          return res.status(409).json({ error: 'The next round has already started — resolve it there instead.' });
+        }
+      }
+      walkoverWinner = advancing_team_id;
+    }
+
+    const { data: updated, error } = await supabase
+      .from('matches')
+      .update({ status: 'abandoned', winner_team_id: walkoverWinner, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // Bracket walkover advances through the one shared engine.
+    if (isBracketMatch && walkoverWinner) {
+      try { await advanceTournamentWinner(id); } catch (e) { console.error('walkover advance failed:', e instanceof Error ? e.message : e); }
+    }
+
+    // Notify participants (best-effort).
+    try {
+      const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', id);
+      const ids = (parts || []).map((p) => p.user_id).filter((uid) => uid !== userId);
+      const label = (match.team_a_name && match.team_b_name) ? `${match.team_a_name} vs ${match.team_b_name}` : 'Your match';
+      if (ids.length > 0) {
+        await notifyUsers(ids, {
+          type: 'match_abandoned',
+          title: 'Match abandoned',
+          body: `${label} was abandoned.`,
+          data: { matchId: id, screen: 'MatchDetail' },
+        });
+      }
+    } catch { /* best-effort */ }
+
+    return res.json({ match: updated });
+  } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }

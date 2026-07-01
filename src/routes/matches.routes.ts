@@ -7,6 +7,10 @@ import {
   addParticipants,
   selfAssignUmpire,
   cancelMatch,
+  abandonMatch,
+  followMatch,
+  unfollowMatch,
+  getMatchChat,
   completeMatch,
   listOpenMatches,
   joinOpenMatch,
@@ -33,6 +37,10 @@ router.get('/:id', authenticateToken, getMatch);
 router.patch('/:id', authenticateToken, updateMatch);
 router.delete('/:id', authenticateToken, cancelMatch);
 router.post('/:id/cancel', authenticateToken, cancelMatch); // alias for frontend compatibility
+router.post('/:id/abandon', authenticateToken, abandonMatch);
+router.post('/:id/follow', authenticateToken, followMatch);
+router.delete('/:id/follow', authenticateToken, unfollowMatch);
+router.get('/:id/chat', authenticateToken, getMatchChat);
 router.post('/:id/participants', authenticateToken, addParticipants);
 router.post('/:id/umpire/self-assign', authenticateToken, selfAssignUmpire);
 router.post('/:id/complete', authenticateToken, completeMatch);

@@ -5,6 +5,7 @@ import { notifyUser, notifyUsers } from '../utils/notify';
 import { upsertVenue } from './venues.controller';
 import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
+import { parsePagination, pageMeta } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { recomputeSummary, writeCricketInningsStats } from './scoring.controller';
@@ -250,15 +251,20 @@ export async function listMatches(req: Request, res: Response) {
     // Accept either a UUID or a slug/name for sport_id — the mobile app
     // has some legacy call sites that still pass 'cricket' / 'badminton'.
     const resolvedSportId = await resolveSportId(sport_id);
-    let query = supabase.from('matches').select('*').order('scheduled_at', { ascending: false }).limit(100);
+    const p = parsePagination(req.query as Record<string, unknown>);
+    let query = supabase
+      .from('matches')
+      .select('*', { count: 'exact' })
+      .order('scheduled_at', { ascending: false })
+      .range(p.from, p.to);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (status) query = query.eq('status', status);
     if (tournament_id) query = query.eq('tournament_id', tournament_id);
     if (team_id) query = query.or(`team_a_id.eq.${team_id},team_b_id.eq.${team_id}`);
     if (mine === '1') query = query.eq('created_by', userId);
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ matches: data || [] });
+    return res.json({ matches: data || [], ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

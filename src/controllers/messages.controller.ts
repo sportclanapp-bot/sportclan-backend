@@ -103,6 +103,41 @@ export async function getOrCreateDM(req: Request, res: Response) {
     if (existing) return res.json({ data: existing, chat: existing });
   }
 
+  // Gate NEW DM creation (SC-A1): honour blocks in either direction (a
+  // pre-existing hole — blocks weren't enforced on DM creation) and the
+  // target's message_privacy. Existing conversations above are unaffected.
+  if (other_user_id !== userId) {
+    const { data: block } = await supabase
+      .from('user_blocks')
+      .select('id')
+      .or(`and(blocker_id.eq.${userId},blocked_id.eq.${other_user_id}),and(blocker_id.eq.${other_user_id},blocked_id.eq.${userId})`)
+      .limit(1)
+      .maybeSingle();
+    if (block) return res.status(403).json({ error: 'You can’t message this user.' });
+
+    const { data: target } = await supabase
+      .from('users')
+      .select('message_privacy')
+      .eq('id', other_user_id)
+      .maybeSingle();
+    const privacy = (target?.message_privacy as string) ?? 'everyone';
+    if (privacy === 'nobody') {
+      return res.status(403).json({ error: 'This user isn’t accepting new messages.' });
+    }
+    if (privacy === 'followers') {
+      const { data: follows } = await supabase
+        .from('follow_relationships')
+        .select('id')
+        .eq('follower_id', userId)
+        .eq('following_id', other_user_id)
+        .limit(1)
+        .maybeSingle();
+      if (!follows) {
+        return res.status(403).json({ error: 'Only people they follow can message this user.' });
+      }
+    }
+  }
+
   // Create new DM
   const { data: chat, error } = await supabase
     .from('chats')

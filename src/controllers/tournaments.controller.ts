@@ -420,44 +420,50 @@ export async function getBracket(req: Request, res: Response) {
 
     const { data: matches, error } = await supabase
       .from('matches')
-      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at')
+      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label')
       .eq('tournament_id', id)
+      .order('round', { ascending: true })
+      .order('match_no', { ascending: true })
       .order('scheduled_at', { ascending: true });
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
-    // Infer round structure. We walk the match list in chronological order
-    // and split into standard knockout round sizes (1 final, 2 semis, 4 QFs
-    // etc). Anything that doesn't fit falls into a final "Round 1" bucket.
-    const total = matches?.length ?? 0;
-    const roundSizes: Array<{ name: string; size: number }> = [];
-    if (total >= 8) roundSizes.push({ name: 'Quarter-Finals', size: 4 });
-    if (total >= 3) roundSizes.push({ name: 'Semi-Finals', size: 2 });
-    if (total >= 1) roundSizes.push({ name: 'Final', size: 1 });
-
-    // Matches come in chronologically: earliest rounds first. Pop from the
-    // *end* of roundSizes to build earliest→latest.
-    const rounds: Array<{ name: string; matches: any[] }> = [];
-    const reversedSizes = [...roundSizes].reverse();
-    let cursor = 0;
-    for (const r of reversedSizes) {
-      const slice = (matches ?? []).slice(cursor, cursor + r.size);
-      cursor += r.size;
-      rounds.push({
-        name: r.name,
-        matches: slice.map((m) => {
-          const ss: any = m.score_summary ?? {};
-          return {
-            id: m.id,
-            team_a_name: m.team_a_name,
-            team_b_name: m.team_b_name,
-            score_a: ss.team_a_score ?? null,
-            score_b: ss.team_b_score ?? null,
-            winner_team_id: m.winner_team_id,
-            status: m.status,
-          };
-        }),
-      });
+    // Group by the PERSISTED round (SC-23) — no more count-heuristic guessing.
+    // round 0 = group stage (groups_knockout); 1..R = the bracket rounds.
+    const byRound = new Map<number, any[]>();
+    for (const m of matches ?? []) {
+      const r = m.round ?? 1;
+      if (!byRound.has(r)) byRound.set(r, []);
+      byRound.get(r)!.push(m);
     }
+    const roundKeys = Array.from(byRound.keys()).sort((a, b) => a - b);
+    const count = roundKeys.length;
+    const roundName = (r: number, idx: number): string => {
+      if (r === 0) return 'Group Stage';
+      const fromEnd = count - 1 - idx; // 0 = last round = final
+      if (fromEnd === 0) return 'Final';
+      if (fromEnd === 1) return 'Semi-Finals';
+      if (fromEnd === 2) return 'Quarter-Finals';
+      return `Round ${r}`;
+    };
+
+    const rounds = roundKeys.map((r, idx) => ({
+      name: roundName(r, idx),
+      matches: byRound.get(r)!.map((m) => {
+        const ss: any = m.score_summary ?? {};
+        return {
+          id: m.id,
+          team_a_id: m.team_a_id,
+          team_b_id: m.team_b_id,
+          team_a_name: m.team_a_name,
+          team_b_name: m.team_b_name,
+          score_a: ss.team_a_score ?? ss?.A?.score ?? null,
+          score_b: ss.team_b_score ?? ss?.B?.score ?? null,
+          winner_team_id: m.winner_team_id,
+          status: m.status,
+          scheduled_at: m.scheduled_at,
+        };
+      }),
+    }));
 
     return res.json({ tournament, rounds });
   } catch (e) {
@@ -524,6 +530,7 @@ export async function updateFixtures(req: Request, res: Response) {
     }
 
     const results: any[] = [];
+    const blocked: string[] = [];
     for (const upd of items) {
       const fixtureId = upd.id ?? upd.fixture_id;
       if (!fixtureId) continue;
@@ -538,6 +545,30 @@ export async function updateFixtures(req: Request, res: Response) {
       if (upd.status) patch.status = upd.status;
       if (Object.keys(patch).length === 0) continue;
 
+      const settingWinner = 'winner_team_id' in patch || patch.status === 'completed';
+
+      // SC-23: once a winner has advanced into the next round and that match has
+      // started, don't let the organizer rewrite this result out from under it.
+      if (settingWinner) {
+        const { data: cur } = await supabase
+          .from('matches')
+          .select('next_match_id')
+          .eq('id', fixtureId)
+          .eq('tournament_id', id)
+          .maybeSingle();
+        if (cur?.next_match_id) {
+          const { data: child } = await supabase
+            .from('matches')
+            .select('status')
+            .eq('id', cur.next_match_id)
+            .maybeSingle();
+          if (child && child.status !== 'scheduled') {
+            blocked.push(fixtureId);
+            continue;
+          }
+        }
+      }
+
       // Allow updates even when status isn't 'scheduled' if explicitly setting
       // a new status (e.g. organizer marking 'completed' for an offline match)
       let query = supabase
@@ -549,10 +580,20 @@ export async function updateFixtures(req: Request, res: Response) {
         query = query.eq('status', 'scheduled');
       }
       const { data, error } = await query.select('*').single();
-      if (!error && data) results.push(data);
+      if (!error && data) {
+        results.push(data);
+        // Propagate the winner into the bracket (SC-23) / auto-complete (SC-24).
+        if (settingWinner) {
+          try {
+            await advanceTournamentWinner(fixtureId);
+          } catch {
+            /* best effort */
+          }
+        }
+      }
     }
 
-    return res.json({ updated: results.length, fixtures: results });
+    return res.json({ updated: results.length, fixtures: results, blocked: blocked.length ? blocked : undefined });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -615,10 +656,233 @@ export async function getTournamentChat(req: Request, res: Response) {
 }
 
 // POST /tournaments/:id/generate-fixtures
+// ─── Bracket engine (SC-23) ──────────────────────────────────────────────────
+
+type TeamSlot = { id: string; name: string };
+interface BracketBase {
+  sport_id: string;
+  tournament_id: string;
+  venue: string | null;
+  city_id: string | null;
+  created_by: string;
+}
+
+function nextPow2(n: number): number {
+  let p = 1;
+  while (p < n) p *= 2;
+  return p;
+}
+
+// Build round-1 matchups for `n` real teams padded to the next power of two.
+// Every match gets a real team in slot A; the remaining teams fill slot B of
+// the first (n-M) matches; the rest are byes (slot B empty). This guarantees no
+// match is bye-vs-bye. Also used to seed a groups→KO bracket from qualifiers.
+function buildRound1(teams: TeamSlot[]): Array<{ a: TeamSlot | null; b: TeamSlot | null }> {
+  const n = teams.length;
+  const M = nextPow2(n) / 2;
+  const round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }> = [];
+  for (let m = 0; m < M; m++) {
+    const b = teams[M + m] ?? null;
+    round1.push({ a: teams[m] ?? null, b });
+  }
+  return round1;
+}
+
+// Insert a full single-elimination bracket (all rounds up front), linking each
+// match to its parent via next_match_id/next_slot so winners can advance.
+// `round1` gives the explicit round-1 matchups (length = bracketSize/2); later
+// rounds are created as TBD. Rounds are inserted final→first so a child's
+// next_match_id references an already-created parent. Returns the ids of round-1
+// matches that are byes (one real team) so the caller can auto-resolve them.
+async function insertSingleElim(
+  base: BracketBase,
+  startDate: Date,
+  round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>,
+): Promise<{ byeMatchIds: string[] }> {
+  const dayMs = 86400000;
+  const bracketSize = round1.length * 2;
+  const roundsCount = Math.max(1, Math.round(Math.log2(bracketSize)));
+  const created: Record<string, string> = {}; // `${round}:${matchNo}` -> id
+  let dayCursor = 0;
+
+  for (let r = roundsCount; r >= 1; r--) {
+    const matchesInRound = bracketSize / Math.pow(2, r);
+    const rows: any[] = [];
+    for (let m = 0; m < matchesInRound; m++) {
+      const nextId = r < roundsCount ? created[`${r + 1}:${Math.floor(m / 2)}`] : null;
+      const nextSlot = r < roundsCount ? (m % 2 === 0 ? 'A' : 'B') : null;
+      const a = r === 1 ? round1[m].a : null;
+      const b = r === 1 ? round1[m].b : null;
+      let aName = 'TBD';
+      let bName = 'TBD';
+      if (r === 1) {
+        aName = a?.name ?? (b ? 'BYE' : 'TBD');
+        bName = b?.name ?? (a ? 'BYE' : 'TBD');
+      }
+      rows.push({
+        sport_id: base.sport_id,
+        tournament_id: base.tournament_id,
+        team_a_id: a?.id ?? null,
+        team_b_id: b?.id ?? null,
+        team_a_name: aName,
+        team_b_name: bName,
+        scheduled_at: new Date(startDate.getTime() + dayCursor * dayMs).toISOString(),
+        venue: base.venue,
+        city_id: base.city_id,
+        status: 'scheduled',
+        score_summary: {},
+        created_by: base.created_by,
+        round: r,
+        match_no: m,
+        next_match_id: nextId,
+        next_slot: nextSlot,
+      });
+      dayCursor++;
+    }
+    const { data, error } = await supabase.from('matches').insert(rows).select('id, match_no');
+    if (error) throw new Error(error.message);
+    for (const d of data ?? []) created[`${r}:${d.match_no}`] = d.id as string;
+  }
+
+  const byeMatchIds: string[] = [];
+  for (let m = 0; m < round1.length; m++) {
+    const { a, b } = round1[m];
+    if (!!a?.id !== !!b?.id) byeMatchIds.push(created[`1:${m}`]);
+  }
+  return { byeMatchIds };
+}
+
+// Mark a bye/decided match completed and propagate its winner forward.
+async function resolveMatchWinner(matchId: string, winnerTeamId: string): Promise<void> {
+  await supabase.from('matches').update({ status: 'completed', winner_team_id: winnerTeamId }).eq('id', matchId);
+  await advanceTournamentWinner(matchId);
+}
+
+// Propagate a resolved match's winner into its parent fixture slot; complete the
+// tournament when the final resolves; seed the KO stage when a group stage ends.
+// Idempotent (only fills an empty slot) so it's safe to call from every
+// completion path (completeMatch / updateFixtures / updateMatch). SC-23/24.
+export async function advanceTournamentWinner(matchId: string): Promise<void> {
+  const { data: m } = await supabase
+    .from('matches')
+    .select('id, tournament_id, winner_team_id, next_match_id, next_slot, group_label, round, team_a_id, team_b_id, team_a_name, team_b_name')
+    .eq('id', matchId)
+    .maybeSingle();
+  if (!m || !m.tournament_id) return;
+
+  // Group-stage match → the group stage may now be complete; seed the KO.
+  if (m.group_label) {
+    await maybeSeedKnockout(m.tournament_id);
+    return;
+  }
+
+  // Non-bracket format (round_robin/league) has no round/linkage to advance.
+  if (m.round == null) return;
+
+  const winnerId = m.winner_team_id;
+  // No winner yet (e.g. a draw not decided) → the bracket waits; the organizer
+  // can set a winner via the fixture editor, which re-fires this.
+  if (!winnerId) return;
+
+  if (!m.next_match_id) {
+    // Final resolved → auto-complete the tournament (SC-24).
+    await supabase
+      .from('tournaments')
+      .update({ status: 'completed', updated_at: new Date().toISOString() })
+      .eq('id', m.tournament_id)
+      .eq('status', 'live');
+    return;
+  }
+
+  const winnerName =
+    winnerId === m.team_a_id ? m.team_a_name : winnerId === m.team_b_id ? m.team_b_name : null;
+  const slotIdCol = m.next_slot === 'A' ? 'team_a_id' : 'team_b_id';
+  const slotNameCol = m.next_slot === 'A' ? 'team_a_name' : 'team_b_name';
+  const { data: parent } = await supabase
+    .from('matches')
+    .select(`id, ${slotIdCol}`)
+    .eq('id', m.next_match_id)
+    .maybeSingle();
+  if (!parent) return;
+  if ((parent as any)[slotIdCol]) return; // already filled — idempotent
+  await supabase
+    .from('matches')
+    .update({ [slotIdCol]: winnerId, [slotNameCol]: winnerName ?? 'Winner' })
+    .eq('id', m.next_match_id);
+}
+
+// When every group-stage match is complete, seed the knockout round-1 slots from
+// the group standings (top 2 per group, cross-paired to avoid an immediate
+// same-group rematch). Idempotent. SC-23 (groups→KO transition).
+async function maybeSeedKnockout(tournamentId: string): Promise<void> {
+  const { data: groupMatches } = await supabase
+    .from('matches')
+    .select('id, status, winner_team_id')
+    .eq('tournament_id', tournamentId)
+    .eq('round', 0);
+  if (!groupMatches || groupMatches.length === 0) return;
+  if (groupMatches.some((g) => g.status !== 'completed')) return;
+
+  const { data: ko1 } = await supabase
+    .from('matches')
+    .select('id, match_no, team_a_id, team_b_id')
+    .eq('tournament_id', tournamentId)
+    .is('group_label', null)
+    .eq('round', 1)
+    .order('match_no', { ascending: true });
+  if (!ko1 || ko1.length === 0) return;
+  if (ko1.some((k) => k.team_a_id || k.team_b_id)) return; // already seeded
+
+  const { data: entries } = await supabase
+    .from('tournament_entries')
+    .select('team_id, group_label, team:teams!team_id(id, name)')
+    .eq('tournament_id', tournamentId)
+    .not('group_label', 'is', null);
+
+  const wins: Record<string, number> = {};
+  for (const g of groupMatches) if (g.winner_team_id) wins[g.winner_team_id] = (wins[g.winner_team_id] ?? 0) + 1;
+
+  const byGroup: Record<string, Array<{ id: string; name: string; w: number }>> = {};
+  for (const e of entries ?? []) {
+    const label = (e.group_label as string) ?? '?';
+    (byGroup[label] ??= []).push({ id: e.team_id as string, name: (e.team as any)?.name ?? 'Team', w: wins[e.team_id as string] ?? 0 });
+  }
+  const labels = Object.keys(byGroup).sort();
+  const winners: TeamSlot[] = [];
+  const runners: TeamSlot[] = [];
+  for (const label of labels) {
+    const sorted = byGroup[label].sort((a, b) => b.w - a.w);
+    if (sorted[0]) winners.push({ id: sorted[0].id, name: sorted[0].name });
+    if (sorted[1]) runners.push({ id: sorted[1].id, name: sorted[1].name });
+  }
+  // Rotate runners by one group so round 1 never re-pairs a group (W_g vs R_{g+1}).
+  const rotated = runners.map((_, i) => runners[(i + 1) % runners.length]).filter(Boolean) as TeamSlot[];
+  const qualifiers = [...winners, ...rotated];
+  if (qualifiers.length < 2) return;
+  const round1 = buildRound1(qualifiers);
+
+  for (let m = 0; m < ko1.length; m++) {
+    const mu = round1[m] ?? { a: null, b: null };
+    await supabase
+      .from('matches')
+      .update({
+        team_a_id: mu.a?.id ?? null,
+        team_b_id: mu.b?.id ?? null,
+        team_a_name: mu.a?.name ?? (mu.b ? 'BYE' : 'TBD'),
+        team_b_name: mu.b?.name ?? (mu.a ? 'BYE' : 'TBD'),
+      })
+      .eq('id', ko1[m].id);
+    if (!!mu.a?.id !== !!mu.b?.id) {
+      await resolveMatchWinner(ko1[m].id, (mu.a?.id ?? mu.b?.id) as string);
+    }
+  }
+}
+
 // Auto-generates match fixtures from approved entries. Supports:
-//   knockout → single elimination bracket (N-1 matches)
-//   round_robin → every team plays every other team (N*(N-1)/2 matches)
-//   groups_knockout → split into groups of 4, top 2 advance to KO
+//   knockout → single elimination bracket, all rounds linked (any team count)
+//   round_robin/league → every team plays every other (N*(N-1)/2 matches)
+//   groups_knockout → round-robin groups (round 0) + a linked KO bracket seeded
+//                     from group standings once the group stage completes
 export async function generateFixtures(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -658,59 +922,41 @@ export async function generateFixtures(req: Request, res: Response) {
       return res.status(400).json({ error: 'Fixtures already generated. Delete existing matches first.' });
     }
 
-    const matchRows: any[] = [];
     const startDate = tournament.start_date ? new Date(tournament.start_date) : new Date();
     const dayMs = 86400000;
     const format = (tournament.format ?? 'knockout').toLowerCase();
+    const base: BracketBase = {
+      sport_id: tournament.sport_id,
+      tournament_id: id,
+      venue: tournament.venue ?? null,
+      city_id: tournament.city_id ?? null,
+      created_by: userId,
+    };
 
     if (format === 'knockout') {
-      // Single elimination: pair teams 0v1, 2v3, ...; winners advance.
-      // Total matches = teams.length - 1 (but we only create first round here).
-      for (let i = 0; i < teams.length - 1; i += 2) {
-        const a = teams[i];
-        const b = teams[i + 1] ?? { id: null, name: 'BYE' };
-        matchRows.push({
-          sport_id: tournament.sport_id,
-          tournament_id: id,
-          team_a_id: a.id,
-          team_b_id: b.id,
-          team_a_name: a.name,
-          team_b_name: b.name,
-          scheduled_at: new Date(startDate.getTime() + Math.floor(i / 2) * dayMs).toISOString(),
-          venue: tournament.venue ?? null,
-          city_id: tournament.city_id ?? null,
-          status: 'scheduled',
-          score_summary: {},
-          created_by: userId,
-        });
+      // Full single-elim bracket (all rounds, linked). Byes auto-advance.
+      const { byeMatchIds } = await insertSingleElim(base, startDate, buildRound1(teams));
+      for (const byeId of byeMatchIds) {
+        const { data: bm } = await supabase
+          .from('matches')
+          .select('team_a_id, team_b_id')
+          .eq('id', byeId)
+          .maybeSingle();
+        const winnerId = bm?.team_a_id ?? bm?.team_b_id;
+        if (winnerId) await resolveMatchWinner(byeId, winnerId);
       }
-      // Add semifinal and final placeholders
-      const semis = Math.floor(teams.length / 4);
-      for (let i = 0; i < semis; i++) {
-        matchRows.push({
-          sport_id: tournament.sport_id,
-          tournament_id: id,
-          team_a_name: 'TBD', team_b_name: 'TBD',
-          scheduled_at: new Date(startDate.getTime() + (matchRows.length + 1) * dayMs).toISOString(),
-          venue: tournament.venue ?? null,
-          city_id: tournament.city_id ?? null,
-          status: 'scheduled', score_summary: {},
-          created_by: userId,
-        });
-      }
-      // Final
-      matchRows.push({
-        sport_id: tournament.sport_id,
-        tournament_id: id,
-        team_a_name: 'TBD', team_b_name: 'TBD',
-        scheduled_at: new Date(startDate.getTime() + (matchRows.length + 1) * dayMs).toISOString(),
-        venue: tournament.venue ?? null,
-        city_id: tournament.city_id ?? null,
-        status: 'scheduled', score_summary: {},
-        created_by: userId,
-      });
-    } else if (format === 'round_robin' || format === 'league') {
-      // Every team plays every other team
+      await supabase.from('tournaments').update({ status: 'live' }).eq('id', id);
+      const { count } = await supabase
+        .from('matches')
+        .select('id', { count: 'exact', head: true })
+        .eq('tournament_id', id);
+      return res.json({ success: true, matchesCreated: count ?? 0, format });
+    }
+
+    const matchRows: any[] = [];
+
+    if (format === 'round_robin' || format === 'league') {
+      let mno = 0;
       for (let i = 0; i < teams.length; i++) {
         for (let j = i + 1; j < teams.length; j++) {
           matchRows.push({
@@ -720,29 +966,41 @@ export async function generateFixtures(req: Request, res: Response) {
             team_b_id: teams[j].id,
             team_a_name: teams[i].name,
             team_b_name: teams[j].name,
-            scheduled_at: new Date(startDate.getTime() + matchRows.length * dayMs).toISOString(),
+            scheduled_at: new Date(startDate.getTime() + mno * dayMs).toISOString(),
             venue: tournament.venue ?? null,
             city_id: tournament.city_id ?? null,
-            status: 'scheduled', score_summary: {},
+            status: 'scheduled',
+            score_summary: {},
             created_by: userId,
+            round: 1,
+            match_no: mno,
           });
+          mno++;
         }
       }
-    } else if (format === 'groups_knockout') {
-      // Split into groups of 4, round-robin within groups
+      if (matchRows.length > 0) {
+        const { data, error } = await supabase.from('matches').insert(matchRows).select('id');
+        if (error) return res.status(500).json({ error: sanitizeError(error) });
+      }
+      await supabase.from('tournaments').update({ status: 'live' }).eq('id', id);
+      return res.json({ success: true, matchesCreated: matchRows.length, format });
+    }
+
+    if (format === 'groups_knockout') {
+      // Round-robin groups of 4 (round 0), then an empty KO bracket seeded from
+      // the group standings once the group stage completes (maybeSeedKnockout).
       const groupSize = 4;
-      const numGroups = Math.ceil(teams.length / groupSize);
-      const groups = Array.from({ length: numGroups }, () => [] as typeof teams);
+      const numGroups = Math.max(1, Math.ceil(teams.length / groupSize));
+      const groups: TeamSlot[][] = Array.from({ length: numGroups }, () => []);
       teams.forEach((t, i) => groups[i % numGroups].push(t));
 
-      // Group stage
+      let mno = 0;
       for (let g = 0; g < groups.length; g++) {
-        const label = String.fromCharCode(65 + g); // A, B, C...
-        const grp = groups[g];
-        // Update group_label on entries
-        for (const t of grp) {
+        const label = String.fromCharCode(65 + g); // A, B, C…
+        for (const t of groups[g]) {
           await supabase.from('tournament_entries').update({ group_label: label }).eq('tournament_id', id).eq('team_id', t.id);
         }
+        const grp = groups[g];
         for (let i = 0; i < grp.length; i++) {
           for (let j = i + 1; j < grp.length; j++) {
             matchRows.push({
@@ -752,41 +1010,38 @@ export async function generateFixtures(req: Request, res: Response) {
               team_b_id: grp[j].id,
               team_a_name: grp[i].name,
               team_b_name: grp[j].name,
-              scheduled_at: new Date(startDate.getTime() + matchRows.length * dayMs).toISOString(),
+              scheduled_at: new Date(startDate.getTime() + mno * dayMs).toISOString(),
               venue: tournament.venue ?? null,
               city_id: tournament.city_id ?? null,
-              status: 'scheduled', score_summary: {},
+              status: 'scheduled',
+              score_summary: {},
               created_by: userId,
+              round: 0,
+              match_no: mno,
+              group_label: label,
             });
+            mno++;
           }
         }
       }
-      // KO phase (semifinals + final) — TBD placeholders
-      const koMatches = Math.min(numGroups, 4);
-      for (let i = 0; i < koMatches; i++) {
-        matchRows.push({
-          sport_id: tournament.sport_id,
-          tournament_id: id,
-          team_a_name: 'TBD', team_b_name: 'TBD',
-          scheduled_at: new Date(startDate.getTime() + (matchRows.length + 1) * dayMs).toISOString(),
-          venue: tournament.venue ?? null,
-          city_id: tournament.city_id ?? null,
-          status: 'scheduled', score_summary: {},
-          created_by: userId,
-        });
+      if (matchRows.length > 0) {
+        const { error } = await supabase.from('matches').insert(matchRows);
+        if (error) return res.status(500).json({ error: sanitizeError(error) });
       }
-    }
+      const koSize = nextPow2(numGroups * 2);
+      const koRound1 = Array.from({ length: koSize / 2 }, () => ({ a: null as TeamSlot | null, b: null as TeamSlot | null }));
+      const koStart = new Date(startDate.getTime() + (matchRows.length + 1) * dayMs);
+      await insertSingleElim(base, koStart, koRound1);
 
-    // Insert all matches
-    if (matchRows.length > 0) {
-      const { data, error } = await supabase.from('matches').insert(matchRows).select('id');
-      if (error) return res.status(500).json({ error: sanitizeError(error) });
-      // Update tournament status to live
       await supabase.from('tournaments').update({ status: 'live' }).eq('id', id);
-      return res.json({ success: true, matchesCreated: data?.length ?? 0, format });
+      const { count } = await supabase
+        .from('matches')
+        .select('id', { count: 'exact', head: true })
+        .eq('tournament_id', id);
+      return res.json({ success: true, matchesCreated: count ?? 0, format });
     }
 
-    return res.json({ success: true, matchesCreated: 0 });
+    return res.status(400).json({ error: `Unsupported format: ${format}` });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

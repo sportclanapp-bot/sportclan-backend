@@ -32,6 +32,10 @@ export async function search(req: Request, res: Response) {
       return searchByAccountType(res, query, 'association', pageSize);
     case 'clubs':
       return searchClubs(res, query, pageSize);
+    case 'leagues':
+      return searchByAccountType(res, query, 'leagues', pageSize);
+    case 'other':
+      return searchByAccountType(res, query, 'other', pageSize);
     default:
       return res.status(400).json({ error: 'Invalid tab' });
   }
@@ -167,20 +171,33 @@ async function searchBusinesses(res: Response, q: string, limit: number) {
   return res.json({ data: filtered });
 }
 
-// Generic account-type search — used for Coaches, Associations, etc.
+// Generic account-type search — Coaches, Associations, Leagues, Other.
+// Uses the user_account_types join table (like the umpire/business paths) so a
+// SECONDARY role surfaces too, instead of the legacy singular users.account_type
+// column that only ever matched a user's primary type (SC-27). Search is
+// intentionally NOT premium-gated — every pro is discoverable here; premium
+// only gates the richer Services directory. Premium just ranks first.
 async function searchByAccountType(res: Response, q: string, accountType: string, limit: number) {
-  let query = supabase
+  const { data: users, error } = await supabase
     .from('users')
-    .select('id, name, username, profile_picture_url, bio, is_premium, account_type, city:cities!city_id(id, name)')
-    .ilike('account_type', `%${accountType}%`)
-    // Premium service accounts appear first — "Featured listing"
+    .select('id, name, username, profile_picture_url, bio, is_premium, city:cities!city_id(id, name)')
+    .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
     .order('is_premium', { ascending: false })
     .order('name', { ascending: true })
     .limit(limit);
-  if (q) query = query.ilike('name', `%${q}%`);
-  const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ data: data || [] });
+
+  const userIds = (users || []).map((u) => u.id);
+  if (userIds.length === 0) return res.json({ data: [] });
+
+  const { data: accountTypes } = await supabase
+    .from('user_account_types')
+    .select('user_id')
+    .in('user_id', userIds)
+    .eq('account_type', accountType);
+
+  const matchIds = new Set((accountTypes || []).map((a) => a.user_id));
+  return res.json({ data: (users || []).filter((u) => matchIds.has(u.id)) });
 }
 
 async function searchClubs(res: Response, q: string, limit: number) {

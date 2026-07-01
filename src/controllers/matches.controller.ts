@@ -8,6 +8,7 @@ import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { calculateAndSetMVP } from './matchFeatures.controller';
+import { advanceTournamentWinner } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats } from './scoring.controller';
 
 // POST /matches — create. FREE for all (Change #6).
@@ -509,6 +510,15 @@ export async function updateMatch(req: Request, res: Response) {
     update.updated_at = new Date().toISOString();
     const { data, error } = await supabase.from('matches').update(update).eq('id', id).select('*').single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // If a winner/completion was set on a tournament bracket match here, advance
+    // the bracket too (SC-23) so this path can't leave a stuck fixture.
+    if (data?.tournament_id && ('winner_team_id' in update || update.status === 'completed')) {
+      try {
+        await advanceTournamentWinner(id);
+      } catch (advErr) {
+        console.error('bracket advancement failed:', advErr instanceof Error ? advErr.message : advErr);
+      }
+    }
     return res.json({ match: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -556,18 +566,43 @@ export async function addParticipants(req: Request, res: Response) {
 }
 
 // POST /matches/:id/umpire/self-assign
+// Lets a user officiate a match they didn't create. Gated to accounts holding
+// the umpire/referee role, and only for matches still open for officiating
+// (not completed/cancelled/abandoned) that don't already have an umpire.
 export async function selfAssignUmpire(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
+
+    // Role gate: only umpire/referee accounts can officiate (SC-20 decision).
+    const { data: roles } = await supabase
+      .from('user_account_types')
+      .select('account_type')
+      .eq('user_id', userId)
+      .in('account_type', ['umpire', 'referee']);
+    if (!roles || roles.length === 0) {
+      return res.status(403).json({
+        error: 'Only umpire / referee accounts can officiate matches. Add the Umpire role in Edit profile.',
+        code: 'NOT_AN_UMPIRE',
+      });
+    }
+
     const { data: match } = await supabase
       .from('matches')
-      .select('id, umpire_id')
+      .select('id, umpire_id, created_by, status, team_a_name, team_b_name')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
-    if (match.umpire_id) return res.status(409).json({ error: 'Match already has an umpire' });
+    if (match.status === 'completed' || match.status === 'cancelled' || match.status === 'abandoned') {
+      return res.status(409).json({ error: 'This match is no longer open for officiating.' });
+    }
+    if (match.umpire_id) {
+      return res.status(409).json({
+        error: match.umpire_id === userId ? 'You are already officiating this match.' : 'Match already has an umpire',
+      });
+    }
+
     const { data, error } = await supabase
       .from('matches')
       .update({ umpire_id: userId, updated_at: new Date().toISOString() })
@@ -575,6 +610,25 @@ export async function selfAssignUmpire(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // Let the creator know someone picked up officiating (best-effort).
+    if (match.created_by && match.created_by !== userId) {
+      const matchLabel = (match.team_a_name && match.team_b_name)
+        ? `${match.team_a_name} vs ${match.team_b_name}`
+        : 'your match';
+      try {
+        await notifyUser({
+          userId: match.created_by,
+          type: 'match_umpire_assigned',
+          title: 'Umpire assigned',
+          body: `An umpire has taken up officiating for ${matchLabel}.`,
+          data: { matchId: id, screen: 'MatchDetail' },
+        });
+      } catch {
+        // best-effort
+      }
+    }
+
     return res.json({ match: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -641,13 +695,24 @@ export async function completeMatch(req: Request, res: Response) {
 
     const { data: match } = await supabase
       .from('matches')
-      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked')
+      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (match.status === 'completed') return res.status(400).json({ error: 'Match already completed' });
     if (match.created_by !== userId && match.umpire_id !== userId) {
       return res.status(403).json({ error: 'Only the creator or umpire can complete' });
+    }
+
+    // SC-23: knockout bracket matches can't end in a draw — a decisive winner is
+    // required so the bracket can advance. (Group-stage matches, round=0, and
+    // non-bracket formats may draw.)
+    const isBracketMatch = !!match.tournament_id && match.round != null && match.round > 0 && !match.group_label;
+    if (isBracketMatch && !winner_team_id) {
+      return res.status(400).json({
+        error: 'Knockout matches need a decisive winner — pick the winning team (no draws in a bracket).',
+        code: 'BRACKET_NEEDS_WINNER',
+      });
     }
 
     // Get participants grouped by team side
@@ -940,6 +1005,17 @@ export async function completeMatch(req: Request, res: Response) {
           body: `Rate your umpire for ${matchLabel}`,
           data: { umpireId: match.umpire_id, matchId: id, screen: 'UmpireRatings' },
         });
+      }
+    }
+
+    // If this is a tournament bracket match, propagate the winner into the next
+    // round (and auto-complete the tournament if it was the final). Best-effort;
+    // the winner_team_id was finalised above (incl. side-derived backfill).
+    if (match.tournament_id) {
+      try {
+        await advanceTournamentWinner(id);
+      } catch (advErr) {
+        console.error('bracket advancement failed:', advErr instanceof Error ? advErr.message : advErr);
       }
     }
 

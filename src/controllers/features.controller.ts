@@ -122,7 +122,16 @@ export async function getTournamentStandings(req: Request, res: Response) {
       }
     }
 
-    return res.json({ standings, isCricket });
+    // SC-25: the FE StandingsRow reads team_name / team_id, but the rows carry
+    // team / teamId — so every row rendered a blank name. Alias both (keep the
+    // originals for any other consumer).
+    const aliased = standings.map((r) => ({
+      ...r,
+      team_name: (r as any).team,
+      team_id: (r as any).teamId,
+    }));
+
+    return res.json({ standings: aliased, isCricket });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -257,6 +257,80 @@ export function aggregateCricketPlayers(
   return players;
 }
 
+// ─── Non-cricket per-player rollups (SC-14) ─────────────────────────────────
+// Same contract as aggregateCricketPlayers: keyed by user_id, driven by the
+// `player_id` the scorer credits per event (the SportScoringScreen "Credit
+// player" picker). Events without player_id don't contribute — casual/skipped
+// attribution yields an empty map, exactly like cricket.
+export interface GoalPlayerLine { side: 'A' | 'B'; goals: number; assists: number }
+export interface PointPlayerLine { side: 'A' | 'B'; points: number; assists: number }
+export interface RallyPlayerLine { side: 'A' | 'B'; points: number }
+export type PlayerLine = CricketPlayerLine | GoalPlayerLine | PointPlayerLine | RallyPlayerLine;
+
+const sideOfPayload = (p: any): 'A' | 'B' => (p?.team_side === 'B' ? 'B' : 'A');
+
+// Goal sports (football, hockey): goals + assists per scorer.
+export function aggregateGoalPlayers(events: { event_type: string; payload: any }[]): Record<string, GoalPlayerLine> {
+  const players: Record<string, GoalPlayerLine> = {};
+  for (const e of events) {
+    const p = e.payload ?? {};
+    const id: string | undefined = p.player_id;
+    if (!id) continue;
+    const isGoal = e.event_type === 'score' && p.kind === 'goal';
+    const isAssist = e.event_type === 'assist';
+    if (!isGoal && !isAssist) continue;
+    const line = (players[id] ??= { side: sideOfPayload(p), goals: 0, assists: 0 });
+    if (isGoal) line.goals += 1;
+    if (isAssist) line.assists += 1;
+  }
+  return players;
+}
+
+// Point sports (basketball): points (payload.value) + assists per scorer.
+export function aggregatePointPlayers(events: { event_type: string; payload: any }[]): Record<string, PointPlayerLine> {
+  const players: Record<string, PointPlayerLine> = {};
+  for (const e of events) {
+    const p = e.payload ?? {};
+    const id: string | undefined = p.player_id;
+    if (!id) continue;
+    if (e.event_type === 'score' || e.event_type === 'basket') {
+      const line = (players[id] ??= { side: sideOfPayload(p), points: 0, assists: 0 });
+      line.points += Number(p.value ?? 0);
+    } else if (e.event_type === 'assist') {
+      const line = (players[id] ??= { side: sideOfPayload(p), points: 0, assists: 0 });
+      line.assists += 1;
+    }
+  }
+  return players;
+}
+
+// Rally/set + board + generic score sports (badminton, tennis, tabletennis,
+// pickleball, volleyball, carrom, kabaddi, athletics): points/rallies won.
+// Carrom's queen carries value 3, so summing payload.value (default 1) is right.
+export function aggregateRallyPlayers(events: { event_type: string; payload: any }[]): Record<string, RallyPlayerLine> {
+  const players: Record<string, RallyPlayerLine> = {};
+  for (const e of events) {
+    const p = e.payload ?? {};
+    const id: string | undefined = p.player_id;
+    if (!id) continue;
+    if (e.event_type !== 'score' && e.event_type !== 'point') continue;
+    const line = (players[id] ??= { side: sideOfPayload(p), points: 0 });
+    line.points += Number(p.value ?? 1);
+  }
+  return players;
+}
+
+// Dispatcher: route a match's events to the right per-family rollup. Cricket
+// goes through the EXISTING, verified aggregateCricketPlayers unchanged (its
+// output is byte-identical). Chess has no scoring events → empty map (MVP is
+// decided by winner side). `slug` must be the normalised form.
+export function aggregatePlayers(slug: string, events: { event_type: string; payload: any }[]): Record<string, PlayerLine> {
+  if (slug === 'cricket') return aggregateCricketPlayers(events);
+  if (slug === 'football' || slug === 'hockey') return aggregateGoalPlayers(events);
+  if (slug === 'basketball') return aggregatePointPlayers(events);
+  return aggregateRallyPlayers(events);
+}
+
 // Recompute a match's score_summary from the authoritative event log, for ALL
 // sports, into the canonical shape:
 //   { A: { score, …sport detail }, B: { … }, …preserved keys (result/winner_side) }
@@ -271,7 +345,11 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
   if (!match) return null;
   const { data: sportRow } = await supabase
     .from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
-  const slug = sportRow?.slug ?? '';
+  // Normalise the slug so hyphenated/underscored slugs (e.g. 'table-tennis')
+  // match the single-token keys in SET_CONFIG / the family checks below.
+  // Previously 'table-tennis' fell through to the generic point tally instead
+  // of set scoring — the same class of gap as SC-15 (tennis).
+  const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
   const { data: events } = await supabase
     .from('match_events').select('event_type, payload').eq('match_id', matchId)
     .order('created_at', { ascending: true });
@@ -346,12 +424,12 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
   }
 
   const summary: Record<string, any> = { ...existing, A, B };
-  // A5-003/004 · attach the additive per-player rollup for cricket so the
-  // scorecard/MVP can read real batting+bowling figures. Side totals (A/B)
-  // above are untouched, so results + the A7-002 results surface don't change.
-  if (slug === 'cricket') {
-    summary.players = aggregateCricketPlayers(events as any[]);
-  }
+  // A5-003/004 + SC-14 · attach the additive per-player rollup for ALL sports so
+  // the scorecard/MVP can read real per-player figures. Cricket routes through
+  // the original aggregateCricketPlayers (byte-identical); other families get
+  // goals/points/rally-points. Side totals (A/B) above are untouched, so results
+  // and the A7-002 results surface don't change.
+  summary.players = aggregatePlayers(slug, events as any[]);
   await supabase
     .from('matches')
     .update({ score_summary: summary, updated_at: new Date().toISOString() })

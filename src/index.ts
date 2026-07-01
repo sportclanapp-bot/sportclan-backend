@@ -37,8 +37,15 @@ import venuesRoutes from './routes/venues.routes';
 import referralsRoutes from './routes/referrals.routes';
 import devRoutes from './routes/dev.routes';
 import adminRoutes from './routes/admin.routes';
+import jobsRoutes from './routes/jobs.routes';
 import { sweepExpiredPremium } from './controllers/subscriptions.controller';
 import { sweepStaleLiveMatches } from './controllers/matches.controller';
+import {
+  runPublishScheduledPosts,
+  runSmartMatchNotifications,
+  runReEngagement,
+  runWeeklyDigest,
+} from './controllers/features.controller';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -126,6 +133,7 @@ app.use('/kudos', kudosRoutes);
 app.use('/venues', venuesRoutes);
 app.use('/referrals', referralsRoutes);
 app.use('/dev', devRoutes);
+app.use('/internal/jobs', jobsRoutes);
 app.use('/admin', adminRoutes);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
@@ -171,5 +179,42 @@ app.listen(PORT, () => {
   };
   void runSweep();
   setInterval(runSweep, 60 * 60 * 1000).unref();
+
+  // ── Scheduled feature jobs (in-process, independent of dev.routes which is
+  //    deleted pre-launch). All jobs are idempotent / deduped via
+  //    notification_sends, so a double-fire (restart / multi-instance) is safe.
+
+  // Publish due scheduled (Premium) posts frequently so they appear on time.
+  const runPublish = async () => {
+    try {
+      const { published } = await runPublishScheduledPosts();
+      if (published > 0) console.log(`[publish-scheduled-posts] published ${published}`); // eslint-disable-line no-console
+    } catch (e) {
+      console.warn('[publish-scheduled-posts] failed', e instanceof Error ? e.message : e); // eslint-disable-line no-console
+    }
+  };
+  void runPublish();
+  setInterval(runPublish, 2 * 60 * 1000).unref();
+
+  // Daily notification jobs at ~09:00 IST; weekly digest additionally on Monday.
+  // The hourly tick acts only when the IST hour is 9; the per-user/day dedupe
+  // guarantees at-most-once even if a tick overlaps or the process restarts.
+  const runDailyWeekly = async () => {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false, weekday: 'short',
+    }).formatToParts(new Date());
+    const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? -1);
+    const weekday = parts.find((p) => p.type === 'weekday')?.value; // 'Mon'…
+    if (hour !== 9) return;
+    try { const { sent } = await runSmartMatchNotifications(); if (sent) console.log(`[smart-match] sent ${sent}`); } // eslint-disable-line no-console
+    catch (e) { console.warn('[smart-match] failed', e instanceof Error ? e.message : e); } // eslint-disable-line no-console
+    try { const { sent } = await runReEngagement(); if (sent) console.log(`[reengagement] sent ${sent}`); } // eslint-disable-line no-console
+    catch (e) { console.warn('[reengagement] failed', e instanceof Error ? e.message : e); } // eslint-disable-line no-console
+    if (weekday === 'Mon') {
+      try { const { sent } = await runWeeklyDigest(); if (sent) console.log(`[weekly-digest] sent ${sent}`); } // eslint-disable-line no-console
+      catch (e) { console.warn('[weekly-digest] failed', e instanceof Error ? e.message : e); } // eslint-disable-line no-console
+    }
+  };
+  setInterval(runDailyWeekly, 60 * 60 * 1000).unref();
 });
 // Sat Apr 11 01:56:26 IST 2026

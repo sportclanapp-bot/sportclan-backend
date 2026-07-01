@@ -18,7 +18,8 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   if (!match) return null;
 
   const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
-  const slug = sportRow?.slug ?? '';
+  // Normalise so 'table-tennis' matches the single-token family checks below.
+  const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
 
   const { data: events } = await supabase
     .from('match_events')
@@ -88,12 +89,24 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
     if (winner) scores.set(winner.user_id, 9999);
   }
 
-  // Find top scorer
+  // Find top scorer. Tie-breaker (SC-14): higher score → player on the winning
+  // side → lowest user_id (stable/deterministic). Previously ties were broken
+  // by Map iteration order, which made the MVP non-deterministic when several
+  // players scored equally.
+  const sideOf = new Map(participants.map((p2) => [p2.user_id, p2.team_side]));
   let mvpId: string | null = null;
-  let maxScore = 0;
+  let best: { score: number; onWinning: boolean; uid: string } | null = null;
   for (const [uid, score] of scores) {
-    if (score > maxScore) { maxScore = score; mvpId = uid; }
+    if (score <= 0) continue; // no contribution → never MVP
+    const onWinning = winnerSide != null && sideOf.get(uid) === winnerSide;
+    const better =
+      best === null ||
+      score > best.score ||
+      (score === best.score && onWinning && !best.onWinning) ||
+      (score === best.score && onWinning === best.onWinning && uid < best.uid);
+    if (better) best = { score, onWinning, uid };
   }
+  mvpId = best?.uid ?? null;
 
   if (mvpId) {
     await supabase.from('matches').update({ mvp_user_id: mvpId }).eq('id', matchId);

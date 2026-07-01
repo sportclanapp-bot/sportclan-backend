@@ -38,6 +38,7 @@ import referralsRoutes from './routes/referrals.routes';
 import devRoutes from './routes/dev.routes';
 import adminRoutes from './routes/admin.routes';
 import { sweepExpiredPremium } from './controllers/subscriptions.controller';
+import { sweepStaleLiveMatches } from './controllers/matches.controller';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -155,6 +156,17 @@ app.listen(PORT, () => {
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[premium-sweep] failed', e instanceof Error ? e.message : e);
+    }
+    // SC-16 · auto-abandon matches stuck 'live' with no scoring activity.
+    try {
+      const { abandoned } = await sweepStaleLiveMatches();
+      if (abandoned > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`[stale-live-sweep] abandoned ${abandoned} stale live match(es)`);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[stale-live-sweep] failed', e instanceof Error ? e.message : e);
     }
   };
   void runSweep();

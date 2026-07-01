@@ -270,6 +270,34 @@ export async function listMatches(req: Request, res: Response) {
   }
 }
 
+// SC-16 · Reconcile abandoned live matches. A match flips to 'live' on its first
+// scoring event; if the umpire never taps "End match", it lingers 'live' forever
+// and shows up as a zombie LIVE card on Home/hub. This bulk-marks matches that
+// have been 'live' with no activity (`updated_at`, bumped on every scoring
+// event) for STALE_LIVE_HOURS as 'abandoned' — a status the enum already allows.
+//
+// Safe by construction: ELO/attribution are only applied on *completion*, so an
+// abandoned match never scored ratings and needs no reversal. Idempotent and
+// bulk (filters on the indexed `status` column), so running it hourly across
+// multiple instances is fine. 6h with no scoring input is well beyond any real
+// match's live gap, so this won't kill an in-progress game.
+const STALE_LIVE_HOURS = 6;
+
+export async function sweepStaleLiveMatches(): Promise<{ abandoned: number }> {
+  const cutoff = new Date(Date.now() - STALE_LIVE_HOURS * 3600_000).toISOString();
+  const { data: stale, error } = await supabase
+    .from('matches')
+    .select('id')
+    .eq('status', 'live')
+    .lt('updated_at', cutoff);
+  if (error || !stale || stale.length === 0) return { abandoned: 0 };
+  await supabase
+    .from('matches')
+    .update({ status: 'abandoned', updated_at: new Date().toISOString() })
+    .in('id', stale.map((m) => m.id));
+  return { abandoned: stale.length };
+}
+
 // GET /matches/:id/commentary — returns match_events formatted into
 // human-readable commentary lines. Cheap — reads only the events table.
 export async function getCommentary(req: Request, res: Response) {

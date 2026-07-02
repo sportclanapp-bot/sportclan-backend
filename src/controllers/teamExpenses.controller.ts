@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
+import { LIMITS } from '../utils/validation';
 
 // ── Team Expense Manager ────────────────────────────────────────────────────
 
@@ -26,6 +27,12 @@ export async function addExpense(req: Request, res: Response) {
     const { id } = req.params;
     const { title, amount, category, paid_by, split_among, notes, match_id, tournament_id } = req.body || {};
     if (!title || amount == null) return res.status(400).json({ error: 'title and amount required' });
+    // SC-38: amount must be a sane positive value (negatives corrupted the
+    // expense summary; absurd values overflowed the numeric column → 500).
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0 || amt > LIMITS.expenseMaxAmount) {
+      return res.status(400).json({ error: `amount must be between 1 and ${LIMITS.expenseMaxAmount}` });
+    }
 
     const { data, error } = await supabase
       .from('team_expenses')

@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { checkExpiredSubscriptions } from './subscriptions.controller';
 import { resolveSportId } from '../utils/sportId';
+import { LIMITS } from '../utils/validation';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 
 // Public-safe user fields. Never returns password_hash.
@@ -270,6 +271,13 @@ export async function updateMe(req: Request, res: Response) {
   }
   if (Object.keys(patch).length === 0) {
     return res.status(400).json({ error: 'No updatable fields provided' });
+  }
+  // Length caps (no cap existed before): bio + display name.
+  if (typeof patch.bio === 'string' && patch.bio.length > LIMITS.bioMax) {
+    return res.status(400).json({ error: `Bio must be ${LIMITS.bioMax} characters or fewer` });
+  }
+  if (typeof patch.name === 'string' && patch.name.length > LIMITS.teamNameMax) {
+    return res.status(400).json({ error: `Name must be ${LIMITS.teamNameMax} characters or fewer` });
   }
 
   // Username change: enforce 30-day cooldown and uniqueness

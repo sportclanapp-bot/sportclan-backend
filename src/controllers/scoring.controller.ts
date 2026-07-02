@@ -396,6 +396,8 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
   const B: Record<string, any> = { score: 0 };
   const sides: Record<'A' | 'B', Record<string, any>> = { A, B };
   const sideOf = (p: any): 'A' | 'B' => ((p?.team_side as 'A' | 'B') === 'B' ? 'B' : 'A');
+  let chessResult: string | null = null; // SC-47
+  let chessWinner: 'A' | 'B' | 'tie' | null = null;
 
   if (slug === 'cricket') {
     for (const s of ['A', 'B'] as const) Object.assign(sides[s], { runs: 0, balls: 0, wickets: 0 });
@@ -445,6 +447,19 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
     A.score = setsA; B.score = setsB;
     A.sets = setScoresA; B.sets = setScoresB;
     A.points = curA; B.points = curB; // current in-progress set/board
+  } else if (slug === 'chess') {
+    // SC-47: chess records a single `result` event ({winner: white|black|draw}).
+    // Reflect it as A/B scores (1-0 / 0-1 / ½-½) plus a result string + winner
+    // side, so the summary is correct for BOTH registered-team and free-text
+    // games (previously the result event was ignored → always "Match Draw").
+    // The last result event wins.
+    for (const e of events) {
+      if (e.event_type !== 'result') continue;
+      const w = ((e.payload || {}) as any).winner;
+      if (w === 'white') { A.score = 1; B.score = 0; chessResult = 'White wins'; chessWinner = 'A'; }
+      else if (w === 'black') { A.score = 0; B.score = 1; chessResult = 'Black wins'; chessWinner = 'B'; }
+      else if (w === 'draw') { A.score = 0.5; B.score = 0.5; chessResult = 'Draw'; chessWinner = 'tie'; }
+    }
   } else {
     // Generic fallback: count scoring events per side so SOMETHING persists for
     // sports without bespoke logic (no worse than today, where nothing did).
@@ -457,6 +472,10 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
   }
 
   const summary: Record<string, any> = { ...existing, A, B };
+  if (slug === 'chess') {
+    summary.result = chessResult ?? 'No result yet';
+    summary.winner_side = chessWinner;
+  }
   // A5-003/004 + SC-14 · attach the additive per-player rollup for ALL sports so
   // the scorecard/MVP can read real per-player figures. Cricket routes through
   // the original aggregateCricketPlayers (byte-identical); other families get

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
-import { parsePagination, pageMeta } from '../utils/pagination';
+import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
+import { sanitizeError } from '../utils/response';
 
 /**
  * Admin controller · stats + moderation + broadcast.
@@ -290,7 +291,7 @@ export async function adminListUsers(req: Request, res: Response) {
       .range(p.from, p.to);
     if (q) query = query.or(`name.ilike.%${q}%,username.ilike.%${q}%,phone.ilike.%${q}%`);
     const { data, error, count } = await query;
-    if (error) return res.status(500).json({ error: error.message });
+    if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ users: data ?? [], ...pageMeta(count, p) });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed to list users' });

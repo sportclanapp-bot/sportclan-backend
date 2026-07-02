@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
-import { parsePagination, pageMeta } from '../utils/pagination';
+import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS } from '../utils/validation';
@@ -175,7 +175,7 @@ export async function listTournaments(req: Request, res: Response) {
     if (status) query = query.eq('status', status);
     if (mine === '1') query = query.eq('created_by', userId);
     const { data, error, count } = await query;
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ tournaments: data || [], ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

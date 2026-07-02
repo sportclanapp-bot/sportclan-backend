@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
-import { parsePagination, pageMeta } from '../utils/pagination';
+import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { LIMITS } from '../utils/validation';
@@ -85,7 +85,7 @@ export async function listTeams(req: Request, res: Response) {
     if (teamIdsFilter) query = query.in('id', teamIdsFilter);
 
     const { data, error, count } = await query;
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ teams: data || [], ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

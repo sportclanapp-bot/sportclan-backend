@@ -53,13 +53,18 @@ export async function deleteExpense(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id, expenseId } = req.params;
-    const { error } = await supabase
+    const { data: deleted, error } = await supabase
       .from('team_expenses')
       .delete()
       .eq('id', expenseId)
       .eq('team_id', id)
-      .eq('created_by', userId);
+      .eq('created_by', userId)
+      .select('id');
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // SC-32: a 0-row delete (wrong owner/team or missing) must 404.
+    if (!deleted || deleted.length === 0) {
+      return res.status(404).json({ error: 'Expense not found or not yours' });
+    }
     return res.json({ success: true });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

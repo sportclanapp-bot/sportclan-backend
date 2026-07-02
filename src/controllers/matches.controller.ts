@@ -870,10 +870,12 @@ export async function completeMatch(req: Request, res: Response) {
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
-    if (match.status === 'completed') return res.status(400).json({ error: 'Match already completed' });
+    // Authorization before status (SC-33): a non-owner must get 403, not learn
+    // the match state via a 400.
     if (match.created_by !== userId && match.umpire_id !== userId) {
       return res.status(403).json({ error: 'Only the creator or umpire can complete' });
     }
+    if (match.status === 'completed') return res.status(400).json({ error: 'Match already completed' });
 
     // SC-23: knockout bracket matches can't end in a draw — a decisive winner is
     // required so the bracket can advance. (Group-stage matches, round=0, and

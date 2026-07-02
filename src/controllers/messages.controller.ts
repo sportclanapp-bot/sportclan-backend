@@ -530,23 +530,31 @@ export async function deleteMessage(req: Request, res: Response) {
 
   if (!msg) return res.status(404).json({ error: 'Message not found' });
 
+  // SC-35: a server-side soft-delete blanks the message for EVERYONE, so it
+  // must be sender-only regardless of `for_everyone`. Previously the mutation
+  // ran scoped only by messageId with no check on the delete-for-me path, so
+  // any authenticated user could blank anyone's message by id. A true per-user
+  // "delete for me" needs a per-user hide table (not built yet); until then a
+  // non-sender cannot delete.
+  if (msg.sender_id !== userId) {
+    return res.status(403).json({ error: 'Only the sender can delete this message' });
+  }
   if (for_everyone) {
-    // Only sender can delete for everyone, within 5 minutes
-    if (msg.sender_id !== userId) {
-      return res.status(403).json({ error: 'Only sender can delete for everyone' });
-    }
     const elapsed = Date.now() - new Date(msg.created_at).getTime();
     if (elapsed > 5 * 60 * 1000) {
       return res.status(403).json({ error: '5-minute window has passed' });
     }
   }
 
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from('messages')
     .update({ is_deleted: true, content: null, image_url: null })
-    .eq('id', messageId);
+    .eq('id', messageId)
+    .eq('sender_id', userId)
+    .select('id');
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
+  if (!updated || updated.length === 0) return res.status(404).json({ error: 'Message not found' });
   return res.json({ success: true });
 }
 

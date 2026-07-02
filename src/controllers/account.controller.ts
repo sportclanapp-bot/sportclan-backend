@@ -176,13 +176,18 @@ export async function revokeSession(req: Request, res: Response) {
   const userId = req.userId!;
   const { sessionId } = req.params;
 
-  const { error } = await supabase
+  const { data: deleted, error } = await supabase
     .from('refresh_tokens')
     .delete()
     .eq('id', sessionId)
-    .eq('user_id', userId);
+    .eq('user_id', userId)
+    .select('id');
 
   if (error) return res.status(500).json({ error: error.message });
+  // SC-32: a 0-row delete (not your session, or missing) must 404.
+  if (!deleted || deleted.length === 0) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
   return res.json({ success: true });
 }
 

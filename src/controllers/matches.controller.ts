@@ -7,6 +7,7 @@ import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
+import { isSportInactive } from '../utils/sports';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats } from './scoring.controller';
@@ -33,6 +34,11 @@ export async function createMatch(req: Request, res: Response) {
       is_ranked,
     } = req.body || {};
     if (!sport_id) return res.status(400).json({ error: 'sport_id is required' });
+    // Reject soft-deactivated sports (kabaddi/athletics). No-op until the
+    // sports.is_active column exists.
+    if (await isSportInactive(sport_id)) {
+      return res.status(400).json({ error: 'This sport is not available' });
+    }
     // A ranked match counts toward ELO / leaderboards, so it must be played
     // between two REGISTERED teams (free-text sides have no roster to attribute
     // stats to). Per-side lineup (>=2) is enforced at completion (A5-003 P3).

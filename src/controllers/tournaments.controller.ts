@@ -3,7 +3,8 @@ import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
-import { isSportInactive } from '../utils/sports';
+import { validateSportForCreate } from '../utils/sports';
+import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS } from '../utils/validation';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -59,11 +60,27 @@ export async function createTournament(req: Request, res: Response) {
     if (!sport_id || !name || !format) {
       return res.status(400).json({ error: 'sport_id, name, format are required' });
     }
-    // Reject soft-deactivated sports (kabaddi/athletics). No-op until the
-    // sports.is_active column exists.
-    if (await isSportInactive(sport_id)) {
-      return res.status(400).json({ error: 'This sport is not available' });
+    // Validate format (SC-37) — unknown enum previously 500'd on insert.
+    if (!isValidTournamentFormat(format)) {
+      return res.status(400).json({
+        error: `Invalid format. Must be one of: ${TOURNAMENT_FORMATS.join(', ')}`,
+      });
     }
+    // Bound max_teams (SC-39) — 0/1/absurd values previously created degenerate
+    // tournaments.
+    const maxTeamsNum = Number(max_teams);
+    if (
+      !Number.isInteger(maxTeamsNum) ||
+      maxTeamsNum < LIMITS.tournamentMinTeams ||
+      maxTeamsNum > LIMITS.tournamentMaxTeams
+    ) {
+      return res.status(400).json({
+        error: `max_teams must be between ${LIMITS.tournamentMinTeams} and ${LIMITS.tournamentMaxTeams}`,
+      });
+    }
+    // Validate the sport (unknown/malformed/deactivated → clean 400, not a 500).
+    const sportErr = await validateSportForCreate(sport_id);
+    if (sportErr) return res.status(400).json({ error: sportErr });
     // Whitelist only string values in sport_metadata to avoid arbitrary
     // shape injection. Empty strings and __custom__ sentinel are dropped.
     const metadata: Record<string, string> = {};

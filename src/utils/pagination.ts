@@ -35,6 +35,9 @@ export function parsePagination(
 
   let offset = parseInt(String(query.offset ?? 0), 10);
   if (!Number.isFinite(offset) || offset < 0) offset = 0;
+  // Cap the offset (SC-41): a huge value made Supabase `.range()` throw a
+  // Postgres range error → unhandled 500. Beyond this there's nothing to page.
+  offset = Math.min(offset, 1_000_000);
 
   return { limit, offset, from: offset, to: offset + limit - 1 };
 }

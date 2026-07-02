@@ -296,7 +296,9 @@ export async function updatePost(req: Request, res: Response) {
     .select()
     .single();
 
-  return res.json({ data, post: data });
+  // SC-32: a 0-row update (wrong owner or missing) must 404, not a false 200
+  // with null data.
+  if (error || !data) return res.status(404).json({ error: 'Post not found or not yours' });
   return res.json({ data, post: data });
 }
 
@@ -305,13 +307,18 @@ export async function deletePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
 
-  const { error } = await supabase
+  const { data: deleted, error } = await supabase
     .from('community_posts')
     .delete()
     .eq('id', id)
-    .eq('author_id', userId);
+    .eq('author_id', userId)
+    .select('id');
 
-  if (error) return res.status(404).json({ error: 'Post not found or not yours' });
+  if (error) return res.status(500).json({ error: error.message });
+  // SC-32: a 0-row delete (wrong owner or missing) must 404, not a false 200.
+  if (!deleted || deleted.length === 0) {
+    return res.status(404).json({ error: 'Post not found or not yours' });
+  }
   return res.json({ success: true });
 }
 
@@ -413,13 +420,18 @@ export async function deleteComment(req: Request, res: Response) {
   const userId = req.userId!;
   const { commentId } = req.params;
 
-  const { error } = await supabase
+  const { data: deleted, error } = await supabase
     .from('post_comments')
     .delete()
     .eq('id', commentId)
-    .eq('author_id', userId);
+    .eq('author_id', userId)
+    .select('id');
 
-  if (error) return res.status(404).json({ error: 'Comment not found or not yours' });
+  if (error) return res.status(500).json({ error: error.message });
+  // SC-32: a 0-row delete (wrong owner or missing) must 404, not a false 200.
+  if (!deleted || deleted.length === 0) {
+    return res.status(404).json({ error: 'Comment not found or not yours' });
+  }
   return res.json({ success: true });
 }
 

@@ -98,29 +98,44 @@ export async function createEvent(req: Request, res: Response) {
     // PRD 12.1: fan out push notifications for wickets and goals. We don't
     // await — the scorer shouldn't block on push delivery.
     try {
-      if (event_type === 'wicket') {
+      // Every sport notifies followers on a scoring event. Cricket emits
+      // `wicket`; every other ruleset (football/hockey goals, basketball
+      // points, rally/tennis/carrom points) emits the generic `score` event
+      // (`goal` kept as a legacy alias). Non-scoring events (ball, note, card,
+      // period_change) don't notify. Read the freshly-recomputed summary so the
+      // notified score reflects this event.
+      const isScoreEvent =
+        event_type === 'wicket' || event_type === 'score' || event_type === 'goal';
+      if (isScoreEvent) {
+        const { data: fresh } = await supabase
+          .from('matches')
+          .select('score_summary, team_a_name, team_b_name')
+          .eq('id', matchId)
+          .maybeSingle();
+        const summary: any = fresh?.score_summary || {};
         const side = (payload?.team_side as string) || 'A';
-        const playerName = (payload?.batter_name as string) || (payload?.player_name as string) || 'Batter';
-        const runs = payload?.batter_runs ?? payload?.runs_scored ?? '';
-        const inning: any = (match.score_summary || {})[side] || {};
-        const scoreStr = `${inning.runs ?? 0}/${(inning.wickets ?? 0) + 1}`;
-        const teamLabel = `Team ${side}`;
-        const title = 'Wicket!';
-        const body = runs !== ''
-          ? `${playerName} out for ${runs} | ${teamLabel} ${scoreStr}`
-          : `${playerName} out | ${teamLabel} ${scoreStr}`;
-        void fanoutScoreUpdate(matchId, title, body);
-      } else if (event_type === 'goal') {
-        const side = (payload?.team_side as string) || 'A';
-        const teamLabel = (payload?.team_name as string) || `Team ${side}`;
-        const summary: any = match.score_summary || {};
-        const a = summary.A?.goals ?? summary.A?.score ?? 0;
-        const b = summary.B?.goals ?? summary.B?.score ?? 0;
-        const newA = side === 'A' ? a + 1 : a;
-        const newB = side === 'B' ? b + 1 : b;
-        const title = 'GOAL!';
-        const body = `${teamLabel} scores! ${newA}-${newB}`;
-        void fanoutScoreUpdate(matchId, title, body);
+        const teamName = (s: string) =>
+          s === 'A' ? (fresh?.team_a_name || 'Team A') : (fresh?.team_b_name || 'Team B');
+
+        if (event_type === 'wicket') {
+          const playerName =
+            (payload?.batter_name as string) || (payload?.player_name as string) || 'Batter';
+          const runs = payload?.batter_runs ?? payload?.runs_scored ?? '';
+          const inning: any = summary[side] || {};
+          const scoreStr = `${inning.runs ?? 0}/${inning.wickets ?? 0}`;
+          const title = 'Wicket!';
+          const body =
+            runs !== ''
+              ? `${playerName} out for ${runs} | ${teamName(side)} ${scoreStr}`
+              : `${playerName} out | ${teamName(side)} ${scoreStr}`;
+          void fanoutScoreUpdate(matchId, title, body);
+        } else {
+          // generic score / goal — points or goals across all other sports
+          const val = (s: any) => s?.score ?? s?.goals ?? s?.points ?? 0;
+          const title = payload?.kind === 'goal' ? 'GOAL!' : 'Score!';
+          const body = `${teamName(side)} scores! ${val(summary.A)}-${val(summary.B)}`;
+          void fanoutScoreUpdate(matchId, title, body);
+        }
       }
     } catch {
       // ignore

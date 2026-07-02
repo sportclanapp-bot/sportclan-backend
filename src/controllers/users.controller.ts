@@ -172,6 +172,22 @@ export async function getUserById(req: Request, res: Response) {
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: 'User not found' });
 
+  // Block gate (SC-31): if a block exists in either direction between the
+  // viewer and this profile's owner, the profile is invisible — return 404 so
+  // the block itself isn't disclosed. Anonymous viewers (optionalAuth with no
+  // token) and self-views are unaffected.
+  const viewerId = req.userId;
+  if (viewerId && viewerId !== id) {
+    const { data: block } = await supabase
+      .from('user_blocks')
+      .select('id')
+      .or(
+        `and(blocker_id.eq.${viewerId},blocked_id.eq.${id}),and(blocker_id.eq.${id},blocked_id.eq.${viewerId})`,
+      )
+      .maybeSingle();
+    if (block) return res.status(404).json({ error: 'User not found' });
+  }
+
   // Respect the DOB privacy toggle (PRD 17.5): if the owner hid their DOB,
   // strip it from the public response. Viewing your own profile hits
   // /users/me instead, so we don't need a self-bypass here.
@@ -378,6 +394,19 @@ export async function followUser(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { id: target } = req.params;
   if (target === userId) return res.status(400).json({ error: 'Cannot follow yourself' });
+
+  // Block gate (SC-31): can't follow someone you've blocked, or who has blocked
+  // you. Without this, a blocked user could re-follow after the block-time
+  // unfollow, defeating the block.
+  const { data: block } = await supabase
+    .from('user_blocks')
+    .select('id')
+    .or(
+      `and(blocker_id.eq.${userId},blocked_id.eq.${target}),and(blocker_id.eq.${target},blocked_id.eq.${userId})`,
+    )
+    .maybeSingle();
+  if (block) return res.status(403).json({ error: 'Cannot follow this user' });
+
   const { error } = await supabase
     .from('follow_relationships')
     .insert({ follower_id: userId, following_id: target });

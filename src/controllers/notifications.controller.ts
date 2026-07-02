@@ -45,12 +45,17 @@ export async function markRead(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { id } = req.params;
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from('notifications')
     .update({ read: true })
     .eq('id', id)
-    .eq('user_id', userId);
+    .eq('user_id', userId)
+    .select('id');
   if (error) return res.status(500).json({ error: error.message });
+  // SC-32: a 0-row update (not your notification, or missing) must 404.
+  if (!updated || updated.length === 0) {
+    return res.status(404).json({ error: 'Notification not found' });
+  }
   return res.json({ success: true });
 }
 
@@ -152,11 +157,16 @@ export async function deleteNotification(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { id } = req.params;
-  const { error } = await supabase
+  const { data: deleted, error } = await supabase
     .from('notifications')
     .delete()
     .eq('id', id)
-    .eq('user_id', userId);
+    .eq('user_id', userId)
+    .select('id');
   if (error) return res.status(500).json({ error: error.message });
+  // SC-32: a 0-row delete (not your notification, or missing) must 404.
+  if (!deleted || deleted.length === 0) {
+    return res.status(404).json({ error: 'Notification not found' });
+  }
   return res.json({ success: true });
 }

@@ -3,6 +3,32 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { calculateDLSTarget } from '../utils/dls';
 import { aggregateCricketPlayers } from './scoring.controller';
+import { isTerminalMatchStatus } from '../utils/validation';
+
+/**
+ * Shared gate for match-mutating feature endpoints (DLS, event edit/delete,
+ * innings stats): the caller must be the creator/umpire (SC-42 also adds the
+ * missing auth check to DLS/innings which previously had none), and a finished
+ * match is immutable (409). Returns { error } to short-circuit, or {} to pass.
+ */
+async function loadScorableMatch(
+  id: string,
+  userId: string,
+): Promise<{ error?: { status: number; msg: string } }> {
+  const { data: match } = await supabase
+    .from('matches')
+    .select('created_by, umpire_id, status')
+    .eq('id', id)
+    .maybeSingle();
+  if (!match) return { error: { status: 404, msg: 'Match not found' } };
+  if (match.created_by !== userId && match.umpire_id !== userId) {
+    return { error: { status: 403, msg: 'Only the scorer or umpire can modify this match' } };
+  }
+  if (isTerminalMatchStatus(match.status)) {
+    return { error: { status: 409, msg: 'This match is finished and can no longer be modified' } };
+  }
+  return {};
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // FEATURE 1 — MVP / Player of the Match
@@ -192,6 +218,8 @@ export async function applyDLS(req: Request, res: Response) {
     if (team1_score == null || total_overs == null || team2_overs_remaining == null || team2_wickets == null) {
       return res.status(400).json({ error: 'team1_score, total_overs, team2_overs_remaining, team2_wickets required' });
     }
+    const gate = await loadScorableMatch(id, userId);
+    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg });
 
     const result = calculateDLSTarget(
       Number(team1_score),
@@ -231,16 +259,9 @@ export async function editMatchEvent(req: Request, res: Response) {
     const { event_id, changes } = req.body || {};
     if (!event_id || !changes) return res.status(400).json({ error: 'event_id and changes required' });
 
-    // Verify scorer/umpire/creator
-    const { data: match } = await supabase
-      .from('matches')
-      .select('created_by, umpire_id')
-      .eq('id', id)
-      .maybeSingle();
-    if (!match) return res.status(404).json({ error: 'Match not found' });
-    if (match.created_by !== userId && match.umpire_id !== userId) {
-      return res.status(403).json({ error: 'Only scorer or umpire can edit events' });
-    }
+    // Verify scorer/umpire/creator + reject finished matches (SC-42)
+    const gate = await loadScorableMatch(id, userId);
+    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg });
 
     // Get current event
     const { data: event } = await supabase
@@ -275,15 +296,9 @@ export async function deleteMatchEvent(req: Request, res: Response) {
   try {
     const { id, eventId } = req.params;
 
-    const { data: match } = await supabase
-      .from('matches')
-      .select('created_by, umpire_id')
-      .eq('id', id)
-      .maybeSingle();
-    if (!match) return res.status(404).json({ error: 'Match not found' });
-    if (match.created_by !== userId && match.umpire_id !== userId) {
-      return res.status(403).json({ error: 'Only scorer or umpire can delete events' });
-    }
+    // Verify scorer/umpire/creator + reject finished matches (SC-42)
+    const gate = await loadScorableMatch(id, userId);
+    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg });
 
     // Get event for audit
     const { data: event } = await supabase
@@ -323,6 +338,8 @@ export async function upsertInningsStats(req: Request, res: Response) {
     if (!Array.isArray(stats) || stats.length === 0) {
       return res.status(400).json({ error: 'stats array required' });
     }
+    const gate = await loadScorableMatch(id, userId);
+    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg });
 
     const rows = stats.map((s: any) => ({
       match_id: id,

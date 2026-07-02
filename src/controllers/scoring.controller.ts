@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { notifyUsers } from '../utils/notify';
+import { isTerminalMatchStatus } from '../utils/validation';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
 // every participant in the match. Failures are swallowed — the fan-out must
@@ -57,6 +58,11 @@ export async function createEvent(req: Request, res: Response) {
     const auth = await authorizeScorer(matchId, userId);
     if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
     const match = auth.match;
+
+    // SC-42: a finished match is immutable — no more scoring events.
+    if (isTerminalMatchStatus(match.status)) {
+      return res.status(409).json({ error: 'This match is finished and can no longer be scored' });
+    }
 
     // Catch-all: any scored event means the match is in progress, so promote it
     // to `live`. The toss handler already does this for the normal flow; this
@@ -524,6 +530,10 @@ export async function undoEvent(req: Request, res: Response) {
     const matchId = String(req.params.matchId);
     const auth = await authorizeScorer(matchId, userId);
     if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+    // SC-42: no edits to a finished match.
+    if (isTerminalMatchStatus(auth.match.status)) {
+      return res.status(409).json({ error: 'This match is finished and can no longer be edited' });
+    }
 
     const { data: latest } = await supabase
       .from('match_events')

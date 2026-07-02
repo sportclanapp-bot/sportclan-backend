@@ -7,7 +7,8 @@ import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
-import { isSportInactive } from '../utils/sports';
+import { validateSportForCreate } from '../utils/sports';
+import { isTerminalMatchStatus } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats } from './scoring.controller';
@@ -34,11 +35,9 @@ export async function createMatch(req: Request, res: Response) {
       is_ranked,
     } = req.body || {};
     if (!sport_id) return res.status(400).json({ error: 'sport_id is required' });
-    // Reject soft-deactivated sports (kabaddi/athletics). No-op until the
-    // sports.is_active column exists.
-    if (await isSportInactive(sport_id)) {
-      return res.status(400).json({ error: 'This sport is not available' });
-    }
+    // Validate the sport (unknown/malformed/deactivated → clean 400, not a 500).
+    const sportErr = await validateSportForCreate(sport_id);
+    if (sportErr) return res.status(400).json({ error: sportErr });
     // A ranked match counts toward ELO / leaderboards, so it must be played
     // between two REGISTERED teams (free-text sides have no roster to attribute
     // stats to). Per-side lineup (>=2) is enforced at completion (A5-003 P3).
@@ -164,6 +163,10 @@ export async function setMatchTossHandler(req: Request, res: Response) {
   if (!match) return res.status(404).json({ error: 'Match not found' });
   if (match.created_by !== userId && match.umpire_id !== userId) {
     return res.status(403).json({ error: 'Only the creator or umpire can record the toss' });
+  }
+  // SC-42: a finished match is immutable — no toss changes.
+  if (isTerminalMatchStatus(match.status)) {
+    return res.status(409).json({ error: 'This match is finished and can no longer be changed' });
   }
 
   // Recording the toss is the moment play begins, so flip the match to `live`
@@ -882,6 +885,22 @@ export async function completeMatch(req: Request, res: Response) {
       return res.status(403).json({ error: 'Only the creator or umpire can complete' });
     }
     if (match.status === 'completed') return res.status(400).json({ error: 'Match already completed' });
+    // SC-42: an abandoned/cancelled match is already terminal — can't complete it.
+    if (isTerminalMatchStatus(match.status)) {
+      return res.status(409).json({ error: 'This match is already finished' });
+    }
+    // SC-42: don't complete a match that was never played — a scheduled match
+    // with no scoring events and no explicit result. (The organiser
+    // "record result" flow supplies winner_team_id, which stays allowed.)
+    if (match.status === 'scheduled' && !winner_team_id) {
+      const { count } = await supabase
+        .from('match_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('match_id', id);
+      if (!count) {
+        return res.status(400).json({ error: 'Cannot complete a match that has not started' });
+      }
+    }
 
     // SC-23: knockout bracket matches can't end in a draw — a decisive winner is
     // required so the bracket can advance. (Group-stage matches, round=0, and

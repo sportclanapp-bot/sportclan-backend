@@ -130,8 +130,16 @@ export async function createEvent(req: Request, res: Response) {
               : `${playerName} out | ${teamName(side)} ${scoreStr}`;
           void fanoutScoreUpdate(matchId, title, body);
         } else {
-          // generic score / goal — points or goals across all other sports
-          const val = (s: any) => s?.score ?? s?.goals ?? s?.points ?? 0;
+          // generic score / goal — points or goals across all other sports.
+          // Rally-family sports (badminton/TT/volleyball/pickleball/tennis) keep
+          // the live running count in `points` (their `score` is sets-won, 0
+          // early game); football goals / basketball points keep it in
+          // `score`/`goals`.
+          const val = (s: any) => {
+            if (!s) return 0;
+            if (Array.isArray(s.sets)) return s.points ?? 0;
+            return s.score ?? s.goals ?? s.points ?? 0;
+          };
           const title = payload?.kind === 'goal' ? 'GOAL!' : 'Score!';
           const body = `${teamName(side)} scores! ${val(summary.A)}-${val(summary.B)}`;
           void fanoutScoreUpdate(matchId, title, body);

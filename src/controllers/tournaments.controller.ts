@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
+import { isSportInactive } from '../utils/sports';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -57,6 +58,11 @@ export async function createTournament(req: Request, res: Response) {
     } = req.body || {};
     if (!sport_id || !name || !format) {
       return res.status(400).json({ error: 'sport_id, name, format are required' });
+    }
+    // Reject soft-deactivated sports (kabaddi/athletics). No-op until the
+    // sports.is_active column exists.
+    if (await isSportInactive(sport_id)) {
+      return res.status(400).json({ error: 'This sport is not available' });
     }
     // Whitelist only string values in sport_metadata to avoid arbitrary
     // shape injection. Empty strings and __custom__ sentinel are dropped.

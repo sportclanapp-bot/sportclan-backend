@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
+import { isSportInactive } from '../utils/sports';
 
 function generateJoinCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -19,6 +20,11 @@ export async function createTeam(req: Request, res: Response) {
     const { sport_id, name, logo_url, city_id } = req.body || {};
     if (!sport_id || !name) {
       return res.status(400).json({ error: 'sport_id and name are required' });
+    }
+    // Reject soft-deactivated sports (kabaddi/athletics). No-op until the
+    // sports.is_active column exists.
+    if (await isSportInactive(sport_id)) {
+      return res.status(400).json({ error: 'This sport is not available' });
     }
     // Generate a unique join code
     let join_code = generateJoinCode();

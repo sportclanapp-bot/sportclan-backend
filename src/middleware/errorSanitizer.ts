@@ -12,7 +12,11 @@ import { Request, Response, NextFunction } from 'express';
 export function sanitizeErrorResponses(req: Request, res: Response, next: NextFunction) {
   const originalJson = res.json.bind(res);
   (res as unknown as { json: (b: unknown) => Response }).json = (body: unknown) => {
-    if (res.statusCode >= 500 && body && typeof body === 'object') {
+    // Scrub ONLY 500 Internal Server Error — that's where unhandled DB errors
+    // (raw Postgres strings) surface. Intentional 5xx like 503 Service
+    // Unavailable carry hand-written, safe, user-facing messages (payments/OAuth
+    // "feature unavailable") and must be preserved (SC-45).
+    if (res.statusCode === 500 && body && typeof body === 'object') {
       const b = body as Record<string, unknown>;
       const detail = b.error ?? b.message;
       if (typeof detail === 'string' && detail !== 'Internal server error') {

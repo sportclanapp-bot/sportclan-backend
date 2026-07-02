@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
-import { parsePagination, pageMeta } from '../utils/pagination';
+import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
+import { sanitizeError } from '../utils/response';
 
 // GET /leaderboard
 // Query:
@@ -148,7 +149,7 @@ export async function getLeaderboard(req: Request, res: Response) {
       .order('matches_played', { ascending: false })
       .order('user_id', { ascending: true })
       .range(p.from, p.to);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
 
     const pageRows = (rows || []) as Row[];
     const userMap = await fetchUserMap(pageRows.map((r) => r.user_id));

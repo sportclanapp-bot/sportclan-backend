@@ -35,11 +35,21 @@ export function parsePagination(
 
   let offset = parseInt(String(query.offset ?? 0), 10);
   if (!Number.isFinite(offset) || offset < 0) offset = 0;
-  // Cap the offset (SC-41): a huge value made Supabase `.range()` throw a
-  // Postgres range error → unhandled 500. Beyond this there's nothing to page.
-  offset = Math.min(offset, 1_000_000);
+  // Cap the offset defensively; the real overflow (offset past the row count)
+  // is handled by isRangeError() below (SC-41).
+  offset = Math.min(offset, 10_000_000);
 
   return { limit, offset, from: offset, to: offset + limit - 1 };
+}
+
+/**
+ * PostgREST returns 416 "Requested range not satisfiable" (code PGRST103) when
+ * a `.range()` offset lands past the end of the result set. That surfaced as an
+ * unhandled 500 (SC-41). List endpoints treat it as an empty final page instead.
+ */
+export function isRangeError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  return error.code === 'PGRST103' || /range not satisfiable/i.test(error.message || '');
 }
 
 /** Standard pagination envelope appended to list responses. */

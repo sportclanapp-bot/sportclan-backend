@@ -5,7 +5,7 @@ import { notifyUser, notifyUsers } from '../utils/notify';
 import { upsertVenue } from './venues.controller';
 import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
-import { parsePagination, pageMeta } from '../utils/pagination';
+import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { isTerminalMatchStatus } from '../utils/validation';
@@ -273,7 +273,7 @@ export async function listMatches(req: Request, res: Response) {
     if (team_id) query = query.or(`team_a_id.eq.${team_id},team_b_id.eq.${team_id}`);
     if (mine === '1') query = query.eq('created_by', userId);
     const { data, error, count } = await query;
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ matches: data || [], ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

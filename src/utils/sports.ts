@@ -19,3 +19,24 @@ export async function isSportInactive(sportId?: string | null): Promise<boolean>
     .maybeSingle();
   return data?.is_active === false;
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Validate a sport_id at create time (SC-36). Returns a client-safe error
+ * message string, or null when the sport is valid + active. Replaces the
+ * bare isSportInactive() gate: a malformed or unknown sport_id previously
+ * slipped through and 500'd on the uuid cast / FK violation at insert.
+ */
+export async function validateSportForCreate(sportId?: string | null): Promise<string | null> {
+  if (!sportId || !UUID_RE.test(String(sportId))) return 'A valid sport is required';
+  const { data } = await supabase
+    .from('sports')
+    .select('*')
+    .eq('id', sportId)
+    .maybeSingle();
+  if (!data) return 'Unknown sport';
+  if (data.is_active === false) return 'This sport is not available';
+  return null;
+}
+

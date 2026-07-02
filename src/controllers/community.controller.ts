@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
+import { LIMITS } from '../utils/validation';
 
 // ─── Basic profanity word list ───────────────────────────────────────────────
 const PROFANITY_LIST = [
@@ -149,6 +150,10 @@ export async function createPost(req: Request, res: Response) {
   if (!bodyContent || bodyContent.trim().length === 0) {
     return res.status(400).json({ error: 'Content is required' });
   }
+  // Length cap (SC-40) — over-length previously hit the DB CHECK and 500'd.
+  if (bodyContent.length > LIMITS.postTextMax) {
+    return res.status(400).json({ error: `Post must be ${LIMITS.postTextMax} characters or fewer` });
+  }
 
   // Profanity check
   const detected = detectProfanity(bodyContent);
@@ -275,6 +280,9 @@ export async function updatePost(req: Request, res: Response) {
   const { content, sport_id, city_id, post_type, link_url } = req.body;
 
   if (content) {
+    if (content.length > LIMITS.postTextMax) {
+      return res.status(400).json({ error: `Post must be ${LIMITS.postTextMax} characters or fewer` });
+    }
     const detected = detectProfanity(content);
     if (detected.length > 0) {
       return res.status(400).json({ error: 'PROFANITY_DETECTED', detected_words: detected });
@@ -390,6 +398,9 @@ export async function createComment(req: Request, res: Response) {
 
   if (!content || content.trim().length === 0) {
     return res.status(400).json({ error: 'Content is required' });
+  }
+  if (content.length > LIMITS.postTextMax) {
+    return res.status(400).json({ error: `Comment must be ${LIMITS.postTextMax} characters or fewer` });
   }
 
   const detected = detectProfanity(content);
@@ -588,13 +599,15 @@ export async function votePoll(req: Request, res: Response) {
   // 1. Fetch post; verify it's a poll
   const { data: post, error: fetchErr } = await supabase
     .from('community_posts')
-    .select('id, poll_options, post_type')
+    .select('id, poll_options, post_type, is_closed')
     .eq('id', id)
     .maybeSingle();
 
   if (fetchErr) return res.status(500).json({ error: sanitizeError(fetchErr) });
   if (!post) return res.status(404).json({ error: 'Post not found' });
   if (!post.poll_options) return res.status(400).json({ error: 'Not a poll post' });
+  // SC-43: a closed poll is final — no more votes.
+  if (post.is_closed) return res.status(409).json({ error: 'This poll is closed' });
 
   const options = post.poll_options as Array<{ id: string; text: string; vote_count: number }>;
   if (!options.find((o) => o.id === option_id)) {

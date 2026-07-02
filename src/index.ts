@@ -38,6 +38,7 @@ import referralsRoutes from './routes/referrals.routes';
 import devRoutes from './routes/dev.routes';
 import adminRoutes from './routes/admin.routes';
 import jobsRoutes from './routes/jobs.routes';
+import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
 import { sweepExpiredPremium } from './controllers/subscriptions.controller';
 import { sweepStaleLiveMatches } from './controllers/matches.controller';
 import {
@@ -63,6 +64,9 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // 12mb cap supports base64-encoded profile photos (Change #4: no client size limit;
 // server compresses). Larger uploads should switch to multipart in a future module.
 app.use(express.json({ limit: '12mb' }));
+
+// Backstop: scrub internal/DB detail from any 5xx response (SC-44).
+app.use(sanitizeErrorResponses);
 
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -135,6 +139,9 @@ app.use('/referrals', referralsRoutes);
 app.use('/dev', devRoutes);
 app.use('/internal/jobs', jobsRoutes);
 app.use('/admin', adminRoutes);
+
+// Final backstop for uncaught throws (must be last).
+app.use(globalErrorHandler);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {

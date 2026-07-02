@@ -11,11 +11,15 @@ export function err(res: Response, status: number, message: string, code?: strin
   return res.status(status).json({ success: false, message, ...(code ? { code } : {}) });
 }
 
-// Sanitize Supabase/DB error messages so internals don't leak to clients.
-// In development mode we pass the raw message through for debugging.
+// Sanitize Supabase/DB error messages so internals never leak to clients
+// (SC-44). Always returns a generic message and logs the real detail
+// server-side, regardless of NODE_ENV — relying on the env flag was fragile
+// (it isn't set outside prod, so raw Postgres strings were leaking). The 5xx
+// response backstop middleware genericizes anything this misses.
 export function sanitizeError(error: { message?: string } | null | undefined): string {
-  if (process.env.NODE_ENV !== 'production') {
-    return error?.message ?? 'An unexpected error occurred';
+  if (error?.message) {
+    // eslint-disable-next-line no-console
+    console.error('[db/internal error]', error.message);
   }
-  return 'An unexpected error occurred';
+  return 'Internal server error';
 }

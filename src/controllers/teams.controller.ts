@@ -3,7 +3,8 @@ import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
-import { isSportInactive } from '../utils/sports';
+import { validateSportForCreate } from '../utils/sports';
+import { LIMITS } from '../utils/validation';
 
 function generateJoinCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -21,11 +22,12 @@ export async function createTeam(req: Request, res: Response) {
     if (!sport_id || !name) {
       return res.status(400).json({ error: 'sport_id and name are required' });
     }
-    // Reject soft-deactivated sports (kabaddi/athletics). No-op until the
-    // sports.is_active column exists.
-    if (await isSportInactive(sport_id)) {
-      return res.status(400).json({ error: 'This sport is not available' });
+    if (String(name).length > LIMITS.teamNameMax) {
+      return res.status(400).json({ error: `Team name must be ${LIMITS.teamNameMax} characters or fewer` });
     }
+    // Validate the sport (unknown/malformed/deactivated → clean 400, not a 500).
+    const sportErr = await validateSportForCreate(sport_id);
+    if (sportErr) return res.status(400).json({ error: sportErr });
     // Generate a unique join code
     let join_code = generateJoinCode();
     for (let i = 0; i < 5; i++) {

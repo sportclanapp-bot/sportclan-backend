@@ -155,7 +155,37 @@ export async function getMe(req: Request, res: Response) {
     accountTypes = isValidAccountType(data.account_type) ? [data.account_type] : ['player'];
   }
 
-  return res.json({ user: { ...data, account_types: accountTypes } });
+  // Aggregate header stats (SC-46): total matches across all the user's sports
+  // + their rank in the most-played sport. Best-effort — never fails getMe, and
+  // replaces the hardcoded 0 / — the profile header used to show.
+  let total_matches = 0;
+  let city_rank: number | null = null;
+  try {
+    const { data: sp } = await supabase
+      .from('user_sport_profiles')
+      .select('sport_id, rating, matches_played')
+      .eq('user_id', userId);
+    if (sp && sp.length) {
+      total_matches = sp.reduce((s, p: any) => s + (p.matches_played ?? 0), 0);
+      const primary = [...sp].sort(
+        (a: any, b: any) => (b.matches_played ?? 0) - (a.matches_played ?? 0),
+      )[0] as any;
+      if (primary && (primary.matches_played ?? 0) > 0) {
+        const { count } = await supabase
+          .from('user_sport_profiles')
+          .select('id', { count: 'exact', head: true })
+          .eq('sport_id', primary.sport_id)
+          .gt('rating', primary.rating);
+        city_rank = (count ?? 0) + 1;
+      }
+    }
+  } catch {
+    // best-effort
+  }
+
+  return res.json({
+    user: { ...data, account_types: accountTypes, total_matches, city_rank },
+  });
 }
 
 // GET /users/:id — public profile

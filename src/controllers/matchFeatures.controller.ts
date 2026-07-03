@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { calculateDLSTarget } from '../utils/dls';
-import { aggregateCricketPlayers } from './scoring.controller';
+import { aggregateCricketPlayers, aggregatePlayers, isGuestId, type CricketPlayerLine } from './scoring.controller';
 import { isTerminalMatchStatus } from '../utils/validation';
 
 /**
@@ -56,20 +56,34 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
     .select('user_id, team_side')
     .eq('match_id', matchId);
 
-  if (!participants?.length) return null;
+  // Attribution rollup — the authoritative per-player source for every sport,
+  // and the ONLY source for casual/guest matches (which have no participants).
+  // It gives the candidate set, each player's side, and (for guests / SC-52
+  // registered players) their display name. So MVP no longer requires
+  // match_participants: unranked-registered and casual/guest matches now get a
+  // real MVP too, instead of the old `if (!participants?.length) return null`.
+  const roll = aggregatePlayers(slug, (events ?? []) as { event_type: string; payload: any }[]);
+  const sideOf = new Map<string, 'A' | 'B'>();
+  const nameOf = new Map<string, string>();
+  for (const p of participants ?? []) sideOf.set(p.user_id, p.team_side as 'A' | 'B');
+  for (const [uid, line] of Object.entries(roll)) {
+    sideOf.set(uid, line.side);
+    if (line.name) nameOf.set(uid, line.name);
+  }
 
-  // Score each participant based on sport-specific formula
+  // Score each candidate (every participant AND every attributed player,
+  // registered or guest) with the sport-specific formula.
   const scores = new Map<string, number>();
-  for (const p of participants) scores.set(p.user_id, 0);
+  for (const p of participants ?? []) scores.set(p.user_id, 0);
+  for (const uid of Object.keys(roll)) if (!scores.has(uid)) scores.set(uid, 0);
 
   // Cricket is attributed via the per-player rollup (batsman/bowler ids in the
   // event payload), NOT created_by — A5-003. Runs + wickets×25, credited to the
-  // real striker/bowler. Attributed players who aren't in the participant list
-  // are still credited (attribution is authoritative).
+  // real striker/bowler (or a guest).
   if (slug === 'cricket') {
-    const roll = aggregateCricketPlayers((events ?? []) as { event_type: string; payload: any }[]);
     for (const [uid, line] of Object.entries(roll)) {
-      scores.set(uid, (scores.get(uid) ?? 0) + line.runs + line.bowl_wickets * 25);
+      const l = line as CricketPlayerLine;
+      scores.set(uid, (scores.get(uid) ?? 0) + l.runs + l.bowl_wickets * 25);
     }
   }
 
@@ -111,15 +125,15 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   // always returned the first team-A participant regardless of who won, A5-008.)
   const winnerSide = (match.score_summary as { winner_side?: 'A' | 'B' })?.winner_side ?? null;
   if (slug === 'chess' && winnerSide) {
-    const winner = participants.find((p2) => p2.team_side === winnerSide);
+    // Winner-side participant (chess has no scoring events → no rollup). Casual
+    // guest chess has neither, so it stays MVP-less (the result still displays).
+    const winner = (participants ?? []).find((p2) => p2.team_side === winnerSide);
     if (winner) scores.set(winner.user_id, 9999);
   }
 
   // Find top scorer. Tie-breaker (SC-14): higher score → player on the winning
-  // side → lowest user_id (stable/deterministic). Previously ties were broken
-  // by Map iteration order, which made the MVP non-deterministic when several
-  // players scored equally.
-  const sideOf = new Map(participants.map((p2) => [p2.user_id, p2.team_side]));
+  // side → lowest id (stable/deterministic). `sideOf` was built above from
+  // participants ∪ rollup, so it covers guests too.
   let mvpId: string | null = null;
   let best: { score: number; onWinning: boolean; uid: string } | null = null;
   for (const [uid, score] of scores) {
@@ -134,9 +148,24 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   }
   mvpId = best?.uid ?? null;
 
-  if (mvpId) {
-    await supabase.from('matches').update({ mvp_user_id: mvpId }).eq('id', matchId);
-  }
+  // Persist. Real users → mvp_user_id (FK; feeds profile MVP tallies). Guests →
+  // name-only in score_summary.mvp for DISPLAY; mvp_user_id stays null so a
+  // guest never touches any real user's stats/leaderboard/ELO.
+  const guest = mvpId ? isGuestId(mvpId) : false;
+  const summary =
+    match.score_summary && typeof match.score_summary === 'object'
+      ? (match.score_summary as Record<string, unknown>)
+      : {};
+  await supabase
+    .from('matches')
+    .update({
+      mvp_user_id: mvpId && !guest ? mvpId : null,
+      score_summary: {
+        ...summary,
+        mvp: mvpId ? { id: mvpId, name: nameOf.get(mvpId) ?? null, guest } : null,
+      },
+    })
+    .eq('id', matchId);
   return mvpId;
 }
 
@@ -145,17 +174,28 @@ export async function getMatchMVP(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('mvp_user_id')
+      .select('mvp_user_id, score_summary')
       .eq('id', id)
       .maybeSingle();
-    if (!match?.mvp_user_id) return res.json({ mvp: null });
 
-    const { data: user } = await supabase
-      .from('users')
-      .select('id, name, username, profile_picture_url, is_premium')
-      .eq('id', match.mvp_user_id)
-      .maybeSingle();
-    return res.json({ mvp: user });
+    // Real-user MVP — resolve the full user (feeds the profile MVP tally).
+    if (match?.mvp_user_id) {
+      const { data: user } = await supabase
+        .from('users')
+        .select('id, name, username, profile_picture_url, is_premium')
+        .eq('id', match.mvp_user_id)
+        .maybeSingle();
+      if (user) return res.json({ mvp: { ...user, guest: false } });
+    }
+
+    // Guest / name-only MVP (casual matches) — display-only, no users row.
+    const gm = (match?.score_summary as { mvp?: { id?: string; name?: string; guest?: boolean } } | null)?.mvp;
+    if (gm?.guest && gm.name) {
+      return res.json({
+        mvp: { id: gm.id, name: gm.name, username: null, profile_picture_url: null, is_premium: false, guest: true },
+      });
+    }
+    return res.json({ mvp: null });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

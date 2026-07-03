@@ -36,7 +36,7 @@ async function fanoutScoreUpdate(
 async function authorizeScorer(matchId: string, userId: string) {
   const { data: match } = await supabase
     .from('matches')
-    .select('id, created_by, umpire_id, score_summary, sport_id, status')
+    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return { ok: false as const, status: 404, error: 'Match not found' };
@@ -73,6 +73,23 @@ export async function createEvent(req: Request, res: Response) {
         await supabase.from('matches').update({ status: 'live' }).eq('id', matchId);
       } catch {
         // best-effort — don't block scoring on the status flip
+      }
+    }
+
+    // Guest players (manual entry for casual matches) + untrusted-name hygiene.
+    // Ranked matches are real-users-only (ELO/leaderboards) — reject guest ids
+    // there as defence-in-depth (the app also hides guest mode for ranked).
+    if (payload && typeof payload === 'object') {
+      const ids = [payload.player_id, payload.batsman_id, payload.bowler_id];
+      if (match.is_ranked && ids.some((v: unknown) => isGuestId(v as string))) {
+        return res.status(400).json({ error: 'Ranked matches require registered players, not guests.' });
+      }
+      for (const k of ['player_name', 'batsman_name', 'bowler_name'] as const) {
+        if (payload[k] != null) {
+          const clean = sanitizePlayerName(payload[k]);
+          if (clean) payload[k] = clean;
+          else delete payload[k];
+        }
       }
     }
 
@@ -227,6 +244,7 @@ function setWon(
 // so casual/unattributed matches yield an empty map and behave as before.
 export interface CricketPlayerLine {
   side: 'A' | 'B';
+  name?: string; // SC-14/guest: display name captured from the event payload
   runs: number; balls: number; fours: number; sixes: number;
   out: boolean; dismissal?: string;
   bowl_balls: number; bowl_runs: number; bowl_wickets: number;
@@ -236,10 +254,13 @@ export function aggregateCricketPlayers(
   events: { event_type: string; payload: any }[],
 ): Record<string, CricketPlayerLine> {
   const players: Record<string, CricketPlayerLine> = {};
-  const ensure = (id: string, side: 'A' | 'B'): CricketPlayerLine => {
+  const ensure = (id: string, side: 'A' | 'B', name?: string): CricketPlayerLine => {
     if (!players[id]) {
       players[id] = { side, runs: 0, balls: 0, fours: 0, sixes: 0, out: false, bowl_balls: 0, bowl_runs: 0, bowl_wickets: 0 };
     }
+    // First non-empty name wins — lets the scorecard/MVP resolve a real name
+    // straight from the rollup (fixes SC-52) and names guest players too.
+    if (name && !players[id]!.name) players[id]!.name = name;
     return players[id]!;
   };
   for (const e of events) {
@@ -248,38 +269,40 @@ export function aggregateCricketPlayers(
     const bowlSide: 'A' | 'B' = batSide === 'A' ? 'B' : 'A';
     const batId: string | undefined = p.batsman_id || p.player_id;
     const bowlId: string | undefined = p.bowler_id;
+    const batName: string | undefined = p.batsman_name || p.player_name;
+    const bowlName: string | undefined = p.bowler_name;
     if (e.event_type === 'ball') {
       const runs = Number(p.runs ?? 0);
       if (batId) {
-        const b = ensure(batId, batSide);
+        const b = ensure(batId, batSide, batName);
         if (!p.is_extra) b.balls += 1;
         b.runs += runs;
         if (runs === 4) b.fours += 1;
         if (runs === 6) b.sixes += 1;
       }
       if (bowlId) {
-        const w = ensure(bowlId, bowlSide);
+        const w = ensure(bowlId, bowlSide, bowlName);
         if (!p.is_extra) w.bowl_balls += 1;
         w.bowl_runs += runs;
       }
     } else if (e.event_type === 'extra') {
       const runs = Number(p.runs ?? 0);
       const legal = p.type === 'B' || p.type === 'Lb'; // byes/leg-byes are legal balls
-      if (batId && legal) ensure(batId, batSide).balls += 1; // ball faced, runs are extras (not the batter's)
+      if (batId && legal) ensure(batId, batSide, batName).balls += 1; // ball faced, runs are extras (not the batter's)
       if (bowlId) {
-        const w = ensure(bowlId, bowlSide);
+        const w = ensure(bowlId, bowlSide, bowlName);
         if (legal) w.bowl_balls += 1; // byes/leg-byes NOT charged to the bowler
         else w.bowl_runs += runs;     // wides/no-balls ARE charged to the bowler
       }
     } else if (e.event_type === 'wicket') {
       if (batId) {
-        const b = ensure(batId, batSide);
+        const b = ensure(batId, batSide, batName);
         if (!p.is_extra) b.balls += 1;
         b.out = true;
         b.dismissal = p.wicket_type || p.type || 'out';
       }
       if (bowlId) {
-        const w = ensure(bowlId, bowlSide);
+        const w = ensure(bowlId, bowlSide, bowlName);
         if (!p.is_extra) w.bowl_balls += 1;
         const wt = String(p.wicket_type || p.type || '').toLowerCase().replace(/[^a-z]/g, '');
         // Run-outs / retirements aren't credited to the bowler.
@@ -295,12 +318,38 @@ export function aggregateCricketPlayers(
 // `player_id` the scorer credits per event (the SportScoringScreen "Credit
 // player" picker). Events without player_id don't contribute — casual/skipped
 // attribution yields an empty map, exactly like cricket.
-export interface GoalPlayerLine { side: 'A' | 'B'; goals: number; assists: number }
-export interface PointPlayerLine { side: 'A' | 'B'; points: number; assists: number }
-export interface RallyPlayerLine { side: 'A' | 'B'; points: number }
+export interface GoalPlayerLine { side: 'A' | 'B'; name?: string; goals: number; assists: number }
+export interface PointPlayerLine { side: 'A' | 'B'; name?: string; points: number; assists: number }
+export interface RallyPlayerLine { side: 'A' | 'B'; name?: string; points: number }
 export type PlayerLine = CricketPlayerLine | GoalPlayerLine | PointPlayerLine | RallyPlayerLine;
 
 const sideOfPayload = (p: any): 'A' | 'B' => (p?.team_side === 'B' ? 'B' : 'A');
+
+// ─── Guest players (manual entry for casual matches) ────────────────────────
+// Casual/free-text matches have no roster. The scorer can type player names;
+// the app mints a stable `guest:<uuid>` id per player and stamps it (with
+// `player_name`) on each event, so guests ride the SAME player_id-keyed
+// attribution rails as registered users. Guest ids must NEVER be treated as a
+// real user_id — they carry no users row, and must be excluded from any
+// users/FK lookup (MVP mvp_user_id, innings_stats, ELO/leaderboard).
+export const GUEST_PREFIX = 'guest:';
+export const isGuestId = (id: string | null | undefined): boolean =>
+  typeof id === 'string' && id.startsWith(GUEST_PREFIX);
+
+// Scorer-typed player name is untrusted input — trim, strip control chars,
+// collapse whitespace, and cap length so it can't bloat the payload or break
+// display. Returns undefined for empty/whitespace-only names.
+export function sanitizePlayerName(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  // eslint-disable-next-line no-control-regex
+  const clean = raw.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  return clean.length ? clean : undefined;
+}
+
+// Capture the display name a payload carries for a given player-id key, so the
+// aggregates can store it once (first non-empty wins).
+const nameFromPayload = (p: any): string | undefined =>
+  sanitizePlayerName(p?.player_name);
 
 // Goal sports (football, hockey): goals + assists per scorer.
 export function aggregateGoalPlayers(events: { event_type: string; payload: any }[]): Record<string, GoalPlayerLine> {
@@ -313,6 +362,7 @@ export function aggregateGoalPlayers(events: { event_type: string; payload: any 
     const isAssist = e.event_type === 'assist';
     if (!isGoal && !isAssist) continue;
     const line = (players[id] ??= { side: sideOfPayload(p), goals: 0, assists: 0 });
+    if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
     if (isGoal) line.goals += 1;
     if (isAssist) line.assists += 1;
   }
@@ -328,9 +378,11 @@ export function aggregatePointPlayers(events: { event_type: string; payload: any
     if (!id) continue;
     if (e.event_type === 'score' || e.event_type === 'basket') {
       const line = (players[id] ??= { side: sideOfPayload(p), points: 0, assists: 0 });
+      if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
       line.points += Number(p.value ?? 0);
     } else if (e.event_type === 'assist') {
       const line = (players[id] ??= { side: sideOfPayload(p), points: 0, assists: 0 });
+      if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
       line.assists += 1;
     }
   }
@@ -348,6 +400,7 @@ export function aggregateRallyPlayers(events: { event_type: string; payload: any
     if (!id) continue;
     if (e.event_type !== 'score' && e.event_type !== 'point') continue;
     const line = (players[id] ??= { side: sideOfPayload(p), points: 0 });
+    if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
     line.points += Number(p.value ?? 1);
   }
   return players;
@@ -516,7 +569,10 @@ export async function writeCricketInningsStats(matchId: string): Promise<void> {
   const players = aggregateCricketPlayers(events as any[]);
   const teamId = (side: 'A' | 'B'): string | null =>
     (side === 'A' ? match.team_a_id : match.team_b_id) ?? null;
-  const rows = Object.entries(players).map(([userId, line]) => ({
+  const rows = Object.entries(players)
+    // Guests carry no users row — never insert a guest id into the user_id FK.
+    .filter(([userId]) => !isGuestId(userId))
+    .map(([userId, line]) => ({
     match_id: matchId,
     user_id: userId,
     team_id: teamId(line.side),

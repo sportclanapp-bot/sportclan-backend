@@ -562,7 +562,14 @@ export async function addParticipants(req: Request, res: Response) {
     if (match.created_by !== userId && match.umpire_id !== userId) {
       return res.status(403).json({ error: 'Only the creator or umpire can add participants' });
     }
-    const rows = participants.map((p: any) => ({
+    // SC-53: dedupe by user_id (last wins) — a batch containing the same user
+    // twice (e.g. a player listed on both sides) would otherwise make Postgres'
+    // ON CONFLICT upsert fail with "cannot affect row a second time" → 500.
+    const byUser = new Map<string, any>();
+    for (const p of participants as any[]) {
+      if (p && p.user_id) byUser.set(p.user_id, p);
+    }
+    const rows = Array.from(byUser.values()).map((p: any) => ({
       match_id: id,
       user_id: p.user_id,
       team_side: p.team_side,
@@ -570,6 +577,9 @@ export async function addParticipants(req: Request, res: Response) {
       jersey_number: p.jersey_number ?? null,
       batting_order: p.batting_order ?? null,
     }));
+    if (rows.length === 0) {
+      return res.status(400).json({ error: 'participants array is required' });
+    }
     // Upsert on the (match_id,user_id) unique key so re-saving a lineup (e.g.
     // editing the playing XI) doesn't collide — A5-003 P3.
     const { data, error } = await supabase

@@ -183,8 +183,31 @@ export async function getMe(req: Request, res: Response) {
     // best-effort
   }
 
+  // Follower/following counts (SC-49) — getMe omitted these, so the own-profile
+  // header FOLLOWERS stat always showed 0. getUserById already returns them for
+  // other profiles; mirror that here. Best-effort.
+  let followers_count = 0;
+  let following_count = 0;
+  try {
+    const [f1, f2] = await Promise.all([
+      supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('following_id', userId),
+      supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('follower_id', userId),
+    ]);
+    followers_count = f1.count ?? 0;
+    following_count = f2.count ?? 0;
+  } catch {
+    // best-effort
+  }
+
   return res.json({
-    user: { ...data, account_types: accountTypes, total_matches, city_rank },
+    user: {
+      ...data,
+      account_types: accountTypes,
+      total_matches,
+      city_rank,
+      followers_count,
+      following_count,
+    },
   });
 }
 

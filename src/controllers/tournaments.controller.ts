@@ -936,13 +936,22 @@ export async function generateFixtures(req: Request, res: Response) {
       return res.status(400).json({ error: 'At least 2 approved teams required' });
     }
 
-    // Check for existing matches — don't duplicate
-    const { count: existingCount } = await supabase
-      .from('matches')
-      .select('id', { count: 'exact', head: true })
-      .eq('tournament_id', id);
-    if ((existingCount ?? 0) > 0) {
-      return res.status(400).json({ error: 'Fixtures already generated. Delete existing matches first.' });
+    // SC-48: DB-level atomic claim to prevent the fixture-generation RACE. The
+    // old "count existing matches" guard let two concurrent requests both see 0
+    // and both generate (→ duplicated fixtures). Postgres serializes concurrent
+    // UPDATEs on the same row, so exactly ONE request flips
+    // fixtures_generated false→true and gets a row back; the losers get 0 rows
+    // and are rejected. The flag is reset in the catch below if generation
+    // itself fails, so a genuine error still allows a retry.
+    const { data: claim, error: claimErr } = await supabase
+      .from('tournaments')
+      .update({ fixtures_generated: true })
+      .eq('id', id)
+      .eq('fixtures_generated', false)
+      .select('id');
+    if (claimErr) return res.status(500).json({ error: sanitizeError(claimErr) });
+    if (!claim || claim.length === 0) {
+      return res.status(409).json({ error: 'Fixtures already generated for this tournament.' });
     }
 
     const startDate = tournament.start_date ? new Date(tournament.start_date) : new Date();
@@ -1002,8 +1011,8 @@ export async function generateFixtures(req: Request, res: Response) {
         }
       }
       if (matchRows.length > 0) {
-        const { data, error } = await supabase.from('matches').insert(matchRows).select('id');
-        if (error) return res.status(500).json({ error: sanitizeError(error) });
+        const { error } = await supabase.from('matches').insert(matchRows).select('id');
+        if (error) throw new Error('fixture insert failed');
       }
       await supabase.from('tournaments').update({ status: 'live' }).eq('id', id);
       return res.json({ success: true, matchesCreated: matchRows.length, format });
@@ -1049,7 +1058,7 @@ export async function generateFixtures(req: Request, res: Response) {
       }
       if (matchRows.length > 0) {
         const { error } = await supabase.from('matches').insert(matchRows);
-        if (error) return res.status(500).json({ error: sanitizeError(error) });
+        if (error) throw new Error('fixture insert failed');
       }
       const koSize = nextPow2(numGroups * 2);
       const koRound1 = Array.from({ length: koSize / 2 }, () => ({ a: null as TeamSlot | null, b: null as TeamSlot | null }));
@@ -1064,8 +1073,17 @@ export async function generateFixtures(req: Request, res: Response) {
       return res.json({ success: true, matchesCreated: count ?? 0, format });
     }
 
+    // Unsupported format after claiming — release the flag so it isn't stuck.
+    await supabase.from('tournaments').update({ fixtures_generated: false }).eq('id', id);
     return res.status(400).json({ error: `Unsupported format: ${format}` });
   } catch {
+    // SC-48: generation failed after the atomic claim — release the flag so the
+    // organiser can retry (otherwise the tournament would be permanently locked).
+    try {
+      await supabase.from('tournaments').update({ fixtures_generated: false }).eq('id', req.params.id);
+    } catch {
+      // best-effort
+    }
     return res.status(500).json({ error: 'Internal server error' });
   }
 }

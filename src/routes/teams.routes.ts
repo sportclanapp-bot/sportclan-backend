@@ -5,6 +5,7 @@ import {
   getTeam,
   addTeamMember,
   removeTeamMember,
+  updateMemberRole,
   updateTeam,
   joinTeamByCode,
   disbandTeam,
@@ -20,6 +21,7 @@ router.get('/', authenticateToken, listTeams);
 router.get('/:id', authenticateToken, getTeam);
 router.post('/:id/members', authenticateToken, addTeamMember);
 router.delete('/:id/members/:userId', authenticateToken, removeTeamMember);
+router.patch('/:id/members/:userId/role', authenticateToken, updateMemberRole);
 router.patch('/:id', authenticateToken, updateTeam);
 router.delete('/:id', authenticateToken, disbandTeam);
 router.get('/:id/expenses', authenticateToken, listExpenses);

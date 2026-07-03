@@ -165,6 +165,51 @@ export async function removeTeamMember(req: Request, res: Response) {
   }
 }
 
+// PATCH /teams/:id/members/:userId/role — transfer captaincy (Option A).
+// The only supported transition is handing captaincy to another member, which
+// atomically demotes the current captain to player. The promote+demote runs in
+// a single DB statement inside transfer_team_captaincy() (migration 037), so
+// the "exactly one captain" invariant is never observably broken — supabase-js
+// has no multi-statement transactions, hence the RPC.
+export async function updateMemberRole(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const id = String(req.params.id);
+    const targetUserId = String(req.params.userId);
+    const { role } = req.body || {};
+
+    if (role !== 'captain') {
+      return res.status(400).json({ error: "Only transferring the 'captain' role is supported" });
+    }
+    if (targetUserId === userId) {
+      return res.status(400).json({ error: 'You are already the captain' });
+    }
+    if (!(await isCaptain(id, userId))) {
+      return res.status(403).json({ error: 'Only the captain can transfer captaincy' });
+    }
+    // Target must be a member of this team → 404 rather than a false success.
+    const { data: target } = await supabase
+      .from('team_members')
+      .select('user_id')
+      .eq('team_id', id)
+      .eq('user_id', targetUserId)
+      .maybeSingle();
+    if (!target) return res.status(404).json({ error: 'Member not found on this team' });
+
+    const { error } = await supabase.rpc('transfer_team_captaincy', {
+      p_team_id: id,
+      p_actor_id: userId,
+      p_target_id: targetUserId,
+    });
+    if (error) return res.status(400).json({ error: sanitizeError(error) });
+
+    return res.json({ success: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 // PATCH /teams/:id — captain only
 export async function updateTeam(req: Request, res: Response) {
   const userId = req.userId;

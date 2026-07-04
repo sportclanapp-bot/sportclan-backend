@@ -125,10 +125,24 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   // always returned the first team-A participant regardless of who won, A5-008.)
   const winnerSide = (match.score_summary as { winner_side?: 'A' | 'B' })?.winner_side ?? null;
   if (slug === 'chess' && winnerSide) {
-    // Winner-side participant (chess has no scoring events → no rollup). Casual
-    // guest chess has neither, so it stays MVP-less (the result still displays).
-    const winner = (participants ?? []).find((p2) => p2.team_side === winnerSide);
-    if (winner) scores.set(winner.user_id, 9999);
+    // Winner auto-MVP. Chess has no scoring events, so recomputeSummary stamps
+    // the credited winner into score_summary.players (keyed by player_id, with
+    // side = winner_side) — that's the primary, guest-capable source and makes
+    // casual/guest chess get a real MVP. Fall back to a registered participant
+    // on the winning side when the scorer skipped attribution.
+    const players = (match.score_summary as {
+      players?: Record<string, { side?: string; name?: string }>;
+    })?.players ?? {};
+    const creditedId = Object.keys(players).find((id) => players[id]?.side === winnerSide);
+    if (creditedId) {
+      const nm = players[creditedId]?.name;
+      if (nm && !nameOf.has(creditedId)) nameOf.set(creditedId, nm);
+      sideOf.set(creditedId, winnerSide);
+      scores.set(creditedId, 9999);
+    } else {
+      const winner = (participants ?? []).find((p2) => p2.team_side === winnerSide);
+      if (winner) scores.set(winner.user_id, 9999);
+    }
   }
 
   // Find top scorer. Tie-breaker (SC-14): higher score → player on the winning

@@ -56,6 +56,9 @@ export async function createTournament(req: Request, res: Response) {
       organiser_mobile,
       registration_deadline,
       home_away,
+      num_groups,
+      group_size,
+      qualifiers_per_group,
     } = req.body || {};
     if (!sport_id || !name || !format) {
       return res.status(400).json({ error: 'sport_id, name, format are required' });
@@ -90,6 +93,34 @@ export async function createTournament(req: Request, res: Response) {
           metadata[k] = v;
         }
       }
+    }
+
+    // SC-58: optional groups_knockout configuration (organizer-chosen group
+    // count / size + qualifiers per group, incl. top-1). Validated here and only
+    // persisted when provided, so the insert stays compatible even if migration
+    // 038 (which adds these columns) has not been applied yet.
+    const groupsConfigFields: Record<string, number> = {};
+    const cfgInt = (v: unknown) => (v === undefined || v === null ? null : Number(v));
+    const ng = cfgInt(num_groups);
+    if (ng !== null) {
+      if (!Number.isInteger(ng) || ng < 1 || ng > 64) {
+        return res.status(400).json({ error: 'num_groups must be an integer between 1 and 64' });
+      }
+      groupsConfigFields.num_groups = ng;
+    }
+    const gs = cfgInt(group_size);
+    if (gs !== null) {
+      if (!Number.isInteger(gs) || gs < 2 || gs > 64) {
+        return res.status(400).json({ error: 'group_size must be an integer between 2 and 64' });
+      }
+      groupsConfigFields.group_size = gs;
+    }
+    const qpg = cfgInt(qualifiers_per_group);
+    if (qpg !== null) {
+      if (!Number.isInteger(qpg) || qpg < 1 || qpg > 32) {
+        return res.status(400).json({ error: 'qualifiers_per_group must be an integer between 1 and 32' });
+      }
+      groupsConfigFields.qualifiers_per_group = qpg;
     }
 
     // Generate unique entry code (retry a few times on collision)
@@ -131,6 +162,7 @@ export async function createTournament(req: Request, res: Response) {
         organiser_mobile: organiser_mobile || null,
         registration_deadline: registration_deadline || null,
         home_away: !!home_away,
+        ...groupsConfigFields,
       })
       .select('*')
       .single();
@@ -711,6 +743,71 @@ function buildRound1(teams: TeamSlot[]): Array<{ a: TeamSlot | null; b: TeamSlot
   return round1;
 }
 
+// Standard single-elimination seed slot order for a bracket of `size` (a power
+// of two). Returns the seed NUMBER (1-indexed, 1 = strongest) that belongs in
+// each slot, arranged so seed 1 and seed 2 land in opposite halves and top
+// seeds meet as late as possible. e.g. size 8 → [1,8,4,5,2,7,3,6].
+function seedSlotOrder(size: number): number[] {
+  let order = [1, 2];
+  while (order.length < size) {
+    const sum = order.length * 2 + 1;
+    const next: number[] = [];
+    for (const s of order) {
+      next.push(s);
+      next.push(sum - s);
+    }
+    order = next;
+  }
+  return order;
+}
+
+// SC-58: seed `seeds` (STRONGEST FIRST) into a bracket of nextPow2(seeds.length)
+// using the standard seeding order, so byes fall on the TOP seeds (fair) instead
+// of on arbitrary array indices. Match m pairs slot 2m vs slot 2m+1; a slot whose
+// seed number exceeds the real field is a bye, and because seed 1 sits opposite
+// the highest (missing) seed numbers, the strongest teams receive the byes.
+function seededRound1(
+  seeds: TeamSlot[],
+  koSize: number,
+): Array<{ a: TeamSlot | null; b: TeamSlot | null }> {
+  const order = seedSlotOrder(koSize);
+  const slots: (TeamSlot | null)[] = order.map((seedNo) => seeds[seedNo - 1] ?? null);
+  const round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }> = [];
+  for (let m = 0; m < koSize / 2; m++) {
+    round1.push({ a: slots[2 * m] ?? null, b: slots[2 * m + 1] ?? null });
+  }
+  return round1;
+}
+
+// SC-58: groups_knockout config. group_size / num_groups / qualifiers_per_group
+// were hardcoded (4 / derived / top-2), which made top-1-per-group and custom
+// group counts impossible and forced index-seeded byes. These knobs live on the
+// tournaments row (migration 038). Read defensively so the controller still runs
+// (with the old defaults) if the migration hasn't been applied yet.
+interface GroupsConfig {
+  numGroups: number | null;
+  groupSize: number | null;
+  qualifiersPerGroup: number;
+}
+async function getGroupsConfig(tournamentId: string): Promise<GroupsConfig> {
+  try {
+    const { data, error } = await supabase
+      .from('tournaments')
+      .select('num_groups, group_size, qualifiers_per_group')
+      .eq('id', tournamentId)
+      .maybeSingle();
+    if (error || !data) return { numGroups: null, groupSize: null, qualifiersPerGroup: 2 };
+    const d = data as { num_groups?: number | null; group_size?: number | null; qualifiers_per_group?: number | null };
+    return {
+      numGroups: d.num_groups ?? null,
+      groupSize: d.group_size ?? null,
+      qualifiersPerGroup: Math.max(1, Number(d.qualifiers_per_group ?? 2)),
+    };
+  } catch {
+    return { numGroups: null, groupSize: null, qualifiersPerGroup: 2 };
+  }
+}
+
 // Insert a full single-elimination bracket (all rounds up front), linking each
 // match to its parent via next_match_id/next_slot so winners can advance.
 // `round1` gives the explicit round-1 matchups (length = bracketSize/2); later
@@ -862,6 +959,12 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
     .eq('tournament_id', tournamentId)
     .not('group_label', 'is', null);
 
+  // SC-58: deterministic standings (wins desc, then team id — NEVER DB row
+  // order) + config-driven qualifiers per group + a properly SEEDED bracket so
+  // byes fall on the strongest qualifiers instead of arbitrary array indices.
+  const cfg = await getGroupsConfig(tournamentId);
+  const qualsPerGroup = cfg.qualifiersPerGroup;
+
   const wins: Record<string, number> = {};
   for (const g of groupMatches) if (g.winner_team_id) wins[g.winner_team_id] = (wins[g.winner_team_id] ?? 0) + 1;
 
@@ -871,18 +974,29 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
     (byGroup[label] ??= []).push({ id: e.team_id as string, name: (e.team as any)?.name ?? 'Team', w: wins[e.team_id as string] ?? 0 });
   }
   const labels = Object.keys(byGroup).sort();
-  const winners: TeamSlot[] = [];
-  const runners: TeamSlot[] = [];
+
+  // Deterministic comparator: more wins first, ties broken by team id (stable,
+  // reproducible) rather than the nondeterministic DB fetch order.
+  const cmp = (a: { w: number; id: string }, b: { w: number; id: string }) =>
+    b.w - a.w || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+  // ranks[r] = every team that finished position r (0-based) in its group.
+  const ranks: Array<Array<{ id: string; name: string; w: number }>> = [];
   for (const label of labels) {
-    const sorted = byGroup[label].sort((a, b) => b.w - a.w);
-    if (sorted[0]) winners.push({ id: sorted[0].id, name: sorted[0].name });
-    if (sorted[1]) runners.push({ id: sorted[1].id, name: sorted[1].name });
+    const sorted = byGroup[label].slice().sort(cmp);
+    for (let r = 0; r < qualsPerGroup; r++) {
+      if (sorted[r]) (ranks[r] ??= []).push(sorted[r]);
+    }
   }
-  // Rotate runners by one group so round 1 never re-pairs a group (W_g vs R_{g+1}).
-  const rotated = runners.map((_, i) => runners[(i + 1) % runners.length]).filter(Boolean) as TeamSlot[];
-  const qualifiers = [...winners, ...rotated];
-  if (qualifiers.length < 2) return;
-  const round1 = buildRound1(qualifiers);
+  // Seed strongest-first: all group winners (ordered by record) become the top
+  // seeds — so they get the byes — then all runners-up, then thirds, etc.
+  const seeds: TeamSlot[] = [];
+  for (let r = 0; r < ranks.length; r++) {
+    const tier = (ranks[r] ?? []).slice().sort(cmp);
+    for (const t of tier) seeds.push({ id: t.id, name: t.name });
+  }
+  if (seeds.length < 2) return;
+  const round1 = seededRound1(seeds, ko1.length * 2);
 
   for (let m = 0; m < ko1.length; m++) {
     const mu = round1[m] ?? { a: null, b: null };
@@ -1019,10 +1133,17 @@ export async function generateFixtures(req: Request, res: Response) {
     }
 
     if (format === 'groups_knockout') {
-      // Round-robin groups of 4 (round 0), then an empty KO bracket seeded from
-      // the group standings once the group stage completes (maybeSeedKnockout).
-      const groupSize = 4;
-      const numGroups = Math.max(1, Math.ceil(teams.length / groupSize));
+      // Round-robin groups (round 0), then an empty KO bracket seeded from the
+      // group standings once the group stage completes (maybeSeedKnockout).
+      // SC-58: group count + qualifiers-per-group are organizer-configurable
+      // (migration 038); fall back to the historical 4-per-group / top-2.
+      const gcfg = await getGroupsConfig(id);
+      const groupSize = gcfg.groupSize ?? 4;
+      const numGroups = Math.min(
+        teams.length,
+        Math.max(1, gcfg.numGroups ?? Math.ceil(teams.length / groupSize)),
+      );
+      const qualsPerGroup = gcfg.qualifiersPerGroup;
       const groups: TeamSlot[][] = Array.from({ length: numGroups }, () => []);
       teams.forEach((t, i) => groups[i % numGroups].push(t));
 
@@ -1060,7 +1181,7 @@ export async function generateFixtures(req: Request, res: Response) {
         const { error } = await supabase.from('matches').insert(matchRows);
         if (error) throw new Error('fixture insert failed');
       }
-      const koSize = nextPow2(numGroups * 2);
+      const koSize = nextPow2(numGroups * qualsPerGroup);
       const koRound1 = Array.from({ length: koSize / 2 }, () => ({ a: null as TeamSlot | null, b: null as TeamSlot | null }));
       const koStart = new Date(startDate.getTime() + (matchRows.length + 1) * dayMs);
       await insertSingleElim(base, koStart, koRound1);

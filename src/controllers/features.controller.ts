@@ -551,22 +551,49 @@ export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
     .select('id, city_id, name')
     .lt('last_active_at', threeDaysAgo)
     .in('city_id', cityIds);
+  const cands = (candidates ?? []).filter(
+    (u) => u.city_id && matchByCity.has(u.city_id as string),
+  );
+  if (cands.length === 0) return { sent: 0 };
 
-  let sent = 0;
-  for (const user of candidates ?? []) {
-    const m = user.city_id ? matchByCity.get(user.city_id as string) : undefined;
-    if (!m) continue;
-    if (!(await claimNotificationSend(user.id, 'smart_match', sentOn))) continue;
-    await supabase.from('notifications').insert({
-      user_id: user.id,
-      type: 'smart_match',
-      title: 'Match near you today!',
-      body: `🎮 ${m.team_a_name} is looking for players at ${m.venue ?? 'a venue nearby'}`,
-      data: { matchId: m.id, screen: 'MatchDetail' },
-    });
-    sent++;
-  }
-  return { sent };
+  // BULK dedupe: one query for who already got smart_match today, then send to
+  // the rest in a single bulk insert each — no per-user round-trips. This is
+  // O(few queries) regardless of how many candidates a busy city has (the
+  // per-user claim loop above was still minutes for a ~200-user city). The
+  // notification_sends UNIQUE(user_id, job_type, sent_on) remains the source of
+  // truth for the dedupe.
+  const { data: sentRows } = await supabase
+    .from('notification_sends')
+    .select('user_id')
+    .eq('job_type', 'smart_match')
+    .eq('sent_on', sentOn)
+    .in('user_id', cands.map((u) => u.id as string));
+  const already = new Set((sentRows ?? []).map((r) => r.user_id as string));
+  const toSend = cands.filter((u) => !already.has(u.id as string));
+  if (toSend.length === 0) return { sent: 0 };
+
+  // Claim (bulk). The single daily cron isn't concurrent, so a bulk insert of
+  // the not-yet-sent rows is race-free in practice; the UNIQUE constraint is the
+  // backstop. Abort the send if the claim fails so we never notify without a
+  // recorded send.
+  const { error: claimErr } = await supabase
+    .from('notification_sends')
+    .insert(toSend.map((u) => ({ user_id: u.id as string, job_type: 'smart_match', sent_on: sentOn })));
+  if (claimErr) return { sent: 0 };
+
+  await supabase.from('notifications').insert(
+    toSend.map((u) => {
+      const m = matchByCity.get(u.city_id as string)!;
+      return {
+        user_id: u.id as string,
+        type: 'smart_match',
+        title: 'Match near you today!',
+        body: `🎮 ${m.team_a_name} is looking for players at ${m.venue ?? 'a venue nearby'}`,
+        data: { matchId: m.id, screen: 'MatchDetail' },
+      };
+    }),
+  );
+  return { sent: toSend.length };
 }
 
 export async function triggerSmartMatchNotifications(_req: Request, res: Response) {

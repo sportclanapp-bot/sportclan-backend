@@ -516,52 +516,55 @@ export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
   const tomorrow = new Date(today.getTime() + 86400000);
   const sentOn = istDateStr();
 
-  // SC-66: page through ALL eligible inactive users, not just an arbitrary 100.
-  // The old query was `.limit(100)` with no ordering and no city filter, so the
-  // 100 slots got consumed by users with a null city_id (which the loop then
-  // skips) — starving users we could actually notify. Now we (a) filter
-  // city_id NOT NULL at the DB so every fetched row is actionable, (b) order
-  // deterministically (most-inactive first, id tiebreak) for reproducibility,
-  // and (c) paginate up to a safety cap so the job scales past 100 users.
-  const PAGE = 500;
-  const MAX_USERS = 50000; // safety backstop against a runaway loop
-  let sent = 0;
-  for (let offset = 0; offset < MAX_USERS; offset += PAGE) {
-    const { data: inactiveUsers, error: usersErr } = await supabase
-      .from('users')
-      .select('id, city_id, name')
-      .lt('last_active_at', threeDaysAgo)
-      .not('city_id', 'is', null)
-      .order('last_active_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(offset, offset + PAGE - 1);
-    if (usersErr) break;
-    const batch = inactiveUsers ?? [];
-    if (batch.length === 0) break;
-    for (const user of batch) {
-      if (!user.city_id) continue; // defensive; the DB filter already excludes nulls
-      const { data: openMatches } = await supabase
-        .from('matches')
-        .select('id, team_a_name, venue, sport_id')
-        .eq('city_id', user.city_id)
-        .eq('is_open', true)
-        .gte('scheduled_at', today.toISOString())
-        .lt('scheduled_at', tomorrow.toISOString())
-        .limit(1);
-      if (openMatches && openMatches.length > 0) {
-        if (!(await claimNotificationSend(user.id, 'smart_match', sentOn))) continue;
-        const m = openMatches[0];
-        await supabase.from('notifications').insert({
-          user_id: user.id,
-          type: 'smart_match',
-          title: 'Match near you today!',
-          body: `🎮 ${m.team_a_name} is looking for players at ${m.venue ?? 'a venue nearby'}`,
-          data: { matchId: m.id, screen: 'MatchDetail' },
-        });
-        sent++;
-      }
+  // SC-67 (set-based): the previous SC-66 fix reached every eligible user but did
+  // it with a per-user match query paginated over ALL ~10k inactive users — O(N)
+  // sequential round-trips, minutes per run, HTTP timeouts. Instead:
+  //   (1) ONE query for today's open matches, reduced to one per city, so we only
+  //       ever consider cities that actually have something to notify about;
+  //   (2) ONE query for inactive (>3d, city-not-null) users IN those cities;
+  //   (3) a bounded claim+notify (no per-user SELECT — the match comes from the
+  //       in-memory map). Work is O(open-match-cities + candidates-in-them), not
+  //       O(all inactive users). Dedupe (notification_sends) is unchanged.
+  const { data: openMatches } = await supabase
+    .from('matches')
+    .select('id, team_a_name, venue, city_id')
+    .eq('is_open', true)
+    .gte('scheduled_at', today.toISOString())
+    .lt('scheduled_at', tomorrow.toISOString())
+    .not('city_id', 'is', null);
+  if (!openMatches || openMatches.length === 0) return { sent: 0 };
+
+  // One representative open match per city.
+  const matchByCity = new Map<string, { id: string; team_a_name: string; venue: string | null }>();
+  for (const m of openMatches) {
+    const cid = m.city_id as string | null;
+    if (cid && !matchByCity.has(cid)) {
+      matchByCity.set(cid, { id: m.id as string, team_a_name: m.team_a_name as string, venue: (m.venue as string | null) ?? null });
     }
-    if (batch.length < PAGE) break;
+  }
+  const cityIds = [...matchByCity.keys()];
+  if (cityIds.length === 0) return { sent: 0 };
+
+  // Inactive, city'd users only in the cities that have a match today.
+  const { data: candidates } = await supabase
+    .from('users')
+    .select('id, city_id, name')
+    .lt('last_active_at', threeDaysAgo)
+    .in('city_id', cityIds);
+
+  let sent = 0;
+  for (const user of candidates ?? []) {
+    const m = user.city_id ? matchByCity.get(user.city_id as string) : undefined;
+    if (!m) continue;
+    if (!(await claimNotificationSend(user.id, 'smart_match', sentOn))) continue;
+    await supabase.from('notifications').insert({
+      user_id: user.id,
+      type: 'smart_match',
+      title: 'Match near you today!',
+      body: `🎮 ${m.team_a_name} is looking for players at ${m.venue ?? 'a venue nearby'}`,
+      data: { matchId: m.id, screen: 'MatchDetail' },
+    });
+    sent++;
   }
   return { sent };
 }

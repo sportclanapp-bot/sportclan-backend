@@ -138,14 +138,31 @@ export async function getOrCreateDM(req: Request, res: Response) {
     }
   }
 
-  // Create new DM
+  // SC-62: one DM per pair. dm_key is the sorted user-id pair, backed by a
+  // UNIQUE index on chats (migration 042). Racing get-or-create calls that both
+  // got past the participant lookup above now collide on the insert: the loser
+  // gets 23505 and returns the winner's chat, so exactly one conversation exists.
+  const [a, b] = [userId, other_user_id].sort();
+  const dmKey = `${a}:${b}`;
+
   const { data: chat, error } = await supabase
     .from('chats')
-    .insert({ is_group: false, created_by: userId })
+    .insert({ is_group: false, created_by: userId, dm_key: dmKey })
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  if (error) {
+    if ((error as { code?: string }).code === '23505') {
+      const { data: existingChat } = await supabase
+        .from('chats')
+        .select('*')
+        .eq('dm_key', dmKey)
+        .eq('is_group', false)
+        .maybeSingle();
+      if (existingChat) return res.json({ data: existingChat, chat: existingChat });
+    }
+    return res.status(500).json({ error: sanitizeError(error) });
+  }
 
   const { error: partErr } = await supabase.from('chat_participants').insert([
     { chat_id: chat.id, user_id: userId, role: 'admin' },

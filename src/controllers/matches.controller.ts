@@ -210,43 +210,39 @@ export async function joinOpenMatch(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
-    const { data: match } = await supabase
-      .from('matches')
-      .select('id, is_open, status, players_needed')
-      .eq('id', id)
-      .maybeSingle();
-    if (!match) return res.status(404).json({ error: 'Match not found' });
-    if (!match.is_open) return res.status(400).json({ error: 'Match is not open' });
-    if (match.status === 'completed' || match.status === 'cancelled') {
-      return res.status(400).json({ error: 'Match has ended' });
-    }
 
-    // Don't double-join.
-    const { data: existing } = await supabase
-      .from('match_participants')
-      .select('id')
-      .eq('match_id', id)
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (existing) return res.json({ success: true, alreadyJoined: true });
-
-    const { error } = await supabase
-      .from('match_participants')
-      .insert({ match_id: id, user_id: userId, team_side: 'A' });
+    // SC-59: capacity check + participant insert + players_needed decrement are
+    // done atomically in one transaction (join_open_match, migration 039). The
+    // old JS read-modify-write on a stale snapshot let N concurrent joins all
+    // pass the check and oversell a match's open slots without bound. The RPC
+    // takes a row lock on the match so joins serialize; already-joined users are
+    // handled idempotently under the lock (no 23505 leak — SC-63).
+    const { data, error } = await supabase.rpc('join_open_match', {
+      p_match_id: id,
+      p_user_id: userId,
+    });
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
-    // Decrement players_needed (never below 0). If it hits 0, close the match.
-    const nextNeeded = Math.max(0, (match.players_needed ?? 0) - 1);
-    await supabase
-      .from('matches')
-      .update({
-        players_needed: nextNeeded,
-        is_open: nextNeeded > 0,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id);
+    const row = (Array.isArray(data) ? data[0] : data) as
+      | { status: string; players_needed: number | null }
+      | undefined;
+    const status = row?.status;
+    const playersNeeded = row?.players_needed ?? 0;
 
-    return res.json({ success: true, players_needed: nextNeeded });
+    switch (status) {
+      case 'joined':
+        return res.json({ success: true, players_needed: playersNeeded });
+      case 'already_joined':
+        return res.json({ success: true, alreadyJoined: true, players_needed: playersNeeded });
+      case 'full':
+        return res.status(409).json({ error: 'Match is full' });
+      case 'not_open':
+        return res.status(400).json({ error: 'Match is not open' });
+      case 'not_found':
+        return res.status(404).json({ error: 'Match not found' });
+      default:
+        return res.status(500).json({ error: 'Internal server error' });
+    }
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

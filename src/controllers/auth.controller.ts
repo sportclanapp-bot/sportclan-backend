@@ -149,6 +149,21 @@ async function isSuspended(userId: string): Promise<boolean> {
   }
 }
 
+/** True once an account has been soft-deleted via POST /account/delete
+ * (deleted_at set). Deletion is FINAL — a deleted account cannot be logged into
+ * (its data is scrubbed and it is purged after the 30-day grace). Mirrors
+ * isSuspended, including the fail-open on a transient DB error. */
+async function isDeleted(userId: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from('users').select('deleted_at').eq('id', userId).maybeSingle();
+    if (error) return false;
+    return !!(data && (data as { deleted_at?: string | null }).deleted_at);
+  } catch {
+    return false;
+  }
+}
+
 // POST /auth/verify-otp  { phone, code }
 export async function verifyOtp(req: Request, res: Response) {
   const { phone, code } = req.body || {};
@@ -207,14 +222,27 @@ export async function register(req: Request, res: Response) {
     }
   }
 
-  // Phone must be free
+  // Phone must be free — EXCEPT a soft-deleted account still holds its phone.
+  // Deletion is final (the old account is gone, not restorable), so we let the
+  // number be reused for a BRAND-NEW signup instead of stranding the user
+  // ("can't log in AND can't re-register"). Release the phone from the dead row
+  // first; that row keeps its content + deleted_at and is hard-purged after the
+  // 30-day grace.
   const { data: existingPhone } = await supabase
-    .from('users').select('id').eq('phone', p).maybeSingle();
+    .from('users').select('id, deleted_at').eq('phone', p).maybeSingle();
   if (existingPhone) {
-    return res.status(400).json({
-      code: 'PHONE_ALREADY_REGISTERED',
-      error: 'This mobile number is already registered. Please login instead.',
-    });
+    if ((existingPhone as { deleted_at?: string | null }).deleted_at) {
+      const { error: freeErr } = await supabase
+        .from('users')
+        .update({ phone: `deleted:${existingPhone.id}` })
+        .eq('id', existingPhone.id);
+      if (freeErr) return res.status(500).json({ error: 'Could not free the number for re-registration' });
+    } else {
+      return res.status(400).json({
+        code: 'PHONE_ALREADY_REGISTERED',
+        error: 'This mobile number is already registered. Please login instead.',
+      });
+    }
   }
 
   // Email must be free (if provided)
@@ -383,6 +411,9 @@ export async function otpLogin(req: Request, res: Response) {
   if (await isSuspended(user.id)) {
     return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
   }
+  if (await isDeleted(user.id)) {
+    return res.status(403).json({ error: 'This account has been deleted.' });
+  }
 
   await deleteOtp(p);
   const accessToken = generateAccessToken(user.id);
@@ -415,6 +446,9 @@ export async function login(req: Request, res: Response) {
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
   if (await isSuspended(user.id)) {
     return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
+  }
+  if (await isDeleted(user.id)) {
+    return res.status(403).json({ error: 'This account has been deleted.' });
   }
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);

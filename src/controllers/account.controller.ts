@@ -1,24 +1,31 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 
-// POST /account/delete — soft-delete with 30-day grace + immediate PII scrub
+// POST /account/delete — FINAL delete: immediate PII scrub + login lockout,
+// hard-purged after a 30-day retention window.
 //
-// Privacy posture: We keep the row alive for 30 days so the user can restore
-// by signing in again, but we scrub identifiable fields immediately to honor
-// the "delete on request" expectation from Play Data Safety / DPDP. After
-// 30 days, /account/purge-expired (cron-callable) hard-deletes the row.
+// Privacy posture: deletion is permanent — there is NO self-service restore.
+// We scrub identifiable fields immediately (Play Data Safety / DPDP "delete on
+// request") and set deleted_at, which (a) blocks all further login for the
+// account (see isDeleted in auth.controller) and (b) marks the row for
+// hard-delete by /account/purge-expired (cron-callable) after 30 days. The
+// 30-day window is a retention/audit buffer, NOT a user-facing grace period —
+// the scrub is destructive (originals are overwritten, not archived).
 //
 // Scrubbed-now (so they vanish from any UI surface immediately):
 //   name → "Deleted User"
 //   username → "deleted_<short-uuid>" (preserves DB uniqueness constraint)
 //   email → null
-//   phone → still kept (needed to restore via OTP within the grace window)
 //   profile_picture_url → null
 //   bio → null
 //   gender, dob → null
 //
-// Kept until permanent purge: phone (for restore), user-id references on
-// content (so threads don't lose their structure during the grace period).
+// phone: kept on the dead row so login stays locked out during the grace; it is
+// released (renamed to a sentinel) only if the same number re-registers, which
+// creates a brand-new account (never a restore of the old one).
+//
+// Kept until permanent purge: user-id references on content (so threads don't
+// lose their structure during the retention window).
 export async function deleteAccount(req: Request, res: Response) {
   const userId = req.userId!;
   const { confirmation } = req.body || {};
@@ -57,7 +64,7 @@ export async function deleteAccount(req: Request, res: Response) {
 
   return res.json({
     success: true,
-    message: 'Account deactivated and personal data scrubbed. Sign in within 30 days with the same phone to restore. After 30 days, the account is permanently deleted.',
+    message: 'Your account has been permanently deleted and your personal data scrubbed. This cannot be undone. Any remaining records are purged after 30 days.',
   });
 }
 

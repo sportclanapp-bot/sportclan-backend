@@ -191,48 +191,21 @@ export async function createPost(req: Request, res: Response) {
     }
   }
 
-  // Check 5 posts/month limit for free users
+  // Premium flag drives both the free-tier post cap and premium-only features
+  // (image posts, scheduling) below.
   const { data: user } = await supabase
     .from('users')
     .select('is_premium')
     .eq('id', userId)
     .single();
-
-  if (!user?.is_premium) {
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
-
-    const { count } = await supabase
-      .from('community_posts')
-      .select('id', { count: 'exact', head: true })
-      .eq('author_id', userId)
-      .gte('created_at', startOfMonth.toISOString());
-
-    if ((count ?? 0) >= 5) {
-      return res.status(403).json({ error: 'POST_LIMIT_REACHED' });
-    }
-  }
-
-  const insertPayload: Record<string, unknown> = {
-    author_id: userId,
-    content: bodyContent.trim(),
-    image_url: bodyImage || null,
-    link_url: link_url || null,
-    sport_id: sport_id || null,
-    city_id: city_id || null,
-    post_type: type || post_type || 'general',
-    mentions: mentions || [],
-  };
-  if (pollOptions) {
-    insertPayload.poll_options = pollOptions;
-  }
+  const isPremium = !!user?.is_premium;
 
   // Scheduled publishing · Premium-only, must be a future timestamp.
   // The publishScheduledPosts job clears scheduled_at once the time passes,
   // at which point the post becomes visible in the normal feed query.
+  let scheduledAtIso: string | null = null;
   if (scheduled_at) {
-    if (!user?.is_premium) {
+    if (!isPremium) {
       return res.status(403).json({ error: 'SCHEDULING_PREMIUM' });
     }
     const when = new Date(scheduled_at);
@@ -242,16 +215,36 @@ export async function createPost(req: Request, res: Response) {
     if (when.getTime() <= Date.now()) {
       return res.status(400).json({ error: 'scheduled_at must be in the future' });
     }
-    insertPayload.scheduled_at = when.toISOString();
+    scheduledAtIso = when.toISOString();
   }
 
+  // SC-60: the 5-posts/month free-tier cap is enforced atomically inside
+  // create_post_capped (migration 040) — a per-user pg_advisory_xact_lock makes
+  // the count + insert one critical section, so concurrent creates can't all
+  // pass a stale check-then-act and bypass the cap. Premium users bypass the cap
+  // (p_is_premium). On the cap the RPC raises POST_LIMIT_REACHED -> same 403 shape.
   const { data, error } = await supabase
-    .from('community_posts')
-    .insert(insertPayload)
-    .select()
+    .rpc('create_post_capped', {
+      p_author_id: userId,
+      p_is_premium: isPremium,
+      p_content: bodyContent.trim(),
+      p_image_url: bodyImage || null,
+      p_link_url: link_url || null,
+      p_sport_id: sport_id || null,
+      p_city_id: city_id || null,
+      p_post_type: type || post_type || 'general',
+      p_mentions: mentions || [],
+      p_poll_options: pollOptions ?? null,
+      p_scheduled_at: scheduledAtIso,
+    })
     .single();
 
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  if (error) {
+    if ((error as { message?: string }).message?.includes('POST_LIMIT_REACHED')) {
+      return res.status(403).json({ error: 'POST_LIMIT_REACHED' });
+    }
+    return res.status(500).json({ error: sanitizeError(error) });
+  }
 
   // Award coins: 2 per post, capped at 5/day via a date-scoped event type.
   try {
@@ -628,43 +621,22 @@ export async function votePoll(req: Request, res: Response) {
     return res.json({ post });
   }
 
-  // 3. Upsert the vote
-  const { error: upsertErr } = await supabase
-    .from('poll_votes')
-    .upsert({
-      post_id: id,
-      user_id: userId,
-      option_id,
-      created_at: new Date().toISOString(),
-    }, { onConflict: 'post_id,user_id' });
-
-  if (upsertErr) return res.status(500).json({ error: sanitizeError(upsertErr) });
-
-  // 4. Recompute counts from poll_votes (authoritative)
-  const { data: counts } = await supabase
-    .from('poll_votes')
-    .select('option_id')
-    .eq('post_id', id);
-
-  const tally: Record<string, number> = {};
-  for (const r of counts ?? []) {
-    tally[(r as { option_id: string }).option_id] = (tally[(r as { option_id: string }).option_id] ?? 0) + 1;
-  }
-
-  const updatedOptions = options.map((o) => ({
-    ...o,
-    vote_count: tally[o.id] ?? 0,
-  }));
-
-  // 5. Persist counts back onto the post for fast reads
-  const { data: updated, error: updateErr } = await supabase
-    .from('community_posts')
-    .update({ poll_options: updatedOptions })
-    .eq('id', id)
-    .select()
+  // 3. SC-61: upsert the vote AND recompute the denormalized
+  // poll_options[].vote_count atomically (apply_poll_vote, migration 041). The
+  // old flow upserted, then in a separate statement read-all-recompute-wrote the
+  // whole JSONB — which lost updates under concurrency, drifting the cached
+  // counts below the true poll_votes count. The RPC locks the post row and
+  // recomputes the counts directly from the authoritative poll_votes in one
+  // transaction, so the denormalized counts always match the tally.
+  const { data: updated, error: voteErr } = await supabase
+    .rpc('apply_poll_vote', {
+      p_post_id: id,
+      p_user_id: userId,
+      p_option_id: option_id,
+    })
     .single();
 
-  if (updateErr) return res.status(500).json({ error: sanitizeError(updateErr) });
+  if (voteErr) return res.status(500).json({ error: sanitizeError(voteErr) });
 
-  return res.json({ post: { ...updated, my_vote_option_id: option_id } });
+  return res.json({ post: { ...(updated as object), my_vote_option_id: option_id } });
 }

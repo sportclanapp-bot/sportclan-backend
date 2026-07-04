@@ -262,6 +262,14 @@ export async function joinTeamByCode(req: Request, res: Response) {
       .insert({ team_id: team.id, user_id: userId, role: 'player' })
       .select('*')
       .single();
+    // SC-64: a same-user concurrent join races past the pre-check above and both
+    // inserts hit UNIQUE(team_id,user_id). The unique violation (23505) means the
+    // caller is already a member — map it to a clean 409, never a raw 500. (The
+    // SC-44 backstop only scrubs the 5xx *message*; it can't know a 500 here was
+    // really an idempotent already-member condition, so we special-case it.)
+    if ((error as { code?: string } | null)?.code === '23505') {
+      return res.status(409).json({ error: 'Already a member of this team' });
+    }
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ team, member });
   } catch {

@@ -451,6 +451,12 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
   const sideOf = (p: any): 'A' | 'B' => ((p?.team_side as 'A' | 'B') === 'B' ? 'B' : 'A');
   let chessResult: string | null = null; // SC-47
   let chessWinner: 'A' | 'B' | 'tie' | null = null;
+  // The winning player the scorer credited on the last decisive result event
+  // (guest-capable). Populates score_summary.players so casual/guest chess has
+  // an MVP candidate — chess has no scoring events, so the generic rollup is
+  // empty. A draw clears these (no winner → no MVP).
+  let chessWinnerId: string | null = null;
+  let chessWinnerName: string | null = null;
 
   if (slug === 'cricket') {
     for (const s of ['A', 'B'] as const) Object.assign(sides[s], { runs: 0, balls: 0, wickets: 0 });
@@ -508,10 +514,18 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
     // The last result event wins.
     for (const e of events) {
       if (e.event_type !== 'result') continue;
-      const w = ((e.payload || {}) as any).winner;
+      const pr = (e.payload || {}) as any;
+      const w = pr.winner;
       if (w === 'white') { A.score = 1; B.score = 0; chessResult = 'White wins'; chessWinner = 'A'; }
       else if (w === 'black') { A.score = 0; B.score = 1; chessResult = 'Black wins'; chessWinner = 'B'; }
       else if (w === 'draw') { A.score = 0.5; B.score = 0.5; chessResult = 'Draw'; chessWinner = 'tie'; }
+      else continue;
+      // Capture the winner the scorer credited on THIS result event (the last
+      // decisive result wins, matching the score above). A draw carries no
+      // winning player. player_id may be a guest:<id> — that's fine, it rides
+      // the same rail and is resolved name-only downstream.
+      chessWinnerId = w === 'draw' ? null : (pr.player_id ?? null);
+      chessWinnerName = w === 'draw' ? null : (sanitizePlayerName(pr.player_name) ?? null);
     }
   } else {
     // Generic fallback: count scoring events per side so SOMETHING persists for
@@ -535,6 +549,16 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
   // goals/points/rally-points. Side totals (A/B) above are untouched, so results
   // and the A7-002 results surface don't change.
   summary.players = aggregatePlayers(slug, events as any[]);
+  // Chess has no scoring events, so aggregatePlayers yields an empty map. Instead
+  // represent the credited WINNER as a 1-entry rollup keyed by their player_id
+  // (guest-safe) with { name, side: winner_side }, so the scorecard/MVP can
+  // attribute the result for casual/guest chess (registered chess already had a
+  // participant fallback). A draw → empty map → no MVP.
+  if (slug === 'chess') {
+    summary.players = chessWinnerId
+      ? { [chessWinnerId]: { side: chessWinner, name: chessWinnerName ?? undefined, points: 1 } }
+      : {};
+  }
   await supabase
     .from('matches')
     .update({ score_summary: summary, updated_at: new Date().toISOString() })

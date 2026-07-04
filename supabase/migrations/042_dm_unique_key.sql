@@ -8,6 +8,12 @@
 -- — enforced by a UNIQUE index scoped to DMs (group chats keep dm_key NULL and are
 -- unaffected). getOrCreateDM now inserts with the key and, on 23505, selects and
 -- returns the existing chat — so exactly one conversation can exist per pair.
+--
+-- NOTE: uuid has no MIN/MAX aggregate, so we cast to text. The controller builds
+-- the key as `[userId, other].sort().join(':')` and JS default sort is UTF-16
+-- code-unit (byte) order — so we compare with COLLATE "C" (byte order) here to
+-- produce a byte-identical lesser:greater key. A locale collation could disagree
+-- on edge cases and mint a non-matching key.
 
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS dm_key TEXT;
 
@@ -17,15 +23,15 @@ ALTER TABLE chats ADD COLUMN IF NOT EXISTS dm_key TEXT;
 -- participant lookup; no NEW dupes can be created once the index exists.
 WITH pairs AS (
   SELECT cp.chat_id,
-         MIN(cp.user_id) AS u1,
-         MAX(cp.user_id) AS u2,
-         COUNT(*)        AS n
+         MIN(cp.user_id::text COLLATE "C") AS u1,
+         MAX(cp.user_id::text COLLATE "C") AS u2,
+         COUNT(*)                          AS n
   FROM chat_participants cp
   GROUP BY cp.chat_id
 ),
 dm AS (
   SELECT p.chat_id,
-         (p.u1::text || ':' || p.u2::text) AS k,
+         (p.u1 || ':' || p.u2) AS k,
          row_number() OVER (PARTITION BY p.u1, p.u2 ORDER BY c.created_at, c.id) AS rn
   FROM pairs p
   JOIN chats c ON c.id = p.chat_id

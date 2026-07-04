@@ -516,35 +516,52 @@ export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
   const tomorrow = new Date(today.getTime() + 86400000);
   const sentOn = istDateStr();
 
-  const { data: inactiveUsers } = await supabase
-    .from('users')
-    .select('id, city_id, name')
-    .lt('last_active_at', threeDaysAgo)
-    .limit(100);
-
+  // SC-66: page through ALL eligible inactive users, not just an arbitrary 100.
+  // The old query was `.limit(100)` with no ordering and no city filter, so the
+  // 100 slots got consumed by users with a null city_id (which the loop then
+  // skips) — starving users we could actually notify. Now we (a) filter
+  // city_id NOT NULL at the DB so every fetched row is actionable, (b) order
+  // deterministically (most-inactive first, id tiebreak) for reproducibility,
+  // and (c) paginate up to a safety cap so the job scales past 100 users.
+  const PAGE = 500;
+  const MAX_USERS = 50000; // safety backstop against a runaway loop
   let sent = 0;
-  for (const user of inactiveUsers ?? []) {
-    if (!user.city_id) continue;
-    const { data: openMatches } = await supabase
-      .from('matches')
-      .select('id, team_a_name, venue, sport_id')
-      .eq('city_id', user.city_id)
-      .eq('is_open', true)
-      .gte('scheduled_at', today.toISOString())
-      .lt('scheduled_at', tomorrow.toISOString())
-      .limit(1);
-    if (openMatches && openMatches.length > 0) {
-      if (!(await claimNotificationSend(user.id, 'smart_match', sentOn))) continue;
-      const m = openMatches[0];
-      await supabase.from('notifications').insert({
-        user_id: user.id,
-        type: 'smart_match',
-        title: 'Match near you today!',
-        body: `🎮 ${m.team_a_name} is looking for players at ${m.venue ?? 'a venue nearby'}`,
-        data: { matchId: m.id, screen: 'MatchDetail' },
-      });
-      sent++;
+  for (let offset = 0; offset < MAX_USERS; offset += PAGE) {
+    const { data: inactiveUsers, error: usersErr } = await supabase
+      .from('users')
+      .select('id, city_id, name')
+      .lt('last_active_at', threeDaysAgo)
+      .not('city_id', 'is', null)
+      .order('last_active_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + PAGE - 1);
+    if (usersErr) break;
+    const batch = inactiveUsers ?? [];
+    if (batch.length === 0) break;
+    for (const user of batch) {
+      if (!user.city_id) continue; // defensive; the DB filter already excludes nulls
+      const { data: openMatches } = await supabase
+        .from('matches')
+        .select('id, team_a_name, venue, sport_id')
+        .eq('city_id', user.city_id)
+        .eq('is_open', true)
+        .gte('scheduled_at', today.toISOString())
+        .lt('scheduled_at', tomorrow.toISOString())
+        .limit(1);
+      if (openMatches && openMatches.length > 0) {
+        if (!(await claimNotificationSend(user.id, 'smart_match', sentOn))) continue;
+        const m = openMatches[0];
+        await supabase.from('notifications').insert({
+          user_id: user.id,
+          type: 'smart_match',
+          title: 'Match near you today!',
+          body: `🎮 ${m.team_a_name} is looking for players at ${m.venue ?? 'a venue nearby'}`,
+          data: { matchId: m.id, screen: 'MatchDetail' },
+        });
+        sent++;
+      }
     }
+    if (batch.length < PAGE) break;
   }
   return { sent };
 }

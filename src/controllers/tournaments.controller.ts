@@ -326,12 +326,54 @@ export async function createEntry(req: Request, res: Response) {
       }
     }
 
+    // SC-83: a team may re-enter after a REJECTED/WITHDRAWN entry. Reopen the
+    // existing row to `pending` with a single filtered UPDATE (atomic per
+    // statement). A row that is already pending/approved is a clean 400 —
+    // never a duplicate row and never a raw 500 from the unique constraint.
+    const nowIso = new Date().toISOString();
+    const { data: reopened } = await supabase
+      .from('tournament_entries')
+      .update({ status: 'pending', entered_at: nowIso })
+      .eq('tournament_id', id)
+      .eq('team_id', team_id)
+      .in('status', ['rejected', 'withdrawn'])
+      .select('*')
+      .maybeSingle();
+    if (reopened) return res.json({ entry: reopened });
+
+    // No rejected/withdrawn row was reopened → either a live (pending/approved)
+    // entry already exists, or there is no row yet.
+    const { data: existing } = await supabase
+      .from('tournament_entries')
+      .select('status')
+      .eq('tournament_id', id)
+      .eq('team_id', team_id)
+      .maybeSingle();
+    if (existing) {
+      return res.status(400).json({
+        error: 'This team is already entered in this tournament.',
+        code: 'ALREADY_ENTERED',
+      });
+    }
+
     const { data, error } = await supabase
       .from('tournament_entries')
       .insert({ tournament_id: id, team_id, status: 'pending' })
       .select('*')
       .single();
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    if (error) {
+      // Race backstop: a concurrent submit inserted first → unique violation.
+      // The unique constraint guarantees no duplicate row; surface a clean 400,
+      // never a 500.
+      const code = (error as { code?: string }).code;
+      if (code === '23505' || /duplicate|unique/i.test(error.message || '')) {
+        return res.status(400).json({
+          error: 'This team is already entered in this tournament.',
+          code: 'ALREADY_ENTERED',
+        });
+      }
+      return res.status(500).json({ error: sanitizeError(error) });
+    }
     return res.json({ entry: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

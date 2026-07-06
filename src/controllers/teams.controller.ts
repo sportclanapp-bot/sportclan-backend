@@ -4,6 +4,7 @@ import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { excludeDeletedEmbed } from '../utils/activeUser';
 import { sanitizeError } from '../utils/response';
+import { notifyUnlessBlocked } from '../utils/notify';
 import { validateSportForCreate } from '../utils/sports';
 import { LIMITS } from '../utils/validation';
 
@@ -140,6 +141,19 @@ export async function addTeamMember(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // Notify the added user (consent-by-notification; they can self-leave).
+    // Block-respecting, best-effort — never fail the add.
+    try {
+      const { data: team } = await supabase.from('teams').select('name').eq('id', id).maybeSingle();
+      await notifyUnlessBlocked(userId, {
+        userId: user_id,
+        type: 'added_to_team',
+        title: 'Added to a team',
+        body: `You were added to ${team?.name ?? 'a team'}.`,
+        data: { teamId: id, actorId: userId },
+      });
+    } catch { /* best-effort */ }
     return res.json({ member: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

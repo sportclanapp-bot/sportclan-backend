@@ -109,19 +109,25 @@ export async function deleteAccount(req: Request, res: Response) {
   // never leave a team headless/two-captained. The JS loop is a transitional
   // fallback for the window before 046 is applied (same rule, non-atomic) and
   // can be removed once 046 is live.
+  let _captaincyPath = 'rpc';
+  let _rpcErr: string | null = null;
   try {
     const { error: rpcErr } = await supabase.rpc('finalize_captaincy_on_delete', { p_user_id: userId });
     if (rpcErr) throw rpcErr;
-  } catch {
+  } catch (e) {
+    _captaincyPath = 'fallback';
+    _rpcErr = (e as { message?: string })?.message ?? String(e);
     try {
       await resolveCaptainciesOnDelete(userId);
     } catch {
-      // ignore captaincy-transfer failures
+      _captaincyPath = 'fallback_error';
     }
   }
 
   return res.json({
     success: true,
+    _captaincyPath, // TEMP instrumentation (SC-79 RPC verify) — revert after
+    _rpcErr,        // TEMP
     message: 'Your account has been permanently deleted and your personal data scrubbed. This cannot be undone. Any remaining records are purged after 30 days.',
   });
 }

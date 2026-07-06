@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 
 // ─── UNIFIED SEARCH ─────────────────────────────────────────────────────────
 export async function search(req: Request, res: Response) {
@@ -43,14 +44,14 @@ export async function search(req: Request, res: Response) {
 }
 
 async function searchPlayers(res: Response, q: string, sportId: string | undefined, limit: number, callerId?: string) {
-  const { data, error } = await supabase
+  const { data, error } = await excludeDeleted(supabase // SC-77: hide deleted accounts
     .from('users')
     .select(`
       id, name, username, profile_picture_url, is_premium, discoverability,
       city:cities!city_id(id, name),
       sports:user_sports(sport:sports(id, name, emoji))
     `)
-    .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
+    .or(`username.ilike.%${q}%,name.ilike.%${q}%`))
     // Premium users appear first — delivers the "Boosted ranking" promise
     .order('is_premium', { ascending: false })
     .order('name', { ascending: true })
@@ -125,7 +126,7 @@ async function searchTournaments(res: Response, q: string, sportId: string | und
 
 async function searchUmpires(res: Response, q: string, sportId: string | undefined, limit: number) {
   // Only premium umpires shown
-  const { data, error } = await supabase
+  const { data, error } = await excludeDeleted(supabase // SC-77: hide deleted accounts
     .from('users')
     .select(`
       id, name, username, profile_picture_url, is_premium,
@@ -133,7 +134,7 @@ async function searchUmpires(res: Response, q: string, sportId: string | undefin
     `)
     .eq('is_premium', true)
     .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
-    .limit(limit);
+    .limit(limit));
 
   if (error) return res.status(500).json({ error: error.message });
 
@@ -158,12 +159,13 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
     .from('community_posts')
     .select(`
       id, content, created_at, likes_count, comments_count,
-      author:users!author_id(id, name, username, profile_picture_url),
+      author:users!author_id!inner(id, name, username, profile_picture_url),
       sport:sports!sport_id(id, name, emoji)
     `)
     .ilike('content', `%${q}%`)
     .order('created_at', { ascending: false })
     .limit(limit);
+  query = excludeDeletedEmbed(query, 'author'); // SC-77
 
   if (sportId) query = query.eq('sport_id', sportId);
   const { data, error } = await query;
@@ -173,7 +175,7 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
 
 async function searchBusinesses(res: Response, q: string, limit: number) {
   // Businesses are Premium users with Business account type
-  const { data: users, error } = await supabase
+  const { data: users, error } = await excludeDeleted(supabase // SC-77: hide deleted accounts
     .from('users')
     .select(`
       id, name, username, profile_picture_url, is_premium,
@@ -181,7 +183,7 @@ async function searchBusinesses(res: Response, q: string, limit: number) {
     `)
     .eq('is_premium', true)
     .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
-    .limit(limit);
+    .limit(limit));
 
   if (error) return res.status(500).json({ error: error.message });
 
@@ -207,13 +209,13 @@ async function searchBusinesses(res: Response, q: string, limit: number) {
 // intentionally NOT premium-gated — every pro is discoverable here; premium
 // only gates the richer Services directory. Premium just ranks first.
 async function searchByAccountType(res: Response, q: string, accountType: string, limit: number) {
-  const { data: users, error } = await supabase
+  const { data: users, error } = await excludeDeleted(supabase // SC-77: hide deleted accounts
     .from('users')
     .select('id, name, username, profile_picture_url, bio, is_premium, city:cities!city_id(id, name)')
     .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
     .order('is_premium', { ascending: false })
     .order('name', { ascending: true })
-    .limit(limit);
+    .limit(limit));
   if (error) return res.status(500).json({ error: error.message });
 
   const userIds = (users || []).map((u) => u.id);

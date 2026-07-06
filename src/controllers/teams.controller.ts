@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
+import { excludeDeletedEmbed } from '../utils/activeUser';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { LIMITS } from '../utils/validation';
@@ -100,10 +101,12 @@ export async function getTeam(req: Request, res: Response) {
     const { id } = req.params;
     const { data: team, error } = await supabase.from('teams').select('*').eq('id', id).maybeSingle();
     if (error || !team) return res.status(404).json({ error: 'Team not found' });
-    const { data: members } = await supabase
+    // SC-79: `!inner` + filter hides soft-deleted members from the roster
+    // (belt-and-suspenders alongside the delete-time captaincy transfer).
+    const { data: members } = await excludeDeletedEmbed(supabase
       .from('team_members')
-      .select('id, role, jersey_number, joined_at, user:user_id (id, name, username, profile_picture_url)')
-      .eq('team_id', id);
+      .select('id, role, jersey_number, joined_at, user:user_id!inner (id, name, username, profile_picture_url)')
+      .eq('team_id', id), 'user');
     return res.json({ team, members: members || [] });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

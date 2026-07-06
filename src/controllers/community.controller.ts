@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { LIMITS } from '../utils/validation';
+import { excludeDeletedEmbed } from '../utils/activeUser';
 
 // ─── Basic profanity word list ───────────────────────────────────────────────
 // SC-68: the original list was matched with a naive `lower.includes(w)` substring
@@ -69,15 +70,18 @@ export async function listPosts(req: Request, res: Response) {
   // builder that was never executed, and a second query whose result was
   // discarded — before running the real `q` below (A6-011). Both removed; `q`
   // is the single source of truth (and we no longer fire a wasted round-trip).
+  // SC-77: `!inner` + excludeDeletedEmbed below drops posts whose author is a
+  // soft-deleted account so they don't linger in the feed.
   let q = supabase
     .from('community_posts')
     .select(`
       *,
-      author:users!author_id(id, name, username, profile_picture_url, is_premium),
+      author:users!author_id!inner(id, name, username, profile_picture_url, is_premium),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
     `)
     .limit(pageSize);
+  q = excludeDeletedEmbed(q, 'author');
   if (sortMode === 'trending') {
     q = q.gte('created_at', since24h).order('likes_count', { ascending: false });
   } else {
@@ -145,18 +149,22 @@ export async function getSportStoryCounts(req: Request, res: Response) {
 // ─── GET SINGLE POST ────────────────────────────────────────────────────────
 export async function getPost(req: Request, res: Response) {
   const { id } = req.params;
+  // SC-77: `!inner` on author → a post by a soft-deleted author returns no row,
+  // so the post is no longer openable by direct id (treated as 404).
   const { data, error } = await supabase
     .from('community_posts')
     .select(`
       *,
-      author:users!author_id(id, name, username, profile_picture_url, is_premium),
+      author:users!author_id!inner(id, name, username, profile_picture_url, is_premium),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
     `)
     .eq('id', id)
-    .single();
+    .is('author.deleted_at', null)
+    .maybeSingle();
 
-  return res.json({ data, post: data });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  if (!data) return res.status(404).json({ error: 'Post not found' });
   return res.json({ data, post: data });
 }
 
@@ -408,13 +416,15 @@ export async function unlikePost(req: Request, res: Response) {
 export async function listComments(req: Request, res: Response) {
   const { id } = req.params;
 
+  // SC-77: hide comments authored by a soft-deleted account.
   const { data, error } = await supabase
     .from('post_comments')
     .select(`
       *,
-      author:users!author_id(id, name, username, profile_picture_url, is_premium)
+      author:users!author_id!inner(id, name, username, profile_picture_url, is_premium)
     `)
     .eq('post_id', id)
+    .is('author.deleted_at', null)
     .order('created_at', { ascending: true });
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });

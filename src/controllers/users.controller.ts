@@ -5,6 +5,7 @@ import { checkExpiredSubscriptions } from './subscriptions.controller';
 import { resolveSportId } from '../utils/sportId';
 import { LIMITS } from '../utils/validation';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
+import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
@@ -218,10 +219,11 @@ export async function getUserById(req: Request, res: Response) {
   // instead of 500ing on the Postgres uuid cast (A11-002).
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!UUID_RE.test(id)) return res.status(404).json({ error: 'User not found' });
-  const { data, error } = await supabase
+  // SC-77: a soft-deleted account 404s (never renders a "Deleted User" profile).
+  const { data, error } = await excludeDeleted(supabase
     .from('users')
     .select(PUBLIC_FIELDS)
-    .eq('id', id)
+    .eq('id', id))
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: 'User not found' });
@@ -494,11 +496,12 @@ export async function unfollowUser(req: Request, res: Response) {
 // GET /users/:id/followers
 export async function getFollowers(req: Request, res: Response) {
   const { id } = req.params;
-  const { data, error } = await supabase
+  // SC-77: hide soft-deleted accounts from the followers list.
+  const { data, error } = await excludeDeletedEmbed(supabase
     .from('follow_relationships')
-    .select('follower_id, users:follower_id (id, name, profile_picture_url, bio)')
+    .select('follower_id, users:follower_id!inner (id, name, profile_picture_url, bio)')
     .eq('following_id', id)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false }), 'users');
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean) });
 }
@@ -506,11 +509,12 @@ export async function getFollowers(req: Request, res: Response) {
 // GET /users/:id/following
 export async function getFollowing(req: Request, res: Response) {
   const { id } = req.params;
-  const { data, error } = await supabase
+  // SC-77: hide soft-deleted accounts from the following list.
+  const { data, error } = await excludeDeletedEmbed(supabase
     .from('follow_relationships')
-    .select('following_id, users:following_id (id, name, profile_picture_url, bio)')
+    .select('following_id, users:following_id!inner (id, name, profile_picture_url, bio)')
     .eq('follower_id', id)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false }), 'users');
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean) });
 }
@@ -669,7 +673,8 @@ export async function discoverPlayers(req: Request, res: Response) {
   const { data: users } = await supabase
     .from('users')
     .select('id, name, username, profile_picture_url, city_id, is_premium, is_available, streak_count, discoverability')
-    .in('id', matchedIds);
+    .in('id', matchedIds)
+    .is('deleted_at', null); // SC-77: exclude soft-deleted accounts from discovery
 
   const userMap = new Map<string, any>();
   for (const u of users || []) userMap.set(u.id, u);
@@ -839,7 +844,8 @@ export async function getRival(req: Request, res: Response) {
   const { data: users } = await supabase
     .from('users')
     .select('id, name, username, profile_picture_url, city_id, is_premium')
-    .in('id', candidateIds);
+    .in('id', candidateIds)
+    .is('deleted_at', null); // SC-77: a deleted account can't be surfaced as a rival
   const userMap = new Map<string, any>();
   for (const u of users || []) userMap.set(u.id, u);
 
@@ -1177,12 +1183,13 @@ export async function updateSportProfile(req: Request, res: Response) {
 export async function getReviews(req: Request, res: Response) {
   const { id } = req.params;
   try {
-    const { data, error } = await supabase
+    // SC-77: hide reviews written by a soft-deleted account.
+    const { data, error } = await excludeDeletedEmbed(supabase
       .from('user_reviews')
-      .select('id, rating, comment, created_at, reviewer:users!reviewer_id(id, name, profile_picture_url)')
+      .select('id, rating, comment, created_at, reviewer:users!reviewer_id!inner(id, name, profile_picture_url)')
       .eq('reviewed_id', id)
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(50), 'reviewer');
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     const ratings = (data ?? []).map((r: any) => r.rating as number);
     const avgRating = ratings.length > 0 ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10 : null;

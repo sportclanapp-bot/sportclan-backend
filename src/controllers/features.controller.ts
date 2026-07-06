@@ -404,11 +404,13 @@ export async function getPlayerOfWeek(req: Request, res: Response) {
     const { data: users } = await supabase
       .from('users')
       .select('id, name, username, profile_picture_url, is_premium')
-      .in('id', userIds);
+      .in('id', userIds)
+      .is('deleted_at', null); // SC-78: exclude soft-deleted players
     const userMap = new Map((users ?? []).map((u: any) => [u.id, u]));
 
     const result = {
-      players: top.slice(0, 11).map((p) => ({
+      // SC-78: drop players whose account is soft-deleted.
+      players: top.filter((p) => userMap.has(p.user_id)).slice(0, 11).map((p) => ({
         user: userMap.get(p.user_id) ?? null,
         sport_id: p.sport_id,
         rating: p.rating,

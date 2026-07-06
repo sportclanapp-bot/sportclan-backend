@@ -26,6 +26,45 @@ import { supabase } from '../utils/supabase';
 //
 // Kept until permanent purge: user-id references on content (so threads don't
 // lose their structure during the retention window).
+// SC-79: a captain deleting their account must not strand their teams with a
+// (soon-hidden) deleted captain. At delete time, for every team the user
+// captains: promote the vice-captain if one exists, else the oldest remaining
+// member (min joined_at, tie-break user_id), and demote the departing captain
+// to 'player' (single-captain invariant; the row is then hidden by the roster
+// read-filter). If the captain was the SOLE member, remove their membership and
+// leave the team inert (0 members) — the empty team is cascade-purged at 30d.
+// Runs best-effort (non-fatal): account deletion must succeed regardless.
+async function resolveCaptainciesOnDelete(userId: string): Promise<void> {
+  const { data: captainRows } = await supabase
+    .from('team_members')
+    .select('team_id')
+    .eq('user_id', userId)
+    .eq('role', 'captain');
+
+  for (const { team_id } of captainRows || []) {
+    const { data: others } = await supabase
+      .from('team_members')
+      .select('user_id, role, joined_at')
+      .eq('team_id', team_id)
+      .neq('user_id', userId)
+      .order('joined_at', { ascending: true })
+      .order('user_id', { ascending: true });
+
+    const list = others || [];
+    if (list.length === 0) {
+      // Sole member — remove the membership; the team goes inert.
+      await supabase.from('team_members').delete().eq('team_id', team_id).eq('user_id', userId);
+      continue;
+    }
+    // Vice-captain succeeds first; otherwise the oldest remaining member.
+    const successor = list.find((m) => m.role === 'vice_captain') ?? list[0];
+    await supabase.from('team_members').update({ role: 'captain' })
+      .eq('team_id', team_id).eq('user_id', successor.user_id);
+    await supabase.from('team_members').update({ role: 'player' })
+      .eq('team_id', team_id).eq('user_id', userId);
+  }
+}
+
 export async function deleteAccount(req: Request, res: Response) {
   const userId = req.userId!;
   const { confirmation } = req.body || {};
@@ -60,6 +99,15 @@ export async function deleteAccount(req: Request, res: Response) {
     await supabase.from('push_tokens').delete().eq('user_id', userId);
   } catch {
     // ignore push-token cleanup failures
+  }
+
+  // SC-79: transfer captaincy of any teams this user captained. Best-effort —
+  // deletion has already succeeded; a transfer hiccup must not fail the request
+  // (the roster read-filter hides the deleted captain regardless).
+  try {
+    await resolveCaptainciesOnDelete(userId);
+  } catch {
+    // ignore captaincy-transfer failures
   }
 
   return res.json({

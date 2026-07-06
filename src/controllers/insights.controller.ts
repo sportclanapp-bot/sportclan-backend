@@ -30,15 +30,19 @@ export async function getScorerLeaderboard(req: Request, res: Response) {
     const { data: users } = await supabase
       .from('users')
       .select('id, name, username, profile_picture_url, city_id')
-      .in('id', userIds);
+      .in('id', userIds)
+      .is('deleted_at', null); // SC-78: exclude soft-deleted scorers
     const userMap = new Map((users ?? []).map((u: any) => [u.id, u]));
 
-    const result = scorers.map((s, i) => ({
-      rank: i + 1,
-      user: userMap.get(s.userId) ?? null,
-      matchesScored: s.matchesScored,
-      sqs: s.sqs,
-    }));
+    // SC-78: drop scorers whose account is soft-deleted (no user in the map).
+    const result = scorers
+      .filter((s) => userMap.has(s.userId))
+      .map((s, i) => ({
+        rank: i + 1,
+        user: userMap.get(s.userId) ?? null,
+        matchesScored: s.matchesScored,
+        sqs: s.sqs,
+      }));
 
     return res.json({ scorers: result });
   } catch {

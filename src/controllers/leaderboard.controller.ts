@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { deletedIdSet } from '../utils/activeUser';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
@@ -27,7 +28,8 @@ type Row = { user_id: string; rating: number; matches_played: number; wins: numb
 async function fetchUserMap(ids: string[]): Promise<Map<string, any>> {
   const map = new Map<string, any>();
   if (ids.length === 0) return map;
-  const { data } = await supabase.from('users').select(USER_FIELDS).in('id', ids);
+  // SC-78: never surface a soft-deleted account's name/photo.
+  const { data } = await supabase.from('users').select(USER_FIELDS).in('id', ids).is('deleted_at', null);
   for (const u of data || []) map.set(u.id, u);
   return map;
 }
@@ -113,6 +115,9 @@ export async function getLeaderboard(req: Request, res: Response) {
         const set = new Set(cityUserIds);
         ranked = ranked.filter((r) => set.has(r.user_id));
       }
+      // SC-78: drop soft-deleted accounts from the ranking entirely.
+      const delMonthly = await deletedIdSet(ranked.map((r) => r.user_id));
+      if (delMonthly.size > 0) ranked = ranked.filter((r) => !delMonthly.has(r.user_id));
       ranked.sort(compareRows);
 
       const total = ranked.length;
@@ -152,8 +157,13 @@ export async function getLeaderboard(req: Request, res: Response) {
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
 
     const pageRows = (rows || []) as Row[];
+    // SC-78: drop soft-deleted accounts from the page (rank positions preserved).
+    const delAllTime = await deletedIdSet(pageRows.map((r) => r.user_id));
     const userMap = await fetchUserMap(pageRows.map((r) => r.user_id));
-    const leaderboard = pageRows.map((r, i) => toEntry(r, p.offset + i + 1, userMap.get(r.user_id)));
+    const leaderboard = pageRows
+      .map((r, i) => ({ r, rank: p.offset + i + 1 }))
+      .filter((x) => !delAllTime.has(x.r.user_id))
+      .map((x) => toEntry(x.r, x.rank, userMap.get(x.r.user_id)));
 
     // Requester's own rank — competition rank by rating (count of stronger
     // profiles + 1), computed with a single cheap head-count. No full scan.

@@ -104,10 +104,20 @@ export async function deleteAccount(req: Request, res: Response) {
   // SC-79: transfer captaincy of any teams this user captained. Best-effort —
   // deletion has already succeeded; a transfer hiccup must not fail the request
   // (the roster read-filter hides the deleted captain regardless).
+  // Primary path is the ATOMIC RPC finalize_captaincy_on_delete (migration 046):
+  // the whole transfer runs in one transaction, so a process death mid-run can
+  // never leave a team headless/two-captained. The JS loop is a transitional
+  // fallback for the window before 046 is applied (same rule, non-atomic) and
+  // can be removed once 046 is live.
   try {
-    await resolveCaptainciesOnDelete(userId);
+    const { error: rpcErr } = await supabase.rpc('finalize_captaincy_on_delete', { p_user_id: userId });
+    if (rpcErr) throw rpcErr;
   } catch {
-    // ignore captaincy-transfer failures
+    try {
+      await resolveCaptainciesOnDelete(userId);
+    } catch {
+      // ignore captaincy-transfer failures
+    }
   }
 
   return res.json({

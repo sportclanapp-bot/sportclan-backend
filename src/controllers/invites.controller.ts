@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sendPushToTokens } from '../utils/fcm';
+import { notifyUnlessBlocked } from '../utils/notify';
 
 // POST /invites  { receiver_id, sport_id, message? }
 export async function createInvite(req: Request, res: Response) {
@@ -89,8 +90,26 @@ export async function respondToInvite(req: Request, res: Response) {
     .update({ status, responded_at: new Date().toISOString() })
     .eq('id', id)
     .eq('receiver_id', userId)
-    .select('id, status')
+    .select('id, status, sender_id, sport_id')
     .single();
   if (error || !data) return res.status(404).json({ error: error?.message || 'Invite not found' });
-  return res.json({ invite: data });
+
+  // Notify the SENDER that their invite was accepted/declined (block-respecting,
+  // best-effort — never fail the response).
+  try {
+    const { data: responder } = await supabase
+      .from('users').select('name, username').eq('id', userId).maybeSingle();
+    const handle = responder?.username ? `@${responder.username}` : responder?.name ?? 'Someone';
+    const accepted = status === 'accepted';
+    await notifyUnlessBlocked(userId, {
+      userId: data.sender_id,
+      type: accepted ? 'invite_accepted' : 'invite_declined',
+      title: accepted ? `${handle} accepted your play invite` : `${handle} declined your play invite`,
+      body: accepted ? 'Tap to view their profile and set up a match.' : '',
+      data: { actorId: userId, invite_id: data.id, sport_id: data.sport_id },
+    });
+  } catch {
+    // best-effort
+  }
+  return res.json({ invite: { id: data.id, status: data.status } });
 }

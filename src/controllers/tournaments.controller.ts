@@ -5,6 +5,7 @@ import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS } from '../utils/validation';
+import { notifyUnlessBlocked } from '../utils/notify';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -309,7 +310,7 @@ export async function createEntry(req: Request, res: Response) {
     // Check registration deadline and max_teams cap
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('max_teams, registration_deadline')
+      .select('max_teams, registration_deadline, created_by, name')
       .eq('id', id)
       .maybeSingle();
     if (tournament?.registration_deadline && new Date(tournament.registration_deadline) < new Date()) {
@@ -330,6 +331,23 @@ export async function createEntry(req: Request, res: Response) {
     // existing row to `pending` with a single filtered UPDATE (atomic per
     // statement). A row that is already pending/approved is a clean 400 —
     // never a duplicate row and never a raw 500 from the unique constraint.
+    // Notify the ORGANISER that a team requested entry (block-respecting,
+    // best-effort). Fired for a fresh request AND a re-request (reopen).
+    const notifyEntryRequested = async (entryRowId: string) => {
+      try {
+        const organiserId = tournament?.created_by;
+        if (!organiserId || organiserId === userId) return;
+        const { data: team } = await supabase.from('teams').select('name').eq('id', team_id).maybeSingle();
+        await notifyUnlessBlocked(userId, {
+          userId: organiserId,
+          type: 'entry_requested',
+          title: 'New tournament entry',
+          body: `${team?.name ?? 'A team'} requested to enter ${tournament?.name ?? 'your tournament'}.`,
+          data: { tournamentId: id, teamId: team_id, entryId: entryRowId },
+        });
+      } catch { /* best-effort */ }
+    };
+
     const nowIso = new Date().toISOString();
     const { data: reopened } = await supabase
       .from('tournament_entries')
@@ -339,7 +357,10 @@ export async function createEntry(req: Request, res: Response) {
       .in('status', ['rejected', 'withdrawn'])
       .select('*')
       .maybeSingle();
-    if (reopened) return res.json({ entry: reopened });
+    if (reopened) {
+      await notifyEntryRequested(reopened.id);
+      return res.json({ entry: reopened });
+    }
 
     // No rejected/withdrawn row was reopened → either a live (pending/approved)
     // entry already exists, or there is no row yet.
@@ -374,6 +395,7 @@ export async function createEntry(req: Request, res: Response) {
       }
       return res.status(500).json({ error: sanitizeError(error) });
     }
+    await notifyEntryRequested(data.id);
     return res.json({ entry: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -400,7 +422,7 @@ export async function updateEntry(req: Request, res: Response) {
 
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by')
+      .select('created_by, name')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -434,6 +456,27 @@ export async function updateEntry(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // Notify the team CAPTAIN when the organiser approves/rejects the entry
+    // (block-respecting, best-effort). Withdrawals are self-initiated → no notify.
+    if (status === 'approved' || status === 'rejected') {
+      try {
+        const { data: cap } = await supabase
+          .from('team_members').select('user_id')
+          .eq('team_id', entry.team_id).eq('role', 'captain').maybeSingle();
+        if (cap?.user_id && cap.user_id !== userId) {
+          const { data: team } = await supabase.from('teams').select('name').eq('id', entry.team_id).maybeSingle();
+          const approved = status === 'approved';
+          await notifyUnlessBlocked(userId, {
+            userId: cap.user_id,
+            type: approved ? 'entry_approved' : 'entry_rejected',
+            title: approved ? 'Tournament entry approved' : 'Tournament entry rejected',
+            body: `${team?.name ?? 'Your team'} was ${approved ? 'approved for' : 'rejected from'} ${tournament?.name ?? 'the tournament'}.`,
+            data: { tournamentId: id, teamId: entry.team_id, entryId },
+          });
+        }
+      } catch { /* best-effort */ }
+    }
     return res.json({ entry: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

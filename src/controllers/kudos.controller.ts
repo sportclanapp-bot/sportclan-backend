@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { notifyUser } from '../utils/notify';
 import { excludeDeletedEmbed } from '../utils/activeUser';
+import { blockedUserIds, excludeIds } from '../utils/blocks';
 
 const KUDOS_COINS = 2;
 
@@ -112,13 +113,15 @@ export async function sendKudos(req: Request, res: Response) {
 // paginated to the most recent 50. Public; no auth scope needed.
 export async function listReceivedKudos(req: Request, res: Response) {
   const { userId } = req.params;
-  // SC-77: hide kudos sent by a soft-deleted account.
-  const { data, error } = await excludeDeletedEmbed(supabase
+  // SC-77: hide kudos by a soft-deleted account. Block edge: hide kudos sent by
+  // anyone the viewer (req.userId — route is authed) has blocked either direction.
+  const blocked = await blockedUserIds(req.userId);
+  const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
     .from('kudos')
     .select('id, match_id, message, created_at, from_user_id, sender:users!from_user_id!inner(id, name, username, profile_picture_url)')
     .eq('to_user_id', userId)
     .order('created_at', { ascending: false })
-    .limit(50), 'sender');
+    .limit(50), 'sender'), 'from_user_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ kudos: data ?? [] });
 }

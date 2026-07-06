@@ -6,7 +6,7 @@ import { resolveSportId } from '../utils/sportId';
 import { LIMITS } from '../utils/validation';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
-import { blockedUserIds } from '../utils/blocks';
+import { blockedUserIds, excludeIds } from '../utils/blocks';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
@@ -497,12 +497,15 @@ export async function unfollowUser(req: Request, res: Response) {
 // GET /users/:id/followers
 export async function getFollowers(req: Request, res: Response) {
   const { id } = req.params;
-  // SC-77: hide soft-deleted accounts from the followers list.
-  const { data, error } = await excludeDeletedEmbed(supabase
+  // SC-77: hide soft-deleted accounts. Block edge: when a viewer is present
+  // (optionalAuth), also hide anyone they've blocked either direction — so a
+  // blocked user never surfaces even in a third party's follower list.
+  const blocked = await blockedUserIds(req.userId);
+  const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
     .from('follow_relationships')
     .select('follower_id, users:follower_id!inner (id, name, profile_picture_url, bio)')
     .eq('following_id', id)
-    .order('created_at', { ascending: false }), 'users');
+    .order('created_at', { ascending: false }), 'users'), 'follower_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean) });
 }
@@ -510,12 +513,14 @@ export async function getFollowers(req: Request, res: Response) {
 // GET /users/:id/following
 export async function getFollowing(req: Request, res: Response) {
   const { id } = req.params;
-  // SC-77: hide soft-deleted accounts from the following list.
-  const { data, error } = await excludeDeletedEmbed(supabase
+  // SC-77: hide soft-deleted accounts. Block edge (optionalAuth viewer): hide
+  // anyone the viewer has blocked either direction from a third party's list.
+  const blocked = await blockedUserIds(req.userId);
+  const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
     .from('follow_relationships')
     .select('following_id, users:following_id!inner (id, name, profile_picture_url, bio)')
     .eq('follower_id', id)
-    .order('created_at', { ascending: false }), 'users');
+    .order('created_at', { ascending: false }), 'users'), 'following_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean) });
 }
@@ -1186,13 +1191,15 @@ export async function updateSportProfile(req: Request, res: Response) {
 export async function getReviews(req: Request, res: Response) {
   const { id } = req.params;
   try {
-    // SC-77: hide reviews written by a soft-deleted account.
-    const { data, error } = await excludeDeletedEmbed(supabase
+    // SC-77: hide reviews by a soft-deleted account. Block edge (optionalAuth):
+    // hide reviews authored by anyone the viewer has blocked either direction.
+    const blocked = await blockedUserIds(req.userId);
+    const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
       .from('user_reviews')
       .select('id, rating, comment, created_at, reviewer:users!reviewer_id!inner(id, name, profile_picture_url)')
       .eq('reviewed_id', id)
       .order('created_at', { ascending: false })
-      .limit(50), 'reviewer');
+      .limit(50), 'reviewer'), 'reviewer_id', blocked);
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     const ratings = (data ?? []).map((r: any) => r.rating as number);
     const avgRating = ratings.length > 0 ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10 : null;

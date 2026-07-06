@@ -612,15 +612,34 @@ export async function checkUsername(req: Request, res: Response) {
 // GET /auth/coupon/validate?code=
 // Returns { valid: boolean, description?: string }. Best-effort lookup —
 // the actual coupon application happens in the register controller.
+// Codes that were intentionally RETIRED because their perk is now delivered
+// automatically at signup (the early-bird auto-grant: 3 months premium + 50
+// coins). The coupon_codes row is inactive/absent on purpose — DO NOT reactivate
+// it (that would double-dip the auto-grant). We only give the UI an honest,
+// specific message instead of a bare valid:false that reads as "invalid coupon".
+// This grants NOTHING — it is a message only.
+const RETIRED_COUPONS: Record<string, string> = {
+  EARLYBIRDS: 'EarlyBirds is already applied automatically when you sign up — no code needed.',
+};
+
 export async function validateCoupon(req: Request, res: Response) {
   const code = ((req.query.code as string) || '').trim();
   if (!code) return res.status(400).json({ error: 'code is required' });
+  const retiredMessage = RETIRED_COUPONS[code.toUpperCase()];
   const { data: coupon } = await supabase
     .from('coupon_codes')
     .select('description, expires_at, active, max_uses, uses_count')
     .ilike('code', code)
     .maybeSingle();
-  if (!coupon || !coupon.active) return res.json({ valid: false });
+  if (!coupon || !coupon.active) {
+    // A known-retired code (e.g. EARLYBIRDS) → honest "already included" state
+    // rather than the generic invalid one, so the UI can reassure the user
+    // instead of showing an error. Still valid:false → grants nothing.
+    if (retiredMessage) {
+      return res.json({ valid: false, reason: 'already_included', message: retiredMessage });
+    }
+    return res.json({ valid: false });
+  }
   if (coupon.expires_at && new Date(coupon.expires_at) < new Date()) {
     return res.json({ valid: false });
   }

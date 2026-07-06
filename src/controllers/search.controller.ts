@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
+import { blockedUserIds, excludeIds } from '../utils/blocks';
 
 // ─── UNIFIED SEARCH ─────────────────────────────────────────────────────────
 export async function search(req: Request, res: Response) {
@@ -23,35 +24,36 @@ export async function search(req: Request, res: Response) {
     case 'tournaments':
       return searchTournaments(res, query, sport_id as string, pageSize);
     case 'umpires':
-      return searchUmpires(res, query, sport_id as string, pageSize);
+      return searchUmpires(res, query, sport_id as string, pageSize, callerId);
     case 'coaches':
-      return searchByAccountType(res, query, 'coach', pageSize);
+      return searchByAccountType(res, query, 'coach', pageSize, callerId);
     case 'posts':
-      return searchPosts(res, query, sport_id as string, pageSize);
+      return searchPosts(res, query, sport_id as string, pageSize, callerId);
     case 'businesses':
-      return searchBusinesses(res, query, pageSize);
+      return searchBusinesses(res, query, pageSize, callerId);
     case 'associations':
-      return searchByAccountType(res, query, 'association', pageSize);
+      return searchByAccountType(res, query, 'association', pageSize, callerId);
     case 'clubs':
-      return searchByAccountType(res, query, 'club', pageSize);
+      return searchByAccountType(res, query, 'club', pageSize, callerId);
     case 'leagues':
-      return searchByAccountType(res, query, 'leagues', pageSize);
+      return searchByAccountType(res, query, 'leagues', pageSize, callerId);
     case 'other':
-      return searchByAccountType(res, query, 'other', pageSize);
+      return searchByAccountType(res, query, 'other', pageSize, callerId);
     default:
       return res.status(400).json({ error: 'Invalid tab' });
   }
 }
 
 async function searchPlayers(res: Response, q: string, sportId: string | undefined, limit: number, callerId?: string) {
-  const { data, error } = await excludeDeleted(supabase // SC-77: hide deleted accounts
+  const blocked = await blockedUserIds(callerId); // SC-82
+  const { data, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
     .from('users')
     .select(`
       id, name, username, profile_picture_url, is_premium, discoverability,
       city:cities!city_id(id, name),
       sports:user_sports(sport:sports(id, name, emoji))
     `)
-    .or(`username.ilike.%${q}%,name.ilike.%${q}%`))
+    .or(`username.ilike.%${q}%,name.ilike.%${q}%`)), 'id', blocked)
     // Premium users appear first — delivers the "Boosted ranking" promise
     .order('is_premium', { ascending: false })
     .order('name', { ascending: true })
@@ -124,9 +126,10 @@ async function searchTournaments(res: Response, q: string, sportId: string | und
   return res.json({ data: data || [] });
 }
 
-async function searchUmpires(res: Response, q: string, sportId: string | undefined, limit: number) {
+async function searchUmpires(res: Response, q: string, sportId: string | undefined, limit: number, callerId?: string) {
   // Only premium umpires shown
-  const { data, error } = await excludeDeleted(supabase // SC-77: hide deleted accounts
+  const blocked = await blockedUserIds(callerId); // SC-82
+  const { data, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
     .from('users')
     .select(`
       id, name, username, profile_picture_url, is_premium,
@@ -134,7 +137,7 @@ async function searchUmpires(res: Response, q: string, sportId: string | undefin
     `)
     .eq('is_premium', true)
     .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
-    .limit(limit));
+    .limit(limit)), 'id', blocked);
 
   if (error) return res.status(500).json({ error: error.message });
 
@@ -154,7 +157,7 @@ async function searchUmpires(res: Response, q: string, sportId: string | undefin
   return res.json({ data: filtered });
 }
 
-async function searchPosts(res: Response, q: string, sportId: string | undefined, limit: number) {
+async function searchPosts(res: Response, q: string, sportId: string | undefined, limit: number, callerId?: string) {
   let query = supabase
     .from('community_posts')
     .select(`
@@ -166,6 +169,7 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
     .order('created_at', { ascending: false })
     .limit(limit);
   query = excludeDeletedEmbed(query, 'author'); // SC-77
+  query = excludeIds(query, 'author_id', await blockedUserIds(callerId)); // SC-81
 
   if (sportId) query = query.eq('sport_id', sportId);
   const { data, error } = await query;
@@ -173,9 +177,10 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
   return res.json({ data: data || [] });
 }
 
-async function searchBusinesses(res: Response, q: string, limit: number) {
+async function searchBusinesses(res: Response, q: string, limit: number, callerId?: string) {
   // Businesses are Premium users with Business account type
-  const { data: users, error } = await excludeDeleted(supabase // SC-77: hide deleted accounts
+  const blocked = await blockedUserIds(callerId); // SC-82
+  const { data: users, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
     .from('users')
     .select(`
       id, name, username, profile_picture_url, is_premium,
@@ -183,7 +188,7 @@ async function searchBusinesses(res: Response, q: string, limit: number) {
     `)
     .eq('is_premium', true)
     .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
-    .limit(limit));
+    .limit(limit)), 'id', blocked);
 
   if (error) return res.status(500).json({ error: error.message });
 
@@ -208,14 +213,15 @@ async function searchBusinesses(res: Response, q: string, limit: number) {
 // column that only ever matched a user's primary type (SC-27). Search is
 // intentionally NOT premium-gated — every pro is discoverable here; premium
 // only gates the richer Services directory. Premium just ranks first.
-async function searchByAccountType(res: Response, q: string, accountType: string, limit: number) {
-  const { data: users, error } = await excludeDeleted(supabase // SC-77: hide deleted accounts
+async function searchByAccountType(res: Response, q: string, accountType: string, limit: number, callerId?: string) {
+  const blocked = await blockedUserIds(callerId); // SC-82
+  const { data: users, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
     .from('users')
     .select('id, name, username, profile_picture_url, bio, is_premium, city:cities!city_id(id, name)')
     .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
     .order('is_premium', { ascending: false })
     .order('name', { ascending: true })
-    .limit(limit));
+    .limit(limit)), 'id', blocked);
   if (error) return res.status(500).json({ error: error.message });
 
   const userIds = (users || []).map((u) => u.id);

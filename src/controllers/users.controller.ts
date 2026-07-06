@@ -6,6 +6,7 @@ import { resolveSportId } from '../utils/sportId';
 import { LIMITS } from '../utils/validation';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
+import { blockedUserIds } from '../utils/blocks';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
@@ -838,7 +839,9 @@ export async function getRival(req: Request, res: Response) {
     return res.json({ rival: null });
   }
 
-  const candidateIds = higher.map((h) => h.user_id).filter((uid) => uid !== id);
+  // SC-82: a user blocked either direction can't be surfaced as a rival.
+  const blockedRival = await blockedUserIds(userId);
+  const candidateIds = higher.map((h) => h.user_id).filter((uid) => uid !== id && !blockedRival.has(uid));
   if (candidateIds.length === 0) return res.json({ rival: null });
 
   const { data: users } = await supabase

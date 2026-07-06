@@ -37,3 +37,19 @@ export function excludeIds<Q>(q: Q, column: string, ids: Set<string>): Q {
   return (q as unknown as { not: (c: string, op: string, v: string) => Q })
     .not(column, 'in', `(${[...ids].join(',')})`);
 }
+
+/**
+ * True iff `userA` and `userB` have blocked each other in EITHER direction.
+ * Single query — for hot pairwise checks (like/comment/interaction gates) where
+ * pulling the full blockedUserIds set would be wasteful. Returns false when the
+ * two ids are equal (a user can always interact with their own content).
+ */
+export async function isBlockedBetween(userA?: string, userB?: string): Promise<boolean> {
+  if (!userA || !userB || userA === userB) return false;
+  const { data } = await supabase
+    .from('user_blocks')
+    .select('id')
+    .or(`and(blocker_id.eq.${userA},blocked_id.eq.${userB}),and(blocker_id.eq.${userB},blocked_id.eq.${userA})`)
+    .maybeSingle();
+  return !!data;
+}

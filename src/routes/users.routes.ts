@@ -38,8 +38,8 @@ router.get('/me/profile-completeness', authenticateToken, getProfileCompleteness
 router.get('/discover', authenticateToken, discoverPlayers);
 
 router.get('/:id', optionalAuth, getUserById);
-router.get('/:id/followers', getFollowers);
-router.get('/:id/following', getFollowing);
+router.get('/:id/followers', optionalAuth, getFollowers);
+router.get('/:id/following', optionalAuth, getFollowing);
 router.get('/:id/sport-profile/:sportId', getSportProfile);
 router.patch('/:id/sport-profile/:sportId', authenticateToken, updateSportProfile);
 router.get('/:id/activity-heatmap', getActivityHeatmap);
@@ -48,7 +48,7 @@ router.get('/:id/rival', authenticateToken, getRival);
 router.get('/:id/season-recap', getSeasonRecap);
 router.get('/:id/insights', getUserInsights);
 
-router.get('/:id/reviews', getReviews);
+router.get('/:id/reviews', optionalAuth, getReviews);
 router.post('/:id/reviews', authenticateToken, submitReview);
 
 router.post('/:id/follow', authenticateToken, followUser);

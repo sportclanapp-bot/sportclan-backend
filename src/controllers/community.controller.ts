@@ -3,7 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { LIMITS } from '../utils/validation';
 import { excludeDeletedEmbed } from '../utils/activeUser';
-import { blockedUserIds, excludeIds } from '../utils/blocks';
+import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 
 // ─── Basic profanity word list ───────────────────────────────────────────────
 // SC-68: the original list was matched with a naive `lower.includes(w)` substring
@@ -397,6 +397,14 @@ export async function likePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
 
+  // Block gate: a blocked user (either direction) can't like the author's post.
+  const { data: likePostRow } = await supabase
+    .from('community_posts').select('author_id').eq('id', id).maybeSingle();
+  if (!likePostRow) return res.status(404).json({ error: 'Post not found' });
+  if (await isBlockedBetween(userId, likePostRow.author_id)) {
+    return res.status(403).json({ error: 'BLOCKED' });
+  }
+
   const { error } = await supabase
     .from('post_likes')
     .insert({ post_id: id, user_id: userId });
@@ -457,6 +465,14 @@ export async function createComment(req: Request, res: Response) {
   const detected = detectProfanity(content);
   if (detected.length > 0) {
     return res.status(400).json({ error: 'PROFANITY_DETECTED', detected_words: detected });
+  }
+
+  // Block gate: a blocked user (either direction) can't comment on the post.
+  const { data: commentPostRow } = await supabase
+    .from('community_posts').select('author_id').eq('id', id).maybeSingle();
+  if (!commentPostRow) return res.status(404).json({ error: 'Post not found' });
+  if (await isBlockedBetween(userId, commentPostRow.author_id)) {
+    return res.status(403).json({ error: 'BLOCKED' });
   }
 
   const { data, error } = await supabase

@@ -928,14 +928,23 @@ export async function completeMatch(req: Request, res: Response) {
     const ratingHistoryRows: Array<{ user_id: string; sport_id: string; match_id: string; old_rating: number; new_rating: number; delta: number }> = [];
     let allPlayerIds: string[] = [];
 
-    // Ranked matches must have a real lineup (>=2 per side) before they can
-    // close — otherwise the ELO/leaderboard impact would be meaningless (A5-003
-    // P3). Casual matches have no such requirement.
+    // Ranked matches must have a real lineup before they can close — otherwise
+    // the ELO impact would be meaningless (a side with no registered player would
+    // be rated against the 1200 avgRating fallback below = phantom-rating farming).
+    // SC-74: the check was originally ">=2 per side", which assumed TEAM sports
+    // and permanently blocked legitimate 1v1/singles ranked play (chess, carrom,
+    // and singles tennis/badminton/table-tennis/pickleball) from ever completing.
+    // The protection that actually matters is "no EMPTY side" — each side must
+    // have at least ONE registered participant. match_participants only ever holds
+    // real user_ids (guests ride in event payloads as guest:<id> and never enter
+    // this table), and ranked guest scoring is already rejected at createEvent, so
+    // ">=1 registered per side" keeps the anti-phantom guarantee while allowing
+    // 1v1. Casual matches have no such requirement.
     if (match.is_ranked) {
       const aCount = (participants ?? []).filter((p) => p.team_side === 'A').length;
       const bCount = (participants ?? []).filter((p) => p.team_side === 'B').length;
-      if (aCount < 2 || bCount < 2) {
-        return res.status(400).json({ error: 'Ranked matches need at least 2 players per side. Set the lineup first.' });
+      if (aCount < 1 || bCount < 1) {
+        return res.status(400).json({ error: 'Ranked matches need at least one registered player on each side. Set the lineup first.' });
       }
     }
 

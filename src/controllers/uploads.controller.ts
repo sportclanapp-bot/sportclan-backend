@@ -72,6 +72,13 @@ export async function uploadAudio(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
+  // SC-75: voice notes are disabled — chat is text + link only. This endpoint
+  // is chat-voice-only (nothing else uploads audio), so blocking it here is
+  // scoped to chat and doesn't affect the shared /uploads/profile-photo path
+  // (profile / team logos / post images). Returns 404 so the feature reads as
+  // unavailable.
+  return res.status(404).json({ error: 'Voice notes are not available.', code: 'VOICE_DISABLED' });
+
   const { base64, mime } = req.body || {};
   if (!base64 || typeof base64 !== 'string') {
     return res.status(400).json({ error: 'base64 is required' });

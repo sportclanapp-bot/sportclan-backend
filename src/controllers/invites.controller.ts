@@ -4,6 +4,35 @@ import { sendPushToTokens } from '../utils/fcm';
 import { notifyUnlessBlocked } from '../utils/notify';
 
 // POST /invites  { receiver_id, sport_id, message? }
+// Best-effort receiver notification — shared by a fresh invite and a re-send.
+async function notifyInviteReceived(
+  inviteId: string, senderId: string, receiverId: string, sportId: string, message: string | null,
+): Promise<void> {
+  const [{ data: sender }, { data: sport }] = await Promise.all([
+    supabase.from('users').select('name, username').eq('id', senderId).maybeSingle(),
+    supabase.from('sports').select('name, emoji').eq('id', sportId).maybeSingle(),
+  ]);
+  const senderHandle = sender?.username ? `@${sender.username}` : sender?.name ?? 'Someone';
+  const sportLabel = sport ? `${sport.emoji} ${sport.name}` : 'a match';
+  await supabase.from('notifications').insert({
+    user_id: receiverId,
+    type: 'invite',
+    title: `${senderHandle} sent you a play invite`,
+    body: `For ${sportLabel}${message ? ` — "${message}"` : ''}`,
+    data: { invite_id: inviteId, sport_id: sportId, sender_id: senderId },
+  });
+  const { data: tokens } = await supabase.from('push_tokens').select('token').eq('user_id', receiverId);
+  if (tokens && tokens.length > 0) {
+    await sendPushToTokens(tokens.map((t: any) => t.token), {
+      title: `${senderHandle} wants to play`,
+      body: `${sportLabel}${message ? ` — ${message}` : ''}`,
+      data: { type: 'invite', invite_id: inviteId },
+    });
+  }
+}
+
+const INVITE_COLS = 'id, sender_id, receiver_id, sport_id, message, status, created_at';
+
 export async function createInvite(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -23,43 +52,89 @@ export async function createInvite(req: Request, res: Response) {
     .maybeSingle();
   if (block) return res.status(403).json({ error: 'Cannot invite a blocked user' });
 
-  const { data: invite, error } = await supabase
+  // DEDUP: one PENDING invite per (sender, receiver, sport). A resolved
+  // (accepted/declined) invite is REOPENED to pending; a live pending one is a
+  // clean 400 — never a duplicate row.
+  const { data: existingRows } = await supabase
     .from('invites')
-    .insert({ sender_id: userId, receiver_id, sport_id, message: message || null })
-    .select('id, sender_id, receiver_id, sport_id, message, status, created_at')
-    .single();
-  if (error || !invite) return res.status(500).json({ error: error?.message || 'Failed to create invite' });
+    .select('id, status')
+    .eq('sender_id', userId)
+    .eq('receiver_id', receiver_id)
+    .eq('sport_id', sport_id)
+    .order('created_at', { ascending: false });
+  const rows = existingRows || [];
+  if (rows.some((r) => r.status === 'pending')) {
+    return res.status(400).json({
+      error: 'You already have a pending invite to this player for this sport.',
+      code: 'ALREADY_INVITED',
+    });
+  }
+  const resolved = rows.find((r) => r.status === 'declined' || r.status === 'accepted');
 
-  // Best-effort: write a notification + push to receiver.
-  const [{ data: sender }, { data: sport }] = await Promise.all([
-    supabase.from('users').select('name, username').eq('id', userId).maybeSingle(),
-    supabase.from('sports').select('name, emoji').eq('id', sport_id).maybeSingle(),
-  ]);
-  const senderHandle = sender?.username ? `@${sender.username}` : sender?.name ?? 'Someone';
-  const sportLabel = sport ? `${sport.emoji} ${sport.name}` : 'a match';
-
-  await supabase.from('notifications').insert({
-    user_id: receiver_id,
-    type: 'invite',
-    title: `${senderHandle} sent you a play invite`,
-    body: `For ${sportLabel}${message ? ` — "${message}"` : ''}`,
-    data: { invite_id: invite.id, sport_id, sender_id: userId },
-  });
-
-  const { data: tokens } = await supabase
-    .from('push_tokens').select('token').eq('user_id', receiver_id);
-  if (tokens && tokens.length > 0) {
-    await sendPushToTokens(
-      tokens.map((t: any) => t.token),
-      {
-        title: `${senderHandle} wants to play`,
-        body: `${sportLabel}${message ? ` — ${message}` : ''}`,
-        data: { type: 'invite', invite_id: invite.id },
-      },
-    );
+  let invite: any;
+  const nowIso = new Date().toISOString();
+  if (resolved) {
+    // Reopen this exact row — concurrent reopens all target the same id, so no dup.
+    const { data, error } = await supabase
+      .from('invites')
+      .update({ status: 'pending', responded_at: null, message: message || null, created_at: nowIso })
+      .eq('id', resolved.id)
+      .select(INVITE_COLS)
+      .single();
+    if (error || !data) return res.status(500).json({ error: error?.message || 'Failed to re-send invite' });
+    invite = data;
+  } else {
+    const { data, error } = await supabase
+      .from('invites')
+      .insert({ sender_id: userId, receiver_id, sport_id, message: message || null })
+      .select(INVITE_COLS)
+      .single();
+    if (error) {
+      // Race backstop (partial unique index uq_invites_pending): a concurrent
+      // first-time invite inserted first → already-invited, never a raw 500.
+      const code = (error as { code?: string }).code;
+      if (code === '23505' || /duplicate|unique/i.test(error.message || '')) {
+        return res.status(400).json({
+          error: 'You already have a pending invite to this player for this sport.',
+          code: 'ALREADY_INVITED',
+        });
+      }
+      return res.status(500).json({ error: error.message || 'Failed to create invite' });
+    }
+    invite = data;
   }
 
+  try { await notifyInviteReceived(invite.id, userId, receiver_id, sport_id, message || null); } catch { /* best-effort */ }
   return res.json({ invite });
+}
+
+// DELETE /invites/:id — the SENDER withdraws their own PENDING invite. Silent
+// removal (the row is deleted; the receiver's copy simply vanishes). Only the
+// sender, only while pending; accepted/declined can't be withdrawn.
+export async function withdrawInvite(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  const { data: invite } = await supabase
+    .from('invites').select('id, sender_id, status').eq('id', id).maybeSingle();
+  if (!invite) return res.status(404).json({ error: 'Invite not found' });
+  if (invite.sender_id !== userId) {
+    return res.status(403).json({ error: 'Only the sender can withdraw this invite' });
+  }
+  if (invite.status !== 'pending') {
+    return res.status(400).json({ error: 'Only a pending invite can be withdrawn.', code: 'INVITE_RESOLVED' });
+  }
+  // Guarded delete: if the receiver responded between the read and here, 0 rows
+  // delete → clean 400 (race-safe), never a false success.
+  const { data: deleted, error } = await supabase
+    .from('invites').delete()
+    .eq('id', id).eq('sender_id', userId).eq('status', 'pending')
+    .select('id');
+  if (error) return res.status(500).json({ error: error.message });
+  if (!deleted || deleted.length === 0) {
+    return res.status(400).json({ error: 'This invite was already responded to.', code: 'INVITE_RESOLVED' });
+  }
+  return res.json({ success: true });
 }
 
 // GET /invites — invites received by current user

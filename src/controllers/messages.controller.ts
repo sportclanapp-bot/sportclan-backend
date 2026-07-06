@@ -532,7 +532,10 @@ export async function sendMessage(req: Request, res: Response) {
 export async function deleteMessage(req: Request, res: Response) {
   const userId = req.userId!;
   const { messageId } = req.params;
-  const { for_everyone } = req.body;
+  // SC-71: a bodyless DELETE leaves req.body undefined; guard the destructure so
+  // it defaults to a plain "delete this message" (for_everyone falsy) instead of
+  // throwing → 500. Auth behaviour is unchanged (non-sender still 403).
+  const { for_everyone } = req.body ?? {};
 
   const { data: msg } = await supabase
     .from('messages')

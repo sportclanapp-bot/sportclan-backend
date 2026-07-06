@@ -3,6 +3,7 @@
 // blocks the caller (and never throws) because push is always optional.
 import { supabase } from './supabase';
 import { sendPushToTokens } from './fcm';
+import { blockedUserIds } from './blocks';
 
 export interface NotifyArgs {
   userId: string;
@@ -31,6 +32,10 @@ const PREF_CATEGORY: Record<string, string> = {
   community: 'social',
   invite: 'social',
   play_invite: 'social',
+  invite_accepted: 'social',
+  invite_declined: 'social',
+  // Tournament-entry decisions are left UNMAPPED (ungated) below — they're
+  // organiser/team-critical and should always deliver.
   // Gifts
   gift: 'gifts',
   gift_received: 'gifts',
@@ -134,4 +139,21 @@ export async function notifyUsers(userIds: string[], payload: Omit<NotifyArgs, '
     // eslint-disable-next-line no-console
     console.error('[notify] fanout failed', payload.type, err);
   }
+}
+
+/**
+ * Notify `args.userId` about `actorId`'s action — UNLESS the two have blocked
+ * each other (either direction). Used by approval/decision notifications so a
+ * block is never crossed. Best-effort; fails open on lookup error.
+ */
+export async function notifyUnlessBlocked(actorId: string, args: NotifyArgs): Promise<void> {
+  try {
+    if (actorId && actorId !== args.userId) {
+      const blocked = await blockedUserIds(args.userId);
+      if (blocked.has(actorId)) return;
+    }
+  } catch {
+    // fail open — a block-lookup error must not drop a legitimate notification
+  }
+  await notifyUser(args);
 }

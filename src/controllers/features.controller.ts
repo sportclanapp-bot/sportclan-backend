@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { notifyUser } from '../utils/notify';
+import { notifyUser, notifyUnlessBlocked } from '../utils/notify';
 
 // ────────────────────────────────────────────────────────────────────────────
 // TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
@@ -209,6 +209,19 @@ export async function addTournamentOfficial(req: Request, res: Response) {
       .single();
     if (error?.code === '23505') return res.json({ success: true, alreadyAdded: true });
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // Notify the assigned official (consent-by-notification; they can step down
+    // via self-remove). Block-respecting, best-effort — never fail the assign.
+    try {
+      const { data: t } = await supabase.from('tournaments').select('name').eq('id', id).maybeSingle();
+      await notifyUnlessBlocked(userId, {
+        userId: user_id,
+        type: 'assigned_as_official',
+        title: 'You’re a tournament official',
+        body: `You were assigned as ${role} for ${t?.name ?? 'a tournament'}.`,
+        data: { tournamentId: id, actorId: userId, role },
+      });
+    } catch { /* best-effort */ }
     return res.json({ official: data });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
@@ -222,7 +235,17 @@ export async function removeTournamentOfficial(req: Request, res: Response) {
     const { id, officialId } = req.params;
     const { data: tournament } = await supabase.from('tournaments').select('created_by').eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
-    if (tournament.created_by !== userId) return res.status(403).json({ error: 'Only organiser can remove officials' });
+
+    // An official may STEP DOWN (self-remove), mirroring team self-leave; the
+    // organiser may remove anyone.
+    const { data: official } = await supabase
+      .from('tournament_officials').select('user_id').eq('id', officialId).eq('tournament_id', id).maybeSingle();
+    if (!official) return res.status(404).json({ error: 'Official not found' });
+    const isOrganiser = tournament.created_by === userId;
+    const isSelf = official.user_id === userId;
+    if (!isOrganiser && !isSelf) {
+      return res.status(403).json({ error: 'Only the organiser or the official themselves can remove' });
+    }
 
     await supabase.from('tournament_officials').delete().eq('id', officialId).eq('tournament_id', id);
     return res.json({ success: true });

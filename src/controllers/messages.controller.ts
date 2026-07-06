@@ -452,23 +452,24 @@ export async function sendMessage(req: Request, res: Response) {
     reply_to_id,
     image_url: imageUrl,
     audio_url: audioUrl,
-    audio_duration_ms: audioDurationMs,
   } = req.body;
 
   const body = (typeof text === 'string' && text) ? text : content;
 
-  // Validation: must have text OR image OR audio
-  if (!body && !imageUrl && !audioUrl) {
-    return res.status(400).json({ error: 'text, image_url, or audio_url is required' });
+  // SC-75: chat is TEXT + LINK only. Reject any media so the scope is ENFORCED
+  // server-side, not merely hidden in the UI (the endpoint is reachable via a
+  // direct API call). Links need no special handling — they're plain text the
+  // client renders. The shared /uploads/profile-photo endpoint is left intact
+  // (profile / team logos / post images still use it); only chat message media
+  // is refused here, and the chat-only /uploads/audio endpoint is disabled.
+  if (imageUrl || audioUrl) {
+    return res.status(400).json({ error: 'Chat supports text and links only.', code: 'CHAT_TEXT_ONLY' });
   }
-  if (body && typeof body === 'string' && body.length > MAX_MESSAGE_LENGTH) {
+  if (!body) {
+    return res.status(400).json({ error: 'text is required' });
+  }
+  if (typeof body === 'string' && body.length > MAX_MESSAGE_LENGTH) {
     return res.status(400).json({ error: `Message exceeds ${MAX_MESSAGE_LENGTH} character limit` });
-  }
-  if (audioUrl && typeof audioUrl !== 'string') {
-    return res.status(400).json({ error: 'audio_url must be a string' });
-  }
-  if (imageUrl && typeof imageUrl !== 'string') {
-    return res.status(400).json({ error: 'image_url must be a string' });
   }
 
   // Verify participant
@@ -483,19 +484,13 @@ export async function sendMessage(req: Request, res: Response) {
 
   // Build insert payload. Some columns may not exist on older schemas;
   // pgrest will surface an error if so, which we propagate.
+  // Text + link only (SC-75) — media is rejected above, so nothing to store.
   const insertPayload: Record<string, unknown> = {
     chat_id: id,
     sender_id: userId,
     content: (typeof body === 'string' ? body.trim() : null) || null,
-    image_url: imageUrl ?? null,
     reply_to_id: reply_to_id || null,
   };
-  if (audioUrl) {
-    insertPayload.audio_url = audioUrl;
-    if (typeof audioDurationMs === 'number') {
-      insertPayload.audio_duration_ms = audioDurationMs;
-    }
-  }
 
   const { data, error } = await supabase
     .from('messages')

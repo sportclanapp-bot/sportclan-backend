@@ -5,7 +5,7 @@ import {
   listComments, createComment, deleteComment, reactToComment,
   reportContent, getMyPostCount, searchMentions, getSportStoryCounts,
 } from '../controllers/community.controller';
-import { authenticateToken } from '../middleware/auth.middleware';
+import { authenticateToken, optionalAuth } from '../middleware/auth.middleware';
 
 const router = Router();
 
@@ -13,7 +13,7 @@ const router = Router();
 router.get('/posts', authenticateToken, listPosts);
 router.get('/posts/my-count', authenticateToken, getMyPostCount);
 router.get('/sport-story-counts', authenticateToken, getSportStoryCounts);
-router.get('/posts/:id', getPost);
+router.get('/posts/:id', optionalAuth, getPost);
 router.post('/posts', authenticateToken, createPost);
 router.patch('/posts/:id', authenticateToken, updatePost);
 router.delete('/posts/:id', authenticateToken, deletePost);
@@ -26,7 +26,7 @@ router.get('/posts/:id/liked', authenticateToken, checkLiked);
 router.post('/posts/:id/vote', authenticateToken, votePoll);
 
 // Comments
-router.get('/posts/:id/comments', listComments);
+router.get('/posts/:id/comments', optionalAuth, listComments);
 router.post('/posts/:id/comments', authenticateToken, createComment);
 router.delete('/comments/:commentId', authenticateToken, deleteComment);
 router.post('/comments/:commentId/react', authenticateToken, reactToComment);

@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { LIMITS } from '../utils/validation';
 import { excludeDeletedEmbed } from '../utils/activeUser';
+import { blockedUserIds, excludeIds } from '../utils/blocks';
 
 // ─── Basic profanity word list ───────────────────────────────────────────────
 // SC-68: the original list was matched with a naive `lower.includes(w)` substring
@@ -101,6 +102,9 @@ export async function listPosts(req: Request, res: Response) {
     q = q.is('scheduled_at', null);
   }
 
+  // SC-81: hide posts authored by blocked-either-direction users from the feed.
+  q = excludeIds(q, 'author_id', await blockedUserIds(req.userId));
+
   const result = await q;
 
   if (result.error) return res.status(500).json({ error: sanitizeError(result.error) });
@@ -151,7 +155,9 @@ export async function getPost(req: Request, res: Response) {
   const { id } = req.params;
   // SC-77: `!inner` on author → a post by a soft-deleted author returns no row,
   // so the post is no longer openable by direct id (treated as 404).
-  const { data, error } = await supabase
+  // SC-81: also 404 if the author is blocked either direction (req.userId set
+  // via optionalAuth on the route).
+  let query = supabase
     .from('community_posts')
     .select(`
       *,
@@ -160,8 +166,9 @@ export async function getPost(req: Request, res: Response) {
       city:cities!city_id(id, name)
     `)
     .eq('id', id)
-    .is('author.deleted_at', null)
-    .maybeSingle();
+    .is('author.deleted_at', null);
+  query = excludeIds(query, 'author_id', await blockedUserIds(req.userId));
+  const { data, error } = await query.maybeSingle();
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
   if (!data) return res.status(404).json({ error: 'Post not found' });
@@ -417,7 +424,9 @@ export async function listComments(req: Request, res: Response) {
   const { id } = req.params;
 
   // SC-77: hide comments authored by a soft-deleted account.
-  const { data, error } = await supabase
+  // SC-81: hide comments authored by blocked-either-direction users (viewer via
+  // optionalAuth).
+  let cq = supabase
     .from('post_comments')
     .select(`
       *,
@@ -426,6 +435,8 @@ export async function listComments(req: Request, res: Response) {
     .eq('post_id', id)
     .is('author.deleted_at', null)
     .order('created_at', { ascending: true });
+  cq = excludeIds(cq, 'author_id', await blockedUserIds(req.userId));
+  const { data, error } = await cq;
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.json({ data: data || [], comments: data || [] });

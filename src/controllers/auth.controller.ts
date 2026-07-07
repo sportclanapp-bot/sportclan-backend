@@ -17,7 +17,6 @@ import { awardCoins } from '../utils/coins';
 // is wired (A4-003). Premium is complimentary via the early-bird grant meanwhile.
 const PAYMENTS_ENABLED = process.env.PAYMENTS_ENABLED === 'true';
 
-type OtpPurpose = 'login' | 'register' | 'reset' | 'change_phone';
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
 

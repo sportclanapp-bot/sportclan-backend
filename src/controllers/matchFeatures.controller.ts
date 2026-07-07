@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { calculateDLSTarget } from '../utils/dls';
-import { aggregateCricketPlayers, aggregatePlayers, isGuestId, type CricketPlayerLine } from './scoring.controller';
+import { aggregatePlayers, isGuestId, type CricketPlayerLine } from './scoring.controller';
 import { isTerminalMatchStatus } from '../utils/validation';
 
 /**

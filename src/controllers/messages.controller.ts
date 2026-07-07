@@ -534,7 +534,7 @@ export async function sendMessage(req: Request, res: Response) {
           title: 'You were mentioned',
           body: `${data?.sender?.name ?? 'Someone'} mentioned you in a chat`,
           data: { chatId: id, messageId: data?.id },
-        }).then(() => {});
+        }).then(() => {}, () => {}); // SC-112: best-effort; 2nd arg handles rejection (no unhandled promise rejection)
       }
     }
   }

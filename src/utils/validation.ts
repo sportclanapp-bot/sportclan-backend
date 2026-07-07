@@ -33,6 +33,21 @@ export const LIMITS = {
   urlMax: 2048,
 } as const;
 
+// AUDIT-5: cap user-supplied array lengths to block payload/DoS via huge arrays.
+// Caps chosen to sit well above real UI limits (never break legit use).
+export const ARRAY_LIMITS = {
+  mentions: 20,
+  participants: 50,
+  forwardChats: 20,
+  batchIds: 500,
+  splitAmong: 50,
+  sportIds: 30,
+} as const;
+
+export function tooManyItems(v: unknown, max: number): boolean {
+  return Array.isArray(v) && v.length > max;
+}
+
 // SC-96: a well-formed http(s) URL within the length cap. Empty/null is handled
 // by the callers (clearing a field is allowed) — this only judges present values.
 export function isValidHttpUrl(v: unknown): boolean {

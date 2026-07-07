@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { isBlockedBetween } from '../utils/blocks';
-import { LIMITS, firstInvalidUrl } from '../utils/validation';
+import { LIMITS, firstInvalidUrl, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
 import { parsePagination } from '../utils/pagination';
 
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
@@ -612,6 +612,9 @@ export async function forwardMessage(req: Request, res: Response) {
   if (!message_id || !chat_ids?.length) {
     return res.status(400).json({ error: 'message_id and chat_ids required' });
   }
+  if (tooManyItems(chat_ids, ARRAY_LIMITS.forwardChats)) {
+    return res.status(400).json({ error: `Too many chats (max ${ARRAY_LIMITS.forwardChats})` });
+  }
 
   const { data: original } = await supabase
     .from('messages')
@@ -667,6 +670,9 @@ export async function batchMarkRead(req: Request, res: Response) {
   const { messageIds } = req.body ?? {};
   if (!Array.isArray(messageIds) || messageIds.length === 0) {
     return res.status(400).json({ error: 'messageIds array is required' });
+  }
+  if (tooManyItems(messageIds, ARRAY_LIMITS.batchIds)) {
+    return res.status(400).json({ error: `Too many messageIds (max ${ARRAY_LIMITS.batchIds})` });
   }
 
   // SC-107 IDOR: only mark messages in chats the caller is a participant of.

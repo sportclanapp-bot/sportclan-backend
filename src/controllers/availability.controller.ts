@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { ARRAY_LIMITS, tooManyItems } from '../utils/validation';
 
 // ─── GET MY AVAILABILITY ────────────────────────────────────────────────────
 export async function getAvailability(req: Request, res: Response) {
@@ -36,6 +37,9 @@ export async function updateAvailability(req: Request, res: Response) {
   const VALID_STATUSES = ['looking_to_play', 'available_weekend', 'not_available'];
   if (status !== undefined && status !== null && !VALID_STATUSES.includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
+  }
+  if (tooManyItems(sport_ids, ARRAY_LIMITS.sportIds)) {
+    return res.status(400).json({ error: `Too many sport_ids (max ${ARRAY_LIMITS.sportIds})` });
   }
 
   const { data, error } = await supabase

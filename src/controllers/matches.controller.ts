@@ -8,7 +8,7 @@ import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
-import { isTerminalMatchStatus } from '../utils/validation';
+import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats } from './scoring.controller';
@@ -574,6 +574,9 @@ export async function addParticipants(req: Request, res: Response) {
     const { participants } = req.body || {};
     if (!Array.isArray(participants) || participants.length === 0) {
       return res.status(400).json({ error: 'participants array is required' });
+    }
+    if (tooManyItems(participants, ARRAY_LIMITS.participants)) {
+      return res.status(400).json({ error: `Too many participants (max ${ARRAY_LIMITS.participants})` });
     }
     const { data: match } = await supabase
       .from('matches')

@@ -7,6 +7,7 @@ import { LIMITS } from '../utils/validation';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds } from '../utils/blocks';
+import { istDay } from '../utils/appTime';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
@@ -1236,10 +1237,7 @@ export async function submitReview(req: Request, res: Response) {
 // (distinct from the match-play streak_count).
 const CHECKIN_COINS = 5;
 
-// Calendar day in IST (the app timezone) as YYYY-MM-DD.
-function istDay(d: Date = new Date()): string {
-  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-}
+// istDay lives in ../utils/appTime (SC-93: one IST source of truth).
 
 export async function checkIn(req: Request, res: Response) {
   const userId = req.userId;

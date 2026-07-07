@@ -494,7 +494,7 @@ export async function updateMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id')
+      .select('created_by, umpire_id, status')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -520,6 +520,15 @@ export async function updateMatch(req: Request, res: Response) {
     const update: Record<string, any> = {};
     for (const key of allowedKeys) {
       if (req.body && key in req.body) update[key] = req.body[key];
+    }
+    // SC-85: a finished match's result is frozen. Editing status/winner/score/
+    // team identity on a terminal match would let it be resurrected (status->live)
+    // and re-completed, DOUBLE-applying ELO + matches_played (unbounded inflation),
+    // or rewrite a recorded winner without touching the already-applied ratings.
+    // Benign display/metadata fields (venue, names, scheduled_at, ...) stay editable.
+    const FROZEN_ON_TERMINAL = ['status', 'winner_team_id', 'score_summary', 'team_a_id', 'team_b_id'];
+    if (isTerminalMatchStatus(match.status) && FROZEN_ON_TERMINAL.some((k) => k in update)) {
+      return res.status(409).json({ error: 'This match is already finished — its result and status are locked.' });
     }
     update.updated_at = new Date().toISOString();
     const { data, error } = await supabase.from('matches').update(update).eq('id', id).select('*').single();
@@ -829,11 +838,17 @@ export async function cancelMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, team_a_name, team_b_name')
+      .select('id, created_by, team_a_name, team_b_name, status')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (match.created_by !== userId) return res.status(403).json({ error: 'Only the creator can cancel' });
+    // SC-84: a finished match is terminal — cancelling it would strand the ELO
+    // and stats it already applied (ghost ratings). Only scheduled/live cancel.
+    // Mirrors the isTerminalMatchStatus guard in completeMatch/abandonMatch.
+    if (isTerminalMatchStatus(match.status)) {
+      return res.status(409).json({ error: 'This match is already finished and cannot be cancelled.' });
+    }
     const { data, error } = await supabase
       .from('matches')
       .update({ status: 'cancelled', updated_at: new Date().toISOString() })

@@ -61,6 +61,20 @@ export async function sendKudos(req: Request, res: Response) {
     })
     .select('*')
     .single();
+  // SC-116: concurrent double-send loses the unique race (mig 048 uq_kudos_from_
+  // to_match). The winner already inserted + credited coins — return the same
+  // idempotent { alreadySent } as the pre-check, and (critically) return BEFORE
+  // the coin-credit below so we never double-credit.
+  if ((error as { code?: string } | null)?.code === '23505') {
+    const { data: existingRow } = await supabase
+      .from('kudos')
+      .select('*')
+      .eq('from_user_id', senderId)
+      .eq('to_user_id', toUserId)
+      .eq('match_id', matchId)
+      .maybeSingle();
+    return res.json({ kudos: existingRow, alreadySent: true });
+  }
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   // Award coins on the recipient's user row.

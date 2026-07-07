@@ -482,7 +482,7 @@ export async function followUser(req: Request, res: Response) {
   const { error } = await supabase
     .from('follow_relationships')
     .insert({ follower_id: userId, following_id: target });
-  if (error && !error.message.includes('duplicate')) {
+  if (error && (error as { code?: string }).code !== '23505') {
     return res.status(500).json({ error: error.message });
   }
   return res.json({ success: true });
@@ -553,7 +553,7 @@ export async function blockUser(req: Request, res: Response) {
   const { error } = await supabase
     .from('user_blocks')
     .insert({ blocker_id: userId, blocked_id: target });
-  if (error && !error.message.includes('duplicate')) {
+  if (error && (error as { code?: string }).code !== '23505') {
     return res.status(500).json({ error: error.message });
   }
   return res.json({ success: true });

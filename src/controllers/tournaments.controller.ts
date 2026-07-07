@@ -1030,11 +1030,23 @@ export async function advanceTournamentWinner(matchId: string): Promise<void> {
   const slotNameCol = m.next_slot === 'A' ? 'team_a_name' : 'team_b_name';
   const { data: parent } = await supabase
     .from('matches')
-    .select(`id, ${slotIdCol}`)
+    .select(`id, ${slotIdCol}, status`)
     .eq('id', m.next_match_id)
     .maybeSingle();
   if (!parent) return;
-  if ((parent as any)[slotIdCol]) return; // already filled — idempotent
+  const existing = (parent as any)[slotIdCol];
+  if (existing) {
+    // SC-87 (Option B — cascade): the child slot is already advanced. Allow a
+    // re-record to OVERWRITE it with the corrected winner, but only while the
+    // child match is still scheduled — a scheduled child has no winner, so the
+    // cascade is bounded to this one level (nothing deeper to re-seed). Once the
+    // child has started, the result is frozen (SC-23 blocks the re-record
+    // upstream; this is the defensive mirror). No-op if the winner is unchanged.
+    if (existing === winnerId) return;
+    if ((parent as any).status !== 'scheduled') return;
+  }
+  // Fill an empty slot (first record) OR overwrite it in-place with the new
+  // winner (same slot, swapped team — never a duplicate).
   await supabase
     .from('matches')
     .update({ [slotIdCol]: winnerId, [slotNameCol]: winnerName ?? 'Winner' })

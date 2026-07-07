@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { notifyUser, notifyUnlessBlocked } from '../utils/notify';
+import { rankTeams } from '../utils/standings';
 
 // ────────────────────────────────────────────────────────────────────────────
 // TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
@@ -13,7 +14,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, sport_id, format')
+      .select('id, sport_id, format, tiebreaker_rules, qualifiers_per_group')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -103,22 +104,37 @@ export async function getTournamentStandings(req: Request, res: Response) {
       }
     }
 
-    // Sort: points DESC, NRR DESC, wins DESC
-    const standings = Array.from(table.values()).sort((a, b) =>
-      b.points - a.points || b.nrr - a.nrr || b.won - a.won
+    // SC-89: rank with the shared tiebreak ladder (points -> head-to-head ->
+    // score-diff -> score-scored -> team_id), honouring configured
+    // tiebreaker_rules — the SAME function the KO-qualification path uses, so
+    // display and qualification always agree. Ranking is per group (teams only
+    // play within their group); a single 'default' group for league formats.
+    const tiebreakerRules = ((tournament as any).tiebreaker_rules ?? []) as any[];
+    const rows = Array.from(table.values());
+    const byGroup = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const g = row.groupLabel ?? 'default';
+      (byGroup.get(g) ?? byGroup.set(g, []).get(g)!).push(row);
+    }
+    const orderIndex = new Map<string, number>();
+    let running = 0;
+    for (const g of Array.from(byGroup.keys()).sort()) {
+      const ids = rankTeams(byGroup.get(g)!.map((r) => r.teamId), matches ?? [], tiebreakerRules);
+      for (const id of ids) orderIndex.set(id, running++);
+    }
+    const standings = rows.sort(
+      (a, b) => (orderIndex.get(a.teamId) ?? 0) - (orderIndex.get(b.teamId) ?? 0),
     );
 
-    // Mark top 2 per group as qualified (for groups_knockout)
+    // Mark the configured number of qualifiers per group (default 2).
     if (tournament.format === 'groups_knockout') {
-      const groups = new Map<string, typeof standings>();
+      const qpg = Math.max(1, Number((tournament as any).qualifiers_per_group ?? 2));
+      const seen = new Map<string, number>();
       for (const row of standings) {
         const g = row.groupLabel ?? 'default';
-        const arr = groups.get(g) ?? [];
-        arr.push(row);
-        groups.set(g, arr);
-      }
-      for (const grp of groups.values()) {
-        grp.slice(0, 2).forEach((r) => (r as any).qualified = true);
+        const n = seen.get(g) ?? 0;
+        if (n < qpg) (row as any).qualified = true;
+        seen.set(g, n + 1);
       }
     }
 

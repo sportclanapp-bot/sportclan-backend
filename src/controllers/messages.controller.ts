@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
+import { isBlockedBetween } from '../utils/blocks';
 
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
 export async function listChats(req: Request, res: Response) {
@@ -574,9 +575,20 @@ export async function deleteMessage(req: Request, res: Response) {
 }
 
 // ─── FORWARD MESSAGE ────────────────────────────────────────────────────────
+// SC-94: reuse the same participant check sendMessage/getMessages use.
+async function isChatParticipant(chatId: string, userId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('chat_participants')
+    .select('chat_id')
+    .eq('chat_id', chatId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  return !!data;
+}
+
 export async function forwardMessage(req: Request, res: Response) {
   const userId = req.userId!;
-  const { message_id, chat_ids } = req.body;
+  const { message_id, chat_ids } = req.body ?? {};
 
   if (!message_id || !chat_ids?.length) {
     return res.status(400).json({ error: 'message_id and chat_ids required' });
@@ -584,13 +596,36 @@ export async function forwardMessage(req: Request, res: Response) {
 
   const { data: original } = await supabase
     .from('messages')
-    .select('content, image_url')
+    .select('content, image_url, chat_id')
     .eq('id', message_id)
     .single();
 
   if (!original) return res.status(404).json({ error: 'Original message not found' });
 
-  const inserts = chat_ids.map((chatId: string) => ({
+  // SC-94 SOURCE: the caller must belong to the chat the message came from —
+  // otherwise they could read (and re-emit) a message from a chat they're not in.
+  if (!(await isChatParticipant(original.chat_id, userId))) {
+    return res.status(403).json({ error: 'Not a member of the source chat' });
+  }
+
+  // SC-94 TARGET: the caller must belong to EVERY target chat — no partial
+  // inject. Also respect blocks on a DM target (mirrors getOrCreateDM).
+  for (const chatId of chat_ids as string[]) {
+    if (!(await isChatParticipant(chatId, userId))) {
+      return res.status(403).json({ error: 'Not a member of a target chat' });
+    }
+    const { data: others } = await supabase
+      .from('chat_participants')
+      .select('user_id')
+      .eq('chat_id', chatId)
+      .neq('user_id', userId);
+    const otherIds = (others ?? []).map((o) => o.user_id as string);
+    if (otherIds.length === 1 && (await isBlockedBetween(userId, otherIds[0]))) {
+      return res.status(403).json({ error: 'You can’t message this user.' });
+    }
+  }
+
+  const inserts = (chat_ids as string[]).map((chatId) => ({
     chat_id: chatId,
     sender_id: userId,
     content: original.content,

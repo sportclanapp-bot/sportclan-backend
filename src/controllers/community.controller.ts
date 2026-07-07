@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { LIMITS } from '../utils/validation';
+import { LIMITS, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
@@ -222,6 +222,10 @@ export async function createPost(req: Request, res: Response) {
       error: 'PROFANITY_DETECTED',
       detected_words: detected,
     });
+  }
+  // AUDIT-5: cap mentions array.
+  if (tooManyItems(mentions, ARRAY_LIMITS.mentions)) {
+    return res.status(400).json({ error: `Too many mentions (max ${ARRAY_LIMITS.mentions})` });
   }
 
   // Poll validation: accept string[] from frontend; convert to JSONB with
@@ -471,6 +475,10 @@ export async function createComment(req: Request, res: Response) {
   }
   if (content.length > LIMITS.postTextMax) {
     return res.status(400).json({ error: `Comment must be ${LIMITS.postTextMax} characters or fewer` });
+  }
+  // AUDIT-5: cap mentions array.
+  if (tooManyItems(mentions, ARRAY_LIMITS.mentions)) {
+    return res.status(400).json({ error: `Too many mentions (max ${ARRAY_LIMITS.mentions})` });
   }
 
   const detected = detectProfanity(content);

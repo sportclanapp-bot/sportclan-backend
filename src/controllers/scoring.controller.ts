@@ -95,18 +95,41 @@ export async function createEvent(req: Request, res: Response) {
       }
     }
 
-    const { data: event, error } = await supabase
-      .from('match_events')
-      .insert({
-        match_id: matchId,
-        event_type,
-        period: period ?? null,
-        clock_seconds: clock_seconds ?? null,
-        payload: payload || {},
-        created_by: userId,
-      })
-      .select('*')
-      .single();
+    // SC-113: atomic, race-safe insert. record_match_event serializes per-match
+    // (advisory lock) and dedupes a rapid/concurrent IDENTICAL submit (double-tap
+    // / retry) → exactly one event, so recomputeSummary can't inflate the score.
+    // Falls back to the direct insert until migration 049 (the RPC) is applied,
+    // so deploying this ahead of the migration is safe (pre-fix behaviour).
+    let event: any = null;
+    let error: any = null;
+    const rpc = await supabase.rpc('record_match_event', {
+      p_match_id: matchId,
+      p_created_by: userId,
+      p_event_type: event_type,
+      p_period: period ?? null,
+      p_clock_seconds: clock_seconds ?? null,
+      p_payload: payload || {},
+    });
+    if (rpc.error && rpc.error.code === 'PGRST202') {
+      // RPC not deployed yet — fall back to the (pre-fix) direct insert.
+      const ins = await supabase
+        .from('match_events')
+        .insert({
+          match_id: matchId,
+          event_type,
+          period: period ?? null,
+          clock_seconds: clock_seconds ?? null,
+          payload: payload || {},
+          created_by: userId,
+        })
+        .select('*')
+        .single();
+      event = ins.data;
+      error = ins.error;
+    } else {
+      event = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+      error = rpc.error;
+    }
     if (error || !event) return res.status(500).json({ error: sanitizeError(error) });
 
     // Recompute the canonical score_summary from the full event log for ALL

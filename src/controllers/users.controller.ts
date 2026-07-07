@@ -3,7 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { checkExpiredSubscriptions } from './subscriptions.controller';
 import { resolveSportId } from '../utils/sportId';
-import { LIMITS } from '../utils/validation';
+import { LIMITS, firstInvalidUrl } from '../utils/validation';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds } from '../utils/blocks';
@@ -335,6 +335,11 @@ export async function updateMe(req: Request, res: Response) {
   }
   if (typeof patch.name === 'string' && patch.name.length > LIMITS.teamNameMax) {
     return res.status(400).json({ error: `Name must be ${LIMITS.teamNameMax} characters or fewer` });
+  }
+  // SC-96: validate profile photo + link are well-formed URLs (was arbitrary text).
+  const badUserUrl = firstInvalidUrl(patch, ['profile_picture_url', 'link']);
+  if (badUserUrl) {
+    return res.status(400).json({ error: `${badUserUrl} must be a valid URL` });
   }
 
   // Username change: enforce 30-day cooldown and uniqueness

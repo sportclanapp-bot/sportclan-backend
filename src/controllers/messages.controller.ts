@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { isBlockedBetween } from '../utils/blocks';
+import { LIMITS, firstInvalidUrl } from '../utils/validation';
 
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
 export async function listChats(req: Request, res: Response) {
@@ -177,9 +178,15 @@ export async function getOrCreateDM(req: Request, res: Response) {
 // ─── CREATE GROUP CHAT ──────────────────────────────────────────────────────
 export async function createGroup(req: Request, res: Response) {
   const userId = req.userId!;
-  const { name, icon_url, member_ids } = req.body;
+  const { name, icon_url, member_ids } = req.body ?? {};
 
   if (!name) return res.status(400).json({ error: 'Group name is required' });
+  if (typeof name === 'string' && name.length > LIMITS.groupNameMax) {
+    return res.status(400).json({ error: `Group name must be ${LIMITS.groupNameMax} characters or fewer` });
+  }
+  if (firstInvalidUrl({ icon_url }, ['icon_url'])) {
+    return res.status(400).json({ error: 'icon_url must be a valid URL' });
+  }
   if (!member_ids || member_ids.length === 0) {
     return res.status(400).json({ error: 'At least one member required' });
   }
@@ -241,6 +248,12 @@ export async function updateGroup(req: Request, res: Response) {
 
   if (!participant || participant.role !== 'admin') {
     return res.status(403).json({ error: 'Only admins can update group' });
+  }
+  if (typeof name === 'string' && name.length > LIMITS.groupNameMax) {
+    return res.status(400).json({ error: `Group name must be ${LIMITS.groupNameMax} characters or fewer` });
+  }
+  if (firstInvalidUrl({ icon_url }, ['icon_url'])) {
+    return res.status(400).json({ error: 'icon_url must be a valid URL' });
   }
 
   const { data, error } = await supabase

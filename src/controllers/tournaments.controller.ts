@@ -4,7 +4,7 @@ import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
-import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS } from '../utils/validation';
+import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl } from '../utils/validation';
 import { rankTeams, computeStats } from '../utils/standings';
 import { notifyUnlessBlocked } from '../utils/notify';
 
@@ -65,6 +65,11 @@ export async function createTournament(req: Request, res: Response) {
     if (!sport_id || !name || !format) {
       return res.status(400).json({ error: 'sport_id, name, format are required' });
     }
+    // SC-95/96: bound name/description; validate image URLs (were unbounded/arbitrary).
+    const tLong = firstTooLong({ name, description }, [['name', LIMITS.tournamentNameMax], ['description', LIMITS.descriptionMax]]);
+    if (tLong) return res.status(400).json({ error: `${tLong[0]} must be ${tLong[1]} characters or fewer` });
+    const tBadUrl = firstInvalidUrl({ banner_url, logo_url, sponsor_logo_url }, ['banner_url', 'logo_url', 'sponsor_logo_url']);
+    if (tBadUrl) return res.status(400).json({ error: `${tBadUrl} must be a valid URL` });
     // Validate format (SC-37) — unknown enum previously 500'd on insert.
     if (!isValidTournamentFormat(format)) {
       return res.status(400).json({
@@ -522,6 +527,11 @@ export async function updateTournament(req: Request, res: Response) {
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     if (tournament.created_by !== userId) return res.status(403).json({ error: 'Only the creator can update' });
+    // SC-95/96: same bounds on edit.
+    const uLong = firstTooLong(req.body || {}, [['name', LIMITS.tournamentNameMax], ['description', LIMITS.descriptionMax]]);
+    if (uLong) return res.status(400).json({ error: `${uLong[0]} must be ${uLong[1]} characters or fewer` });
+    const uBadUrl = firstInvalidUrl(req.body || {}, ['banner_url', 'logo_url', 'sponsor_logo_url']);
+    if (uBadUrl) return res.status(400).json({ error: `${uBadUrl} must be a valid URL` });
 
     const allowedKeys = [
       'name',

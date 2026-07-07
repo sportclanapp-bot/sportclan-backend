@@ -129,6 +129,11 @@ export async function createTournament(req: Request, res: Response) {
       }
       groupsConfigFields.qualifiers_per_group = qpg;
     }
+    // SC-110: for groups_knockout, qualifiers_per_group cannot exceed group_size
+    // (you can't advance more teams from a group than the group contains).
+    if (format === 'groups_knockout' && gs !== null && qpg !== null && qpg > gs) {
+      return res.status(400).json({ error: 'qualifiers_per_group cannot exceed group_size' });
+    }
 
     // Generate unique entry code (retry a few times on collision)
     let entry_code = generateEntryCode();
@@ -532,6 +537,30 @@ export async function updateTournament(req: Request, res: Response) {
     if (uLong) return res.status(400).json({ error: `${uLong[0]} must be ${uLong[1]} characters or fewer` });
     const uBadUrl = firstInvalidUrl(req.body || {}, ['banner_url', 'logo_url', 'sponsor_logo_url']);
     if (uBadUrl) return res.status(400).json({ error: `${uBadUrl} must be a valid URL` });
+
+    // SC-102: validate allowlisted status/max_teams/format on the edit path
+    // (createTournament validates these but the edit path previously did not).
+    // Present-only — an absent field is left untouched.
+    const body = req.body || {};
+    if (body.max_teams !== undefined) {
+      const mt = Number(body.max_teams);
+      if (!Number.isInteger(mt) || mt < LIMITS.tournamentMinTeams || mt > LIMITS.tournamentMaxTeams) {
+        return res.status(400).json({
+          error: `max_teams must be between ${LIMITS.tournamentMinTeams} and ${LIMITS.tournamentMaxTeams}`,
+        });
+      }
+    }
+    if (body.format !== undefined && !isValidTournamentFormat(body.format)) {
+      return res.status(400).json({
+        error: `Invalid format. Must be one of: ${TOURNAMENT_FORMATS.join(', ')}`,
+      });
+    }
+    const validStatuses = ['draft', 'upcoming', 'registration', 'live', 'active', 'completed', 'cancelled'];
+    if (body.status !== undefined && !validStatuses.includes(body.status)) {
+      return res.status(400).json({
+        error: `Invalid status. Must be one of: ${validStatuses.join(', ')}`,
+      });
+    }
 
     const allowedKeys = [
       'name',

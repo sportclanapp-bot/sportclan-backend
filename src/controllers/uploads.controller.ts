@@ -25,11 +25,23 @@ export async function uploadProfilePhoto(req: Request, res: Response) {
 
   // Strip optional data:image/*;base64, prefix.
   const cleaned = base64.replace(/^data:[^;]+;base64,/, '');
+
+  // SC-109: cap the payload before decoding + sharp. base64 encodes 3 bytes as
+  // 4 chars, so ~10MB decoded ≈ 13.4M chars; guard length first (cheap), then
+  // re-check the decoded Buffer size to be exact.
+  if (cleaned.length > 14_000_000) {
+    return res.status(413).json({ error: 'Image too large (max 10MB)' });
+  }
+
   let buf: Buffer;
   try {
     buf = Buffer.from(cleaned, 'base64');
   } catch {
     return res.status(400).json({ error: 'Invalid base64 payload' });
+  }
+
+  if (buf.length > 10 * 1024 * 1024) {
+    return res.status(413).json({ error: 'Image too large (max 10MB)' });
   }
 
   // Server-side compression: resize to max 1200px on longest side, JPEG quality 80

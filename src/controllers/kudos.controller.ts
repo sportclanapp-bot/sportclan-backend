@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { sanitizeError } from '../utils/response';
 import { notifyUser } from '../utils/notify';
 import { excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds } from '../utils/blocks';
@@ -60,7 +61,7 @@ export async function sendKudos(req: Request, res: Response) {
     })
     .select('*')
     .single();
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   // Award coins on the recipient's user row.
   try {

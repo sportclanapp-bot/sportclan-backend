@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { LIMITS } from '../utils/validation';
-import { excludeDeletedEmbed } from '../utils/activeUser';
+import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
 
@@ -127,11 +127,17 @@ export async function getSportStoryCounts(req: Request, res: Response) {
   const since = (req.query.since as string) ||
     new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const { data, error } = await supabase
+  // SC-106: don't count posts whose author is soft-deleted (SC-77 `!inner` +
+  // excludeDeletedEmbed) or blocked either direction (SC-82). Cosmetic count, so
+  // keep it simple — just guard the source rows.
+  let query = supabase
     .from('community_posts')
-    .select('sport_id, sport:sports!sport_id(id, name, emoji)')
+    .select('sport_id, sport:sports!sport_id(id, name, emoji), author:users!author_id!inner(id)')
     .gt('created_at', since)
     .not('sport_id', 'is', null);
+  query = excludeDeletedEmbed(query, 'author');
+  query = excludeIds(query, 'author_id', await blockedUserIds(req.userId));
+  const { data, error } = await query;
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
@@ -635,12 +641,21 @@ export async function checkLiked(req: Request, res: Response) {
 // ─── MENTION SEARCH ─────────────────────────────────────────────────────────
 export async function searchMentions(req: Request, res: Response) {
   const { q } = req.query;
-  if (!q || (q as string).length < 1) return res.json({ data: [], candidates: [] });
+  // SC-104: `q` is interpolated into a PostgREST `.or()` filter, so raw commas,
+  // parens or wildcards in the input let a caller break out of the ilike pattern
+  // (filter injection). Strip PostgREST filter metacharacters + wildcards and
+  // cap the length before use; if nothing usable remains, return an empty list.
+  const safe = String(q ?? '').replace(/[,()%*\\]/g, '').trim().slice(0, 50);
+  if (!safe) return res.json({ data: [], candidates: [] });
 
-  const { data, error } = await supabase
+  // SC-104: also exclude soft-deleted users (SC-77) and block-filter either
+  // direction (SC-82) so the mention picker never surfaces deleted or blocking
+  // users — mirrors the players `search` path.
+  const blocked = await blockedUserIds(req.userId);
+  const { data, error } = await excludeIds(excludeDeleted(supabase
     .from('users')
     .select('id, name, username, profile_picture_url, is_premium')
-    .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
+    .or(`username.ilike.%${safe}%,name.ilike.%${safe}%`)), 'id', blocked)
     .limit(10);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });

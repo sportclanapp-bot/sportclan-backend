@@ -7,6 +7,7 @@ import { sanitizeError } from '../utils/response';
 import { notifyUnlessBlocked } from '../utils/notify';
 import { validateSportForCreate } from '../utils/sports';
 import { LIMITS, firstInvalidUrl } from '../utils/validation';
+import { blockedUserIds } from '../utils/blocks';
 
 function generateJoinCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -282,6 +283,18 @@ export async function joinTeamByCode(req: Request, res: Response) {
       .eq('user_id', userId)
       .maybeSingle();
     if (existing) return res.status(400).json({ error: 'Already a member of this team' });
+
+    // Block gate: the team chat is shared with every member, so a user blocked
+    // (either direction) with ANY current member can't join — otherwise a block
+    // is bypassed into a private shared space. Reuses blocks.ts.
+    const blocked = await blockedUserIds(userId);
+    if (blocked.size > 0) {
+      const { data: members } = await supabase
+        .from('team_members').select('user_id').eq('team_id', team.id);
+      if ((members ?? []).some((m) => blocked.has(m.user_id as string))) {
+        return res.status(403).json({ error: 'You can’t join this team.', code: 'BLOCKED_FROM_TEAM' });
+      }
+    }
 
     const { data: member, error } = await supabase
       .from('team_members')

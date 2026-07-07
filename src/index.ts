@@ -98,6 +98,24 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
 });
 
+// TEMP (SC-90/91 tz confirm) — revert after. Reveals the Node/server timezone
+// and what the UTC-suspect boundary constructors actually produce.
+app.get('/debug/tz', (_req: Request, res: Response) => {
+  const now = new Date();
+  const monthStartConstructed = new Date(now.getFullYear(), now.getMonth(), 1); // leaderboard.controller pattern
+  const setDateMonth = new Date(); setDateMonth.setDate(1); setDateMonth.setHours(0, 0, 0, 0); // getMyPostCount pattern
+  res.json({
+    envTZ: process.env.TZ ?? null,
+    resolvedTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    getTimezoneOffsetMin: now.getTimezoneOffset(), // 0 = UTC, -330 = IST
+    dateToString: now.toString(),
+    // What `new Date(y, m, 1)` yields (leaderboard month start): Z-suffixed UTC instant.
+    newDateYM1_iso: monthStartConstructed.toISOString(),
+    setDate1_iso: setDateMonth.toISOString(),
+    utcNow_iso: now.toISOString(),
+  });
+});
+
 // Stricter limit on /auth/send-otp must be mounted BEFORE the general /auth limiter
 // Cache-Control middleware for static / near-static endpoints. These
 // payloads change infrequently and benefit from edge/client caching.

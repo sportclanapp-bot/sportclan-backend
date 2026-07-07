@@ -525,6 +525,14 @@ export async function updateTournament(req: Request, res: Response) {
     for (const key of allowedKeys) {
       if (req.body && key in req.body) update[key] = req.body[key];
     }
+    // SC-86: don't let a tournament be marked completed while matches are still
+    // scheduled/live — that crowns a champion with an unplayed bracket.
+    if (update.status === 'completed' && (await hasUnplayedFixtures(id))) {
+      return res.status(409).json({
+        error: 'Cannot complete a tournament while matches are still unplayed.',
+        code: 'TOURNAMENT_INCOMPLETE',
+      });
+    }
     update.updated_at = new Date().toISOString();
     const { data, error } = await supabase
       .from('tournaments')
@@ -967,6 +975,19 @@ async function resolveMatchWinner(matchId: string, winnerTeamId: string): Promis
 // tournament when the final resolves; seed the KO stage when a group stage ends.
 // Idempotent (only fills an empty slot) so it's safe to call from every
 // completion path (completeMatch / updateFixtures / updateMatch). SC-23/24.
+// SC-86: a tournament may only be crowned/completed once the whole bracket is
+// played — no match still scheduled or live. Used by both completion paths
+// (auto-complete on final result + manual updateTournament status change) so a
+// champion can never be crowned with an unplayed match (phantom champion).
+async function hasUnplayedFixtures(tournamentId: string): Promise<boolean> {
+  const { count } = await supabase
+    .from('matches')
+    .select('id', { count: 'exact', head: true })
+    .eq('tournament_id', tournamentId)
+    .in('status', ['scheduled', 'live']);
+  return (count ?? 0) > 0;
+}
+
 export async function advanceTournamentWinner(matchId: string): Promise<void> {
   const { data: m } = await supabase
     .from('matches')
@@ -990,7 +1011,11 @@ export async function advanceTournamentWinner(matchId: string): Promise<void> {
   if (!winnerId) return;
 
   if (!m.next_match_id) {
-    // Final resolved → auto-complete the tournament (SC-24).
+    // Final resolved → auto-complete the tournament (SC-24) — but only if the
+    // whole bracket is played. SC-86: if an earlier-round match is still
+    // scheduled/live (e.g. the final was recorded before a semi), do NOT crown.
+    // The resolving final is already terminal here, so it is not self-counted.
+    if (await hasUnplayedFixtures(m.tournament_id)) return;
     await supabase
       .from('tournaments')
       .update({ status: 'completed', updated_at: new Date().toISOString() })

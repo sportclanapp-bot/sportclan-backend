@@ -42,5 +42,12 @@ export function globalErrorHandler(err: unknown, req: Request, res: Response, _n
   // eslint-disable-next-line no-console
   console.error(`[unhandled ${req.method} ${req.originalUrl}]`, detail);
   if (res.headersSent) return;
+  // SC-109: an oversized request body (express.json 12mb limit) throws a
+  // PayloadTooLargeError — return a clean 413 instead of a generic 500. The
+  // memory ceiling is already bounded by the body-parser limit.
+  const e = err as { type?: string; status?: number; statusCode?: number };
+  if (e?.type === 'entity.too.large' || e?.status === 413 || e?.statusCode === 413) {
+    return res.status(413).json({ error: 'Request payload too large' });
+  }
   res.status(500).json({ error: 'Internal server error' });
 }

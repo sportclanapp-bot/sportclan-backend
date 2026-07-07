@@ -5,6 +5,7 @@ import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS } from '../utils/validation';
+import { rankTeams, computeStats } from '../utils/standings';
 import { notifyUnlessBlocked } from '../utils/notify';
 
 function generateEntryCode(): string {
@@ -1112,7 +1113,7 @@ async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise
 async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   const { data: groupMatches } = await supabase
     .from('matches')
-    .select('id, status, winner_team_id')
+    .select('id, status, winner_team_id, team_a_id, team_b_id, score_summary')
     .eq('tournament_id', tournamentId)
     .eq('round', 0);
   if (!groupMatches || groupMatches.length === 0) return;
@@ -1139,35 +1140,42 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   // byes fall on the strongest qualifiers instead of arbitrary array indices.
   const cfg = await getGroupsConfig(tournamentId);
   const qualsPerGroup = cfg.qualifiersPerGroup;
+  const { data: trow } = await supabase
+    .from('tournaments').select('tiebreaker_rules').eq('id', tournamentId).maybeSingle();
+  const tiebreakerRules = ((trow as any)?.tiebreaker_rules ?? []) as any[];
 
-  const wins: Record<string, number> = {};
-  for (const g of groupMatches) if (g.winner_team_id) wins[g.winner_team_id] = (wins[g.winner_team_id] ?? 0) + 1;
-
-  const byGroup: Record<string, Array<{ id: string; name: string; w: number }>> = {};
+  const nameOf: Record<string, string> = {};
+  const groupTeams: Record<string, string[]> = {};
   for (const e of entries ?? []) {
     const label = (e.group_label as string) ?? '?';
-    (byGroup[label] ??= []).push({ id: e.team_id as string, name: (e.team as any)?.name ?? 'Team', w: wins[e.team_id as string] ?? 0 });
+    const tid = e.team_id as string;
+    nameOf[tid] = (e.team as any)?.name ?? 'Team';
+    (groupTeams[label] ??= []).push(tid);
   }
-  const labels = Object.keys(byGroup).sort();
+  const labels = Object.keys(groupTeams).sort();
 
-  // Deterministic comparator: more wins first, ties broken by team id (stable,
-  // reproducible) rather than the nondeterministic DB fetch order.
-  const cmp = (a: { w: number; id: string }, b: { w: number; id: string }) =>
-    b.w - a.w || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  // SC-89: rank each group with the full tiebreak ladder (points -> head-to-head
+  // -> score-diff -> score-scored -> team_id), honouring the tournament's
+  // configured tiebreaker_rules when set. team_id terminator = no strand.
+  const globalStats = computeStats(Object.keys(nameOf), groupMatches);
+  const ptsOf = (id: string) => globalStats.get(id)?.points ?? 0;
 
   // ranks[r] = every team that finished position r (0-based) in its group.
-  const ranks: Array<Array<{ id: string; name: string; w: number }>> = [];
+  const ranks: Array<Array<{ id: string; name: string }>> = [];
   for (const label of labels) {
-    const sorted = byGroup[label].slice().sort(cmp);
+    const orderedIds = rankTeams(groupTeams[label], groupMatches, tiebreakerRules);
     for (let r = 0; r < qualsPerGroup; r++) {
-      if (sorted[r]) (ranks[r] ??= []).push(sorted[r]);
+      const id = orderedIds[r];
+      if (id) (ranks[r] ??= []).push({ id, name: nameOf[id] ?? 'Team' });
     }
   }
-  // Seed strongest-first: all group winners (ordered by record) become the top
-  // seeds — so they get the byes — then all runners-up, then thirds, etc.
+  // Seed strongest-first across groups: within a rank tier, order by points then
+  // team_id so byes fall on the strongest qualifiers.
+  const tierCmp = (a: { id: string }, b: { id: string }) =>
+    ptsOf(b.id) - ptsOf(a.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const seeds: TeamSlot[] = [];
   for (let r = 0; r < ranks.length; r++) {
-    const tier = (ranks[r] ?? []).slice().sort(cmp);
+    const tier = (ranks[r] ?? []).slice().sort(tierCmp);
     for (const t of tier) seeds.push({ id: t.id, name: t.name });
   }
   if (seeds.length < 2) return;

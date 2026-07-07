@@ -97,8 +97,9 @@ async function runSmartNotifications(userId: string): Promise<void> {
         }
       }
     }
-  } catch {
-    // swallow
+  } catch (err) {
+    // SC-112: best-effort match-reminder job, but log the failure (was silently swallowed).
+    console.warn('[smart-notifications] failed:', err instanceof Error ? err.message : err);
   }
 }
 

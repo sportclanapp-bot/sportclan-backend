@@ -4,6 +4,7 @@ import { sanitizeError } from '../utils/response';
 import { LIMITS } from '../utils/validation';
 import { excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
+import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
 
 // ─── Basic profanity word list ───────────────────────────────────────────────
 // SC-68: the original list was matched with a naive `lower.includes(w)` substring
@@ -301,12 +302,13 @@ export async function createPost(req: Request, res: Response) {
   // Award coins: 2 per post, capped at 5/day via a date-scoped event type.
   try {
     const { awardCoins } = await import('../utils/coins');
-    const today = new Date().toISOString().slice(0, 10);
+    // SC-92: bucket the daily coin award by IST day (agrees with check-in).
+    const today = istDay();
     const { count: postsToday } = await supabase
       .from('community_posts')
       .select('id', { count: 'exact', head: true })
       .eq('author_id', userId)
-      .gte('created_at', `${today}T00:00:00Z`);
+      .gte('created_at', istDayStartIso());
     const todayN = postsToday ?? 1;
     if (todayN <= 5) {
       void awardCoins(userId, `community_post_${today}_${todayN}`, 2);
@@ -601,15 +603,14 @@ export async function reportContent(req: Request, res: Response) {
 export async function getMyPostCount(req: Request, res: Response) {
   const userId = req.userId!;
 
-  const startOfMonth = new Date();
-  startOfMonth.setDate(1);
-  startOfMonth.setHours(0, 0, 0, 0);
+  // SC-90: IST calendar month (was server-local/UTC) — mirrors create_post_capped.
+  const startOfMonth = istMonthStartIso();
 
   const { count } = await supabase
     .from('community_posts')
     .select('id', { count: 'exact', head: true })
     .eq('author_id', userId)
-    .gte('created_at', startOfMonth.toISOString());
+    .gte('created_at', startOfMonth);
 
   const used = count ?? 0;
   const limit = 5;

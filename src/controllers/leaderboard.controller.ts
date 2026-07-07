@@ -4,6 +4,7 @@ import { deletedIdSet } from '../utils/activeUser';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
+import { istMonthStartIso } from '../utils/appTime';
 
 // GET /leaderboard
 // Query:
@@ -95,7 +96,8 @@ export async function getLeaderboard(req: Request, res: Response) {
     // rating_history month window is small relative to all-time profiles). ----
     if (period === 'monthly') {
       const now = new Date();
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      // SC-91: IST calendar month (was server-local/UTC).
+      const startOfMonth = istMonthStartIso(now);
       const { data: deltas, error: dErr } = await supabase
         .from('rating_history')
         .select('user_id, delta, new_rating')

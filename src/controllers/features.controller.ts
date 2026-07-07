@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { notifyUser, notifyUnlessBlocked } from '../utils/notify';
 import { rankTeams } from '../utils/standings';
+import { istDay } from '../utils/appTime';
 
 // ────────────────────────────────────────────────────────────────────────────
 // TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
@@ -515,11 +516,11 @@ export async function getNearbyMatches(req: Request, res: Response) {
 // GET /dev/trigger-smart-match-notifications
 // ────────────────────────────────────────────────────────────────────────────
 
-// The calendar day in IST (the app's timezone) as YYYY-MM-DD — used both for
-// the daily-check-in key and the scheduled-job dedupe so "once per day" never
-// drifts across the UTC midnight boundary.
+// SC-93: the IST calendar day now lives in ../utils/appTime (one source of
+// truth). Kept as a thin alias so existing scheduled-job dedupe callers here
+// stay unchanged.
 export function istDateStr(d: Date = new Date()): string {
-  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  return istDay(d);
 }
 
 // Atomically claim "we're sending <jobType> to <userId> on <sentOn>". Returns

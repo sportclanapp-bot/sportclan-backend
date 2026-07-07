@@ -160,6 +160,9 @@ export async function addTeamMember(req: Request, res: Response) {
       .insert({ team_id: id, user_id, role: role || 'player', jersey_number: jersey_number ?? null })
       .select('*')
       .single();
+    if ((error as { code?: string } | null)?.code === '23505') {
+      return res.status(409).json({ error: 'Already a member of this team', code: 'ALREADY_MEMBER' });
+    }
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
     // Notify the added user (consent-by-notification; they can self-leave).

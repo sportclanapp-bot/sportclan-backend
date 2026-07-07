@@ -8,6 +8,7 @@ import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTyp
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay } from '../utils/appTime';
+import { parsePagination } from '../utils/pagination';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
@@ -507,12 +508,14 @@ export async function getFollowers(req: Request, res: Response) {
   // SC-77: hide soft-deleted accounts. Block edge: when a viewer is present
   // (optionalAuth), also hide anyone they've blocked either direction — so a
   // blocked user never surfaces even in a third party's follower list.
+  const p = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   const blocked = await blockedUserIds(req.userId);
   const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
     .from('follow_relationships')
     .select('follower_id, users:follower_id!inner (id, name, profile_picture_url, bio)')
     .eq('following_id', id)
-    .order('created_at', { ascending: false }), 'users'), 'follower_id', blocked);
+    .order('created_at', { ascending: false })
+    .range(p.from, p.to), 'users'), 'follower_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean) });
 }
@@ -522,12 +525,14 @@ export async function getFollowing(req: Request, res: Response) {
   const { id } = req.params;
   // SC-77: hide soft-deleted accounts. Block edge (optionalAuth viewer): hide
   // anyone the viewer has blocked either direction from a third party's list.
+  const pg = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   const blocked = await blockedUserIds(req.userId);
   const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
     .from('follow_relationships')
     .select('following_id, users:following_id!inner (id, name, profile_picture_url, bio)')
     .eq('follower_id', id)
-    .order('created_at', { ascending: false }), 'users'), 'following_id', blocked);
+    .order('created_at', { ascending: false })
+    .range(pg.from, pg.to), 'users'), 'following_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean) });
 }

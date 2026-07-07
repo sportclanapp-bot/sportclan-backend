@@ -5,6 +5,7 @@ import { LIMITS } from '../utils/validation';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
+import { parsePagination } from '../utils/pagination';
 
 // ─── Basic profanity word list ───────────────────────────────────────────────
 // SC-68: the original list was matched with a naive `lower.includes(w)` substring
@@ -442,6 +443,7 @@ export async function listComments(req: Request, res: Response) {
   // SC-77: hide comments authored by a soft-deleted account.
   // SC-81: hide comments authored by blocked-either-direction users (viewer via
   // optionalAuth).
+  const lcp = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   let cq = supabase
     .from('post_comments')
     .select(`
@@ -450,7 +452,8 @@ export async function listComments(req: Request, res: Response) {
     `)
     .eq('post_id', id)
     .is('author.deleted_at', null)
-    .order('created_at', { ascending: true });
+    .order('created_at', { ascending: true })
+    .range(lcp.from, lcp.to);
   cq = excludeIds(cq, 'author_id', await blockedUserIds(req.userId));
   const { data, error } = await cq;
 

@@ -711,6 +711,9 @@ export async function joinByCode(req: Request, res: Response) {
       .insert({ tournament_id: tournament.id, team_id, status: 'pending' })
       .select('*')
       .single();
+    if ((error as { code?: string } | null)?.code === '23505') {
+      return res.status(409).json({ error: 'This team has already entered.', code: 'ALREADY_ENTERED' });
+    }
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ entry: data, tournament_id: tournament.id });
   } catch (e) {

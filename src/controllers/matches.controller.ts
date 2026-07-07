@@ -338,7 +338,8 @@ export async function getCommentary(req: Request, res: Response) {
       .from('match_events')
       .select('id, event_type, period, clock_seconds, payload, created_at')
       .eq('match_id', id)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: true })
+      .limit(2000); // SC-117: safety cap (matches scoring.listEvents ceiling)
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
     const isCricket = !!match.sport_id && String(match.sport_id).toLowerCase().includes('cric');

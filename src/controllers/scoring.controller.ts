@@ -29,8 +29,9 @@ async function fanoutScoreUpdate(
       body,
       data: { matchId, screen: 'MatchDetail' },
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    // SC-112: best-effort fanout, but log the failure so it isn't invisible.
+    console.error('[fanout-score-update] failed:', err instanceof Error ? err.message : err);
   }
 }
 

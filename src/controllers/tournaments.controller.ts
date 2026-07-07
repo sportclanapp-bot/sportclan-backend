@@ -439,7 +439,10 @@ export async function updateEntry(req: Request, res: Response) {
     if (status === 'approved' || status === 'rejected') {
       if (!isCreator) return res.status(403).json({ error: 'Only the tournament creator can approve/reject' });
     } else if (status === 'withdrawn') {
-      if (!isTeamCaptain) return res.status(403).json({ error: 'Only the team captain can withdraw' });
+      // SC-88: the team captain (self-withdraw) or the organiser may withdraw.
+      if (!isTeamCaptain && !isCreator) {
+        return res.status(403).json({ error: 'Only the team captain or organiser can withdraw' });
+      }
     } else {
       if (!isCreator) return res.status(403).json({ error: 'Forbidden' });
     }
@@ -456,6 +459,14 @@ export async function updateEntry(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // SC-88: a mid-bracket withdrawal must not orphan the opponent. Award any
+    // unplayed match of the withdrawing team to its opponent by walkover and
+    // advance them into the next slot. Best-effort — the entry is already
+    // withdrawn; a walkover hiccup must not fail the request.
+    if (status === 'withdrawn') {
+      try { await walkoverOnWithdraw(id, entry.team_id); } catch { /* best-effort */ }
+    }
 
     // Notify the team CAPTAIN when the organiser approves/rejects the entry
     // (block-respecting, best-effort). Withdrawals are self-initiated → no notify.
@@ -1051,6 +1062,48 @@ export async function advanceTournamentWinner(matchId: string): Promise<void> {
     .from('matches')
     .update({ [slotIdCol]: winnerId, [slotNameCol]: winnerName ?? 'Winner' })
     .eq('id', m.next_match_id);
+}
+
+// SC-88: when a team withdraws mid-tournament, resolve its unplayed matches so
+// the opponent isn't stranded. Each scheduled/live match the team is in is
+// awarded to the opponent by WALKOVER (status=abandoned, winner=opponent) and
+// the opponent advances via advanceTournamentWinner (SC-87 cascade). A walkover
+// is a forfeit, not a played match, so NO ELO is applied (abandon +
+// advanceTournamentWinner never touch user_sport_profiles). If the match has no
+// valid opponent (empty slot, or the opponent has ALSO withdrawn) the match is
+// abandoned with no winner and nothing advances.
+async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise<void> {
+  const { data: matches } = await supabase
+    .from('matches')
+    .select('id, team_a_id, team_b_id, status')
+    .eq('tournament_id', tournamentId)
+    .in('status', ['scheduled', 'live'])
+    .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`);
+  const now = new Date().toISOString();
+  for (const mt of matches ?? []) {
+    const opponentId = mt.team_a_id === teamId ? mt.team_b_id : mt.team_a_id;
+    let opponentWithdrawn = false;
+    if (opponentId) {
+      const { data: oppEntry } = await supabase
+        .from('tournament_entries')
+        .select('status')
+        .eq('tournament_id', tournamentId)
+        .eq('team_id', opponentId)
+        .maybeSingle();
+      opponentWithdrawn = oppEntry?.status === 'withdrawn';
+    }
+    if (!opponentId || opponentWithdrawn) {
+      // No one to advance — abandon the match, leave the next slot empty.
+      await supabase.from('matches').update({ status: 'abandoned', updated_at: now }).eq('id', mt.id);
+      continue;
+    }
+    // Walkover: opponent wins the forfeited match and advances.
+    await supabase
+      .from('matches')
+      .update({ status: 'abandoned', winner_team_id: opponentId, updated_at: now })
+      .eq('id', mt.id);
+    await advanceTournamentWinner(mt.id);
+  }
 }
 
 // When every group-stage match is complete, seed the knockout round-1 slots from

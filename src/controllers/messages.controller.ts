@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { isBlockedBetween } from '../utils/blocks';
 import { LIMITS, firstInvalidUrl } from '../utils/validation';
+import { parsePagination } from '../utils/pagination';
 
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
 export async function listChats(req: Request, res: Response) {
@@ -19,11 +20,13 @@ export async function listChats(req: Request, res: Response) {
   const chatIds = (participations || []).map((p) => p.chat_id);
   if (chatIds.length === 0) return res.json({ data: [], chats: [] });
 
+  const lcp = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   const { data: chats, error } = await supabase
     .from('chats')
     .select('*')
     .in('id', chatIds)
-    .order('last_message_at', { ascending: false, nullsFirst: false });
+    .order('last_message_at', { ascending: false, nullsFirst: false })
+    .range(lcp.from, lcp.to);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 

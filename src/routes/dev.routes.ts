@@ -7,8 +7,13 @@ import {
   publishScheduledPosts,
 } from '../controllers/features.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
+import { requireAdmin } from '../middleware/admin.middleware';
 
 const router = Router();
+
+// SC-105: /dev/* exposes mass-seeding (loadFullData) + scheduled-job triggers.
+// Gate the whole router behind auth + admin so ordinary authed users can't call it.
+router.use(authenticateToken, requireAdmin);
 
 // POST /dev/load-full-data — comprehensive test-data seeder.
 // Remove before the production Store build.

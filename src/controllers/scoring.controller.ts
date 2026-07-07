@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { sanitizeError } from '../utils/response';
 import { notifyUsers } from '../utils/notify';
 import { isTerminalMatchStatus } from '../utils/validation';
 
@@ -105,7 +106,7 @@ export async function createEvent(req: Request, res: Response) {
       })
       .select('*')
       .single();
-    if (error || !event) return res.status(500).json({ error: error?.message || 'Failed to log event' });
+    if (error || !event) return res.status(500).json({ error: sanitizeError(error) });
 
     // Recompute the canonical score_summary from the full event log for ALL
     // sports (cricket runs/balls/wickets, football/hockey goals, basketball
@@ -193,7 +194,7 @@ export async function listEvents(req: Request, res: Response) {
       .limit(Math.min(parseInt(limit || '500', 10), 1000));
     if (since) query = query.gt('created_at', since);
     const { data, error } = await query;
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ events: data || [] });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -644,7 +645,7 @@ export async function undoEvent(req: Request, res: Response) {
       .maybeSingle();
     if (!latest) return res.status(404).json({ error: 'No event to undo' });
     const { error } = await supabase.from('match_events').delete().eq('id', latest.id);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     // Recompute the summary from the remaining events so it can't drift out of
     // sync with the event log (the old code left score_summary stale on undo).
     try {

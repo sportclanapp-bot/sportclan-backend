@@ -39,6 +39,9 @@ export async function getUserBadges(req: Request, res: Response) {
 export async function evaluateBadges(req: Request, res: Response) {
   const userId = req.params.userId;
 
+  // SC-101: only allow a user to evaluate their OWN badges (closes cross-user write).
+  if (userId !== req.userId) return res.status(403).json({ error: 'Forbidden' });
+
   // Fetch all badge definitions
   const { data: allBadges, error: badgesErr } = await supabase
     .from('badges')

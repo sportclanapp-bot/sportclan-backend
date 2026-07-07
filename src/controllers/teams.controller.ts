@@ -106,6 +106,16 @@ export async function getTeam(req: Request, res: Response) {
     const { id } = req.params;
     const { data: team, error } = await supabase.from('teams').select('*').eq('id', id).maybeSingle();
     if (error || !team) return res.status(404).json({ error: 'Team not found' });
+    // SC-107: a private team is only readable by its members.
+    if (team.is_public === false) {
+      const { data: membership } = await supabase
+        .from('team_members')
+        .select('id')
+        .eq('team_id', id)
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (!membership) return res.status(403).json({ error: 'This team is private' });
+    }
     // SC-79: `!inner` + filter hides soft-deleted members from the roster
     // (belt-and-suspenders alongside the delete-time captaincy transfer).
     const { data: members } = await excludeDeletedEmbed(supabase
@@ -136,6 +146,12 @@ export async function addTeamMember(req: Request, res: Response) {
     const id = String(req.params.id);
     const { user_id, role, jersey_number } = req.body || {};
     if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+    // SC-103: only 'player' and 'vice_captain' may be assigned here. 'captain'
+    // is off-limits — captaincy transfer is a separate flow, and minting a 2nd
+    // captain breaks the single-captain invariant.
+    if (role !== undefined && !['player', 'vice_captain'].includes(role)) {
+      return res.status(400).json({ error: "role must be 'player' or 'vice_captain'" });
+    }
     if (!(await isCaptain(id, userId))) {
       return res.status(403).json({ error: 'Only the captain can add members' });
     }

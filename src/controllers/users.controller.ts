@@ -6,7 +6,7 @@ import { resolveSportId } from '../utils/sportId';
 import { LIMITS, firstInvalidUrl } from '../utils/validation';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
-import { blockedUserIds, excludeIds } from '../utils/blocks';
+import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay } from '../utils/appTime';
 
 // Public-safe user fields. Never returns password_hash.
@@ -746,8 +746,27 @@ export async function discoverPlayers(req: Request, res: Response) {
 // GET /users/:id/activity-heatmap — returns an entry per day for the last
 // 84 days. `type` is one of 'none' | 'played' | 'won'. Cheap to compute
 // on demand; the frontend caches it per-user.
+// SC-106 — a user-scoped read (heatmap / rating-history / sport-profile) must
+// be invisible when its target is soft-deleted OR blocked either direction with
+// the caller, exactly as getUserById gates the profile page itself. Mirrors that
+// guard: excludeDeleted existence check → 404, then a pairwise block check → 404
+// (isBlockedBetween is the single-query form of getUserById's inline .or()).
+// Returns true (and the caller should 404) when the target must be hidden.
+async function targetUserHidden(targetId: string, viewerId?: string): Promise<boolean> {
+  const { data } = await excludeDeleted(
+    supabase.from('users').select('id').eq('id', targetId),
+  ).maybeSingle();
+  if (!data) return true;
+  if (viewerId && viewerId !== targetId && (await isBlockedBetween(viewerId, targetId))) return true;
+  return false;
+}
+
 export async function getActivityHeatmap(req: Request, res: Response) {
   const { id } = req.params;
+  // SC-106: hide the heatmap of a soft-deleted or blocked target.
+  if (await targetUserHidden(id, req.userId)) {
+    return res.status(404).json({ error: 'User not found' });
+  }
   // 84 days ago in the same timezone as the server.
   const since = new Date();
   since.setDate(since.getDate() - 83);
@@ -921,6 +940,10 @@ export async function getRival(req: Request, res: Response) {
 // left→right without client-side reversal.
 export async function getRatingHistory(req: Request, res: Response) {
   const { id } = req.params;
+  // SC-106: hide the rating history of a soft-deleted or blocked target.
+  if (await targetUserHidden(id, req.userId)) {
+    return res.status(404).json({ error: 'User not found' });
+  }
   const rawSportId = req.query.sport_id as string | undefined;
   if (!rawSportId) return res.status(400).json({ error: 'sport_id is required' });
   const sportId = (await resolveSportId(rawSportId)) ?? rawSportId;
@@ -956,6 +979,10 @@ const SPORT_PROFILE_SELECT =
 
 export async function getSportProfile(req: Request, res: Response) {
   const { id, sportId: rawSportId } = req.params;
+  // SC-106: hide the sport profile of a soft-deleted or blocked target.
+  if (await targetUserHidden(id, req.userId)) {
+    return res.status(404).json({ error: 'User not found' });
+  }
   // Accept either a slug ('cricket') or a UUID; the app passes slugs.
   const sportId = (await resolveSportId(rawSportId)) ?? rawSportId;
 

@@ -29,7 +29,14 @@ export async function getAvailability(req: Request, res: Response) {
 // ─── UPDATE AVAILABILITY ────────────────────────────────────────────────────
 export async function updateAvailability(req: Request, res: Response) {
   const userId = req.userId!;
-  const { status, sport_ids, date_from, date_to, hide_stats, hide_dob } = req.body;
+  // SC-108: guard against bodyless requests (was throwing 500 on destructure).
+  const { status, sport_ids, date_from, date_to, hide_stats, hide_dob } = req.body ?? {};
+
+  // SC-108: validate status against the DB CHECK constraint (see migration 005).
+  const VALID_STATUSES = ['looking_to_play', 'available_weekend', 'not_available'];
+  if (status !== undefined && status !== null && !VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
 
   const { data, error } = await supabase
     .from('player_availability')

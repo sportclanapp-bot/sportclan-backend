@@ -112,37 +112,53 @@ export async function listOpenMatches(req: Request, res: Response) {
 export async function rateMatchHandler(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-  const { id } = req.params;
-  const { matchQuality, wouldPlayAgain } = req.body || {};
-  if (typeof matchQuality !== 'number' || matchQuality < 1 || matchQuality > 5) {
-    return res.status(400).json({ error: 'matchQuality must be 1-5' });
+  try {
+    const { id } = req.params;
+    const { matchQuality, wouldPlayAgain } = req.body ?? {};
+    if (typeof matchQuality !== 'number' || matchQuality < 1 || matchQuality > 5) {
+      return res.status(400).json({ error: 'matchQuality must be 1-5' });
+    }
+    if (typeof wouldPlayAgain !== 'boolean') {
+      return res.status(400).json({ error: 'wouldPlayAgain must be boolean' });
+    }
+
+    // SC-108: the match must exist and be completed — you can only rate a match
+    // that actually happened.
+    const { data: match } = await supabase
+      .from('matches')
+      .select('id, status')
+      .eq('id', id)
+      .maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (match.status !== 'completed') {
+      return res.status(400).json({ error: 'Can only rate a completed match' });
+    }
+
+    // Dedupe — one rating per user per match.
+    const { data: existing } = await supabase
+      .from('match_ratings')
+      .select('*')
+      .eq('match_id', id)
+      .eq('rater_id', userId)
+      .maybeSingle();
+    if (existing) return res.json({ success: true, rating: existing, alreadyRated: true });
+
+    const { data, error } = await supabase
+      .from('match_ratings')
+      .insert({
+        match_id: id,
+        rater_id: userId,
+        match_quality: matchQuality,
+        would_play_again: wouldPlayAgain,
+      })
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    return res.json({ success: true, rating: data });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
   }
-  if (typeof wouldPlayAgain !== 'boolean') {
-    return res.status(400).json({ error: 'wouldPlayAgain must be boolean' });
-  }
-
-  // Dedupe — one rating per user per match.
-  const { data: existing } = await supabase
-    .from('match_ratings')
-    .select('*')
-    .eq('match_id', id)
-    .eq('rater_id', userId)
-    .maybeSingle();
-  if (existing) return res.json({ success: true, rating: existing, alreadyRated: true });
-
-  const { data, error } = await supabase
-    .from('match_ratings')
-    .insert({
-      match_id: id,
-      rater_id: userId,
-      match_quality: matchQuality,
-      would_play_again: wouldPlayAgain,
-    })
-    .select('*')
-    .single();
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
-
-  return res.json({ success: true, rating: data });
 }
 
 // PATCH /matches/:id/toss  { tossWinnerTeamId, tossChoice }
@@ -560,12 +576,23 @@ export async function addParticipants(req: Request, res: Response) {
     }
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id')
+      .select('created_by, umpire_id, status')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (match.created_by !== userId && match.umpire_id !== userId) {
       return res.status(403).json({ error: 'Only the creator or umpire can add participants' });
+    }
+    // SC-98/SC-110: a finished match's lineup is frozen — no adding participants
+    // to a completed/abandoned/cancelled match.
+    if (isTerminalMatchStatus(match.status)) {
+      return res.status(409).json({ error: 'This match is already finished.' });
+    }
+    // SC-110: every participant must be placed on a valid side.
+    for (const p of participants as any[]) {
+      if (p && p.team_side !== 'A' && p.team_side !== 'B') {
+        return res.status(400).json({ error: 'team_side must be A or B' });
+      }
     }
     // SC-53: dedupe by user_id (last wins) — a batch containing the same user
     // twice (e.g. a player listed on both sides) would otherwise make Postgres'
@@ -715,10 +742,25 @@ export async function getMatchChat(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, chat_id, team_a_name, team_b_name, created_by')
+      .select('id, chat_id, team_a_name, team_b_name, created_by, umpire_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
+
+    // SC-107: only people actually in this match may access its group chat.
+    // Previously ANY authed user was silently inserted into the chat. Gate to
+    // the creator, the umpire, or a registered match participant.
+    if (match.created_by !== userId && match.umpire_id !== userId) {
+      const { data: participant } = await supabase
+        .from('match_participants')
+        .select('id')
+        .eq('match_id', id)
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (!participant) {
+        return res.status(403).json({ error: 'Not part of this match' });
+      }
+    }
 
     const chatName = `${match.team_a_name ?? 'Team A'} vs ${match.team_b_name ?? 'Team B'} Chat`;
     let chatId: string | null = match.chat_id ?? null;

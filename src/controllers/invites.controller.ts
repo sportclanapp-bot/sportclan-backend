@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { sanitizeError } from '../utils/response';
 import { sendPushToTokens } from '../utils/fcm';
 import { notifyUnlessBlocked } from '../utils/notify';
 
@@ -81,7 +82,7 @@ export async function createInvite(req: Request, res: Response) {
       .eq('id', resolved.id)
       .select(INVITE_COLS)
       .single();
-    if (error || !data) return res.status(500).json({ error: error?.message || 'Failed to re-send invite' });
+    if (error || !data) return res.status(500).json({ error: sanitizeError(error) });
     invite = data;
   } else {
     const { data, error } = await supabase
@@ -99,7 +100,7 @@ export async function createInvite(req: Request, res: Response) {
           code: 'ALREADY_INVITED',
         });
       }
-      return res.status(500).json({ error: error.message || 'Failed to create invite' });
+      return res.status(500).json({ error: sanitizeError(error) });
     }
     invite = data;
   }
@@ -130,7 +131,7 @@ export async function withdrawInvite(req: Request, res: Response) {
     .from('invites').delete()
     .eq('id', id).eq('sender_id', userId).eq('status', 'pending')
     .select('id');
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
   if (!deleted || deleted.length === 0) {
     return res.status(400).json({ error: 'This invite was already responded to.', code: 'INVITE_RESOLVED' });
   }
@@ -147,7 +148,7 @@ export async function listInvites(req: Request, res: Response) {
     .eq('receiver_id', userId)
     .order('created_at', { ascending: false })
     .limit(50);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.json({ invites: data || [] });
 }
 

@@ -236,7 +236,7 @@ export async function createGroup(req: Request, res: Response) {
 export async function updateGroup(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
-  const { name, icon_url } = req.body;
+  const { name, icon_url } = req.body ?? {};
 
   // Check admin
   const { data: participant } = await supabase
@@ -663,11 +663,22 @@ export async function batchMarkRead(req: Request, res: Response) {
     return res.status(400).json({ error: 'messageIds array is required' });
   }
 
+  // SC-107 IDOR: only mark messages in chats the caller is a participant of.
+  // Fetch the caller's chat ids and constrain the read below to messages in
+  // those chats, so a caller can't flip read_by on arbitrary messages by id.
+  const { data: myChats } = await supabase
+    .from('chat_participants')
+    .select('chat_id')
+    .eq('user_id', userId);
+  const callerChatIds = (myChats ?? []).map((c) => c.chat_id);
+  if (callerChatIds.length === 0) return res.json({ success: true, updated: 0 });
+
   // Pull the rows whose read_by doesn't already contain the caller.
   const { data: rows, error } = await supabase
     .from('messages')
     .select('id, read_by, sender_id')
-    .in('id', messageIds);
+    .in('id', messageIds)
+    .in('chat_id', callerChatIds);
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   const updates: Array<{ id: string; read_by: string[] }> = [];

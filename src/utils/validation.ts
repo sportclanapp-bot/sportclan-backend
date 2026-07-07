@@ -26,4 +26,40 @@ export const LIMITS = {
   postTextMax: 500, // matches the community_posts / post_comments DB CHECK
   bioMax: 500,
   teamNameMax: 60,
+  // SC-95 length caps for previously-unbounded user text.
+  tournamentNameMax: 120,
+  descriptionMax: 2000,
+  groupNameMax: 60,
+  urlMax: 2048,
 } as const;
+
+// SC-96: a well-formed http(s) URL within the length cap. Empty/null is handled
+// by the callers (clearing a field is allowed) — this only judges present values.
+export function isValidHttpUrl(v: unknown): boolean {
+  if (typeof v !== 'string' || v.length === 0 || v.length > LIMITS.urlMax) return false;
+  try {
+    const u = new URL(v);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/** First url field in `keys` whose (present, non-empty) value isn't a valid http(s) URL, or null. */
+export function firstInvalidUrl(obj: Record<string, any>, keys: string[]): string | null {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v === undefined || v === null || v === '') continue; // absent / clearing → allowed
+    if (!isValidHttpUrl(v)) return k;
+  }
+  return null;
+}
+
+/** First [key, max] whose (present, string) value exceeds max, or null. */
+export function firstTooLong(obj: Record<string, any>, limits: Array<[string, number]>): [string, number] | null {
+  for (const [k, max] of limits) {
+    const v = obj?.[k];
+    if (typeof v === 'string' && v.length > max) return [k, max];
+  }
+  return null;
+}

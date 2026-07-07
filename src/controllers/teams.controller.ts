@@ -6,7 +6,7 @@ import { excludeDeletedEmbed } from '../utils/activeUser';
 import { sanitizeError } from '../utils/response';
 import { notifyUnlessBlocked } from '../utils/notify';
 import { validateSportForCreate } from '../utils/sports';
-import { LIMITS } from '../utils/validation';
+import { LIMITS, firstInvalidUrl } from '../utils/validation';
 
 function generateJoinCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -26,6 +26,9 @@ export async function createTeam(req: Request, res: Response) {
     }
     if (String(name).length > LIMITS.teamNameMax) {
       return res.status(400).json({ error: `Team name must be ${LIMITS.teamNameMax} characters or fewer` });
+    }
+    if (firstInvalidUrl({ logo_url }, ['logo_url'])) {
+      return res.status(400).json({ error: 'logo_url must be a valid URL' });
     }
     // Validate the sport (unknown/malformed/deactivated → clean 400, not a 500).
     const sportErr = await validateSportForCreate(sport_id);
@@ -238,6 +241,12 @@ export async function updateTeam(req: Request, res: Response) {
     }
     const allowed: Record<string, any> = {};
     const { name, logo_url, city_id, is_public } = req.body || {};
+    if (typeof name === 'string' && name.length > LIMITS.teamNameMax) {
+      return res.status(400).json({ error: `Team name must be ${LIMITS.teamNameMax} characters or fewer` });
+    }
+    if (firstInvalidUrl({ logo_url }, ['logo_url'])) {
+      return res.status(400).json({ error: 'logo_url must be a valid URL' });
+    }
     if (name !== undefined) allowed.name = name;
     if (logo_url !== undefined) allowed.logo_url = logo_url;
     if (city_id !== undefined) allowed.city_id = city_id;

@@ -249,12 +249,17 @@ export async function directAddTeam(req: Request, res: Response) {
 
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, max_teams')
+      .select('created_by, max_teams, fixtures_generated')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     if (tournament.created_by !== userId) {
       return res.status(403).json({ error: 'Only the organiser can directly add teams' });
+    }
+    // SC-99: once the bracket is generated a new team would never appear in the
+    // fixtures (entries diverge from the played bracket). Registration is closed.
+    if ((tournament as any).fixtures_generated) {
+      return res.status(409).json({ error: 'Registration is closed — the bracket has already been generated.', code: 'REGISTRATION_CLOSED' });
     }
 
     // Check max_teams cap
@@ -311,11 +316,15 @@ export async function createEntry(req: Request, res: Response) {
     // Check registration deadline and max_teams cap
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('max_teams, registration_deadline, created_by, name')
+      .select('max_teams, registration_deadline, created_by, name, fixtures_generated')
       .eq('id', id)
       .maybeSingle();
     if (tournament?.registration_deadline && new Date(tournament.registration_deadline) < new Date()) {
       return res.status(400).json({ error: 'Registration closed', code: 'REGISTRATION_CLOSED' });
+    }
+    // SC-99: no new entries once the bracket is generated (would never play).
+    if ((tournament as any)?.fixtures_generated) {
+      return res.status(409).json({ error: 'Registration is closed — the bracket has already been generated.', code: 'REGISTRATION_CLOSED' });
     }
     if (tournament?.max_teams) {
       const { count } = await supabase
@@ -423,7 +432,7 @@ export async function updateEntry(req: Request, res: Response) {
 
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, name')
+      .select('created_by, name, fixtures_generated')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -439,6 +448,11 @@ export async function updateEntry(req: Request, res: Response) {
 
     if (status === 'approved' || status === 'rejected') {
       if (!isCreator) return res.status(403).json({ error: 'Only the tournament creator can approve/reject' });
+      // SC-99: can't approve a NEW team into the bracket after it's generated.
+      // (reject stays allowed for pending cleanup; withdrawn → SC-88 walkover.)
+      if (status === 'approved' && (tournament as any).fixtures_generated) {
+        return res.status(409).json({ error: 'Registration is closed — the bracket has already been generated.', code: 'REGISTRATION_CLOSED' });
+      }
     } else if (status === 'withdrawn') {
       // SC-88: the team captain (self-withdraw) or the organiser may withdraw.
       if (!isTeamCaptain && !isCreator) {

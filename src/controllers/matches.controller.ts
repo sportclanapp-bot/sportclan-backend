@@ -1152,6 +1152,9 @@ export async function completeMatch(req: Request, res: Response) {
     }
     } // end ELO / profile / streak updates (skipped when the match has no participants)
 
+    // G1 PROBE (temporary — revert after test): fault AFTER ELO/stats, BEFORE match status.
+    if (req.query.__g1fault === 'elo') throw new Error('G1-a probe: half-state after ELO');
+
     // Mark match as completed
     const { data: updatedMatch, error: updateErr } = await supabase
       .from('matches')

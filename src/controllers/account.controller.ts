@@ -110,6 +110,8 @@ export async function deleteAccount(req: Request, res: Response) {
   // fallback for the window before 046 is applied (same rule, non-atomic) and
   // can be removed once 046 is live.
   try {
+    // G1 PROBE (temporary — revert after test): simulate the captaincy RPC failing.
+    if (req.query.__g1fault === 'captaincy') throw new Error('G1-c probe: RPC fail');
     const { error: rpcErr } = await supabase.rpc('finalize_captaincy_on_delete', { p_user_id: userId });
     if (rpcErr) throw rpcErr;
   } catch {

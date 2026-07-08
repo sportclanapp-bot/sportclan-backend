@@ -1082,17 +1082,6 @@ export async function completeMatch(req: Request, res: Response) {
       profiles: corePayloadProfiles,
       rating_history: ratingHistoryRows,
     };
-    // SC-124 PROBE (temporary — revert after test): push a rating_history row with a
-    // non-existent match_id → the RPC's insert FK-violates mid-transaction, proving
-    // the whole finalize_match rolls back (no ELO, status stays not-completed).
-    if (req.query.__scfault === 'rpcfail') {
-      (p_results.rating_history as any[]).push({
-        user_id: allPlayerIds[0] ?? match.created_by,
-        sport_id: match.sport_id,
-        match_id: '00000000-0000-0000-0000-000000000000',
-        old_rating: 1, new_rating: 1, delta: 0,
-      });
-    }
     let updatedMatch: any = null;
     const fin = await supabase.rpc('finalize_match', { p_match_id: id, p_results });
     if (fin.error && fin.error.code === 'PGRST202') {

@@ -11,6 +11,7 @@ async function fanoutScoreUpdate(
   matchId: string,
   title: string,
   body: string,
+  actorId?: string,
 ): Promise<void> {
   try {
     // Participants + anyone who followed the match (SC-A1) — deduped.
@@ -28,7 +29,7 @@ async function fanoutScoreUpdate(
       title,
       body,
       data: { matchId, screen: 'MatchDetail' },
-    });
+    }, { actorId });
   } catch (err) {
     // SC-112: best-effort fanout, but log the failure so it isn't invisible.
     console.error('[fanout-score-update] failed:', err instanceof Error ? err.message : err);
@@ -184,7 +185,7 @@ export async function createEvent(req: Request, res: Response) {
             runs !== ''
               ? `${playerName} out for ${runs} | ${teamName(side)} ${scoreStr}`
               : `${playerName} out | ${teamName(side)} ${scoreStr}`;
-          void fanoutScoreUpdate(matchId, title, body);
+          void fanoutScoreUpdate(matchId, title, body, userId);
         } else {
           // generic score / goal — points or goals across all other sports.
           // Rally-family sports (badminton/TT/volleyball/pickleball/tennis) keep
@@ -198,7 +199,7 @@ export async function createEvent(req: Request, res: Response) {
           };
           const title = payload?.kind === 'goal' ? 'GOAL!' : 'Score!';
           const body = `${teamName(side)} scores! ${val(summary.A)}-${val(summary.B)}`;
-          void fanoutScoreUpdate(matchId, title, body);
+          void fanoutScoreUpdate(matchId, title, body, userId);
         }
       }
     } catch {

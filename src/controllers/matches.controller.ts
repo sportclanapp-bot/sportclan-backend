@@ -1009,162 +1009,145 @@ export async function completeMatch(req: Request, res: Response) {
       }
     }
 
-    // ELO / profile / streak / coin updates run ONLY for ranked matches with a
-    // roster. Casual matches (and ranked matches with no participants) can still
-    // be completed — they just don't touch ratings (A5-003 P3 · ELO gated to
-    // ranked, so casual play stops inflating leaderboard ratings).
+    // ── SC-126: compute ELO + stat deltas in JS (E1-verified math, UNCHANGED),
+    // then persist the core (profiles + rating_history + status) in ONE atomic
+    // transaction via finalize_match (migration 051). ELO runs only for ranked
+    // matches with a roster; casual matches just get status→completed.
+    const corePayloadProfiles: Array<Record<string, any>> = [];
     if (match.is_ranked && participants && participants.length > 0) {
       const teamA = participants.filter((p) => p.team_side === 'A').map((p) => p.user_id);
       const teamB = participants.filter((p) => p.team_side === 'B').map((p) => p.user_id);
       allPlayerIds = [...teamA, ...teamB];
 
-      // Determine outcome: 1 = A wins, 0 = B wins, 0.5 = draw
       let outcome: 1 | 0 | 0.5 = 0.5;
-      if (winner_team_id) {
-        outcome = winner_team_id === match.team_a_id ? 1 : 0;
-      }
+      if (winner_team_id) outcome = winner_team_id === match.team_a_id ? 1 : 0;
 
-    // Fetch or create sport profiles for all participants
-    const { data: existingProfiles } = await supabase
-      .from('user_sport_profiles')
-      .select('id, user_id, rating, matches_played, wins, losses, draws')
-      .eq('sport_id', match.sport_id)
-      .in('user_id', allPlayerIds);
-
-    const profileMap = new Map<string, { id: string; rating: number; matches_played: number; wins: number; losses: number; draws: number }>();
-    for (const p of existingProfiles || []) {
-      profileMap.set(p.user_id, p);
-    }
-
-    // Create missing profiles
-    const missingIds = allPlayerIds.filter((uid) => !profileMap.has(uid));
-    if (missingIds.length > 0) {
-      const rows = missingIds.map((uid) => ({ user_id: uid, sport_id: match.sport_id }));
-      const { data: created } = await supabase
+      const { data: existingProfiles } = await supabase
         .from('user_sport_profiles')
-        .insert(rows)
-        .select('id, user_id, rating, matches_played, wins, losses, draws');
-      for (const p of created || []) {
-        profileMap.set(p.user_id, p);
-      }
-    }
+        .select('user_id, rating, matches_played, wins, losses, draws')
+        .eq('sport_id', match.sport_id)
+        .in('user_id', allPlayerIds);
+      const profileMap = new Map<string, { rating: number; matches_played: number; wins: number; losses: number; draws: number }>();
+      for (const p of existingProfiles || []) profileMap.set(p.user_id, p);
+      // Missing profiles default to a fresh 1200/0 baseline — identical to the old
+      // insert-then-read path, so the ELO numbers are unchanged.
+      const getProfile = (uid: string) =>
+        profileMap.get(uid) ?? { rating: 1200, matches_played: 0, wins: 0, losses: 0, draws: 0 };
+      const avgRating = (ids: string[]) =>
+        (ids.length === 0 ? 1200 : ids.reduce((s, uid) => s + getProfile(uid).rating, 0) / ids.length);
+      const avgMatches = (ids: string[]) =>
+        (ids.length === 0 ? 0 : Math.floor(ids.reduce((s, uid) => s + getProfile(uid).matches_played, 0) / ids.length));
 
-    // Calculate average rating per team for ELO
-    const avgRating = (ids: string[]) => {
-      if (ids.length === 0) return 1200;
-      return ids.reduce((sum, uid) => sum + (profileMap.get(uid)?.rating ?? 1200), 0) / ids.length;
-    };
-    const avgMatches = (ids: string[]) => {
-      if (ids.length === 0) return 0;
-      return Math.floor(ids.reduce((sum, uid) => sum + (profileMap.get(uid)?.matches_played ?? 0), 0) / ids.length);
-    };
+      const [resultA, resultB] = calculateElo(
+        { rating: avgRating(teamA), matchesPlayed: avgMatches(teamA) },
+        { rating: avgRating(teamB), matchesPlayed: avgMatches(teamB) },
+        outcome,
+      );
 
-    const [resultA, resultB] = calculateElo(
-      { rating: avgRating(teamA), matchesPlayed: avgMatches(teamA) },
-      { rating: avgRating(teamB), matchesPlayed: avgMatches(teamB) },
-      outcome,
-    );
-
-    // Update each player's profile
-    for (const uid of allPlayerIds) {
-      const profile = profileMap.get(uid)!;
-      const isTeamA = teamA.includes(uid);
-      const result = isTeamA ? resultA : resultB;
-      const oldRating = profile.rating;
-      const newRating = Math.round((oldRating + result.delta) * 100) / 100;
-      const clampedRating = Math.max(100, newRating);
-
-      const isWinner = winner_team_id
-        ? (isTeamA ? outcome === 1 : outcome === 0)
-        : false;
-      const isLoser = winner_team_id
-        ? (isTeamA ? outcome === 0 : outcome === 1)
-        : false;
-
-      await supabase
-        .from('user_sport_profiles')
-        .update({
+      for (const uid of allPlayerIds) {
+        const profile = getProfile(uid);
+        const isTeamA = teamA.includes(uid);
+        const result = isTeamA ? resultA : resultB;
+        const oldRating = profile.rating;
+        const clampedRating = Math.max(100, Math.round((oldRating + result.delta) * 100) / 100);
+        const isWinner = winner_team_id ? (isTeamA ? outcome === 1 : outcome === 0) : false;
+        const isLoser = winner_team_id ? (isTeamA ? outcome === 0 : outcome === 1) : false;
+        corePayloadProfiles.push({
+          user_id: uid,
+          sport_id: match.sport_id,
           rating: clampedRating,
           matches_played: profile.matches_played + 1,
           wins: profile.wins + (isWinner ? 1 : 0),
           losses: profile.losses + (isLoser ? 1 : 0),
           draws: profile.draws + (!winner_team_id ? 1 : 0),
-          last_match_at: now,
-          updated_at: now,
-        })
-        .eq('id', profile.id);
-
-      ratingHistoryRows.push({
-        user_id: uid,
-        sport_id: match.sport_id,
-        match_id: id,
-        old_rating: oldRating,
-        new_rating: clampedRating,
-        delta: Math.round((clampedRating - oldRating) * 100) / 100,
-      });
-    }
-
-    // Insert rating history
-    if (ratingHistoryRows.length > 0) {
-      const { error: rhErr } = await supabase.from('rating_history').insert(ratingHistoryRows);
-      if (rhErr) console.error('rating_history insert failed:', rhErr.message);
-    }
-
-    // Award 5 coins to every player on the winning team. Idempotent per
-    // (user, match) via awardCoins' unique key on coin_events.
-    if (winner_team_id) {
-      const winnerIds = winner_team_id === match.team_a_id ? teamA : teamB;
-      for (const uid of winnerIds) {
-        void awardCoins(uid, `win_match_${id}`, 5);
+        });
+        ratingHistoryRows.push({
+          user_id: uid,
+          sport_id: match.sport_id,
+          match_id: id,
+          old_rating: oldRating,
+          new_rating: clampedRating,
+          delta: Math.round((clampedRating - oldRating) * 100) / 100,
+        });
       }
     }
 
-    // Activity streaks: advance each participant's streak_count based on the
-    // gap between today and their last_match_date. Rules:
-    //   * same day     → no change (already counted)
-    //   * yesterday    → +1
-    //   * older / null → reset to 1
-    // Best-effort — failures never block match completion.
-    try {
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const { data: currentUsers } = await supabase
-        .from('users')
-        .select('id, streak_count, last_match_date')
-        .in('id', allPlayerIds);
-      for (const u of currentUsers || []) {
-        const last = u.last_match_date as string | null;
-        let nextStreak = 1;
-        if (last === todayStr) {
-          nextStreak = u.streak_count ?? 1;
-        } else if (last) {
-          const lastMs = new Date(last + 'T00:00:00Z').getTime();
-          const todayMs = new Date(todayStr + 'T00:00:00Z').getTime();
-          const diffDays = Math.round((todayMs - lastMs) / 86400000);
-          nextStreak = diffDays === 1 ? (u.streak_count ?? 0) + 1 : 1;
-        }
+    // ── ATOMIC CORE (finalize_match, migration 051): profiles + rating_history +
+    // status→completed in ONE transaction. Any failure → full rollback (match stays
+    // not-completed, retryable); the in-txn status CAS blocks the double-apply.
+    // Falls back to the sequential path until 051 is applied (deploy-order dependency).
+    const p_results = {
+      winner_team_id: winner_team_id || null,
+      now,
+      profiles: corePayloadProfiles,
+      rating_history: ratingHistoryRows,
+    };
+    let updatedMatch: any = null;
+    const fin = await supabase.rpc('finalize_match', { p_match_id: id, p_results });
+    if (fin.error && fin.error.code === 'PGRST202') {
+      // Pre-migration fallback: same values, sequential (NOT atomic — 051 closes this).
+      for (const pr of corePayloadProfiles) {
         await supabase
-          .from('users')
-          .update({ streak_count: nextStreak, last_match_date: todayStr })
-          .eq('id', u.id);
+          .from('user_sport_profiles')
+          .upsert({ ...pr, last_match_at: now, updated_at: now }, { onConflict: 'user_id,sport_id' });
       }
-    } catch {
-      // swallow — streaks are a nice-to-have
+      if (ratingHistoryRows.length > 0) {
+        const { error: rhErr } = await supabase.from('rating_history').insert(ratingHistoryRows);
+        if (rhErr) console.error('rating_history insert failed:', rhErr.message);
+      }
+      const { data: um, error: updateErr } = await supabase
+        .from('matches')
+        .update({ status: 'completed', winner_team_id: winner_team_id || null, updated_at: now })
+        .eq('id', id)
+        .select('*')
+        .single();
+      if (updateErr) return res.status(500).json({ error: sanitizeError(updateErr) });
+      updatedMatch = um;
+    } else if (fin.error) {
+      return res.status(500).json({ error: sanitizeError(fin.error) });
+    } else {
+      const out = fin.data as { applied?: boolean; match?: any } | null;
+      if (out && out.applied === false) {
+        return res.status(400).json({ error: 'Match already completed' });
+      }
+      updatedMatch = out?.match ?? null;
     }
-    } // end ELO / profile / streak updates (skipped when the match has no participants)
 
-    // Mark match as completed
-    const { data: updatedMatch, error: updateErr } = await supabase
-      .from('matches')
-      .update({
-        status: 'completed',
-        winner_team_id: winner_team_id || null,
-        updated_at: now,
-      })
-      .eq('id', id)
-      .select('*')
-      .single();
-
-    if (updateErr) return res.status(500).json({ error: sanitizeError(updateErr) });
+    // ── Post-core best-effort (never blocks completion; all idempotent) ──
+    if (match.is_ranked && allPlayerIds.length > 0) {
+      // Award 5 coins to winners — idempotent per (user,match) via coin_events.
+      if (winner_team_id) {
+        const winnerSide = winner_team_id === match.team_a_id ? 'A' : 'B';
+        const winnerIds = (participants ?? []).filter((p) => p.team_side === winnerSide).map((p) => p.user_id);
+        for (const uid of winnerIds) void awardCoins(uid, `win_match_${id}`, 5);
+      }
+      // Activity streaks — best-effort.
+      try {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const { data: currentUsers } = await supabase
+          .from('users')
+          .select('id, streak_count, last_match_date')
+          .in('id', allPlayerIds);
+        for (const u of currentUsers || []) {
+          const last = u.last_match_date as string | null;
+          let nextStreak = 1;
+          if (last === todayStr) {
+            nextStreak = u.streak_count ?? 1;
+          } else if (last) {
+            const lastMs = new Date(last + 'T00:00:00Z').getTime();
+            const todayMs = new Date(todayStr + 'T00:00:00Z').getTime();
+            const diffDays = Math.round((todayMs - lastMs) / 86400000);
+            nextStreak = diffDays === 1 ? (u.streak_count ?? 0) + 1 : 1;
+          }
+          await supabase
+            .from('users')
+            .update({ streak_count: nextStreak, last_match_date: todayStr })
+            .eq('id', u.id);
+        }
+      } catch {
+        // swallow — streaks are a nice-to-have
+      }
+    }
 
     // Recompute the canonical summary from the event log, then derive the winner
     // BY SIDE and a human result string from the canonical per-side `score`.

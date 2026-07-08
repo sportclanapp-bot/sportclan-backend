@@ -1307,9 +1307,6 @@ export async function generateFixtures(req: Request, res: Response) {
       return res.status(409).json({ error: 'Fixtures already generated for this tournament.' });
     }
 
-    // G1 PROBE (temporary — revert after test): fault AFTER flag claim, BEFORE fixture insert.
-    if (req.query.__g1fault === 'fixtures') throw new Error('G1-b probe: after flag claim');
-
     const startDate = tournament.start_date ? new Date(tournament.start_date) : new Date();
     const dayMs = 86400000;
     const format = (tournament.format ?? 'knockout').toLowerCase();

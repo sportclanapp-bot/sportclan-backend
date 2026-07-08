@@ -1296,15 +1296,54 @@ export async function generateFixtures(req: Request, res: Response) {
     // fixtures_generated false→true and gets a row back; the losers get 0 rows
     // and are rejected. The flag is reset in the catch below if generation
     // itself fails, so a genuine error still allows a retry.
+    const nowIso = new Date().toISOString();
     const { data: claim, error: claimErr } = await supabase
       .from('tournaments')
-      .update({ fixtures_generated: true })
+      .update({ fixtures_generated: true, updated_at: nowIso })
       .eq('id', id)
       .eq('fixtures_generated', false)
       .select('id');
     if (claimErr) return res.status(500).json({ error: sanitizeError(claimErr) });
     if (!claim || claim.length === 0) {
-      return res.status(409).json({ error: 'Fixtures already generated for this tournament.' });
+      // SC-128: the claim failed → fixtures_generated is already true. Normally that
+      // means the bracket exists (→ 409). BUT a HARD crash between this claim and the
+      // match-insert can leave fixtures_generated=true with ZERO matches — a stuck
+      // tournament (every retry → 409 forever, no bracket). Recover ONLY that case.
+      const { count: matchCount } = await supabase
+        .from('matches')
+        .select('id', { count: 'exact', head: true })
+        .eq('tournament_id', id);
+      if (matchCount && matchCount > 0) {
+        // Real bracket exists — genuinely already generated.
+        return res.status(409).json({ error: 'Fixtures already generated for this tournament.' });
+      }
+      // 0 matches could also be a CONCURRENT in-progress generation (claimed, not yet
+      // inserted — SC-48). Distinguish by staleness: a normal generation inserts within
+      // ~1s, so flag=true + 0 matches + a >60s-old timestamp = genuinely crash-stuck.
+      // The updated_at CAS also SERIALIZES concurrent recoveries: exactly one wins the
+      // refresh, the rest see a fresh timestamp → 409. No new duplicate-bracket race.
+      const staleBefore = new Date(Date.now() - 60_000).toISOString();
+      const { data: recover } = await supabase
+        .from('tournaments')
+        .update({ updated_at: nowIso })
+        .eq('id', id)
+        .eq('fixtures_generated', true)
+        .lt('updated_at', staleBefore)
+        .select('id');
+      if (!recover || recover.length === 0) {
+        // In-progress generation (fresh timestamp) or another recovery already won.
+        return res.status(409).json({ error: 'Fixtures already generated for this tournament.' });
+      }
+      // Won the stuck-state recovery (flag already true, 0 matches, stale) → regenerate.
+    }
+    // G1-b PROBE (temporary — revert after test): simulate a hard crash after the claim,
+    // leaving fixtures_generated=true + 0 matches + a stale timestamp (recoverable).
+    if (req.query.__scfault === 'stuck') {
+      await supabase
+        .from('tournaments')
+        .update({ updated_at: new Date(Date.now() - 120_000).toISOString() })
+        .eq('id', id);
+      return res.status(500).json({ error: 'simulated crash-stuck (probe)' });
     }
 
     const startDate = tournament.start_date ? new Date(tournament.start_date) : new Date();

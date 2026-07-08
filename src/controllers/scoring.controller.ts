@@ -54,7 +54,7 @@ export async function createEvent(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const matchId = String(req.params.matchId);
-    const { event_type, period, clock_seconds, payload } = req.body || {};
+    const { event_type, period, clock_seconds, payload, idempotency_key } = req.body || {};
     if (!event_type) return res.status(400).json({ error: 'event_type is required' });
 
     const auth = await authorizeScorer(matchId, userId);
@@ -102,16 +102,24 @@ export async function createEvent(req: Request, res: Response) {
     // so deploying this ahead of the migration is safe (pre-fix behaviour).
     let event: any = null;
     let error: any = null;
-    const rpc = await supabase.rpc('record_match_event', {
+    const baseArgs = {
       p_match_id: matchId,
       p_created_by: userId,
       p_event_type: event_type,
       p_period: period ?? null,
       p_clock_seconds: clock_seconds ?? null,
       p_payload: payload || {},
-    });
+    };
+    // SC-129: pass the per-tap idempotency key so a slow (>3s) retry maps to the
+    // existing event. Fallback ladder keeps the 3s dedup active with no regression
+    // window: 8-arg (with p_client_key) → PGRST202 → 7-arg (the 049 function still
+    // runs its 3s dedup pre-055) → PGRST202 → last-resort direct insert.
+    let rpc = await supabase.rpc('record_match_event', { ...baseArgs, p_client_key: idempotency_key ?? null });
     if (rpc.error && rpc.error.code === 'PGRST202') {
-      // RPC not deployed yet — fall back to the (pre-fix) direct insert.
+      rpc = await supabase.rpc('record_match_event', baseArgs);
+    }
+    if (rpc.error && rpc.error.code === 'PGRST202') {
+      // Neither RPC signature present — last-resort direct insert (no dedup, no client_key column).
       const ins = await supabase
         .from('match_events')
         .insert({

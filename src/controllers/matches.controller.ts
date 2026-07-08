@@ -1055,11 +1055,19 @@ export async function completeMatch(req: Request, res: Response) {
         corePayloadProfiles.push({
           user_id: uid,
           sport_id: match.sport_id,
+          // Absolute values — read by the pre-054 finalize_match (and the JS fallback).
           rating: clampedRating,
           matches_played: profile.matches_played + 1,
           wins: profile.wins + (isWinner ? 1 : 0),
           losses: profile.losses + (isLoser ? 1 : 0),
           draws: profile.draws + (!winner_team_id ? 1 : 0),
+          // SC-131 deltas — read by finalize_match (mig 054), applied ADDITIVELY so
+          // concurrent completions of a player's different matches don't lose an update.
+          // Both shapes travel together, so the JS is drop-in with either function version.
+          rating_delta: Math.round(result.delta * 100) / 100,
+          win_inc: isWinner ? 1 : 0,
+          loss_inc: isLoser ? 1 : 0,
+          draw_inc: !winner_team_id ? 1 : 0,
         });
         ratingHistoryRows.push({
           user_id: uid,

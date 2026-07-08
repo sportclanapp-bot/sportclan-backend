@@ -24,7 +24,7 @@ export async function getCatalogue(_req: Request, res: Response) {
 // POST /gifts/send  { receiverId, giftId, message? }
 export async function sendGift(req: Request, res: Response) {
   const senderId = req.userId!;
-  const { receiverId, giftId, message } = req.body || {};
+  const { receiverId, giftId, message, idempotency_key } = req.body || {};
 
   if (!receiverId || !giftId) return res.status(400).json({ error: 'receiverId and giftId required' });
   if (senderId === receiverId) return res.status(400).json({ error: 'Cannot send gift to yourself' });
@@ -53,66 +53,63 @@ export async function sendGift(req: Request, res: Response) {
   const { data: receiver } = await supabase.from('users').select('id').eq('id', receiverId).single();
   if (!receiver) return res.status(404).json({ error: 'Receiver not found' });
 
-  // Deduct coins ATOMICALLY with a balance floor. The earlier read-then-check
-  // (sender.coin_balance < cost) is only a fast-fail; two concurrent sends can
-  // both pass it and then both deduct, driving the balance negative / double
-  // spending (A4-005). deduct_coins_if_sufficient performs the check and the
-  // decrement in one conditional UPDATE, so at most one of the racing requests
-  // succeeds. It returns the new balance, or NULL when the balance was
-  // insufficient at commit time. (Requires migration 030_atomic_gift_deduct.sql.)
-  const { data: newBalance, error: deductErr } = await supabase
-    .rpc('deduct_coins_if_sufficient', { target_user_id: senderId, amount: gift.cost });
-  if (deductErr) return res.status(500).json({ error: 'Could not deduct coins' });
-  if (newBalance === null || newBalance === undefined) {
+  // SC-114: atomic, retry-idempotent send via the send_gift RPC (migration 052).
+  // idempotency_key (a client UUID per tap) dedups retries → the original result,
+  // no 2nd deduct; a no-key send uses a short ~1.5s backstop window. Dedup + deduct
+  // + gift + ledger all run in ONE transaction. Falls back to the pre-052 sequential
+  // path if the RPC isn't deployed yet (safe pre-migration deploy).
+  const rpc = await supabase.rpc('send_gift', {
+    p_sender: senderId,
+    p_receiver: receiverId,
+    p_gift_id: giftId,
+    p_emoji: gift.emoji,
+    p_name: gift.name,
+    p_cost: gift.cost,
+    p_message: message || null,
+    p_client_key: idempotency_key || null,
+  });
+  if (rpc.error && rpc.error.code === 'PGRST202') {
+    // ── Pre-migration fallback (current behaviour): deduct → insert (+refund) → ledger.
+    const { data: newBalance, error: deductErr } = await supabase
+      .rpc('deduct_coins_if_sufficient', { target_user_id: senderId, amount: gift.cost });
+    if (deductErr) return res.status(500).json({ error: 'Could not deduct coins' });
+    if (newBalance === null || newBalance === undefined) {
+      return res.status(400).json({ error: 'Insufficient coins', required: gift.cost });
+    }
+    const { data: giftTx, error } = await supabase
+      .from('gift_transactions')
+      .insert({
+        sender_id: senderId,
+        receiver_id: receiverId,
+        gift_id: giftId,
+        gift_emoji: gift.emoji,
+        gift_name: gift.name,
+        coin_cost: gift.cost,
+        message: message || null,
+      })
+      .select()
+      .single();
+    if (error) {
+      await supabase.rpc('increment_coins', { target_user_id: senderId, amount: gift.cost });
+      return res.status(500).json({ error: sanitizeError(error) });
+    }
+    await supabase.from('transactions').insert([
+      { user_id: senderId, type: 'gift_sent', coins: -gift.cost, description: `Sent ${gift.name} ${gift.emoji}`, reference_id: giftTx.id, status: 'completed' },
+      { user_id: receiverId, type: 'gift_received', coins: 0, description: `Received ${gift.name} ${gift.emoji}`, reference_id: giftTx.id, status: 'completed' },
+    ]);
+    return res.json({ success: true, giftTransaction: giftTx, remainingBalance: newBalance });
+  }
+  if (rpc.error) return res.status(500).json({ error: sanitizeError(rpc.error) });
+  const out = (rpc.data ?? {}) as { status?: string; gift?: any; new_balance?: number };
+  if (out.status === 'insufficient') {
     return res.status(400).json({ error: 'Insufficient coins', required: gift.cost });
   }
-
-  // Record gift transaction
-  const { data: giftTx, error } = await supabase
-    .from('gift_transactions')
-    .insert({
-      sender_id: senderId,
-      receiver_id: receiverId,
-      gift_id: giftId,
-      gift_emoji: gift.emoji,
-      gift_name: gift.name,
-      coin_cost: gift.cost,
-      message: message || null,
-    })
-    .select()
-    .single();
-
-  if (error) {
-    // The coins were already debited — refund them so a failed insert can't
-    // silently burn the sender's balance.
-    await supabase.rpc('increment_coins', { target_user_id: senderId, amount: gift.cost });
-    return res.status(500).json({ error: sanitizeError(error) });
-  }
-
-  // Record in transactions table
-  await supabase.from('transactions').insert([
-    {
-      user_id: senderId,
-      type: 'gift_sent',
-      coins: -gift.cost,
-      description: `Sent ${gift.name} ${gift.emoji}`,
-      reference_id: giftTx.id,
-      status: 'completed',
-    },
-    {
-      user_id: receiverId,
-      type: 'gift_received',
-      coins: 0,
-      description: `Received ${gift.name} ${gift.emoji}`,
-      reference_id: giftTx.id,
-      status: 'completed',
-    },
-  ]);
-
+  // 'sent' or 'duplicate' — duplicate = an idempotent retry (no double charge).
   return res.json({
     success: true,
-    giftTransaction: giftTx,
-    remainingBalance: newBalance,
+    giftTransaction: out.gift,
+    remainingBalance: out.new_balance,
+    alreadySent: out.status === 'duplicate',
   });
 }
 

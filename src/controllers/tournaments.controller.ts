@@ -1336,15 +1336,6 @@ export async function generateFixtures(req: Request, res: Response) {
       }
       // Won the stuck-state recovery (flag already true, 0 matches, stale) → regenerate.
     }
-    // G1-b PROBE (temporary — revert after test): simulate a hard crash after the claim,
-    // leaving fixtures_generated=true + 0 matches + a stale timestamp (recoverable).
-    if (req.query.__scfault === 'stuck') {
-      await supabase
-        .from('tournaments')
-        .update({ updated_at: new Date(Date.now() - 120_000).toISOString() })
-        .eq('id', id);
-      return res.status(500).json({ error: 'simulated crash-stuck (probe)' });
-    }
 
     const startDate = tournament.start_date ? new Date(tournament.start_date) : new Date();
     const dayMs = 86400000;

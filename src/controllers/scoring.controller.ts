@@ -103,6 +103,7 @@ export async function createEvent(req: Request, res: Response) {
     // so deploying this ahead of the migration is safe (pre-fix behaviour).
     let event: any = null;
     let error: any = null;
+    let wasNew = true; // SC-133: only fan out for a genuinely NEW event (056 reports it)
     const baseArgs = {
       p_match_id: matchId,
       p_created_by: userId,
@@ -136,7 +137,16 @@ export async function createEvent(req: Request, res: Response) {
       event = ins.data;
       error = ins.error;
     } else {
-      event = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+      // SC-133: 056 returns { event, was_new }; 055 (+ the 7-arg fallback) returns a
+      // raw match_events row → treat a row as was_new=true (today's behaviour).
+      const d = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+      if (d && typeof d === 'object' && 'was_new' in d) {
+        event = (d as any).event;
+        wasNew = (d as any).was_new;
+      } else {
+        event = d;
+        wasNew = true;
+      }
       error = rpc.error;
     }
     if (error || !event) return res.status(500).json({ error: sanitizeError(error) });
@@ -163,7 +173,8 @@ export async function createEvent(req: Request, res: Response) {
       // notified score reflects this event.
       const isScoreEvent =
         event_type === 'wicket' || event_type === 'score' || event_type === 'goal';
-      if (isScoreEvent) {
+      // SC-133: skip the fan-out on a dedup-hit (retry) — a deduped event is not new.
+      if (isScoreEvent && wasNew) {
         const { data: fresh } = await supabase
           .from('matches')
           .select('score_summary, team_a_name, team_b_name')

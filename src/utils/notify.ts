@@ -4,6 +4,18 @@
 import { supabase } from './supabase';
 import { sendPushToTokens } from './fcm';
 import { blockedUserIds } from './blocks';
+import { deletedIdSet } from './activeUser';
+
+// Soft-deleted lookup in bounded chunks — deletedIdSet does one `.in()`, which a
+// very large fan-out would overflow (the SC-4/SC-10 `.in()`-at-scale class).
+async function deletedInChunks(ids: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const s = await deletedIdSet(ids.slice(i, i + 500));
+    s.forEach((x) => out.add(x));
+  }
+  return out;
+}
 
 export interface NotifyArgs {
   userId: string;
@@ -105,12 +117,34 @@ export async function notifyUser(args: NotifyArgs): Promise<void> {
   }
 }
 
-// Fan-out to many users. Inserts rows in one batch, pushes in one batch.
-export async function notifyUsers(userIds: string[], payload: Omit<NotifyArgs, 'userId'>): Promise<void> {
-  const deduped = Array.from(new Set(userIds.filter(Boolean)));
-  const uniqueIds = await allowedRecipients(deduped, payload.type);
-  if (uniqueIds.length === 0) return;
+// Fan-out to many users. Filters the recipient set (self/blocked/deleted/prefs),
+// then inserts + pushes in bounded chunks.
+//   opts.actorId — the user whose action triggered this fan-out. When present,
+//   the actor is never notified of their own action (SC-135) and anyone
+//   blocked-either-direction with them is dropped (SC-134). Omit it for system/
+//   ungated fan-outs (e.g. season announcements) or match-critical notifications
+//   a block must never suppress.
+export async function notifyUsers(
+  userIds: string[],
+  payload: Omit<NotifyArgs, 'userId'>,
+  opts: { actorId?: string } = {},
+): Promise<void> {
   try {
+    // dedup (existing) → self → blocked → deleted → prefs (existing).
+    let ids = Array.from(new Set(userIds.filter(Boolean)));
+    const { actorId } = opts;
+    if (actorId) ids = ids.filter((id) => id !== actorId); // SC-135: no self-notify
+    if (actorId && ids.length > 0) {
+      const blocked = await blockedUserIds(actorId); // SC-134: block either-direction
+      if (blocked.size > 0) ids = ids.filter((id) => !blocked.has(id));
+    }
+    if (ids.length > 0) {
+      const deleted = await deletedInChunks(ids); // SC-136: no rows for deleted accounts
+      if (deleted.size > 0) ids = ids.filter((id) => !deleted.has(id));
+    }
+    const uniqueIds = await allowedRecipients(ids, payload.type);
+    if (uniqueIds.length === 0) return;
+
     const rows = uniqueIds.map((userId) => ({
       user_id: userId,
       type: payload.type,
@@ -118,22 +152,41 @@ export async function notifyUsers(userIds: string[], payload: Omit<NotifyArgs, '
       body: payload.body,
       data: payload.data ?? {},
     }));
-    await supabase.from('notifications').insert(rows);
 
-    const { data: tokens } = await supabase
-      .from('push_tokens')
-      .select('token')
-      .in('user_id', uniqueIds);
+    // SC-137: chunk the insert so a large fan-out can't hit a payload/statement
+    // ceiling. Stays non-blocking (SC-112), but a TOTAL drop is logged loudly —
+    // never silently swallowed.
+    const CHUNK = 500;
+    let inserted = 0;
+    let lastErr: unknown = null;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const slice = rows.slice(i, i + CHUNK);
+      const { error } = await supabase.from('notifications').insert(slice);
+      if (error) lastErr = error;
+      else inserted += slice.length;
+    }
+    if (inserted === 0 && rows.length > 0) {
+      // eslint-disable-next-line no-console
+      console.error(`[notify] fanout TOTAL FAILURE (0/${rows.length})`, payload.type, lastErr);
+    } else if (lastErr) {
+      // eslint-disable-next-line no-console
+      console.error(`[notify] fanout PARTIAL (${inserted}/${rows.length})`, payload.type, lastErr);
+    }
 
-    if (tokens && tokens.length > 0) {
-      await sendPushToTokens(
-        tokens.map((t) => t.token),
-        {
-          title: payload.title,
-          body: payload.body,
-          data: { type: payload.type, ...(payload.data ?? {}) },
-        },
-      );
+    // Push in the same chunks (bounds the `.in()` token fetch too).
+    for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+      const slice = uniqueIds.slice(i, i + CHUNK);
+      const { data: tokens } = await supabase.from('push_tokens').select('token').in('user_id', slice);
+      if (tokens && tokens.length > 0) {
+        await sendPushToTokens(
+          tokens.map((t) => t.token),
+          {
+            title: payload.title,
+            body: payload.body,
+            data: { type: payload.type, ...(payload.data ?? {}) },
+          },
+        );
+      }
     }
   } catch (err) {
     // eslint-disable-next-line no-console

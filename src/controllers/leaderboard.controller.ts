@@ -121,15 +121,21 @@ export async function getLeaderboard(req: Request, res: Response) {
       const delMonthly = await deletedIdSet(ranked.map((r) => r.user_id));
       if (delMonthly.size > 0) ranked = ranked.filter((r) => !delMonthly.has(r.user_id));
       ranked.sort(compareRows);
+      // SC-132: competition rank (ties share) over the full sorted array; the page
+      // slice and `me` both read it, so list + me agree at ties. Order unchanged.
+      const compRank: number[] = [];
+      for (let i = 0; i < ranked.length; i++) {
+        compRank[i] = i > 0 && ranked[i].rating === ranked[i - 1].rating ? compRank[i - 1] : i + 1;
+      }
 
       const total = ranked.length;
       const pageRows = ranked.slice(p.offset, p.offset + p.limit);
       const userMap = await fetchUserMap(pageRows.map((r) => r.user_id));
-      const leaderboard = pageRows.map((r, i) => toEntry(r, p.offset + i + 1, userMap.get(r.user_id)));
+      const leaderboard = pageRows.map((r, i) => toEntry(r, compRank[p.offset + i], userMap.get(r.user_id)));
 
       const myIndex = ranked.findIndex((r) => r.user_id === userId);
       const me = myIndex >= 0
-        ? { rank: myIndex + 1, user_id: userId, rating: ranked[myIndex].rating, matches_played: ranked[myIndex].matches_played, wins: ranked[myIndex].wins }
+        ? { rank: compRank[myIndex], user_id: userId, rating: ranked[myIndex].rating, matches_played: ranked[myIndex].matches_played, wins: ranked[myIndex].wins }
         : null;
       return res.json({ leaderboard, me, ...pageMeta(total, p) });
     }
@@ -159,11 +165,35 @@ export async function getLeaderboard(req: Request, res: Response) {
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
 
     const pageRows = (rows || []) as Row[];
+    // SC-132: competition rank (ties share the same number, consistent with the
+    // `me` field below). The row ORDER keeps the full tie-break (rating→wins→mp→
+    // user_id) so pagination stays deterministic — only the displayed rank NUMBER
+    // is competition-style. A rating group's rank = (# profiles rated strictly
+    // higher) + 1, which within a page only changes when rating changes: the first
+    // row needs one head-count (its group may have begun on a previous page — this
+    // is what makes a boundary-spanning tie share the number), and every later
+    // rating group begins at its positional index → rank = offset + i + 1.
+    let firstRank = p.offset + 1;
+    if (pageRows.length > 0) {
+      const { count: aboveFirst } = await scoped(
+        supabase.from('user_sport_profiles').select('user_id', { count: 'exact', head: true }),
+      ).gt('rating', pageRows[0].rating);
+      firstRank = (aboveFirst ?? p.offset) + 1;
+    }
+    const rankByIndex: number[] = [];
+    for (let i = 0; i < pageRows.length; i++) {
+      rankByIndex[i] =
+        i === 0
+          ? firstRank
+          : pageRows[i].rating === pageRows[i - 1].rating
+            ? rankByIndex[i - 1]
+            : p.offset + i + 1;
+    }
     // SC-78: drop soft-deleted accounts from the page (rank positions preserved).
     const delAllTime = await deletedIdSet(pageRows.map((r) => r.user_id));
     const userMap = await fetchUserMap(pageRows.map((r) => r.user_id));
     const leaderboard = pageRows
-      .map((r, i) => ({ r, rank: p.offset + i + 1 }))
+      .map((r, i) => ({ r, rank: rankByIndex[i] }))
       .filter((x) => !delAllTime.has(x.r.user_id))
       .map((x) => toEntry(x.r, x.rank, userMap.get(x.r.user_id)));
 

@@ -542,16 +542,19 @@ export async function createComment(req: Request, res: Response) {
   }
 
   let ins = await insertComment(!!idempotency_key);
-  // Pre-migration fallback: client_key column doesn't exist yet → retry without it.
-  if (ins.error && /client_key/.test(ins.error.message || '')) {
-    ins = await insertComment(false);
-  }
-  // Retry with the SAME key → unique violation → return the original comment (not 500).
+  // Same-key retry → unique violation on uq_post_comments_author_client_key → return
+  // the original comment. CHECK THIS FIRST: the 23505 message contains the substring
+  // 'client_key' (the constraint name), so it must not be mistaken for a missing column.
   if (idempotency_key && (ins.error as { code?: string } | null)?.code === '23505') {
     const { data: existing } = await supabase
       .from('post_comments').select(commentSelect)
       .eq('author_id', userId).eq('client_key', idempotency_key).maybeSingle();
     return res.status(200).json({ data: existing, comment: existing, alreadyPosted: true });
+  }
+  // Pre-migration fallback: the client_key COLUMN isn't there yet (PostgREST schema-cache
+  // miss, code PGRST204) — retry the insert without it.
+  if (ins.error && (ins.error as { code?: string }).code === 'PGRST204') {
+    ins = await insertComment(false);
   }
   if (ins.error) return res.status(500).json({ error: sanitizeError(ins.error) });
   return res.status(201).json({ data: ins.data, comment: ins.data });

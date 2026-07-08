@@ -196,6 +196,7 @@ export async function createPost(req: Request, res: Response) {
     city_id,
     post_type,
     mentions,
+    idempotency_key,
     poll_options: rawPollOptions,
     type, // frontend sends 'type' which can be 'poll', 'general', etc.
     scheduled_at, // optional ISO string · Premium-only scheduled publishing
@@ -287,21 +288,28 @@ export async function createPost(req: Request, res: Response) {
   // the count + insert one critical section, so concurrent creates can't all
   // pass a stale check-then-act and bypass the cap. Premium users bypass the cap
   // (p_is_premium). On the cap the RPC raises POST_LIMIT_REACHED -> same 403 shape.
-  const { data, error } = await supabase
-    .rpc('create_post_capped', {
-      p_author_id: userId,
-      p_is_premium: isPremium,
-      p_content: bodyContent.trim(),
-      p_image_url: bodyImage || null,
-      p_link_url: link_url || null,
-      p_sport_id: sport_id || null,
-      p_city_id: city_id || null,
-      p_post_type: type || post_type || 'general',
-      p_mentions: mentions || [],
-      p_poll_options: pollOptions ?? null,
-      p_scheduled_at: scheduledAtIso,
-    })
+  // SC-130: create_post_capped (mig 053) dedups a retry via p_client_key (or a 2s
+  // backstop when no key) INSIDE the RPC — a retry never burns a monthly-cap slot.
+  const rpcArgs: Record<string, any> = {
+    p_author_id: userId,
+    p_is_premium: isPremium,
+    p_content: bodyContent.trim(),
+    p_image_url: bodyImage || null,
+    p_link_url: link_url || null,
+    p_sport_id: sport_id || null,
+    p_city_id: city_id || null,
+    p_post_type: type || post_type || 'general',
+    p_mentions: mentions || [],
+    p_poll_options: pollOptions ?? null,
+    p_scheduled_at: scheduledAtIso,
+  };
+  let { data, error } = await supabase
+    .rpc('create_post_capped', { ...rpcArgs, p_client_key: idempotency_key ?? null })
     .single();
+  if (error && (error as { code?: string }).code === 'PGRST202') {
+    // mig 053 not applied yet — the old signature has no p_client_key; retry without it.
+    ({ data, error } = await supabase.rpc('create_post_capped', rpcArgs).single());
+  }
 
   if (error) {
     if ((error as { message?: string }).message?.includes('POST_LIMIT_REACHED')) {
@@ -468,7 +476,7 @@ export async function listComments(req: Request, res: Response) {
 export async function createComment(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
-  const { content, parent_id, mentions } = req.body;
+  const { content, parent_id, mentions, idempotency_key } = req.body;
 
   if (!content || content.trim().length === 0) {
     return res.status(400).json({ error: 'Content is required' });
@@ -494,23 +502,59 @@ export async function createComment(req: Request, res: Response) {
     return res.status(403).json({ error: 'BLOCKED' });
   }
 
-  const { data, error } = await supabase
-    .from('post_comments')
-    .insert({
-      post_id: id,
-      author_id: userId,
-      parent_id: parent_id || null,
-      content: content.trim(),
-      mentions: mentions || [],
-    })
-    .select(`
+  // SC-130: idempotent comment. With a key → insert-first (unique index dedups a
+  // retry → return the existing, not a 500). No key → a 2s backstop on
+  // (post_id, author_id, content). Falls back if the client_key column isn't there yet.
+  const commentSelect = `
       *,
       author:users!author_id(id, name, username, profile_picture_url, is_premium)
-    `)
-    .single();
+    `;
+  const basePayload: Record<string, any> = {
+    post_id: id,
+    author_id: userId,
+    parent_id: parent_id || null,
+    content: content.trim(),
+    mentions: mentions || [],
+  };
+  const insertComment = async (withKey: boolean) =>
+    supabase
+      .from('post_comments')
+      .insert(withKey ? { ...basePayload, client_key: idempotency_key } : basePayload)
+      .select(commentSelect)
+      .single();
 
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
-  return res.status(201).json({ data, comment: data });
+  if (!idempotency_key) {
+    // No-key backstop: identical comment on the same post within 2s = a retry.
+    const { data: recent } = await supabase
+      .from('post_comments')
+      .select('id')
+      .eq('post_id', id)
+      .eq('author_id', userId)
+      .eq('content', content.trim())
+      .gt('created_at', new Date(Date.now() - 2000).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recent) {
+      const { data: existing } = await supabase.from('post_comments').select(commentSelect).eq('id', recent.id).single();
+      return res.status(200).json({ data: existing, comment: existing, alreadyPosted: true });
+    }
+  }
+
+  let ins = await insertComment(!!idempotency_key);
+  // Pre-migration fallback: client_key column doesn't exist yet → retry without it.
+  if (ins.error && /client_key/.test(ins.error.message || '')) {
+    ins = await insertComment(false);
+  }
+  // Retry with the SAME key → unique violation → return the original comment (not 500).
+  if (idempotency_key && (ins.error as { code?: string } | null)?.code === '23505') {
+    const { data: existing } = await supabase
+      .from('post_comments').select(commentSelect)
+      .eq('author_id', userId).eq('client_key', idempotency_key).maybeSingle();
+    return res.status(200).json({ data: existing, comment: existing, alreadyPosted: true });
+  }
+  if (ins.error) return res.status(500).json({ error: sanitizeError(ins.error) });
+  return res.status(201).json({ data: ins.data, comment: ins.data });
 }
 
 export async function deleteComment(req: Request, res: Response) {

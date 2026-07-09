@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUser } from '../utils/notify';
+import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers } from '../utils/notify';
 import { rankTeams } from '../utils/standings';
 import { istDay } from '../utils/appTime';
 
@@ -552,6 +552,87 @@ async function releaseNotificationSend(userId: string, jobType: string, sentOn: 
   } catch { /* best effort */ }
 }
 
+// SC-141: grouped row-count for `col IN ids` (+ optional filter), tallied in JS. One
+// bounded fetch replaces N per-user COUNT(head) round-trips. The sets here are small
+// (recent activity / a ≤100-user chunk), well under the fetch cap.
+async function groupCount(
+  table: string,
+  col: string,
+  ids: string[],
+  apply?: (q: any) => any,
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (ids.length === 0) return counts;
+  let q: any = supabase.from(table).select(col).in(col, ids).limit(50000);
+  if (apply) q = apply(q);
+  const { data } = await q;
+  for (const r of (data ?? []) as any[]) {
+    const k = r[col] as string;
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  return counts;
+}
+
+type NotifRow = { user_id: string; type: string; title: string; body: string; data: Record<string, unknown> };
+
+// SC-141: batch a per-user daily notification job in chunks. Per chunk: one dedup
+// lookup -> bulk claim -> bulk insert (per-row fallback on failure) -> best-effort
+// push. Preserves the notification_sends dedup (at-most-once/day), the SC-143 claim/
+// release (a failed row releases ONLY its own claim so it retries), and per-user
+// failure isolation (a chunk-insert failure falls back to per-row — one bad row can
+// never lose the chunk).
+async function batchNotify(opts: {
+  users: { id: string }[];
+  jobType: string;
+  sentOn: string;
+  pushTitle: string;
+  prepare: (chunkUsers: { id: string }[]) => Promise<{ rows: NotifRow[]; userIds: string[]; bodies: Map<string, string> }>;
+  chunkSize?: number;
+}): Promise<{ sent: number }> {
+  const CHUNK = opts.chunkSize ?? 100;
+  let sent = 0;
+  for (let i = 0; i < opts.users.length; i += CHUNK) {
+    const chunk = opts.users.slice(i, i + CHUNK);
+    const ids = chunk.map((u) => u.id);
+    // Dedup: who already got this job today.
+    const { data: existing } = await supabase
+      .from('notification_sends').select('user_id')
+      .eq('job_type', opts.jobType).eq('sent_on', opts.sentOn).in('user_id', ids);
+    const already = new Set((existing ?? []).map((r) => r.user_id as string));
+    const fresh = chunk.filter((u) => !already.has(u.id));
+    if (fresh.length === 0) continue;
+
+    const { rows, userIds, bodies } = await opts.prepare(fresh);
+    if (rows.length === 0) continue;
+
+    // Claim (bulk). The single daily cron isn't concurrent, so this is race-free in
+    // practice; the UNIQUE(user_id, job_type, sent_on) is the backstop.
+    const { error: claimErr } = await supabase.from('notification_sends')
+      .insert(userIds.map((uid) => ({ user_id: uid, job_type: opts.jobType, sent_on: opts.sentOn })));
+    if (claimErr) continue; // concurrent claim conflict — retried next run
+
+    const okIds: string[] = [];
+    const { error: insErr } = await supabase.from('notifications').insert(rows);
+    if (insErr) {
+      // SC-141/SC-143: per-row fallback so one bad row can't lose the chunk; release
+      // the claim of any row that still fails so it retries next run.
+      for (let k = 0; k < rows.length; k++) {
+        const { error: e2 } = await supabase.from('notifications').insert(rows[k]);
+        if (e2) await releaseNotificationSend(userIds[k], opts.jobType, opts.sentOn);
+        else okIds.push(userIds[k]);
+      }
+      console.warn(`[${opts.jobType}] chunk insert failed, per-row fallback`, insErr.message); // eslint-disable-line no-console
+    } else {
+      okIds.push(...userIds);
+    }
+    sent += okIds.length;
+
+    // Push (best-effort) — one token fetch for the chunk, only for created rows.
+    await sendPushToUsers(okIds.map((uid) => ({ userId: uid, type: opts.jobType, title: opts.pushTitle, body: bodies.get(uid) ?? '' })));
+  }
+  return { sent };
+}
+
 // ── Job: publish due scheduled posts (idempotent — nulling scheduled_at) ──────
 export async function runPublishScheduledPosts(): Promise<{ published: number }> {
   const now = new Date().toISOString();
@@ -730,60 +811,29 @@ export async function runReEngagement(): Promise<{ sent: number }> {
     .is('deleted_at', null) // SC-140: never notify a soft-deleted account
     .limit(200);
 
-  // SC-140: prefs gate the ROW (one bulk lookup) — skip users who opted out.
+  // SC-140: prefs gate the ROW (one bulk lookup) — drop users who opted out.
   const reAllowed = new Set(await allowedRecipients((dormant ?? []).map((u) => u.id as string), 'reengagement'));
+  const users = (dormant ?? []).filter((u) => reAllowed.has(u.id as string)).map((u) => ({ id: u.id as string }));
 
-  let sent = 0;
-  {
-    for (const user of dormant ?? []) {
-      if (!reAllowed.has(user.id as string)) continue;
-      if (!(await claimNotificationSend(user.id, 'reengagement', sentOn))) continue;
-      // Check for unread messages
-      const { count: unread } = await supabase
-        .from('notifications')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .eq('read', false);
-
-      // Check new followers
-      const { count: newFollowers } = await supabase
-        .from('follow_relationships')
-        .select('id', { count: 'exact', head: true })
-        .eq('following_id', user.id)
-        .gte('created_at', sevenDaysAgo);
-
-      let body: string;
-      if ((unread ?? 0) > 0) {
-        body = `You have ${unread} unread notifications in SportClan`;
-      } else if ((newFollowers ?? 0) > 0) {
-        body = `${newFollowers} players followed you while you were away!`;
-      } else {
-        body = `Your SportClan clan misses you! 🏆 See what's happening`;
+  // SC-141: chunked bulk claim+insert (was a per-user loop with ~5 queries/user).
+  return batchNotify({
+    users, jobType: 'reengagement', sentOn, pushTitle: 'We miss you!',
+    prepare: async (chunkUsers) => {
+      const ids = chunkUsers.map((u) => u.id);
+      const unread = await groupCount('notifications', 'user_id', ids, (q) => q.eq('read', false));
+      const followers = await groupCount('follow_relationships', 'following_id', ids, (q) => q.gte('created_at', sevenDaysAgo));
+      const rows: NotifRow[] = []; const userIds: string[] = []; const bodies = new Map<string, string>();
+      for (const u of chunkUsers) {
+        const un = unread.get(u.id) ?? 0; const nf = followers.get(u.id) ?? 0;
+        const body = un > 0 ? `You have ${un} unread notifications in SportClan`
+          : nf > 0 ? `${nf} players followed you while you were away!`
+          : `Your SportClan clan misses you! 🏆 See what's happening`;
+        rows.push({ user_id: u.id, type: 'reengagement', title: 'We miss you!', body, data: { screen: 'HomeMain' } });
+        userIds.push(u.id); bodies.set(u.id, body);
       }
-
-      try {
-        const { error: insErr } = await supabase.from('notifications').insert({
-          user_id: user.id,
-          type: 'reengagement',
-          title: 'We miss you!',
-          body,
-          data: { screen: 'HomeMain' },
-        });
-        if (insErr) throw new Error(insErr.message);
-      } catch (e) {
-        // SC-143: send failed → release the claim so the user is retried next run.
-        // SC-141: one user's failure must not abort the rest of the loop.
-        await releaseNotificationSend(user.id, 'reengagement', sentOn);
-        console.warn('[reengagement] insert failed for', user.id, e instanceof Error ? e.message : e); // eslint-disable-line no-console
-        continue;
-      }
-      // SC-140: prefs already gated above; push-only (notifyUser would insert a
-      // SECOND row — the direct insert above is the canonical row).
-      await sendPushToUser(user.id, { type: 'reengagement', title: 'We miss you!', body });
-      sent++;
-    }
-  }
-  return { sent };
+      return { rows, userIds, bodies };
+    },
+  });
 }
 
 export async function triggerReEngagement(_req: Request, res: Response) {
@@ -804,7 +854,7 @@ export async function runWeeklyDigest(): Promise<{ sent: number }> {
   const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
   const sentOn = istDateStr();
 
-  // Active users = logged in within 30 days
+  // Active users = logged in within 30 days.
   const { data: activeUsers } = await supabase
     .from('users')
     .select('id, name')
@@ -812,51 +862,28 @@ export async function runWeeklyDigest(): Promise<{ sent: number }> {
     .is('deleted_at', null) // SC-140: never notify a soft-deleted account
     .limit(500);
 
-  // SC-140: prefs gate the ROW (one bulk lookup) — skip users who opted out.
+  // SC-140: prefs gate the ROW (one bulk lookup).
   const dgAllowed = new Set(await allowedRecipients((activeUsers ?? []).map((u) => u.id as string), 'weekly_digest'));
+  const users = (activeUsers ?? []).filter((u) => dgAllowed.has(u.id as string)).map((u) => ({ id: u.id as string }));
 
-  let sent = 0;
-  {
-    for (const user of activeUsers ?? []) {
-      if (!dgAllowed.has(user.id as string)) continue;
-      const [followsRes, matchesRes] = await Promise.all([
-        supabase.from('follow_relationships')
-          .select('id', { count: 'exact', head: true })
-          .eq('following_id', user.id)
-          .gte('created_at', weekAgo),
-        supabase.from('match_participants')
-          .select('match_id', { count: 'exact', head: true })
-          .eq('user_id', user.id),
-      ]);
-
-      const newFollowers = followsRes.count ?? 0;
-      const matchesPlayed = matchesRes.count ?? 0;
-
-      if (newFollowers === 0 && matchesPlayed === 0) continue;
-      if (!(await claimNotificationSend(user.id, 'weekly_digest', sentOn))) continue;
-
-      const body = `📊 Your week: +${newFollowers} followers, ${matchesPlayed} matches played`;
-      try {
-        const { error: insErr } = await supabase.from('notifications').insert({
-          user_id: user.id,
-          type: 'weekly_digest',
-          title: 'Your weekly digest',
-          body,
-          data: { followers: newFollowers, matches: matchesPlayed },
-        });
-        if (insErr) throw new Error(insErr.message);
-      } catch (e) {
-        // SC-143: release the claim on send failure (retryable); SC-141: don't abort the loop.
-        await releaseNotificationSend(user.id, 'weekly_digest', sentOn);
-        console.warn('[weekly-digest] insert failed for', user.id, e instanceof Error ? e.message : e); // eslint-disable-line no-console
-        continue;
+  // SC-141: chunked bulk claim+insert (was a per-user loop with ~5 queries/user).
+  return batchNotify({
+    users, jobType: 'weekly_digest', sentOn, pushTitle: 'Your weekly digest',
+    prepare: async (chunkUsers) => {
+      const ids = chunkUsers.map((u) => u.id);
+      const followers = await groupCount('follow_relationships', 'following_id', ids, (q) => q.gte('created_at', weekAgo));
+      const matches = await groupCount('match_participants', 'user_id', ids);
+      const rows: NotifRow[] = []; const userIds: string[] = []; const bodies = new Map<string, string>();
+      for (const u of chunkUsers) {
+        const nf = followers.get(u.id) ?? 0; const mp = matches.get(u.id) ?? 0;
+        if (nf === 0 && mp === 0) continue; // skip users with no weekly activity
+        const body = `📊 Your week: +${nf} followers, ${mp} matches played`;
+        rows.push({ user_id: u.id, type: 'weekly_digest', title: 'Your weekly digest', body, data: { followers: nf, matches: mp } });
+        userIds.push(u.id); bodies.set(u.id, body);
       }
-      // SC-140: prefs already gated; push-only (avoid the double-insert).
-      await sendPushToUser(user.id, { type: 'weekly_digest', title: 'Your weekly digest', body });
-      sent++;
-    }
-  }
-  return { sent };
+      return { rows, userIds, bodies };
+    },
+  });
 }
 
 export async function triggerWeeklyDigest(_req: Request, res: Response) {

@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { notifyUser, notifyUnlessBlocked } from '../utils/notify';
+import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUser } from '../utils/notify';
 import { rankTeams } from '../utils/standings';
 import { istDay } from '../utils/appTime';
 
@@ -607,7 +607,8 @@ export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
     .from('users')
     .select('id, city_id, name')
     .lt('last_active_at', threeDaysAgo)
-    .in('city_id', cityIds);
+    .in('city_id', cityIds)
+    .is('deleted_at', null); // SC-140: never notify a soft-deleted account
   const cands = (candidates ?? []).filter(
     (u) => u.city_id && matchByCity.has(u.city_id as string),
   );
@@ -626,7 +627,10 @@ export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
     .eq('sent_on', sentOn)
     .in('user_id', cands.map((u) => u.id as string));
   const already = new Set((sentRows ?? []).map((r) => r.user_id as string));
-  const toSend = cands.filter((u) => !already.has(u.id as string));
+  let toSend = cands.filter((u) => !already.has(u.id as string));
+  // SC-140: prefs gate the ROW — drop users who turned off the 'matches' category.
+  const smAllowed = new Set(await allowedRecipients(toSend.map((u) => u.id as string), 'smart_match'));
+  toSend = toSend.filter((u) => smAllowed.has(u.id as string));
   if (toSend.length === 0) return { sent: 0 };
 
   // Claim (bulk). The single daily cron isn't concurrent, so a bulk insert of
@@ -723,11 +727,16 @@ export async function runReEngagement(): Promise<{ sent: number }> {
     .from('users')
     .select('id, name, city_id')
     .lt('last_active_at', sevenDaysAgo)
+    .is('deleted_at', null) // SC-140: never notify a soft-deleted account
     .limit(200);
+
+  // SC-140: prefs gate the ROW (one bulk lookup) — skip users who opted out.
+  const reAllowed = new Set(await allowedRecipients((dormant ?? []).map((u) => u.id as string), 'reengagement'));
 
   let sent = 0;
   {
     for (const user of dormant ?? []) {
+      if (!reAllowed.has(user.id as string)) continue;
       if (!(await claimNotificationSend(user.id, 'reengagement', sentOn))) continue;
       // Check for unread messages
       const { count: unread } = await supabase
@@ -768,9 +777,9 @@ export async function runReEngagement(): Promise<{ sent: number }> {
         console.warn('[reengagement] insert failed for', user.id, e instanceof Error ? e.message : e); // eslint-disable-line no-console
         continue;
       }
-      try {
-        await notifyUser({ userId: user.id, type: 'reengagement', title: 'We miss you!', body });
-      } catch { /* best effort */ }
+      // SC-140: prefs already gated above; push-only (notifyUser would insert a
+      // SECOND row — the direct insert above is the canonical row).
+      await sendPushToUser(user.id, { type: 'reengagement', title: 'We miss you!', body });
       sent++;
     }
   }
@@ -800,11 +809,16 @@ export async function runWeeklyDigest(): Promise<{ sent: number }> {
     .from('users')
     .select('id, name')
     .gte('last_active_at', monthAgo)
+    .is('deleted_at', null) // SC-140: never notify a soft-deleted account
     .limit(500);
+
+  // SC-140: prefs gate the ROW (one bulk lookup) — skip users who opted out.
+  const dgAllowed = new Set(await allowedRecipients((activeUsers ?? []).map((u) => u.id as string), 'weekly_digest'));
 
   let sent = 0;
   {
     for (const user of activeUsers ?? []) {
+      if (!dgAllowed.has(user.id as string)) continue;
       const [followsRes, matchesRes] = await Promise.all([
         supabase.from('follow_relationships')
           .select('id', { count: 'exact', head: true })
@@ -837,9 +851,8 @@ export async function runWeeklyDigest(): Promise<{ sent: number }> {
         console.warn('[weekly-digest] insert failed for', user.id, e instanceof Error ? e.message : e); // eslint-disable-line no-console
         continue;
       }
-      try {
-        await notifyUser({ userId: user.id, type: 'weekly_digest', title: 'Your weekly digest', body });
-      } catch { /* best effort */ }
+      // SC-140: prefs already gated; push-only (avoid the double-insert).
+      await sendPushToUser(user.id, { type: 'weekly_digest', title: 'Your weekly digest', body });
       sent++;
     }
   }

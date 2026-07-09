@@ -62,7 +62,7 @@ const PREF_CATEGORY: Record<string, string> = {
 // Opt-out model: a category is allowed unless the user has explicitly set it
 // to `false`. Unmapped types (account-critical) are always allowed. Returns the
 // subset of userIds who should receive a notification of this type.
-async function allowedRecipients(userIds: string[], type: string): Promise<string[]> {
+export async function allowedRecipients(userIds: string[], type: string): Promise<string[]> {
   const category = PREF_CATEGORY[type];
   if (!category || userIds.length === 0) return userIds; // ungated
   try {
@@ -80,6 +80,25 @@ async function allowedRecipients(userIds: string[], type: string): Promise<strin
   } catch {
     // On any lookup error, fail open — never silently drop a notification.
     return userIds;
+  }
+}
+
+// Push-only — sends to the user's devices WITHOUT inserting a notifications row.
+// For callers that insert their own row (e.g. the cron jobs, which need to detect
+// insert failure to release their notification_sends claim, SC-143) but still want
+// a push. Assumes prefs were already checked by the caller (SC-140).
+export async function sendPushToUser(userId: string, payload: Omit<NotifyArgs, 'userId'>): Promise<void> {
+  try {
+    const { data: tokens } = await supabase.from('push_tokens').select('token').eq('user_id', userId);
+    if (tokens && tokens.length > 0) {
+      await sendPushToTokens(
+        tokens.map((t) => t.token),
+        { title: payload.title, body: payload.body, data: { type: payload.type, ...(payload.data ?? {}) } },
+      );
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[notify] push-only failed', payload.type, err);
   }
 }
 

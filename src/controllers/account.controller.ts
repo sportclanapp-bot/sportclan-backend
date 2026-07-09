@@ -298,10 +298,13 @@ export async function exportData(req: Request, res: Response) {
       .select('id, phone, name, username, email, bio, gender, dob, city_id, created_at, is_premium, premium_expires_at, coin_balance')
       .eq('id', userId)
       .maybeSingle(),
+    // SC-162: posts live in `community_posts` keyed by `author_id` (there is no
+    // `posts` table / `user_id` column) — the old query silently errored and the
+    // `?? []` below masked it, so every export omitted the user's posts.
     supabase
-      .from('posts')
+      .from('community_posts')
       .select('id, content, image_url, created_at')
-      .eq('user_id', userId)
+      .eq('author_id', userId)
       .order('created_at', { ascending: false }),
     supabase
       .from('match_participants')
@@ -331,6 +334,18 @@ export async function exportData(req: Request, res: Response) {
       .select('sport_id, rating, matches_played, wins, losses, draws, last_match_at')
       .eq('user_id', userId),
   ]);
+
+  // SC-162: a broken sub-query (wrong table/column) used to be masked by the
+  // `?? []` fallbacks below and silently drop that section from the export.
+  // Log any sub-query error loudly so future schema drift is visible, not silent.
+  const sections: Record<string, { error: unknown }> = {
+    profile: profileRes, posts: postsRes, matches: matchesRes,
+    messages: messagesRes, transactions: txnsRes, followers: followersRes,
+    following: followingRes, sport_profiles: sportProfilesRes,
+  };
+  for (const [name, r] of Object.entries(sections)) {
+    if (r.error) console.error(`[export-data] sub-query '${name}' failed for ${userId}:`, r.error);
+  }
 
   return res.json({
     exportedAt: new Date().toISOString(),

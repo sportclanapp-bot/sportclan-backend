@@ -70,6 +70,43 @@ export function firstInvalidUrl(obj: Record<string, any>, keys: string[]): strin
   return null;
 }
 
+// SC-147: image URL fields must point at OUR storage, not an arbitrary external
+// host (an external <Image> src is fetched on every viewer's device → IP/tracking
+// leak). Allowlist = the R2 host(s) the upload endpoint actually returns (derived
+// from the SAME env, so the upload → post round-trip always passes) + R2 public
+// buckets (.r2.dev) + Google-OAuth avatars (.googleusercontent.com). https-only.
+const IMAGE_HOST_SUFFIXES = ['.r2.dev', '.googleusercontent.com'];
+function imageAllowlistHosts(): string[] {
+  const hosts = new Set<string>();
+  const acct = (process.env.R2_ACCOUNT_ID || '').toLowerCase();
+  if (acct) hosts.add(`${acct}.r2.cloudflarestorage.com`);
+  const pub = process.env.R2_PUBLIC_BASE_URL || '';
+  if (pub) { try { hosts.add(new URL(pub).host.toLowerCase()); } catch { /* ignore */ } }
+  return [...hosts];
+}
+export function isAllowedImageUrl(v: unknown): boolean {
+  if (!isValidHttpUrl(v)) return false; // well-formed http(s) within length
+  let host: string;
+  try {
+    const u = new URL(v as string);
+    if (u.protocol !== 'https:') return false; // images must be https
+    host = u.host.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (imageAllowlistHosts().includes(host)) return true;
+  return IMAGE_HOST_SUFFIXES.some((suf) => host.endsWith(suf));
+}
+/** First image-url field whose (present) value isn't an allowed storage URL, or null. */
+export function firstDisallowedImageUrl(obj: Record<string, any>, keys: string[]): string | null {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v === undefined || v === null || v === '') continue;
+    if (!isAllowedImageUrl(v)) return k;
+  }
+  return null;
+}
+
 /** First [key, max] whose (present, string) value exceeds max, or null. */
 export function firstTooLong(obj: Record<string, any>, limits: Array<[string, number]>): [string, number] | null {
   for (const [k, max] of limits) {

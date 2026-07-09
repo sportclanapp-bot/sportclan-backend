@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { isBlockedBetween } from '../utils/blocks';
-import { LIMITS, firstInvalidUrl, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
+import { LIMITS, firstInvalidUrl, ARRAY_LIMITS, tooManyItems, firstDisallowedImageUrl } from '../utils/validation';
 import { parsePagination } from '../utils/pagination';
 
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
@@ -187,8 +187,8 @@ export async function createGroup(req: Request, res: Response) {
   if (typeof name === 'string' && name.length > LIMITS.groupNameMax) {
     return res.status(400).json({ error: `Group name must be ${LIMITS.groupNameMax} characters or fewer` });
   }
-  if (firstInvalidUrl({ icon_url }, ['icon_url'])) {
-    return res.status(400).json({ error: 'icon_url must be a valid URL' });
+  if (firstDisallowedImageUrl({ icon_url }, ['icon_url'])) {
+    return res.status(400).json({ error: 'icon_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
   }
   if (!member_ids || member_ids.length === 0) {
     return res.status(400).json({ error: 'At least one member required' });
@@ -255,8 +255,8 @@ export async function updateGroup(req: Request, res: Response) {
   if (typeof name === 'string' && name.length > LIMITS.groupNameMax) {
     return res.status(400).json({ error: `Group name must be ${LIMITS.groupNameMax} characters or fewer` });
   }
-  if (firstInvalidUrl({ icon_url }, ['icon_url'])) {
-    return res.status(400).json({ error: 'icon_url must be a valid URL' });
+  if (firstDisallowedImageUrl({ icon_url }, ['icon_url'])) {
+    return res.status(400).json({ error: 'icon_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
   }
 
   const { data, error } = await supabase

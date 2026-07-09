@@ -5,7 +5,7 @@ import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
-import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl } from '../utils/validation';
+import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { rankTeams, computeStats } from '../utils/standings';
 import { notifyUnlessBlocked } from '../utils/notify';
 
@@ -67,8 +67,8 @@ export async function createTournament(req: Request, res: Response) {
     // SC-95/96: bound name/description; validate image URLs (were unbounded/arbitrary).
     const tLong = firstTooLong({ name, description }, [['name', LIMITS.tournamentNameMax], ['description', LIMITS.descriptionMax]]);
     if (tLong) return res.status(400).json({ error: `${tLong[0]} must be ${tLong[1]} characters or fewer` });
-    const tBadUrl = firstInvalidUrl({ banner_url, logo_url, sponsor_logo_url }, ['banner_url', 'logo_url', 'sponsor_logo_url']);
-    if (tBadUrl) return res.status(400).json({ error: `${tBadUrl} must be a valid URL` });
+    const tBadUrl = firstDisallowedImageUrl({ banner_url, logo_url, sponsor_logo_url }, ['banner_url', 'logo_url', 'sponsor_logo_url']);
+    if (tBadUrl) return res.status(400).json({ error: `${tBadUrl} must be an uploaded image URL`, code: 'INVALID_IMAGE_URL' });
     // Validate format (SC-37) — unknown enum previously 500'd on insert.
     if (!isValidTournamentFormat(format)) {
       return res.status(400).json({
@@ -534,8 +534,8 @@ export async function updateTournament(req: Request, res: Response) {
     // SC-95/96: same bounds on edit.
     const uLong = firstTooLong(req.body || {}, [['name', LIMITS.tournamentNameMax], ['description', LIMITS.descriptionMax]]);
     if (uLong) return res.status(400).json({ error: `${uLong[0]} must be ${uLong[1]} characters or fewer` });
-    const uBadUrl = firstInvalidUrl(req.body || {}, ['banner_url', 'logo_url', 'sponsor_logo_url']);
-    if (uBadUrl) return res.status(400).json({ error: `${uBadUrl} must be a valid URL` });
+    const uBadUrl = firstDisallowedImageUrl(req.body || {}, ['banner_url', 'logo_url', 'sponsor_logo_url']);
+    if (uBadUrl) return res.status(400).json({ error: `${uBadUrl} must be an uploaded image URL`, code: 'INVALID_IMAGE_URL' });
 
     // SC-102: validate allowlisted status/max_teams/format on the edit path
     // (createTournament validates these but the edit path previously did not).

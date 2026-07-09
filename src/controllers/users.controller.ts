@@ -3,7 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { checkExpiredSubscriptions } from './subscriptions.controller';
 import { resolveSportId } from '../utils/sportId';
-import { LIMITS, firstInvalidUrl } from '../utils/validation';
+import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
@@ -339,10 +339,12 @@ export async function updateMe(req: Request, res: Response) {
     return res.status(400).json({ error: `Name must be ${LIMITS.teamNameMax} characters or fewer` });
   }
   // SC-96: validate profile photo + link are well-formed URLs (was arbitrary text).
-  const badUserUrl = firstInvalidUrl(patch, ['profile_picture_url', 'link']);
-  if (badUserUrl) {
-    return res.status(400).json({ error: `${badUserUrl} must be a valid URL` });
-  }
+  // link is a legit EXTERNAL website → protocol-only; profile_picture_url is an
+  // IMAGE → allowlist to our storage (SC-147; OAuth avatars on *.googleusercontent.com allowed).
+  const badLink = firstInvalidUrl(patch, ['link']);
+  if (badLink) return res.status(400).json({ error: `${badLink} must be a valid URL` });
+  const badAvatar = firstDisallowedImageUrl(patch, ['profile_picture_url']);
+  if (badAvatar) return res.status(400).json({ error: 'profile_picture_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
 
   // Username change: enforce 30-day cooldown and uniqueness
   if ('username' in patch && patch.username) {

@@ -86,16 +86,34 @@ export async function listPosts(req: Request, res: Response) {
     .limit(pageSize);
   q = excludeDeletedEmbed(q, 'author');
   if (sortMode === 'trending') {
-    q = q.gte('created_at', since24h).order('likes_count', { ascending: false });
+    // SC-138: deterministic order even when likes_count ties (created_at, then id).
+    q = q
+      .gte('created_at', since24h)
+      .order('likes_count', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false });
   } else {
-    q = q.order('created_at', { ascending: false });
+    // SC-138: id is the FINAL tie-break → a total order, so keyset pagination can
+    // never skip posts that share a created_at (was: created_at only).
+    q = q.order('created_at', { ascending: false }).order('id', { ascending: false });
   }
 
   if (sport_id) q = q.eq('sport_id', sport_id as string);
   if (city_id) q = q.eq('city_id', city_id as string);
   if (post_type) q = q.eq('post_type', post_type as string);
   if (authorFilter) q = q.eq('author_id', authorFilter);
-  if (cursor && sortMode !== 'trending') q = q.lt('created_at', cursor as string);
+  // SC-138: compound keyset cursor "created_at|id" — a post at the boundary
+  // timestamp is no longer skipped (paginate on the (created_at, id) tuple).
+  // Backward-compat: an OLD ts-only cursor (no "|") falls back to the previous
+  // .lt('created_at') behaviour, so the current app keeps working mid-deploy.
+  if (cursor && sortMode !== 'trending') {
+    const [cts, cid] = String(cursor).split('|');
+    if (cid) {
+      q = q.or(`created_at.lt.${cts},and(created_at.eq.${cts},id.lt.${cid})`);
+    } else {
+      q = q.lt('created_at', cts);
+    }
+  }
 
   // Hide not-yet-published scheduled posts from everyone EXCEPT the author
   // viewing their own profile grid (author_id === the requester).
@@ -115,7 +133,11 @@ export async function listPosts(req: Request, res: Response) {
   return res.json({
     items,
     posts: items,
-    nextCursor: items.length === pageSize ? items[items.length - 1]?.created_at : null,
+    nextCursor: items.length === pageSize
+      ? (sortMode === 'trending'
+          ? items[items.length - 1]?.created_at // trending doesn't keyset-paginate
+          : `${items[items.length - 1]?.created_at}|${items[items.length - 1]?.id}`)
+      : null,
     hasMore: items.length === pageSize,
   });
 }

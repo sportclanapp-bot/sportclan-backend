@@ -6,7 +6,7 @@ import { excludeDeletedEmbed } from '../utils/activeUser';
 import { sanitizeError } from '../utils/response';
 import { notifyUnlessBlocked } from '../utils/notify';
 import { validateSportForCreate } from '../utils/sports';
-import { LIMITS, firstInvalidUrl } from '../utils/validation';
+import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { blockedUserIds } from '../utils/blocks';
 
 function generateJoinCode(): string {
@@ -28,8 +28,8 @@ export async function createTeam(req: Request, res: Response) {
     if (String(name).length > LIMITS.teamNameMax) {
       return res.status(400).json({ error: `Team name must be ${LIMITS.teamNameMax} characters or fewer` });
     }
-    if (firstInvalidUrl({ logo_url }, ['logo_url'])) {
-      return res.status(400).json({ error: 'logo_url must be a valid URL' });
+    if (firstDisallowedImageUrl({ logo_url }, ['logo_url'])) {
+      return res.status(400).json({ error: 'logo_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
     }
     // Validate the sport (unknown/malformed/deactivated → clean 400, not a 500).
     const sportErr = await validateSportForCreate(sport_id);
@@ -264,8 +264,8 @@ export async function updateTeam(req: Request, res: Response) {
     if (typeof name === 'string' && name.length > LIMITS.teamNameMax) {
       return res.status(400).json({ error: `Team name must be ${LIMITS.teamNameMax} characters or fewer` });
     }
-    if (firstInvalidUrl({ logo_url }, ['logo_url'])) {
-      return res.status(400).json({ error: 'logo_url must be a valid URL' });
+    if (firstDisallowedImageUrl({ logo_url }, ['logo_url'])) {
+      return res.status(400).json({ error: 'logo_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
     }
     if (name !== undefined) allowed.name = name;
     if (logo_url !== undefined) allowed.logo_url = logo_url;

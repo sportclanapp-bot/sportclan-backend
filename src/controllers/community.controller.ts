@@ -2,7 +2,7 @@ import { isPremiumActive } from '../utils/premium';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { LIMITS, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
+import { LIMITS, ARRAY_LIMITS, tooManyItems, firstDisallowedImageUrl } from '../utils/validation';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
@@ -230,6 +230,15 @@ export async function createPost(req: Request, res: Response) {
   const bodyImage = (image_url ?? (Array.isArray(media_urls) ? media_urls[0] : undefined)) as
     | string
     | undefined;
+
+  // SC-146/SC-147: validate any supplied image URL(s) point at our storage (https,
+  // allowlisted host) — was UNVALIDATED (javascript:/data:/external/non-URL all passed).
+  const imageCandidates = [image_url, ...(Array.isArray(media_urls) ? media_urls : [])];
+  for (const cand of imageCandidates) {
+    if (cand !== undefined && cand !== null && cand !== '' && firstDisallowedImageUrl({ img: cand }, ['img'])) {
+      return res.status(400).json({ error: 'image_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
+    }
+  }
 
   if (!bodyContent || bodyContent.trim().length === 0) {
     return res.status(400).json({ error: 'Content is required' });

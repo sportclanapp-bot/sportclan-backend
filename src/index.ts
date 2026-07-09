@@ -206,13 +206,26 @@ app.listen(PORT, () => {
   // Daily notification jobs at ~09:00 IST; weekly digest additionally on Monday.
   // The hourly tick acts only when the IST hour is 9; the per-user/day dedupe
   // guarantees at-most-once even if a tick overlaps or the process restarts.
+  // SC-139: run at the FIRST opportunity at/after 09:00 IST each day — on BOOT and
+  // on the hourly tick — so a spin-down/restart/deploy across 09:00 still catches up
+  // the same day (was: fired only if a tick landed exactly at hour==9, silently
+  // skipped otherwise). The per-user notification_sends dedup makes every run
+  // at-most-once-per-day, so a boot-time run can NEVER double-send. An in-memory
+  // once-per-day guard keeps the 09:00-23:00 ticks from redoing the full scan; a
+  // restart resets it, so a post-restart boot re-runs (dedup-protected).
+  let lastDailyRun: string | null = null;
   const runDailyWeekly = async () => {
     const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false, weekday: 'short',
+      timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: 'numeric', hour12: false, weekday: 'short',
     }).formatToParts(new Date());
-    const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? -1);
-    const weekday = parts.find((p) => p.type === 'weekday')?.value; // 'Mon'…
-    if (hour !== 9) return;
+    const val = (t: string) => parts.find((p) => p.type === t)?.value;
+    const hour = Number(val('hour') ?? -1);
+    const weekday = val('weekday'); // 'Mon'…
+    const istDate = `${val('year')}-${val('month')}-${val('day')}`;
+    if (hour < 9) return;                    // don't send before 09:00 IST
+    if (lastDailyRun === istDate) return;    // already ran today in this process
+    lastDailyRun = istDate;
     try { const { sent } = await runSmartMatchNotifications(); if (sent) console.log(`[smart-match] sent ${sent}`); } // eslint-disable-line no-console
     catch (e) { console.warn('[smart-match] failed', e instanceof Error ? e.message : e); } // eslint-disable-line no-console
     try { const { sent } = await runReEngagement(); if (sent) console.log(`[reengagement] sent ${sent}`); } // eslint-disable-line no-console
@@ -222,6 +235,7 @@ app.listen(PORT, () => {
       catch (e) { console.warn('[weekly-digest] failed', e instanceof Error ? e.message : e); } // eslint-disable-line no-console
     }
   };
+  void runDailyWeekly();
   setInterval(runDailyWeekly, 60 * 60 * 1000).unref();
 });
 // Sat Apr 11 01:56:26 IST 2026

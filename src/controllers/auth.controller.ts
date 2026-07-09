@@ -98,12 +98,12 @@ async function sendOtpViaChannel(
       // Falls back to AUTOGEN2 (transactional WhatsApp) if template not set.
       const tpl = process.env.TWOFACTOR_WHATSAPP_TEMPLATE_ID || 'AUTOGEN2';
       const url = `https://2factor.in/API/V1/${apiKey}/ADDON_SERVICES/SEND/WAPI/${cleanPhone}/${tpl}/${code}`;
-      await axios.get(url);
+      await axios.get(url, { timeout: 8000 }); // SC-150: fail fast if 2Factor.in hangs
       return true;
     }
     // Voice call (default)
     const url = `https://2factor.in/API/V1/${apiKey}/VOICE/${cleanPhone}/${code}`;
-    await axios.get(url);
+    await axios.get(url, { timeout: 8000 }); // SC-150: fail fast if 2Factor.in hangs
     return true;
   } catch (err: any) {
     // eslint-disable-next-line no-console
@@ -676,18 +676,28 @@ export async function googleAuth(req: Request, res: Response) {
     // if not installed, we decode the JWT payload directly (less secure
     // but functional for development; install google-auth-library for
     // production-grade verification).
+    // SC-149: verify the ID token cryptographically (signature + audience). There is
+    // NO decode-without-verification fallback — a missing library or a failed
+    // verification FAILS CLOSED. A missing crypto library must never downgrade to
+    // "trust the input" (that let anyone forge a Google identity).
     let payload: { email?: string; name?: string; picture?: string; sub?: string };
     try {
-      // Try google-auth-library first
       const { OAuth2Client } = await import('google-auth-library');
       const client = new OAuth2Client(clientId);
       const ticket = await client.verifyIdToken({ idToken, audience: clientId });
       payload = ticket.getPayload() as typeof payload;
-    } catch {
-      // Fallback: decode JWT payload without verification (dev only)
-      const parts = idToken.split('.');
-      if (parts.length !== 3) return res.status(400).json({ error: 'Invalid token format' });
-      payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+    } catch (err: any) {
+      const code = err?.code ?? '';
+      if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND' || /Cannot find module/i.test(err?.message ?? '')) {
+        // The verification library is unavailable — do NOT trust the token. Fail closed, loudly.
+        // eslint-disable-next-line no-console
+        console.error('[google-auth] google-auth-library unavailable — OAuth verification cannot run', err?.message);
+        return res.status(503).json({ error: 'Google Sign-In temporarily unavailable' });
+      }
+      // Token failed verification (bad signature / audience / expiry) → reject.
+      // eslint-disable-next-line no-console
+      console.warn('[google-auth] ID token verification failed', err?.message);
+      return res.status(401).json({ error: 'Invalid Google token' });
     }
 
     if (!payload?.email) return res.status(400).json({ error: 'Token missing email' });

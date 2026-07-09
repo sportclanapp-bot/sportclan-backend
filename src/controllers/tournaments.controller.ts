@@ -1,3 +1,4 @@
+import { isPremiumActive } from '../utils/premium';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
@@ -25,9 +26,7 @@ export async function createTournament(req: Request, res: Response) {
       .select('is_premium, premium_expires_at')
       .eq('id', userId)
       .maybeSingle();
-    const premiumActive =
-      user?.is_premium &&
-      (!user.premium_expires_at || new Date(user.premium_expires_at).getTime() > Date.now());
+    const premiumActive = isPremiumActive(user); // SC-144: shared live-expiry helper
     if (!premiumActive) {
       return res.status(403).json({
         error: 'Premium subscription required to create tournaments',

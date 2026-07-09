@@ -1,3 +1,4 @@
+import { isPremiumActive } from '../utils/premium';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
@@ -265,27 +266,20 @@ export async function createPost(req: Request, res: Response) {
     }));
   }
 
-  // Check premium for image posts
-  if (bodyImage) {
-    const { data: user } = await supabase
-      .from('users')
-      .select('is_premium')
-      .eq('id', userId)
-      .single();
-
-    if (!user?.is_premium) {
-      return res.status(403).json({ error: 'IMAGE_POSTS_PREMIUM' });
-    }
-  }
-
-  // Premium flag drives both the free-tier post cap and premium-only features
-  // (image posts, scheduling) below.
+  // SC-144: ONE read of premium state, evaluated LIVE (is_premium + expiry) — drives
+  // image posts, scheduling AND the free-tier post cap. Was two `.select('is_premium')`
+  // reads gating on the stale flag (an expired-but-unflipped user kept these ~1h).
   const { data: user } = await supabase
     .from('users')
-    .select('is_premium')
+    .select('is_premium, premium_expires_at')
     .eq('id', userId)
     .single();
-  const isPremium = !!user?.is_premium;
+  const isPremium = isPremiumActive(user);
+
+  // Premium-only image posts.
+  if (bodyImage && !isPremium) {
+    return res.status(403).json({ error: 'IMAGE_POSTS_PREMIUM' });
+  }
 
   // Scheduled publishing · Premium-only, must be a future timestamp.
   // The publishScheduledPosts job clears scheduled_at once the time passes,

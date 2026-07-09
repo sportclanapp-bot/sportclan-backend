@@ -537,6 +537,21 @@ async function claimNotificationSend(userId: string, jobType: string, sentOn: st
   return false;
 }
 
+// SC-143: undo a claim when the notification send FAILED, so the user is retried
+// on the next run instead of being permanently marked-sent-but-unnotified (the
+// dedup would otherwise block the retry forever). Best-effort — a stuck claim only
+// delays one retry, never double-sends.
+async function releaseNotificationSend(userId: string, jobType: string, sentOn: string): Promise<void> {
+  try {
+    await supabase
+      .from('notification_sends')
+      .delete()
+      .eq('user_id', userId)
+      .eq('job_type', jobType)
+      .eq('sent_on', sentOn);
+  } catch { /* best effort */ }
+}
+
 // ── Job: publish due scheduled posts (idempotent — nulling scheduled_at) ──────
 export async function runPublishScheduledPosts(): Promise<{ published: number }> {
   const now = new Date().toISOString();
@@ -623,7 +638,7 @@ export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
     .insert(toSend.map((u) => ({ user_id: u.id as string, job_type: 'smart_match', sent_on: sentOn })));
   if (claimErr) return { sent: 0 };
 
-  await supabase.from('notifications').insert(
+  const { error: insErr } = await supabase.from('notifications').insert(
     toSend.map((u) => {
       const m = matchByCity.get(u.city_id as string)!;
       return {
@@ -635,6 +650,18 @@ export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
       };
     }),
   );
+  if (insErr) {
+    // SC-143: the bulk send failed → release the WHOLE batch's claims so it's
+    // retried next run instead of being permanently lost (claim-before-send).
+    await supabase
+      .from('notification_sends')
+      .delete()
+      .eq('job_type', 'smart_match')
+      .eq('sent_on', sentOn)
+      .in('user_id', toSend.map((u) => u.id as string));
+    console.warn('[smart-match] bulk insert failed, released', toSend.length, 'claims:', insErr.message); // eslint-disable-line no-console
+    return { sent: 0 };
+  }
   return { sent: toSend.length };
 }
 
@@ -725,13 +752,22 @@ export async function runReEngagement(): Promise<{ sent: number }> {
         body = `Your SportClan clan misses you! 🏆 See what's happening`;
       }
 
-      await supabase.from('notifications').insert({
-        user_id: user.id,
-        type: 'reengagement',
-        title: 'We miss you!',
-        body,
-        data: { screen: 'HomeMain' },
-      });
+      try {
+        const { error: insErr } = await supabase.from('notifications').insert({
+          user_id: user.id,
+          type: 'reengagement',
+          title: 'We miss you!',
+          body,
+          data: { screen: 'HomeMain' },
+        });
+        if (insErr) throw new Error(insErr.message);
+      } catch (e) {
+        // SC-143: send failed → release the claim so the user is retried next run.
+        // SC-141: one user's failure must not abort the rest of the loop.
+        await releaseNotificationSend(user.id, 'reengagement', sentOn);
+        console.warn('[reengagement] insert failed for', user.id, e instanceof Error ? e.message : e); // eslint-disable-line no-console
+        continue;
+      }
       try {
         await notifyUser({ userId: user.id, type: 'reengagement', title: 'We miss you!', body });
       } catch { /* best effort */ }
@@ -786,13 +822,21 @@ export async function runWeeklyDigest(): Promise<{ sent: number }> {
       if (!(await claimNotificationSend(user.id, 'weekly_digest', sentOn))) continue;
 
       const body = `📊 Your week: +${newFollowers} followers, ${matchesPlayed} matches played`;
-      await supabase.from('notifications').insert({
-        user_id: user.id,
-        type: 'weekly_digest',
-        title: 'Your weekly digest',
-        body,
-        data: { followers: newFollowers, matches: matchesPlayed },
-      });
+      try {
+        const { error: insErr } = await supabase.from('notifications').insert({
+          user_id: user.id,
+          type: 'weekly_digest',
+          title: 'Your weekly digest',
+          body,
+          data: { followers: newFollowers, matches: matchesPlayed },
+        });
+        if (insErr) throw new Error(insErr.message);
+      } catch (e) {
+        // SC-143: release the claim on send failure (retryable); SC-141: don't abort the loop.
+        await releaseNotificationSend(user.id, 'weekly_digest', sentOn);
+        console.warn('[weekly-digest] insert failed for', user.id, e instanceof Error ? e.message : e); // eslint-disable-line no-console
+        continue;
+      }
       try {
         await notifyUser({ userId: user.id, type: 'weekly_digest', title: 'Your weekly digest', body });
       } catch { /* best effort */ }

@@ -102,6 +102,34 @@ export async function sendPushToUser(userId: string, payload: Omit<NotifyArgs, '
   }
 }
 
+// Bulk push-only — one token fetch for MANY users (each with their own payload),
+// then a per-user send. Lets a batched cron job (SC-141) push a whole chunk with a
+// single push_tokens round-trip instead of one per user. No notifications rows.
+export async function sendPushToUsers(
+  items: { userId: string; type: string; title: string; body: string; data?: Record<string, string> }[],
+): Promise<void> {
+  if (items.length === 0) return;
+  try {
+    const ids = items.map((i) => i.userId);
+    const { data: tokens } = await supabase.from('push_tokens').select('user_id, token').in('user_id', ids);
+    const byUser = new Map<string, string[]>();
+    for (const t of tokens ?? []) {
+      const arr = byUser.get(t.user_id) ?? [];
+      arr.push(t.token);
+      byUser.set(t.user_id, arr);
+    }
+    for (const it of items) {
+      const toks = byUser.get(it.userId);
+      if (toks && toks.length > 0) {
+        await sendPushToTokens(toks, { title: it.title, body: it.body, data: { type: it.type, ...(it.data ?? {}) } });
+      }
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[notify] bulk push failed', err);
+  }
+}
+
 // Send to one user — inserts a row and pushes.
 export async function notifyUser(args: NotifyArgs): Promise<void> {
   try {

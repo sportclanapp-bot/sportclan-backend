@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
+import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
 import { isTerminalMatchStatus } from '../utils/validation';
 
@@ -116,7 +117,8 @@ export async function createEvent(req: Request, res: Response) {
     // existing event. Fallback ladder keeps the 3s dedup active with no regression
     // window: 8-arg (with p_client_key) → PGRST202 → 7-arg (the 049 function still
     // runs its 3s dedup pre-055) → PGRST202 → last-resort direct insert.
-    let rpc = await supabase.rpc('record_match_event', { ...baseArgs, p_client_key: idempotency_key ?? null });
+    // SC-179: coerce a non-UUID key to null so a malformed key can't 500 scoring.
+    let rpc = await supabase.rpc('record_match_event', { ...baseArgs, p_client_key: normalizeClientKey(idempotency_key) });
     if (rpc.error && rpc.error.code === 'PGRST202') {
       rpc = await supabase.rpc('record_match_event', baseArgs);
     }

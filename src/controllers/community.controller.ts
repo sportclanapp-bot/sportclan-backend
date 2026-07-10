@@ -2,6 +2,7 @@ import { isPremiumActive } from '../utils/premium';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
+import { normalizeClientKey } from '../utils/idempotency';
 import { LIMITS, ARRAY_LIMITS, tooManyItems, firstDisallowedImageUrl } from '../utils/validation';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
@@ -329,7 +330,9 @@ export async function createPost(req: Request, res: Response) {
     p_scheduled_at: scheduledAtIso,
   };
   let { data, error } = await supabase
-    .rpc('create_post_capped', { ...rpcArgs, p_client_key: idempotency_key ?? null })
+    // SC-179: a non-UUID key would raise 22P02 (invalid uuid) → 500. Coerce a
+    // malformed key to null so the post still succeeds (dedup just skipped).
+    .rpc('create_post_capped', { ...rpcArgs, p_client_key: normalizeClientKey(idempotency_key) })
     .single();
   if (error && (error as { code?: string }).code === 'PGRST202') {
     // mig 053 not applied yet — the old signature has no p_client_key; retry without it.
@@ -501,7 +504,10 @@ export async function listComments(req: Request, res: Response) {
 export async function createComment(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
-  const { content, parent_id, mentions, idempotency_key } = req.body;
+  const { content, parent_id, mentions } = req.body;
+  // SC-179: coerce a non-UUID key to null (client_key is uuid-typed) so a
+  // malformed key can't 500 the comment insert — the comment still posts.
+  const idempotency_key = normalizeClientKey(req.body?.idempotency_key);
 
   if (!content || content.trim().length === 0) {
     return res.status(400).json({ error: 'Content is required' });

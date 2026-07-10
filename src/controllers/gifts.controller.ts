@@ -2,6 +2,7 @@ import { isPremiumActive } from '../utils/premium';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
+import { normalizeClientKey } from '../utils/idempotency';
 
 // ─── Change #7 CRITICAL: ALL 10 PRD gifts ──────────────────────────────────────
 const GIFT_CATALOGUE = [
@@ -67,7 +68,8 @@ export async function sendGift(req: Request, res: Response) {
     p_name: gift.name,
     p_cost: gift.cost,
     p_message: message || null,
-    p_client_key: idempotency_key || null,
+    // SC-179: coerce a non-UUID key to null so a malformed key can't 500 send_gift.
+    p_client_key: normalizeClientKey(idempotency_key),
   });
   if (rpc.error && rpc.error.code === 'PGRST202') {
     // ── Pre-migration fallback (current behaviour): deduct → insert (+refund) → ledger.

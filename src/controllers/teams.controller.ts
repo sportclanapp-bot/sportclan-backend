@@ -104,8 +104,16 @@ export async function getTeam(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
-    const { data: team, error } = await supabase.from('teams').select('*').eq('id', id).maybeSingle();
+    // SC-200: embed the city so the team hero can show a real location.
+    const { data: team, error } = await supabase
+      .from('teams')
+      .select('*, city:cities!city_id(id, name)')
+      .eq('id', id)
+      .maybeSingle();
     if (error || !team) return res.status(404).json({ error: 'Team not found' });
+    // Flatten embedded city → flat city_name string; drop the nested object.
+    (team as any).city_name = (team as any).city?.name ?? null;
+    delete (team as any).city;
     // SC-107: a private team is only readable by its members.
     if (team.is_public === false) {
       const { data: membership } = await supabase

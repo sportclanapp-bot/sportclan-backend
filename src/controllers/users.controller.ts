@@ -114,11 +114,18 @@ export async function getMe(req: Request, res: Response) {
   void runSmartNotifications(userId);
   const { data, error } = await supabase
     .from('users')
-    .select(PUBLIC_FIELDS)
+    // SC-200: embed the city so the client gets a real city_name (the codebase's
+    // established join idiom; see search/community controllers). Flattened below.
+    .select(`${PUBLIC_FIELDS}, city:cities!city_id(id, name)`)
     .eq('id', userId)
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: 'User not found' });
+
+  // SC-200: flatten the embedded city → flat `city_name` string the FE expects,
+  // and drop the nested object so the response shape stays clean.
+  const city_name = (data as any).city?.name ?? null;
+  delete (data as any).city;
 
   // Profile-completion bonus — 10 coins, once per user. Idempotent via
   // coin_events unique key. Requires name + photo + city + at least 1 sport.
@@ -207,6 +214,7 @@ export async function getMe(req: Request, res: Response) {
   return res.json({
     user: {
       ...data,
+      city_name,
       account_types: accountTypes,
       total_matches,
       city_rank,
@@ -226,7 +234,8 @@ export async function getUserById(req: Request, res: Response) {
   // SC-77: a soft-deleted account 404s (never renders a "Deleted User" profile).
   const { data, error } = await excludeDeleted(supabase
     .from('users')
-    .select(PUBLIC_FIELDS)
+    // SC-200: embed city → flat city_name (flattened into safeUser below).
+    .select(`${PUBLIC_FIELDS}, city:cities!city_id(id, name)`)
     .eq('id', id))
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
@@ -252,6 +261,9 @@ export async function getUserById(req: Request, res: Response) {
   // strip it from the public response. Viewing your own profile hits
   // /users/me instead, so we don't need a self-bypass here.
   const safeUser: any = { ...data };
+  // SC-200: flatten embedded city → city_name, drop the nested object.
+  safeUser.city_name = safeUser.city?.name ?? null;
+  delete safeUser.city;
   if (safeUser.show_dob === false) {
     safeUser.dob = null;
   }

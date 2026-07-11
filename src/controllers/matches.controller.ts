@@ -265,6 +265,45 @@ export async function joinOpenMatch(req: Request, res: Response) {
 }
 
 // GET /matches
+// Attach ELO (both sides' ratings for the match's sport) to chess matches so
+// the FE card/detail can show real ratings for ranked 1v1. Guests/casual
+// players have no rating → null (never faked). Batch-safe (few queries total).
+async function attachChessElo(matches: any[]): Promise<void> {
+  if (!matches || matches.length === 0) return;
+  const sportIds = [...new Set(matches.map((m) => m.sport_id).filter(Boolean))];
+  if (sportIds.length === 0) return;
+  const { data: sports } = await supabase.from('sports').select('id, slug').in('id', sportIds);
+  const chessSportId = (sports || []).find(
+    (s: any) => String(s.slug).toLowerCase().replace(/[-_\s]/g, '') === 'chess',
+  )?.id;
+  if (!chessSportId) return;
+  const chessMatches = matches.filter((m) => m.sport_id === chessSportId);
+  if (chessMatches.length === 0) return;
+  const ids = chessMatches.map((m) => m.id);
+  const { data: parts } = await supabase
+    .from('match_participants')
+    .select('match_id, team_side, user_id')
+    .in('match_id', ids);
+  const uids = [...new Set((parts || []).map((p: any) => p.user_id).filter(Boolean))];
+  const ratingByUser: Record<string, number> = {};
+  if (uids.length > 0) {
+    const { data: profs } = await supabase
+      .from('user_sport_profiles')
+      .select('user_id, rating')
+      .eq('sport_id', chessSportId)
+      .in('user_id', uids);
+    for (const pr of profs || []) ratingByUser[(pr as any).user_id] = Number((pr as any).rating);
+  }
+  const bySide: Record<string, { A: number | null; B: number | null }> = {};
+  for (const m of chessMatches) bySide[m.id] = { A: null, B: null };
+  for (const pt of parts || []) {
+    const side: 'A' | 'B' = (pt as any).team_side === 'B' ? 'B' : 'A';
+    const r = ratingByUser[(pt as any).user_id];
+    if (r != null && bySide[(pt as any).match_id]![side] == null) bySide[(pt as any).match_id]![side] = r;
+  }
+  for (const m of chessMatches) m.elo = bySide[m.id];
+}
+
 export async function listMatches(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -286,7 +325,9 @@ export async function listMatches(req: Request, res: Response) {
     if (mine === '1') query = query.eq('created_by', userId);
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ matches: data || [], ...pageMeta(count, p) });
+    const matches = data || [];
+    await attachChessElo(matches); // chess cards show both players' real ELO
+    return res.json({ matches, ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -496,6 +537,10 @@ export async function getMatch(req: Request, res: Response) {
     ]);
     matchWithRating.follower_count = followerCount ?? 0;
     matchWithRating.is_following = !!myFollow;
+
+    // Chess: attach both players' real ELO for this sport (ranked 1v1). Null for
+    // guests/casual — never faked.
+    await attachChessElo([matchWithRating]);
 
     return res.json({ match: matchWithRating, participants: participants || [], events_count: count || 0 });
   } catch (e) {

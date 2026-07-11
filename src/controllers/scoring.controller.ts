@@ -474,7 +474,7 @@ export function aggregatePlayers(slug: string, events: { event_type: string; pay
 // undo, and at completion. Replaces the old cricket-only recompute.
 export async function recomputeSummary(matchId: string): Promise<Record<string, any> | null> {
   const { data: match } = await supabase
-    .from('matches').select('sport_id, score_summary').eq('id', matchId).maybeSingle();
+    .from('matches').select('sport_id, score_summary, format').eq('id', matchId).maybeSingle();
   if (!match) return null;
   const { data: sportRow } = await supabase
     .from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
@@ -484,7 +484,7 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
   // of set scoring — the same class of gap as SC-15 (tennis).
   const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
   const { data: events } = await supabase
-    .from('match_events').select('event_type, payload').eq('match_id', matchId)
+    .from('match_events').select('event_type, payload, clock_seconds, period').eq('match_id', matchId)
     .order('created_at', { ascending: true });
 
   const existing = (match.score_summary as Record<string, any>) || {};
@@ -504,6 +504,15 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
   // empty. A draw clears these (no winner → no MVP).
   let chessWinnerId: string | null = null;
   let chessWinnerName: string | null = null;
+  // SC-191 follow-up (chess move/clock tracking, no fabricated data): fold the
+  // real `move` events (each carries the mover's remaining clock in
+  // clock_seconds + move number in period) into dual clocks + a move count, and
+  // the result event's `reason` (checkmate/resignation/timeout/draw_*).
+  let chessReason: string | null = null;
+  let chessMoveCount = 0;
+  let chessLastPly = 0;
+  let chessClockWhite: number | null = null; // seconds remaining after White's last move
+  let chessClockBlack: number | null = null;
 
   if (slug === 'cricket') {
     for (const s of ['A', 'B'] as const) Object.assign(sides[s], { runs: 0, balls: 0, wickets: 0 });
@@ -560,6 +569,21 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
     // games (previously the result event was ignored → always "Match Draw").
     // The last result event wins.
     for (const e of events) {
+      if (e.event_type === 'move') {
+        // Real move data (never fabricated): each `move` event is one ply and
+        // carries the mover's remaining clock. side 'A'=White, 'B'=Black.
+        chessMoveCount += 1;
+        const per = (e as any).period;
+        chessLastPly = typeof per === 'number' ? per : chessMoveCount;
+        const mv: any = e.payload || {};
+        const side: 'A' | 'B' = mv.side === 'B' ? 'B' : 'A';
+        const clk = (e as any).clock_seconds;
+        if (typeof clk === 'number') {
+          if (side === 'A') chessClockWhite = clk;
+          else chessClockBlack = clk;
+        }
+        continue;
+      }
       if (e.event_type !== 'result') continue;
       const pr = (e.payload || {}) as any;
       const w = pr.winner;
@@ -567,6 +591,9 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
       else if (w === 'black') { A.score = 0; B.score = 1; chessResult = 'Black wins'; chessWinner = 'B'; }
       else if (w === 'draw') { A.score = 0.5; B.score = 0.5; chessResult = 'Draw'; chessWinner = 'tie'; }
       else continue;
+      // Result reason (checkmate/resignation/timeout/draw_agreement/stalemate/
+      // repetition) — user-entered on the decisive result, no engine needed.
+      chessReason = typeof pr.reason === 'string' ? pr.reason : null;
       // Capture the winner the scorer credited on THIS result event (the last
       // decisive result wins, matching the score above). A draw carries no
       // winning player. player_id may be a guest:<id> — that's fine, it rides
@@ -589,6 +616,33 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
   if (slug === 'chess') {
     summary.result = chessResult ?? 'No result yet';
     summary.winner_side = chessWinner;
+    // Real move/clock rollup (no eval, no SAN — those need an engine / heavy
+    // entry and stay deferred). time_control is the match's format string.
+    summary.chess = {
+      time_control: (match as any).format ?? null,
+      move_count: chessMoveCount,
+      last_ply: chessLastPly,
+      clock_white: chessClockWhite,
+      clock_black: chessClockBlack,
+      result: chessResult ?? 'No result yet',
+      reason: chessReason,
+    };
+  }
+  if (slug === 'tennis') {
+    // Tier 1 serve stats (aces + double faults) from real per-point events.
+    // ACE → point to server + ace credited to server; D-FAULT → point to
+    // returner + double_fault credited to the serving side (payload.server_side).
+    // Serve % / 1st-serve-win% (Tier 2) stays deferred — needs per-serve in/out.
+    const serve = { A: { aces: 0, double_faults: 0 }, B: { aces: 0, double_faults: 0 } };
+    for (const e of events) {
+      if (e.event_type !== 'score') continue;
+      const p: any = e.payload || {};
+      const server: 'A' | 'B' | null = p.server_side === 'B' ? 'B' : p.server_side === 'A' ? 'A' : null;
+      if (!server) continue;
+      if (p.kind === 'ace') serve[server].aces += 1;
+      else if (p.kind === 'double_fault') serve[server].double_faults += 1;
+    }
+    summary.serve = serve;
   }
   // A5-003/004 + SC-14 · attach the additive per-player rollup for ALL sports so
   // the scorecard/MVP can read real per-player figures. Cricket routes through

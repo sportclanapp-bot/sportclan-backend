@@ -67,6 +67,14 @@ export async function listPosts(req: Request, res: Response) {
   const authorFilter = (author_id ?? user_id) as string | undefined;
   const pageSize = Math.min(parseInt(limit as string, 10) || 20, 50);
   const sortMode = (sort as string) || 'recent';
+  // SC-197: feed curation mode. for_you = the default feed (unchanged). following
+  // = only posts by users the viewer follows. tournaments = only posts linked to a
+  // match that belongs to a tournament (real data via the 057 match_id link).
+  const mode = ((req.query.mode as string) || 'for_you').toLowerCase();
+  // Tournaments needs the match embed as an INNER join so we can require a
+  // non-null tournament on the linked match; other modes keep the outer embed so
+  // ordinary (match-less) posts still appear.
+  const matchJoin = mode === 'tournaments' ? 'matches!match_id!inner' : 'matches!match_id';
   // When trending, only consider posts from the last 24h and order by likes
   // desc. `likes_count` already exists on the table (post_likes count cache).
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -84,7 +92,7 @@ export async function listPosts(req: Request, res: Response) {
       author:users!author_id!inner(id, name, username, profile_picture_url, is_premium),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name),
-      match:matches!match_id(id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
+      match:${matchJoin}(id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
     `)
     .limit(pageSize);
   q = excludeDeletedEmbed(q, 'author');
@@ -105,6 +113,25 @@ export async function listPosts(req: Request, res: Response) {
   if (city_id) q = q.eq('city_id', city_id as string);
   if (post_type) q = q.eq('post_type', post_type as string);
   if (authorFilter) q = q.eq('author_id', authorFilter);
+
+  // SC-197: Following — restrict to authors the viewer follows. An unauthenticated
+  // viewer or one who follows nobody gets an empty feed (not the global one).
+  if (mode === 'following') {
+    if (!req.userId) return res.json({ items: [], posts: [], nextCursor: null, hasMore: false });
+    const { data: fr } = await supabase
+      .from('follow_relationships')
+      .select('following_id')
+      .eq('follower_id', req.userId)
+      .limit(2000);
+    const followingIds = (fr ?? []).map((r: { following_id: string }) => r.following_id);
+    if (followingIds.length === 0) {
+      return res.json({ items: [], posts: [], nextCursor: null, hasMore: false });
+    }
+    q = q.in('author_id', followingIds);
+  } else if (mode === 'tournaments') {
+    // Only posts whose inner-joined match actually belongs to a tournament.
+    q = q.not('match.tournament_id', 'is', null);
+  }
   // SC-138: compound keyset cursor "created_at|id" — a post at the boundary
   // timestamp is no longer skipped (paginate on the (created_at, id) tuple).
   // Backward-compat: an OLD ts-only cursor (no "|") falls back to the previous

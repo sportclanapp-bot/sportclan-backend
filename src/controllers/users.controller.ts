@@ -865,15 +865,18 @@ export async function getRival(req: Request, res: Response) {
     .maybeSingle();
   const myCityId = me?.city_id ?? null;
 
-  // Resolve state via cities join for state-level fallback.
-  let myStateId: string | null = null;
+  // Resolve the requester's state for the state-level fallback. cities has a
+  // `state` text column only (no state_id) — selecting a non-existent column
+  // errored the query, so this used to resolve to null and the state tier never
+  // fired. We hold the state NAME here.
+  let myState: string | null = null;
   if (myCityId) {
     const { data: cityRow } = await supabase
       .from('cities')
-      .select('state_id, state')
+      .select('state')
       .eq('id', myCityId)
       .maybeSingle();
-    myStateId = cityRow?.state_id ?? cityRow?.state ?? null;
+    myState = cityRow?.state ?? null;
   }
 
   // Query all candidate profiles with higher rating and sort by delta.
@@ -909,10 +912,10 @@ export async function getRival(req: Request, res: Response) {
     if (stateCache.has(cityId)) return stateCache.get(cityId) ?? null;
     const { data: cityRow } = await supabase
       .from('cities')
-      .select('state_id, state')
+      .select('state')
       .eq('id', cityId)
       .maybeSingle();
-    const s = cityRow?.state_id ?? cityRow?.state ?? null;
+    const s = cityRow?.state ?? null;
     stateCache.set(cityId, s);
     return s;
   };
@@ -927,9 +930,9 @@ export async function getRival(req: Request, res: Response) {
       if (!u) continue;
       if (tier === 'city' && myCityId && u.city_id !== myCityId) continue;
       if (tier === 'state') {
-        if (!myStateId) continue;
+        if (!myState) continue;
         const s = await resolveState(u.city_id);
-        if (s !== myStateId) continue;
+        if (s !== myState) continue;
       }
       return { profile: h, user: u };
     }

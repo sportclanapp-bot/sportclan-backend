@@ -83,7 +83,8 @@ export async function listPosts(req: Request, res: Response) {
       *,
       author:users!author_id!inner(id, name, username, profile_picture_url, is_premium),
       sport:sports!sport_id(id, name, emoji),
-      city:cities!city_id(id, name)
+      city:cities!city_id(id, name),
+      match:matches!match_id(id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
     `)
     .limit(pageSize);
   q = excludeDeletedEmbed(q, 'author');
@@ -224,6 +225,7 @@ export async function createPost(req: Request, res: Response) {
     poll_options: rawPollOptions,
     type, // frontend sends 'type' which can be 'poll', 'general', etc.
     scheduled_at, // optional ISO string · Premium-only scheduled publishing
+    match_id, // SC-193: optional — links a match_result post to a completed match
   } = req.body;
 
   // Normalise frontend field names to the columns we store.
@@ -309,6 +311,39 @@ export async function createPost(req: Request, res: Response) {
     scheduledAtIso = when.toISOString();
   }
 
+  // SC-193: a match_result post must link a REAL completed match the author took
+  // part in. Validate BEFORE inserting so we never persist a fabricated/foreign
+  // scorecard link. Non-participant → 403; not-completed/absent → 400.
+  let validatedMatchId: string | null = null;
+  if (match_id) {
+    const { data: m } = await supabase
+      .from('matches')
+      .select('id, status, created_by')
+      .eq('id', match_id)
+      .maybeSingle();
+    if (!m || m.status !== 'completed') {
+      return res
+        .status(400)
+        .json({ error: 'A result can only be shared for a completed match', code: 'MATCH_NOT_COMPLETED' });
+    }
+    let isParticipant = m.created_by === userId;
+    if (!isParticipant) {
+      const { data: part } = await supabase
+        .from('match_participants')
+        .select('id')
+        .eq('match_id', match_id)
+        .eq('user_id', userId)
+        .maybeSingle();
+      isParticipant = !!part;
+    }
+    if (!isParticipant) {
+      return res
+        .status(403)
+        .json({ error: 'Only a participant can share this match result', code: 'NOT_MATCH_PARTICIPANT' });
+    }
+    validatedMatchId = m.id;
+  }
+
   // SC-60: the 5-posts/month free-tier cap is enforced atomically inside
   // create_post_capped (migration 040) — a per-user pg_advisory_xact_lock makes
   // the count + insert one critical section, so concurrent creates can't all
@@ -324,11 +359,16 @@ export async function createPost(req: Request, res: Response) {
     p_link_url: link_url || null,
     p_sport_id: sport_id || null,
     p_city_id: city_id || null,
-    p_post_type: type || post_type || 'general',
+    // A validated match link forces the match_result type so the feed card + the
+    // SC-197 Tournaments filter key off it consistently.
+    p_post_type: validatedMatchId ? 'match_result' : type || post_type || 'general',
     p_mentions: mentions || [],
     p_poll_options: pollOptions ?? null,
     p_scheduled_at: scheduledAtIso,
   };
+  // SC-193: only attach p_match_id when there IS a link — so ordinary posts keep
+  // resolving to the pre-057 RPC signature until migration 057 is applied.
+  if (validatedMatchId) rpcArgs.p_match_id = validatedMatchId;
   let { data, error } = await supabase
     // SC-179: a non-UUID key would raise 22P02 (invalid uuid) → 500. Coerce a
     // malformed key to null so the post still succeeds (dedup just skipped).

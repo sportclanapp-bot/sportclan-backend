@@ -41,6 +41,7 @@ import jobsRoutes from './routes/jobs.routes';
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
 import { sweepExpiredPremium } from './controllers/subscriptions.controller';
 import { sweepStaleLiveMatches } from './controllers/matches.controller';
+import { purgeExpiredAccountsCore } from './controllers/account.controller';
 import {
   runPublishScheduledPosts,
   runSmartMatchNotifications,
@@ -182,6 +183,20 @@ app.listen(PORT, () => {
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[stale-live-sweep] failed', e instanceof Error ? e.message : e);
+    }
+    // SC-217 · hard-purge accounts soft-deleted >30 days ago. Runs in-process so
+    // the 30-day retention promise is kept WITHOUT depending on CRON_SECRET / an
+    // external cron (the /account/purge-expired endpoint is kept too). Idempotent;
+    // only touches already-anonymized tombstones (deleted_at older than 30d).
+    try {
+      const { purged } = await purgeExpiredAccountsCore();
+      if (purged > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`[account-purge] hard-deleted ${purged} expired account(s)`);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[account-purge] failed', e instanceof Error ? e.message : e);
     }
   };
   void runSweep();

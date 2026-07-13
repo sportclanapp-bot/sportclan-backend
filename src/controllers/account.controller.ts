@@ -132,31 +132,40 @@ export async function deleteAccount(req: Request, res: Response) {
 //
 // Production: hook this up to a Render cron job or Supabase pg_cron to run
 // daily.
-export async function purgeExpiredAccounts(req: Request, res: Response) {
-  const secret = req.headers['x-cron-secret'];
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
+// Core purge logic, callable BOTH from the cron endpoint and the in-process
+// hourly sweep (SC-217 — the endpoint alone never ran because CRON_SECRET is
+// unset). Only ever hard-deletes rows whose deleted_at is a real timestamp older
+// than 30 days (the `.not deleted_at is null` guard makes it impossible to touch
+// a live account). Idempotent — a second run finds nothing.
+export async function purgeExpiredAccountsCore(): Promise<{ purged: number; ids: string[] }> {
   const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
 
-  // Find users past the grace window
   const { data: expired, error: fetchErr } = await supabase
     .from('users')
     .select('id')
     .lt('deleted_at', cutoff)
     .not('deleted_at', 'is', null);
-
-  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
-  if (!expired || expired.length === 0) return res.json({ purged: 0 });
+  if (fetchErr) throw new Error(fetchErr.message);
+  if (!expired || expired.length === 0) return { purged: 0, ids: [] };
 
   const ids = expired.map((u: { id: string }) => u.id);
-
   // Hard-delete the user rows. FK cascades on user_id should clear content
   // automatically; anything that's set to SET NULL will detach.
   const { error: delErr } = await supabase.from('users').delete().in('id', ids);
-  if (delErr) return res.status(500).json({ error: delErr.message });
+  if (delErr) throw new Error(delErr.message);
+  return { purged: ids.length, ids };
+}
 
-  return res.json({ purged: ids.length, ids });
+export async function purgeExpiredAccounts(req: Request, res: Response) {
+  const secret = req.headers['x-cron-secret'];
+  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    return res.json(await purgeExpiredAccountsCore());
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Purge failed' });
+  }
 }
 
 // GET /account/sessions — returns the caller's active sessions, deduped

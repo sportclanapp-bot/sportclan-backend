@@ -804,16 +804,37 @@ export async function checkRatingMilestone(
 export async function runReEngagement(): Promise<{ sent: number }> {
   const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
   const sentOn = istDateStr();
+
+  // SC-215: cooldown + rotation. Previously this deduped only per-day, so a
+  // dormant user got "we miss you" EVERY day, and `.limit(200)` with no ordering
+  // meant only the first ~200 dormant users were ever reached.
+  //  • Cooldown: exclude anyone re-engaged within COOLDOWN_DAYS (notification_sends
+  //    sent_on >= cutoff) → at most once per window, not daily.
+  //  • Rotation: the cooldown itself rotates the pool (reached users drop out for
+  //    the window), and we scan a window far wider than the batch so cooled users
+  //    don't starve it — over the window the whole dormant pool gets reached.
+  const COOLDOWN_DAYS = 7;
+  const BATCH = 200;
+  const cooldownCutoffOn = istDateStr(new Date(Date.now() - COOLDOWN_DAYS * 86400000));
+  const { data: recent } = await supabase
+    .from('notification_sends')
+    .select('user_id')
+    .eq('job_type', 'reengagement')
+    .gte('sent_on', cooldownCutoffOn);
+  const cooling = new Set((recent ?? []).map((r) => r.user_id as string));
+
   const { data: dormant } = await supabase
     .from('users')
     .select('id, name, city_id')
     .lt('last_active_at', sevenDaysAgo)
     .is('deleted_at', null) // SC-140: never notify a soft-deleted account
-    .limit(200);
+    .order('last_active_at', { ascending: true }) // most-dormant first
+    .limit(BATCH * 12); // wide window so cooled users don't starve the batch
+  const eligible = (dormant ?? []).filter((u) => !cooling.has(u.id as string)).slice(0, BATCH);
 
   // SC-140: prefs gate the ROW (one bulk lookup) — drop users who opted out.
-  const reAllowed = new Set(await allowedRecipients((dormant ?? []).map((u) => u.id as string), 'reengagement'));
-  const users = (dormant ?? []).filter((u) => reAllowed.has(u.id as string)).map((u) => ({ id: u.id as string }));
+  const reAllowed = new Set(await allowedRecipients(eligible.map((u) => u.id as string), 'reengagement'));
+  const users = eligible.filter((u) => reAllowed.has(u.id as string)).map((u) => ({ id: u.id as string }));
 
   // SC-141: chunked bulk claim+insert (was a per-user loop with ~5 queries/user).
   return batchNotify({
@@ -852,6 +873,7 @@ export async function triggerReEngagement(_req: Request, res: Response) {
 export async function runWeeklyDigest(): Promise<{ sent: number }> {
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
   const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+  const nowIso = new Date().toISOString();
   const sentOn = istDateStr();
 
   // Active users = logged in within 30 days.
@@ -872,7 +894,25 @@ export async function runWeeklyDigest(): Promise<{ sent: number }> {
     prepare: async (chunkUsers) => {
       const ids = chunkUsers.map((u) => u.id);
       const followers = await groupCount('follow_relationships', 'following_id', ids, (q) => q.gte('created_at', weekAgo));
-      const matches = await groupCount('match_participants', 'user_id', ids);
+      // SC-216: "matches played this week". match_participants has NO timestamp,
+      // so the all-time count mislabeled lifetime matches as weekly AND defeated
+      // the zero-activity skip below (anyone who ever played got a digest). Count
+      // via the match date instead — participations in matches whose scheduled_at
+      // falls in the past week (bounded to <= now so future-scheduled don't count),
+      // joined through the match_participants→matches FK.
+      const matches = new Map<string, number>();
+      {
+        const { data: mp } = await supabase
+          .from('match_participants')
+          .select('user_id, matches!inner(scheduled_at)')
+          .in('user_id', ids)
+          .gte('matches.scheduled_at', weekAgo)
+          .lte('matches.scheduled_at', nowIso)
+          .limit(50000);
+        for (const r of (mp ?? []) as Array<{ user_id: string }>) {
+          matches.set(r.user_id, (matches.get(r.user_id) ?? 0) + 1);
+        }
+      }
       const rows: NotifRow[] = []; const userIds: string[] = []; const bodies = new Map<string, string>();
       for (const u of chunkUsers) {
         const nf = followers.get(u.id) ?? 0; const mp = matches.get(u.id) ?? 0;

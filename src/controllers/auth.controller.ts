@@ -590,6 +590,15 @@ export async function refresh(req: Request, res: Response) {
       .eq('token', refreshToken)
       .maybeSingle();
     if (!row || row.revoked) return res.status(401).json({ error: 'Refresh token revoked' });
+    // SC-213: a ban/deletion must bite mid-session — a suspended or soft-deleted
+    // user must NOT be able to mint fresh access tokens off an old refresh token.
+    // (Login/verify-otp already gate this; refresh was the evasion path.)
+    if (await isSuspended(payload.userId)) {
+      return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
+    }
+    if (await isDeleted(payload.userId)) {
+      return res.status(403).json({ error: 'This account has been deleted.' });
+    }
     const accessToken = generateAccessToken(payload.userId);
     return res.json({ accessToken });
   } catch {

@@ -232,7 +232,7 @@ export async function resolveReport(req: Request, res: Response) {
 // Inserts one notification row per active user. For now this is a simple
 // fan-out; a future version should batch + use a queue.
 export async function broadcastAnnouncement(req: Request, res: Response) {
-  const { title, body } = req.body || {};
+  const { title, body, confirm } = req.body || {};
   if (!title || typeof title !== 'string') {
     return res.status(400).json({ error: 'title is required' });
   }
@@ -259,6 +259,18 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
 
     if (rows.length === 0) {
       return res.json({ ok: true, recipients: 0 });
+    }
+
+    // SC-214: a bare POST used to blast every active user (~10k) with no
+    // preview or confirmation — one fat-finger = mass notification. Require an
+    // explicit confirm; the un-confirmed call is a dry-run that returns the
+    // exact recipient count so the caller sees the blast size before sending.
+    if (confirm !== true) {
+      return res.status(400).json({
+        error: `This will notify ${rows.length} users. Pass confirm:true to send.`,
+        recipients: rows.length,
+        needsConfirm: true,
+      });
     }
 
     // Fan-out is a per-user insert, which at scale (10k+ active users) far
@@ -375,6 +387,18 @@ export async function adminUpdateUser(req: Request, res: Response) {
       .select(ADMIN_USER_FIELDS)
       .single();
     if (error) return res.status(500).json({ error: error.message });
+    // SC-213: when actively suspending, kill the user's refresh tokens so an
+    // existing session can't refresh around the ban. Combined with the
+    // suspended_at re-check in /auth/refresh, the ban bites within one
+    // (short-lived) access-token lifetime instead of never. Best-effort:
+    // a revoke failure must not fail the suspend itself.
+    if (patch.suspended_at) {
+      await supabase
+        .from('refresh_tokens')
+        .update({ revoked: true })
+        .eq('user_id', id)
+        .eq('revoked', false);
+    }
     return res.json({ user: data });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed to update user' });

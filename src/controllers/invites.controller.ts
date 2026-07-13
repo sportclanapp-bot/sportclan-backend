@@ -1,8 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { sendPushToTokens } from '../utils/fcm';
-import { notifyUnlessBlocked } from '../utils/notify';
+import { notifyUnlessBlocked, notifyUser } from '../utils/notify';
 
 // POST /invites  { receiver_id, sport_id, message? }
 // Best-effort receiver notification — shared by a fresh invite and a re-send.
@@ -15,21 +14,16 @@ async function notifyInviteReceived(
   ]);
   const senderHandle = sender?.username ? `@${sender.username}` : sender?.name ?? 'Someone';
   const sportLabel = sport ? `${sport.emoji} ${sport.name}` : 'a match';
-  await supabase.from('notifications').insert({
-    user_id: receiverId,
+  // SC-222: route through notifyUser so the Social toggle is respected (the
+  // direct insert + push here bypassed allowedRecipients). notifyUser handles
+  // the pref gate, the notifications row, AND the push in one call.
+  await notifyUser({
+    userId: receiverId,
     type: 'invite',
     title: `${senderHandle} sent you a play invite`,
     body: `For ${sportLabel}${message ? ` — "${message}"` : ''}`,
     data: { invite_id: inviteId, sport_id: sportId, sender_id: senderId },
   });
-  const { data: tokens } = await supabase.from('push_tokens').select('token').eq('user_id', receiverId);
-  if (tokens && tokens.length > 0) {
-    await sendPushToTokens(tokens.map((t: any) => t.token), {
-      title: `${senderHandle} wants to play`,
-      body: `${sportLabel}${message ? ` — ${message}` : ''}`,
-      data: { type: 'invite', invite_id: inviteId },
-    });
-  }
 }
 
 const INVITE_COLS = 'id, sender_id, receiver_id, sport_id, message, status, created_at';

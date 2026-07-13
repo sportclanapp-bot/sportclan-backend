@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { notifyUser } from '../utils/notify';
 
 // POST /notifications/token  { token, platform: 'ios'|'android'|'web' }
 // Saves (or upserts) a push token for the authenticated user.
@@ -139,8 +140,10 @@ export async function weeklyDigest(req: Request, res: Response) {
     .maybeSingle();
 
   if (!recent || new Date(recent.created_at).getTime() < Date.now() - 7 * 24 * 60 * 60 * 1000) {
-    await supabase.from('notifications').insert({
-      user_id: userId,
+    // SC-224: gate the self-recap on the Digests toggle (the cron digest is
+    // gated via batchNotify; this direct-insert path bypassed it).
+    await notifyUser({
+      userId,
       type: 'weekly_digest',
       title: 'Your Week in Sports',
       body: `${stats.matches_played} matches \u00B7 ${stats.rating_change >= 0 ? '+' : ''}${stats.rating_change} rating \u00B7 ${stats.new_followers} new followers`,

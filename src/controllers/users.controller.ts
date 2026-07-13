@@ -9,7 +9,7 @@ import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
-import { notifyUsers } from '../utils/notify';
+import { notifyUsers, notifyUser } from '../utils/notify';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
@@ -51,8 +51,9 @@ async function runSmartNotifications(userId: string): Promise<void> {
         .contains('data', { matchId: m.id })
         .maybeSingle();
       if (existing) continue;
-      await supabase.from('notifications').insert({
-        user_id: userId,
+      // SC-226: gate on the Match-updates toggle (was a direct insert bypass).
+      await notifyUser({
+        userId,
         type: 'match_reminder',
         title: 'Match reminder',
         body: `\u23F0 ${m.team_a_name} vs ${m.team_b_name} starts in 15 minutes!`,
@@ -89,8 +90,9 @@ async function runSmartNotifications(userId: string): Promise<void> {
           .gte('created_at', weekStartIso)
           .maybeSingle();
         if (!alreadySent) {
-          await supabase.from('notifications').insert({
-            user_id: userId,
+          // SC-226: gate on the Match-updates toggle (was a direct insert bypass).
+          await notifyUser({
+            userId,
             type: 'weekend_nudge',
             title: '\uD83C\uDFC6 Plan your weekend match!',
             body: 'Create a match and invite your friends before Sunday.',

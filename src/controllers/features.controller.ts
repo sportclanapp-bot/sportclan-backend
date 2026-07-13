@@ -781,15 +781,17 @@ export async function checkRatingMilestone(
         .eq('id', sportId)
         .maybeSingle();
       const sportName = sport?.name ?? 'your sport';
-      await supabase.from('notifications').insert({
-        user_id: userId,
-        type: 'rating_milestone',
-        title: `Rating milestone! 🎉`,
-        body: `You crossed ${m} rating in ${sportName}! Amazing achievement!`,
-        data: { milestone: m, sportId, screen: 'SportProfile' },
-      });
+      // SC-223: single, pref-gated notification. Previously this did a direct
+      // insert (ungated, bypassing the Milestones toggle) AND a notifyUser —
+      // double-sending when the toggle was ON and leaking one when OFF.
       try {
-        await notifyUser({ userId, type: 'rating_milestone', title: 'Rating milestone!', body: `🎉 You crossed ${m} rating in ${sportName}!` });
+        await notifyUser({
+          userId,
+          type: 'rating_milestone',
+          title: `Rating milestone! 🎉`,
+          body: `You crossed ${m} rating in ${sportName}! Amazing achievement!`,
+          data: { milestone: String(m), sportId, screen: 'SportProfile' },
+        });
       } catch { /* best effort */ }
       break; // only one milestone per update
     }

@@ -9,6 +9,7 @@ import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
+import { notifyUsers } from '../utils/notify';
 
 // Public-safe user fields. Never returns password_hash.
 const PUBLIC_FIELDS =
@@ -498,6 +499,30 @@ export async function followUser(req: Request, res: Response) {
     .insert({ follower_id: userId, following_id: target });
   if (error && (error as { code?: string }).code !== '23505') {
     return res.status(500).json({ error: error.message });
+  }
+
+  // SC-205: notify the followed user of a GENUINELY NEW follow. A 23505 means the
+  // follow already existed (re-follow spam) → no duplicate notification. Routes to
+  // the follower's profile (user_id). Fire-and-forget — never blocks the follow.
+  if (!error) {
+    void (async () => {
+      const { data: me } = await supabase
+        .from('users').select('name, username').eq('id', userId).maybeSingle();
+      const name = (me?.name || me?.username || 'Someone') as string;
+      await notifyUsers(
+        [target],
+        {
+          type: 'follow',
+          title: 'New follower',
+          body: `${name} started following you`,
+          data: { user_id: userId, actor_id: userId },
+        },
+        { actorId: userId },
+      );
+    })().catch((err) =>
+      // eslint-disable-next-line no-console
+      console.error('[notify] follow failed', err),
+    );
   }
   return res.json({ success: true });
 }

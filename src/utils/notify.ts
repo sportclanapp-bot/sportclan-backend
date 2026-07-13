@@ -42,6 +42,10 @@ const PREF_CATEGORY: Record<string, string> = {
   new_follower: 'social',
   kudos: 'social',
   community: 'social',
+  // SC-204: post engagement (comment / like / comment-reaction) is social-gated.
+  comment: 'social',
+  like: 'social',
+  reaction: 'social',
   invite: 'social',
   play_invite: 'social',
   invite_accepted: 'social',

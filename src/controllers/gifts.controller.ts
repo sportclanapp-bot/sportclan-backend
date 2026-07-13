@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
+import { notifyUsers } from '../utils/notify';
 
 // ─── Change #7 CRITICAL: ALL 10 PRD gifts ──────────────────────────────────────
 const GIFT_CATALOGUE = [
@@ -23,6 +24,31 @@ export async function getCatalogue(_req: Request, res: Response) {
   return res.json({ gifts: GIFT_CATALOGUE });
 }
 
+/** SC-206: notify the gift RECEIVER — fired ONLY after the money transaction has
+ *  already succeeded, and NOT awaited, so a notification failure can never roll
+ *  back or block the gift (SC-112). notifyUsers filters self/blocked/deleted/prefs.
+ *  Routes to the sender's profile (sender_id). */
+function notifyGiftReceived(
+  receiverId: string,
+  senderId: string,
+  senderName: string,
+  gift: { id: string; name: string; emoji: string },
+): void {
+  void notifyUsers(
+    [receiverId],
+    {
+      type: 'gift',
+      title: 'You received a gift',
+      body: `${senderName} sent you ${gift.name} ${gift.emoji}`,
+      data: { gift_id: gift.id, sender_id: senderId, gift_name: gift.name },
+    },
+    { actorId: senderId },
+  ).catch((err) =>
+    // eslint-disable-next-line no-console
+    console.error('[notify] gift failed', err),
+  );
+}
+
 // POST /gifts/send  { receiverId, giftId, message? }
 export async function sendGift(req: Request, res: Response) {
   const senderId = req.userId!;
@@ -37,7 +63,7 @@ export async function sendGift(req: Request, res: Response) {
   // Check sender's premium status
   const { data: sender } = await supabase
     .from('users')
-    .select('coin_balance, is_premium, premium_expires_at')
+    .select('coin_balance, is_premium, premium_expires_at, name, username')
     .eq('id', senderId)
     .single();
 
@@ -54,6 +80,9 @@ export async function sendGift(req: Request, res: Response) {
   // Check receiver exists
   const { data: receiver } = await supabase.from('users').select('id').eq('id', receiverId).single();
   if (!receiver) return res.status(404).json({ error: 'Receiver not found' });
+
+  const senderName = ((sender as { name?: string; username?: string }).name
+    || (sender as { username?: string }).username || 'Someone') as string;
 
   // SC-114: atomic, retry-idempotent send via the send_gift RPC (migration 052).
   // idempotency_key (a client UUID per tap) dedups retries → the original result,
@@ -100,6 +129,8 @@ export async function sendGift(req: Request, res: Response) {
       { user_id: senderId, type: 'gift_sent', coins: -gift.cost, description: `Sent ${gift.name} ${gift.emoji}`, reference_id: giftTx.id, status: 'completed' },
       { user_id: receiverId, type: 'gift_received', coins: 0, description: `Received ${gift.name} ${gift.emoji}`, reference_id: giftTx.id, status: 'completed' },
     ]);
+    // SC-206: gift committed → notify receiver (fire-and-forget, post-transaction).
+    notifyGiftReceived(receiverId, senderId, senderName, gift);
     return res.json({ success: true, giftTransaction: giftTx, remainingBalance: newBalance });
   }
   if (rpc.error) return res.status(500).json({ error: sanitizeError(rpc.error) });
@@ -108,6 +139,11 @@ export async function sendGift(req: Request, res: Response) {
     return res.status(400).json({ error: 'Insufficient coins', required: gift.cost });
   }
   // 'sent' or 'duplicate' — duplicate = an idempotent retry (no double charge).
+  // SC-206: notify the receiver ONLY on a genuine 'sent' — a 'duplicate' retry
+  // must NOT re-notify. Fired after the RPC's money transaction has committed.
+  if (out.status === 'sent') {
+    notifyGiftReceived(receiverId, senderId, senderName, gift);
+  }
   return res.json({
     success: true,
     giftTransaction: out.gift,

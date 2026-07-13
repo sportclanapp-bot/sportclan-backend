@@ -8,6 +8,41 @@ import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
+import { notifyUsers } from '../utils/notify';
+
+/** Short display name for a user id, for notification bodies. Best-effort. */
+async function displayName(userId: string): Promise<string> {
+  try {
+    const { data } = await supabase.from('users').select('name, username').eq('id', userId).maybeSingle();
+    return (data?.name || data?.username || 'Someone') as string;
+  } catch {
+    return 'Someone';
+  }
+}
+
+/** SC-204: fire-and-forget engagement notification (comment / like / reaction).
+ *  EVERYTHING here — the actor-name lookup, prefs/block/self/deleted filtering
+ *  (notifyUsers), and the insert+push — runs OFF the response path inside a
+ *  `void` async with `.catch`, so a notification failure or its cost can NEVER
+ *  affect the underlying action's response (SC-112). Self is skipped up front. */
+function notifyEngagement(
+  recipientId: string | null | undefined,
+  actorId: string,
+  opts: { type: string; title: string; data: Record<string, string>; body: (actorName: string) => string },
+): void {
+  if (!recipientId || recipientId === actorId) return;
+  void (async () => {
+    const name = await displayName(actorId);
+    await notifyUsers(
+      [recipientId],
+      { type: opts.type, title: opts.title, body: opts.body(name), data: opts.data },
+      { actorId },
+    );
+  })().catch((err) =>
+    // eslint-disable-next-line no-console
+    console.error('[notify] engagement failed', opts.type, err),
+  );
+}
 
 // ─── Basic profanity word list ───────────────────────────────────────────────
 // SC-68: the original list was matched with a naive `lower.includes(w)` substring
@@ -525,8 +560,16 @@ export async function likePost(req: Request, res: Response) {
     .from('post_likes')
     .insert({ post_id: id, user_id: userId });
 
-  if (error?.code === '23505') return res.json({ liked: true }); // already liked
+  if (error?.code === '23505') return res.json({ liked: true }); // already liked → no re-notify
   if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+  // SC-204: notify the post author of a NEW like (self-like already filtered).
+  notifyEngagement(likePostRow.author_id, userId, {
+    type: 'like',
+    title: 'New like',
+    body: (n) => `${n} liked your post`,
+    data: { post_id: id, actor_id: userId },
+  });
   return res.json({ liked: true });
 }
 
@@ -655,6 +698,30 @@ export async function createComment(req: Request, res: Response) {
     ins = await insertComment(false);
   }
   if (ins.error) return res.status(500).json({ error: sanitizeError(ins.error) });
+
+  // SC-204: notify the post author of the new comment (the alreadyPosted/dedup
+  // paths above return 200 and never reach here, so a retry never re-notifies).
+  const newCommentId = (ins.data as { id?: string } | null)?.id ?? '';
+  notifyEngagement(commentPostRow.author_id, userId, {
+    type: 'comment',
+    title: 'New comment',
+    body: (n) => `${n} commented on your post`,
+    data: { post_id: id, comment_id: newCommentId, actor_id: userId },
+  });
+  // On a REPLY, also notify the PARENT comment's author — but only if they're not
+  // the post author (already notified above) and not the replier (self-filtered).
+  if (parent_id) {
+    const { data: parent } = await supabase
+      .from('post_comments').select('author_id').eq('id', parent_id).maybeSingle();
+    if (parent?.author_id && parent.author_id !== commentPostRow.author_id) {
+      notifyEngagement(parent.author_id, userId, {
+        type: 'comment',
+        title: 'New reply',
+        body: (n) => `${n} replied to your comment`,
+        data: { post_id: id, comment_id: newCommentId, actor_id: userId },
+      });
+    }
+  }
   return res.status(201).json({ data: ins.data, comment: ins.data });
 }
 
@@ -690,7 +757,7 @@ export async function reactToComment(req: Request, res: Response) {
   // Get current reactions
   const { data: comment } = await supabase
     .from('post_comments')
-    .select('reactions')
+    .select('reactions, author_id, post_id')
     .eq('id', commentId)
     .single();
 
@@ -699,7 +766,8 @@ export async function reactToComment(req: Request, res: Response) {
   const reactions = (comment.reactions as Record<string, string[]>) || {};
   const users = reactions[emoji] || [];
 
-  if (users.includes(userId)) {
+  const added = !users.includes(userId);
+  if (!added) {
     reactions[emoji] = users.filter((u: string) => u !== userId);
     if (reactions[emoji].length === 0) delete reactions[emoji];
   } else {
@@ -712,6 +780,17 @@ export async function reactToComment(req: Request, res: Response) {
     .eq('id', commentId);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+  // SC-204: notify the comment author only when a reaction is ADDED (a toggle-off
+  // must not notify). Routes to the parent post.
+  if (added) {
+    notifyEngagement(comment.author_id, userId, {
+      type: 'reaction',
+      title: 'New reaction',
+      body: (n) => `${n} reacted ${emoji} to your comment`,
+      data: { post_id: comment.post_id, actor_id: userId },
+    });
+  }
   return res.json({ reactions });
 }
 

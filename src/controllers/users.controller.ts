@@ -269,6 +269,26 @@ export async function getUserById(req: Request, res: Response) {
     safeUser.dob = null;
   }
 
+  // SC-221: surface the FULL account-type set (join table) so OTHER users'
+  // profiles can render Coach/Umpire/Business badges. getUserById previously
+  // returned only the legacy singular `account_type`, so the FE (UserProfile
+  // reads `user.account_types`) showed no badges for anyone but yourself
+  // (getMe already returns this). Mirrors getMe's lookup + legacy fallback.
+  let accountTypes: string[] = [];
+  try {
+    const { data: atRows } = await supabase
+      .from('user_account_types')
+      .select('account_type')
+      .eq('user_id', id);
+    accountTypes = (atRows ?? []).map((r: { account_type: string }) => r.account_type);
+  } catch {
+    // fall back below
+  }
+  if (accountTypes.length === 0 && safeUser.account_type) {
+    accountTypes = isValidAccountType(safeUser.account_type) ? [safeUser.account_type] : ['player'];
+  }
+  safeUser.account_types = accountTypes;
+
   // NOTE: a "service account premium gating" block used to live here that
   // masked non-premium service profiles. It was dead code (it compared the
   // lowercase stored account_type against capitalized compound strings like

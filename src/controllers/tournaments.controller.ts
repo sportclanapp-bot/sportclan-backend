@@ -1370,26 +1370,34 @@ export async function generateFixtures(req: Request, res: Response) {
     const matchRows: any[] = [];
 
     if (format === 'round_robin' || format === 'league') {
+      // round_robin = single round-robin (N*(N-1)/2 matches). league = DOUBLE
+      // round-robin / home-and-away (N*(N-1) matches): each pair plays twice with
+      // team_a/team_b (home/away) swapped on the second leg. Standings aggregate
+      // both legs automatically (computeStats/rankTeams iterate every match).
+      const doubleLeg = format === 'league';
       let mno = 0;
       for (let i = 0; i < teams.length; i++) {
         for (let j = i + 1; j < teams.length; j++) {
-          matchRows.push({
-            sport_id: tournament.sport_id,
-            tournament_id: id,
-            team_a_id: teams[i].id,
-            team_b_id: teams[j].id,
-            team_a_name: teams[i].name,
-            team_b_name: teams[j].name,
-            scheduled_at: new Date(startDate.getTime() + mno * dayMs).toISOString(),
-            venue: tournament.venue ?? null,
-            city_id: tournament.city_id ?? null,
-            status: 'scheduled',
-            score_summary: {},
-            created_by: userId,
-            round: 1,
-            match_no: mno,
-          });
-          mno++;
+          const legs: Array<[number, number]> = doubleLeg ? [[i, j], [j, i]] : [[i, j]];
+          for (const [h, a] of legs) {
+            matchRows.push({
+              sport_id: tournament.sport_id,
+              tournament_id: id,
+              team_a_id: teams[h].id,
+              team_b_id: teams[a].id,
+              team_a_name: teams[h].name,
+              team_b_name: teams[a].name,
+              scheduled_at: new Date(startDate.getTime() + mno * dayMs).toISOString(),
+              venue: tournament.venue ?? null,
+              city_id: tournament.city_id ?? null,
+              status: 'scheduled',
+              score_summary: {},
+              created_by: userId,
+              round: 1,
+              match_no: mno,
+            });
+            mno++;
+          }
         }
       }
       if (matchRows.length > 0) {

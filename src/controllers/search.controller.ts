@@ -161,7 +161,7 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
   let query = supabase
     .from('community_posts')
     .select(`
-      id, content, created_at, likes_count, comments_count,
+      id, content, created_at, likes_count, comments_count, scheduled_at, author_id,
       author:users!author_id!inner(id, name, username, profile_picture_url),
       sport:sports!sport_id(id, name, emoji)
     `)
@@ -174,7 +174,13 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
   if (sportId) query = query.eq('sport_id', sportId);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ data: data || [] });
+  // SC-218: search hit content directly — filter out not-yet-published scheduled
+  // posts (visible only to their author), mirroring the feed/getPost embargo.
+  const now = Date.now();
+  const visible = (data || []).filter((p: any) =>
+    !p.scheduled_at || new Date(p.scheduled_at).getTime() <= now || p.author_id === callerId,
+  );
+  return res.json({ data: visible });
 }
 
 async function searchBusinesses(res: Response, q: string, limit: number, callerId?: string) {

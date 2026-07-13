@@ -222,7 +222,8 @@ export async function getSportStoryCounts(req: Request, res: Response) {
     .from('community_posts')
     .select('sport_id, sport:sports!sport_id(id, name, emoji), author:users!author_id!inner(id)')
     .gt('created_at', since)
-    .not('sport_id', 'is', null);
+    .not('sport_id', 'is', null)
+    .is('scheduled_at', null); // SC-218: don't let unpublished scheduled posts inflate the story count
   query = excludeDeletedEmbed(query, 'author');
   query = excludeIds(query, 'author_id', await blockedUserIds(req.userId));
   const { data, error } = await query;
@@ -267,6 +268,14 @@ export async function getPost(req: Request, res: Response) {
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
   if (!data) return res.status(404).json({ error: 'Post not found' });
+  // SC-218: mirror the feed's embargo on this sibling path — a not-yet-published
+  // scheduled post (scheduled_at in the future) is visible ONLY to its author.
+  // The feed hid these; getPost didn't, so any user with the id could read an
+  // embargoed post via direct GET.
+  const sa = (data as { scheduled_at?: string | null }).scheduled_at;
+  if (sa && new Date(sa).getTime() > Date.now() && (data as { author_id?: string }).author_id !== req.userId) {
+    return res.status(404).json({ error: 'Post not found' });
+  }
   return res.json({ data, post: data });
 }
 

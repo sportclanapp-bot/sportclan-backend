@@ -763,6 +763,11 @@ export async function reactToComment(req: Request, res: Response) {
 
   if (!comment) return res.status(404).json({ error: 'Comment not found' });
 
+  // SC-96: block gate — can't react to a blocked-either-direction user's comment.
+  if (await isBlockedBetween(userId, comment.author_id)) {
+    return res.status(403).json({ error: 'BLOCKED' });
+  }
+
   const reactions = (comment.reactions as Record<string, string[]>) || {};
   const users = reactions[emoji] || [];
 
@@ -802,15 +807,16 @@ export async function reportContent(req: Request, res: Response) {
   // shape that the admin moderation queue reads/resolves. (Previously this
   // wrote to comment_reports, which no admin code ever reads — so filed
   // reports never surfaced. Bridged here.)
-  const { target_type, target_id, comment_id, post_id, user_id, reason } = req.body || {};
+  const { target_type, target_id, comment_id, post_id, user_id, message_id, reason } = req.body || {};
 
   if (!reason) return res.status(400).json({ error: 'Reason is required' });
 
-  let resolvedType: 'post' | 'comment' | 'user' | null = null;
+  // SC-209: 'message' is now reportable alongside post/comment/user.
+  let resolvedType: 'post' | 'comment' | 'user' | 'message' | null = null;
   let resolvedId: string | null = null;
   if (target_type && target_id) {
-    if (!['post', 'comment', 'user'].includes(target_type)) {
-      return res.status(400).json({ error: 'target_type must be post, comment, or user' });
+    if (!['post', 'comment', 'user', 'message'].includes(target_type)) {
+      return res.status(400).json({ error: 'target_type must be post, comment, user, or message' });
     }
     resolvedType = target_type;
     resolvedId = target_id;
@@ -818,11 +824,49 @@ export async function reportContent(req: Request, res: Response) {
     resolvedType = 'comment'; resolvedId = comment_id;
   } else if (post_id) {
     resolvedType = 'post'; resolvedId = post_id;
+  } else if (message_id) {
+    resolvedType = 'message'; resolvedId = message_id;
   } else if (user_id) {
     resolvedType = 'user'; resolvedId = user_id;
   }
   if (!resolvedType || !resolvedId) {
-    return res.status(400).json({ error: 'A target (post_id, comment_id, or user_id) is required' });
+    return res.status(400).json({ error: 'A target (post_id, comment_id, message_id, or user_id) is required' });
+  }
+
+  // SC-208: verify the target EXISTS (no orphan reports) and get its owner so we
+  // can reject self-reports. 'user' targets are their own owner.
+  let exists = false;
+  let ownerId: string | null = null;
+  if (resolvedType === 'post') {
+    const { data: t } = await supabase.from('community_posts').select('author_id').eq('id', resolvedId).maybeSingle();
+    exists = !!t; ownerId = (t as { author_id?: string } | null)?.author_id ?? null;
+  } else if (resolvedType === 'comment') {
+    const { data: t } = await supabase.from('post_comments').select('author_id').eq('id', resolvedId).maybeSingle();
+    exists = !!t; ownerId = (t as { author_id?: string } | null)?.author_id ?? null;
+  } else if (resolvedType === 'message') {
+    const { data: t } = await supabase.from('messages').select('sender_id').eq('id', resolvedId).maybeSingle();
+    exists = !!t; ownerId = (t as { sender_id?: string } | null)?.sender_id ?? null;
+  } else {
+    const { data: t } = await supabase.from('users').select('id').eq('id', resolvedId).maybeSingle();
+    exists = !!t; ownerId = (t as { id?: string } | null)?.id ?? null;
+  }
+  if (!exists) return res.status(404).json({ error: 'Reported content not found' });
+  // SC-208: no self-report (a user reporting themselves, or their own content).
+  if (ownerId && ownerId === userId) {
+    return res.status(400).json({ error: 'You can’t report your own content.' });
+  }
+
+  // SC-208: dedup — same reporter + same target = one report (no duplicate rows in
+  // the moderation queue). Return the existing report instead of a new row.
+  const { data: existingReport } = await supabase
+    .from('content_reports')
+    .select('*')
+    .eq('reporter_id', userId)
+    .eq('target_type', resolvedType)
+    .eq('target_id', resolvedId)
+    .maybeSingle();
+  if (existingReport) {
+    return res.status(200).json({ data: existingReport, alreadyReported: true });
   }
 
   const { data, error } = await supabase
@@ -917,12 +961,16 @@ export async function votePoll(req: Request, res: Response) {
   // 1. Fetch post; verify it's a poll
   const { data: post, error: fetchErr } = await supabase
     .from('community_posts')
-    .select('id, poll_options, post_type, is_closed')
+    .select('id, poll_options, post_type, is_closed, author_id')
     .eq('id', id)
     .maybeSingle();
 
   if (fetchErr) return res.status(500).json({ error: sanitizeError(fetchErr) });
   if (!post) return res.status(404).json({ error: 'Post not found' });
+  // SC-96: block gate — can't vote on a blocked-either-direction user's poll.
+  if (await isBlockedBetween(userId, post.author_id)) {
+    return res.status(403).json({ error: 'BLOCKED' });
+  }
   if (!post.poll_options) return res.status(400).json({ error: 'Not a poll post' });
   // SC-43: a closed poll is final — no more votes.
   if (post.is_closed) return res.status(409).json({ error: 'This poll is closed' });

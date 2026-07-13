@@ -1296,6 +1296,10 @@ export async function submitReview(req: Request, res: Response) {
   try {
     const { id } = req.params;
     if (id === userId) return res.status(400).json({ error: 'Cannot review yourself' });
+    // SC-96: block gate — can't review a user you're blocked-either-direction with.
+    if (await isBlockedBetween(userId, id)) {
+      return res.status(403).json({ error: 'You can’t review this user.' });
+    }
     const { rating } = req.body || {};
     const comment = req.body?.comment ?? req.body?.text;
     if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: 'rating 1-5 required' });

@@ -3,7 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { notifyUser } from '../utils/notify';
 import { excludeDeletedEmbed } from '../utils/activeUser';
-import { blockedUserIds, excludeIds } from '../utils/blocks';
+import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 
 const KUDOS_COINS = 2;
 
@@ -25,6 +25,11 @@ export async function sendKudos(req: Request, res: Response) {
   }
   if (toUserId === senderId) {
     return res.status(400).json({ error: 'Cannot send kudos to yourself' });
+  }
+  // SC-96: block gate — a blocked user can't send kudos (which awards the
+  // recipient coins + a notification) to the person they're blocked with.
+  if (await isBlockedBetween(senderId, toUserId)) {
+    return res.status(403).json({ error: 'You can’t send kudos to this user.' });
   }
 
   // Validate both users participated in this match.

@@ -4,6 +4,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
+import { isBlockedBetween } from '../utils/blocks';
 
 // ─── Change #7 CRITICAL: ALL 10 PRD gifts ──────────────────────────────────────
 const GIFT_CATALOGUE = [
@@ -56,6 +57,13 @@ export async function sendGift(req: Request, res: Response) {
 
   if (!receiverId || !giftId) return res.status(400).json({ error: 'receiverId and giftId required' });
   if (senderId === receiverId) return res.status(400).json({ error: 'Cannot send gift to yourself' });
+
+  // SC-207: block gate — a blocked user must not be able to reach the blocker via
+  // a gift (the last user→user channel missing this; mirrors the DM gate). Checked
+  // BEFORE any coin deduction so a blocked send never charges the sender.
+  if (await isBlockedBetween(senderId, receiverId)) {
+    return res.status(403).json({ error: 'You can’t send a gift to this user.' });
+  }
 
   const gift = GIFT_CATALOGUE.find((g) => g.id === giftId);
   if (!gift) return res.status(400).json({ error: 'Invalid gift' });

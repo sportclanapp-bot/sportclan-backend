@@ -98,26 +98,32 @@ export async function getReports(req: Request, res: Response) {
 
     const postIds = [...new Set(rows.filter((r) => r.target_type === 'post').map((r) => r.target_id))];
     const commentIds = [...new Set(rows.filter((r) => r.target_type === 'comment').map((r) => r.target_id))];
+    const messageIds = [...new Set(rows.filter((r) => r.target_type === 'message').map((r) => r.target_id))];
     const userTargetIds = rows.filter((r) => r.target_type === 'user').map((r) => r.target_id);
 
-    // Fetch reported posts/comments first so we can also resolve their authors.
-    const [postsRes, commentsRes] = await Promise.all([
+    // Fetch reported posts/comments/messages first so we can also resolve authors.
+    const [postsRes, commentsRes, messagesRes] = await Promise.all([
       postIds.length
         ? supabase.from('community_posts').select('id, content, author_id').in('id', postIds)
         : Promise.resolve({ data: [] as any[] }),
       commentIds.length
         ? supabase.from('post_comments').select('id, content, author_id').in('id', commentIds)
         : Promise.resolve({ data: [] as any[] }),
+      messageIds.length
+        ? supabase.from('messages').select('id, content, sender_id').in('id', messageIds)
+        : Promise.resolve({ data: [] as any[] }),
     ]);
     const posts = (postsRes.data ?? []) as Array<{ id: string; content: string; author_id: string }>;
     const comments = (commentsRes.data ?? []) as Array<{ id: string; content: string; author_id: string }>;
+    const messages = (messagesRes.data ?? []) as Array<{ id: string; content: string; sender_id: string }>;
 
-    // One batched user fetch: reporters + user-targets + content authors.
+    // One batched user fetch: reporters + user-targets + content authors/senders.
     const userIds = [...new Set([
       ...rows.map((r) => r.reporter_id),
       ...userTargetIds,
       ...posts.map((p) => p.author_id),
       ...comments.map((c) => c.author_id),
+      ...messages.map((m) => m.sender_id),
     ].filter(Boolean))];
     const usersRes = userIds.length
       ? await supabase.from('users').select('id, name, username').in('id', userIds)
@@ -125,6 +131,7 @@ export async function getReports(req: Request, res: Response) {
     const userMap = new Map((usersRes.data ?? []).map((u: any) => [u.id, u]));
     const postMap = new Map(posts.map((p) => [p.id, p]));
     const commentMap = new Map(comments.map((c) => [c.id, c]));
+    const messageMap = new Map(messages.map((m) => [m.id, m]));
 
     const enriched = rows.map((r) => {
       const reporter = userMap.get(r.reporter_id);
@@ -141,6 +148,11 @@ export async function getReports(req: Request, res: Response) {
         content_exists = !!c;
         content_preview = c ? String(c.content).slice(0, 240) : null;
         if (c) content_author = { id: c.author_id, name: userMap.get(c.author_id)?.name ?? null };
+      } else if (r.target_type === 'message') {
+        const m = messageMap.get(r.target_id);
+        content_exists = !!m;
+        content_preview = m ? String(m.content).slice(0, 240) : null;
+        if (m) content_author = { id: m.sender_id, name: userMap.get(m.sender_id)?.name ?? null };
       } else if (r.target_type === 'user') {
         const u = userMap.get(r.target_id);
         content_exists = !!u;

@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { isBlockedBetween } from '../utils/blocks';
+import { isBlockedBetween, blockedUserIds } from '../utils/blocks';
 import { LIMITS, firstInvalidUrl, ARRAY_LIMITS, tooManyItems, firstDisallowedImageUrl } from '../utils/validation';
 import { parsePagination } from '../utils/pagination';
 
@@ -299,6 +299,20 @@ export async function addMember(req: Request, res: Response) {
 
   if ((count ?? 0) >= 50) {
     return res.status(400).json({ error: 'Max 50 members per group' });
+  }
+
+  // SC-96: block gate — don't force the new member into a shared group chat with
+  // anyone they're blocked-either-direction with (mirrors joinTeamByCode). Covers
+  // the adder AND every existing participant.
+  const blockedWithNew = await blockedUserIds(user_id);
+  if (blockedWithNew.size > 0) {
+    const { data: members } = await supabase
+      .from('chat_participants')
+      .select('user_id')
+      .eq('chat_id', id);
+    if ((members ?? []).some((m) => blockedWithNew.has(m.user_id))) {
+      return res.status(403).json({ error: 'Can’t add this user — a block exists with a group member.', code: 'BLOCKED_FROM_GROUP' });
+    }
   }
 
   const { error } = await supabase

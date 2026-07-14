@@ -8,6 +8,7 @@ import { notifyUnlessBlocked } from '../utils/notify';
 import { validateSportForCreate } from '../utils/sports';
 import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { blockedUserIds } from '../utils/blocks';
+import { isUuid } from '../utils/uuid';
 
 function generateJoinCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -104,6 +105,7 @@ export async function getTeam(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
+    if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
     // SC-200: embed the city so the team hero can show a real location.
     const { data: team, error } = await supabase
       .from('teams')
@@ -154,6 +156,14 @@ export async function addTeamMember(req: Request, res: Response) {
     const id = String(req.params.id);
     const { user_id, role, jersey_number } = req.body || {};
     if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+    // SC-244: validate the ids before they hit uuid-typed `.eq()` filters — a
+    // non-UUID would raise 22P02 → a raw 500. Non-UUID → 400; a well-formed but
+    // nonexistent user → 404. (The team_members insert would otherwise 500 on a
+    // 23503 FK violation for a missing user.)
+    if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
+    if (!isUuid(user_id)) return res.status(400).json({ error: 'Invalid user_id' });
+    const { data: userRow } = await supabase.from('users').select('id').eq('id', user_id).maybeSingle();
+    if (!userRow) return res.status(404).json({ error: 'User not found' });
     // SC-103: only 'player' and 'vice_captain' may be assigned here. 'captain'
     // is off-limits — captaincy transfer is a separate flow, and minting a 2nd
     // captain breaks the single-captain invariant.
@@ -198,9 +208,76 @@ export async function removeTeamMember(req: Request, res: Response) {
   try {
     const id = String(req.params.id);
     const targetUserId = String(req.params.userId);
+    // SC-244: guard malformed ids before they hit uuid-typed filters (else 500).
+    if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
+    if (!isUuid(targetUserId)) return res.status(400).json({ error: 'Invalid user id' });
     if (targetUserId !== userId && !(await isCaptain(id, userId))) {
       return res.status(403).json({ error: 'Only the captain or the member themselves can remove' });
     }
+
+    // SC-243: a captain who SELF-leaves must not strand the team without a
+    // captain (headless → nobody can manage or even disband it). When the
+    // leaver is the captain and other members remain, hand captaincy to the
+    // longest-tenured remaining member via the atomic transfer_team_captaincy
+    // RPC (migration 037) FIRST, THEN remove the (now-demoted) ex-captain.
+    // Ordering is the atomicity guarantee: captaincy has already moved before
+    // the ex-captain row is deleted, so the dangerous half-apply (captain
+    // removed + zero captains) is impossible. The only non-atomic gap —
+    // transfer succeeds, delete fails — leaves a valid, captained team (the
+    // ex-captain is a player again), which is recoverable, never orphaned.
+    // A captain who is the LAST member disbands the team if it's clean (no
+    // matches/tournament entries), mirroring disbandTeam's orphan guard.
+    if (targetUserId === userId && (await isCaptain(id, userId))) {
+      const { data: others } = await supabase
+        .from('team_members')
+        .select('user_id, joined_at')
+        .eq('team_id', id)
+        .neq('user_id', userId)
+        .order('joined_at', { ascending: true, nullsFirst: true })
+        .order('user_id', { ascending: true })
+        .limit(1);
+      const heir = others?.[0]?.user_id as string | undefined;
+      if (heir) {
+        const { error: tErr } = await supabase.rpc('transfer_team_captaincy', {
+          p_team_id: id,
+          p_actor_id: userId,
+          p_target_id: heir,
+        });
+        if (tErr) return res.status(400).json({ error: sanitizeError(tErr) });
+        const { error: dErr } = await supabase
+          .from('team_members')
+          .delete()
+          .eq('team_id', id)
+          .eq('user_id', userId);
+        if (dErr) return res.status(500).json({ error: sanitizeError(dErr) });
+        return res.json({ removed: true, captaincy_transferred_to: heir });
+      }
+      // Last member leaving → remove them, then disband if the team has no
+      // match history or tournament entries (same guard as disbandTeam). If it
+      // does, keep the now-memberless team as a historical record (there is no
+      // one left to strand, so this is safe).
+      const { error: dErr } = await supabase
+        .from('team_members')
+        .delete()
+        .eq('team_id', id)
+        .eq('user_id', userId);
+      if (dErr) return res.status(500).json({ error: sanitizeError(dErr) });
+      const { count: matchCount } = await supabase
+        .from('matches')
+        .select('id', { count: 'exact', head: true })
+        .or(`team_a_id.eq.${id},team_b_id.eq.${id}`);
+      const { count: entryCount } = await supabase
+        .from('tournament_entries')
+        .select('id', { count: 'exact', head: true })
+        .eq('team_id', id);
+      if ((matchCount ?? 0) === 0 && (entryCount ?? 0) === 0) {
+        await supabase.from('team_expenses').delete().eq('team_id', id);
+        await supabase.from('teams').delete().eq('id', id);
+        return res.json({ removed: true, team_disbanded: true });
+      }
+      return res.json({ removed: true, team_empty: true });
+    }
+
     const { error } = await supabase
       .from('team_members')
       .delete()
@@ -226,6 +303,8 @@ export async function updateMemberRole(req: Request, res: Response) {
     const id = String(req.params.id);
     const targetUserId = String(req.params.userId);
     const { role } = req.body || {};
+    if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
+    if (!isUuid(targetUserId)) return res.status(400).json({ error: 'Invalid user id' });
 
     if (role !== 'captain') {
       return res.status(400).json({ error: "Only transferring the 'captain' role is supported" });
@@ -264,6 +343,7 @@ export async function updateTeam(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const id = String(req.params.id);
+    if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
     if (!(await isCaptain(id, userId))) {
       return res.status(403).json({ error: 'Only the captain can update the team' });
     }
@@ -351,6 +431,7 @@ export async function disbandTeam(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const id = String(req.params.id);
+    if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
     if (!(await isCaptain(id, userId))) {
       return res.status(403).json({ error: 'Only the captain can disband the team' });
     }

@@ -57,6 +57,10 @@ const PREF_CATEGORY: Record<string, string> = {
   gift_received: 'gifts',
   // Milestones
   rating_milestone: 'milestones',
+  // SC-232: the per-match ELO delta ping (fired for every ranked completion) was
+  // ungated — it respected neither 'matches' nor 'milestones', so a user could
+  // not silence it. Group it with its sibling rating_milestone under Milestones.
+  rating_change: 'milestones',
   achievement: 'milestones',
   // Digests & nudges
   weekly_digest: 'digests',

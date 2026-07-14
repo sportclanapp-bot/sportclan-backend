@@ -1032,7 +1032,9 @@ export async function completeMatch(req: Request, res: Response) {
       const { data: sportRow } = await supabase
         .from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
       const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
-      if (slug === 'basketball') {
+      // Only block a level score when NO winner is declared — an explicit
+      // winner_team_id (forfeit / walkover / organiser record-result) is allowed.
+      if (slug === 'basketball' && !winner_team_id) {
         const { data: mrow } = await supabase
           .from('matches').select('score_summary').eq('id', id).maybeSingle();
         const ss = (mrow?.score_summary ?? {}) as { A?: any; B?: any };

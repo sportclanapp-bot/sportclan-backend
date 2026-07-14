@@ -552,12 +552,24 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
         if (p.type === 'B' || p.type === 'Lb') inn.balls += 1;
       }
       else if (e.event_type === 'wicket') { inn.wickets = Math.min(10, inn.wickets + 1); if (!p.is_extra) inn.balls += 1; }
+      // A batting side can end its innings early by declaring (before all-out /
+      // overs). This is a marker only — it doesn't change runs/balls/wickets or
+      // the winner (still total-vs-total); it just lets the scorecard show
+      // "150/3 dec". The innings-flip itself is driven on the FE.
+      else if (e.event_type === 'declaration') { inn.declared = true; }
       inn.score = inn.runs;
     }
   } else if (slug === 'football' || slug === 'hockey') {
     for (const e of events) {
       const p: any = e.payload || {};
-      if (e.event_type === 'score' && p.kind === 'goal') sides[sideOf(p)].score += 1;
+      if (e.event_type !== 'score') continue;
+      // A normal goal credits the scoring side; an own goal credits the
+      // OPPONENT of the side that put it in their own net (payload.team_side is
+      // the side that conceded it — resolved here, never stored, so it can't
+      // drift). Own goals are (correctly) not credited to any player's tally in
+      // aggregateGoalPlayers, which counts only kind === 'goal'.
+      if (p.kind === 'goal') sides[sideOf(p)].score += 1;
+      else if (p.kind === 'own_goal') sides[sideOf(p) === 'A' ? 'B' : 'A'].score += 1;
     }
     A.goals = A.score; B.goals = B.score;
   } else if (slug === 'basketball') {

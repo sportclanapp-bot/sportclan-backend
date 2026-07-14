@@ -259,7 +259,8 @@ export async function getPost(req: Request, res: Response) {
       *,
       author:users!author_id!inner(id, name, username, profile_picture_url, is_premium),
       sport:sports!sport_id(id, name, emoji),
-      city:cities!city_id(id, name)
+      city:cities!city_id(id, name),
+      match:matches!match_id(id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
     `)
     .eq('id', id)
     .is('author.deleted_at', null);

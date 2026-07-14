@@ -47,25 +47,22 @@ export async function search(req: Request, res: Response) {
 
 async function searchPlayers(res: Response, q: string, sportId: string | undefined, limit: number, callerId?: string) {
   const blocked = await blockedUserIds(callerId); // SC-82
-  // SC-238: apply the sport filter (was accepted but ignored). Restrict to users
-  // who have a user_sports row for that sport; if none, the result is empty.
-  let sportUserIds: string[] | null = null;
-  if (sportId) {
-    const { data: us } = await supabase.from('user_sports').select('user_id').eq('sport_id', sportId);
-    sportUserIds = (us || []).map((r) => r.user_id as string);
-    if (sportUserIds.length === 0) return res.json({ data: [] });
-  }
-  let base = supabase
-    .from('users')
-    .select(`
+  // SC-238: apply the sport filter (was accepted but ignored). Filter DB-side via
+  // an INNER join on user_sports (scalable — no .in()-at-scale pre-fetch, which
+  // caps at 1000 rows and overflows the URL). The `!inner` join drops users who
+  // don't have the sport; the .eq restricts the join to that sport.
+  const sel = `
       id, name, username, profile_picture_url, is_premium, discoverability,
       city:cities!city_id(id, name),
-      sports:user_sports(sport:sports(id, name, emoji))
-    `)
+      sports:user_sports${sportId ? '!inner' : ''}(sport_id, sport:sports(id, name, emoji))
+    `;
+  let base = supabase
+    .from('users')
+    .select(sel)
     // SC-237: injection-safe OR-of-ilike (double-quoted value → commas/parens are
     // literal, LIKE metachars escaped → literal % / _ matching).
     .or(orIlikeContains(['username', 'name'], q));
-  if (sportUserIds) base = base.in('id', sportUserIds);
+  if (sportId) base = base.eq('sports.sport_id', sportId);
   const { data, error } = await excludeIds(excludeDeleted(base), 'id', blocked) // SC-77 deleted + SC-82 blocked
     // Premium users appear first — delivers the "Boosted ranking" promise
     .order('is_premium', { ascending: false })

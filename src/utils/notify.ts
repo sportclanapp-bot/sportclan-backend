@@ -77,6 +77,11 @@ const PREF_CATEGORY: Record<string, string> = {
   // consistent with the other ungated status-changes (tournament entry
   // decisions, added_to_team, match_umpire_assigned/assigned_as_official).
   // NOT a bug.
+  //
+  // SC-239: tournament_cancelled is likewise UNMAPPED by design (ungated — always
+  // delivers), the tournament-level sibling of match_cancelled. An entrant losing
+  // track of a cancelled tournament is a critical status miss, not noise. Named
+  // here so it reads as classified-ungated, not accidentally-unmapped.
 };
 
 // Opt-out model: a category is allowed unless the user has explicitly set it

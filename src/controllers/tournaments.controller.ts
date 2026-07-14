@@ -7,7 +7,7 @@ import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { rankTeams, computeStats } from '../utils/standings';
-import { notifyUnlessBlocked } from '../utils/notify';
+import { notifyUnlessBlocked, notifyUsers } from '../utils/notify';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -248,6 +248,49 @@ export async function getTournament(req: Request, res: Response) {
 }
 
 // POST /tournaments/:id/entries/direct — organiser directly adds a team (auto-approved)
+// SC-240: a single player must not be rostered on two DIFFERENT teams in the
+// same tournament (they'd have to play against themselves). Returns the name of
+// a conflicting team if ANY member of `teamId`'s roster already belongs to
+// another team already entered (pending/approved) in this tournament, else null.
+// Bounded to 3 queries regardless of pool size (no N² roster cross-product):
+// entering roster → other entered team ids → one overlap probe. Distinct teams
+// that share NO players are allowed.
+async function rosterOverlapConflict(
+  tournamentId: string,
+  teamId: string,
+): Promise<{ teamName: string } | null> {
+  const { data: roster } = await supabase
+    .from('team_members')
+    .select('user_id')
+    .eq('team_id', teamId);
+  const userIds = Array.from(new Set((roster ?? []).map((m) => m.user_id).filter(Boolean)));
+  if (userIds.length === 0) return null;
+
+  const { data: entries } = await supabase
+    .from('tournament_entries')
+    .select('team_id')
+    .eq('tournament_id', tournamentId)
+    .in('status', ['pending', 'approved'])
+    .neq('team_id', teamId);
+  const otherTeamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
+  if (otherTeamIds.length === 0) return null;
+
+  const { data: clash } = await supabase
+    .from('team_members')
+    .select('team_id')
+    .in('team_id', otherTeamIds)
+    .in('user_id', userIds)
+    .limit(1)
+    .maybeSingle();
+  if (!clash) return null;
+  const { data: clashTeam } = await supabase
+    .from('teams')
+    .select('name')
+    .eq('id', clash.team_id)
+    .maybeSingle();
+  return { teamName: clashTeam?.name ?? 'another team' };
+}
+
 export async function directAddTeam(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -291,6 +334,15 @@ export async function directAddTeam(req: Request, res: Response) {
       .eq('team_id', team_id)
       .maybeSingle();
     if (existing) return res.status(400).json({ error: 'Team already registered' });
+
+    // SC-240: no player may appear on two teams in the same tournament.
+    const overlap = await rosterOverlapConflict(id, team_id);
+    if (overlap) {
+      return res.status(409).json({
+        error: `A player on this team is already registered with ${overlap.teamName} in this tournament.`,
+        code: 'ROSTER_OVERLAP',
+      });
+    }
 
     const { data, error } = await supabase
       .from('tournament_entries')
@@ -344,6 +396,16 @@ export async function createEntry(req: Request, res: Response) {
       if ((count ?? 0) >= tournament.max_teams) {
         return res.status(400).json({ error: 'Tournament is full', code: 'TOURNAMENT_FULL' });
       }
+    }
+
+    // SC-240: no player may appear on two teams in the same tournament. Checked
+    // before the reopen/insert so a re-entry after a rejection is re-validated too.
+    const overlap = await rosterOverlapConflict(id, team_id);
+    if (overlap) {
+      return res.status(409).json({
+        error: `A player on this team is already registered with ${overlap.teamName} in this tournament.`,
+        code: 'ROSTER_OVERLAP',
+      });
     }
 
     // SC-83: a team may re-enter after a REJECTED/WITHDRAWN entry. Reopen the
@@ -526,7 +588,7 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by')
+      .select('created_by, status, name')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -605,10 +667,69 @@ export async function updateTournament(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // SC-239: cancelling a tournament must not leave its bracket orphaned. On the
+    // TRANSITION into 'cancelled' (from a non-cancelled status), abandon every
+    // still-live/scheduled match and notify the registered entrants. Guarded on
+    // the transition so a re-cancel is a no-op (no double-abandon, no double-
+    // notify). Best-effort — the status change is already committed; a side-effect
+    // hiccup must not fail the request.
+    if (update.status === 'cancelled' && tournament.status !== 'cancelled') {
+      try {
+        await cancelTournamentSideEffects(id, tournament.name ?? null, userId);
+      } catch { /* best-effort */ }
+    }
     return res.json({ tournament: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+// SC-239: side-effects of cancelling a tournament. (a) Abandon every scheduled/
+// live match so no orphaned "LIVE" fixture survives the cancellation — no winner
+// and nothing advances (the whole bracket is dead, unlike an SC-88 single-team
+// walkover). (b) Fan out a 'tournament_cancelled' notification to the CAPTAIN of
+// every registered (pending/approved) team — the same recipient model as the
+// entry approve/reject notifications. Ungated by design (see PREF_CATEGORY /
+// SC-233): a cancellation is a critical one-time status change, always delivered.
+async function cancelTournamentSideEffects(
+  tournamentId: string,
+  tournamentName: string | null,
+  actorId: string,
+): Promise<void> {
+  const now = new Date().toISOString();
+  // (a) Abandon live/scheduled matches. Idempotent: a re-run finds none left.
+  await supabase
+    .from('matches')
+    .update({ status: 'abandoned', updated_at: now })
+    .eq('tournament_id', tournamentId)
+    .in('status', ['scheduled', 'live']);
+
+  // (b) Notify the captain of every still-registered team.
+  const { data: entries } = await supabase
+    .from('tournament_entries')
+    .select('team_id')
+    .eq('tournament_id', tournamentId)
+    .in('status', ['pending', 'approved']);
+  const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
+  if (teamIds.length === 0) return;
+  const { data: captains } = await supabase
+    .from('team_members')
+    .select('user_id')
+    .in('team_id', teamIds)
+    .eq('role', 'captain');
+  const captainIds = Array.from(new Set((captains ?? []).map((c) => c.user_id).filter(Boolean)));
+  if (captainIds.length === 0) return;
+  await notifyUsers(
+    captainIds,
+    {
+      type: 'tournament_cancelled',
+      title: 'Tournament cancelled',
+      body: `${tournamentName ?? 'A tournament'} has been cancelled by the organiser.`,
+      data: { tournamentId },
+    },
+    { actorId },
+  );
 }
 
 // GET /tournaments/:id/bracket — returns the knockout bracket grouped

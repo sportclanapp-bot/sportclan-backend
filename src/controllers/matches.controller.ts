@@ -44,6 +44,13 @@ export async function createMatch(req: Request, res: Response) {
     if (is_ranked && (!team_a_id || !team_b_id)) {
       return res.status(400).json({ error: 'Ranked matches require two registered teams.' });
     }
+    // SC-245: a team can't play itself — a nonsensical fixture and (if ranked)
+    // an ambiguous winner/attribution. Reject when both sides are the SAME
+    // registered team. Free-text-name-only sides have no id to compare, so this
+    // only fires for the team-vs-team path.
+    if (team_a_id && team_b_id && team_a_id === team_b_id) {
+      return res.status(400).json({ error: 'A team can’t play itself — pick two different teams.', code: 'SAME_TEAM' });
+    }
     const { data, error } = await supabase
       .from('matches')
       .insert({
@@ -556,7 +563,7 @@ export async function updateMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id, status')
+      .select('created_by, umpire_id, status, team_a_id, team_b_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -591,6 +598,17 @@ export async function updateMatch(req: Request, res: Response) {
     const FROZEN_ON_TERMINAL = ['status', 'winner_team_id', 'score_summary', 'team_a_id', 'team_b_id'];
     if (isTerminalMatchStatus(match.status) && FROZEN_ON_TERMINAL.some((k) => k in update)) {
       return res.status(409).json({ error: 'This match is already finished — its result and status are locked.' });
+    }
+    // SC-245: don't let an edit PATCH a valid A-vs-B match into self-vs-self.
+    // Compare the EFFECTIVE pair after applying the patch (a side left out of the
+    // body keeps its current value), so setting only team_b_id = team_a_id is
+    // caught too. Only fires when both effective sides are the same team id.
+    {
+      const effA = 'team_a_id' in update ? update.team_a_id : match.team_a_id;
+      const effB = 'team_b_id' in update ? update.team_b_id : match.team_b_id;
+      if (effA && effB && effA === effB) {
+        return res.status(400).json({ error: 'A team can’t play itself — pick two different teams.', code: 'SAME_TEAM' });
+      }
     }
     update.updated_at = new Date().toISOString();
     const { data, error } = await supabase.from('matches').update(update).eq('id', id).select('*').single();

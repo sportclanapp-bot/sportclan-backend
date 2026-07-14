@@ -1349,7 +1349,14 @@ export async function completeMatch(req: Request, res: Response) {
       const matchLabel = (match.team_a_name && match.team_b_name)
         ? `${match.team_a_name} vs ${match.team_b_name}`
         : 'your match';
-      const participantIds = allPlayerIds.filter((uid) => uid !== match.umpire_id);
+      // SC-249: derive the recipients from the actual match_participants rows,
+      // NOT allPlayerIds — allPlayerIds is only populated inside the ranked-ELO
+      // branch above, so a CASUAL umpired match had zero recipients and never
+      // prompted anyone to rate the umpire. The participants list is fetched
+      // regardless of is_ranked, so this fires for casual + ranked alike.
+      const participantIds = Array.from(
+        new Set((participants ?? []).map((p) => p.user_id).filter(Boolean)),
+      ).filter((uid) => uid !== match.umpire_id);
       if (participantIds.length > 0) {
         void notifyUsers(participantIds, {
           type: 'umpire_rating_prompt',

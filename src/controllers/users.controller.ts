@@ -11,9 +11,19 @@ import { istDay } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
 
-// Public-safe user fields. Never returns password_hash.
+// SELF-only fields — the full row for /users/me + own-profile writes. Contains
+// contact + wallet + account internals; NEVER serialize this to another viewer.
+// (Still never returns password_hash — that column is simply not listed.)
 const PUBLIC_FIELDS =
   'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, is_admin, notification_preferences, discoverability, message_privacy, tag_privacy, created_at';
+
+// SC-246: the ONLY fields safe to serialize to a DIFFERENT viewer (getUserById).
+// Deliberately EXCLUDES phone, email, coin_balance, referral_code, is_admin,
+// notification_preferences, message_privacy, discoverability, tag_privacy,
+// premium_expires_at, trial_used. `dob` is included but nulled below unless
+// show_dob. `is_premium` is a public boolean (the expiry timestamp is not).
+const PUBLIC_USER_FIELDS =
+  'id, name, username, profile_picture_url, bio, link, city_id, gender, account_type, is_premium, is_available, streak_count, dob, show_dob, created_at';
 
 // Fire smart engagement notifications lazily from /users/me. Best-effort,
 // never throws — failures here must not block the main profile response.
@@ -237,8 +247,11 @@ export async function getUserById(req: Request, res: Response) {
   // SC-77: a soft-deleted account 404s (never renders a "Deleted User" profile).
   const { data, error } = await excludeDeleted(supabase
     .from('users')
+    // SC-246: a DIFFERENT viewer only ever gets the narrow public projection —
+    // never phone/email/coin_balance/referral_code/is_admin/prefs. (getMe keeps
+    // the full PUBLIC_FIELDS for the user's own data.)
     // SC-200: embed city → flat city_name (flattened into safeUser below).
-    .select(`${PUBLIC_FIELDS}, city:cities!city_id(id, name)`)
+    .select(`${PUBLIC_USER_FIELDS}, city:cities!city_id(id, name)`)
     .eq('id', id))
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
@@ -373,6 +386,21 @@ export async function updateMe(req: Request, res: Response) {
   if (typeof patch.name === 'string' && patch.name.length > LIMITS.teamNameMax) {
     return res.status(400).json({ error: `Name must be ${LIMITS.teamNameMax} characters or fewer` });
   }
+  // SC-248: a DOB can't be in the future or imply an implausible age (>120y).
+  if (patch.dob != null && patch.dob !== '') {
+    const dobDate = new Date(patch.dob as string);
+    if (isNaN(dobDate.getTime())) {
+      return res.status(400).json({ error: 'Date of birth is not a valid date' });
+    }
+    const now = new Date();
+    const age = (now.getTime() - dobDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+    if (dobDate.getTime() > now.getTime()) {
+      return res.status(400).json({ error: 'Date of birth can’t be in the future' });
+    }
+    if (age > 120) {
+      return res.status(400).json({ error: 'Please enter a valid date of birth' });
+    }
+  }
   // SC-96: validate profile photo + link are well-formed URLs (was arbitrary text).
   // link is a legit EXTERNAL website → protocol-only; profile_picture_url is an
   // IMAGE → allowlist to our storage (SC-147; OAuth avatars on *.googleusercontent.com allowed).
@@ -381,8 +409,16 @@ export async function updateMe(req: Request, res: Response) {
   const badAvatar = firstDisallowedImageUrl(patch, ['profile_picture_url']);
   if (badAvatar) return res.status(400).json({ error: 'profile_picture_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
 
-  // Username change: enforce 30-day cooldown and uniqueness
+  // Username change: enforce format, 30-day cooldown, and uniqueness.
   if ('username' in patch && patch.username) {
+    // SC-247: usernames must be [a-zA-Z0-9_] only (no whitespace / punctuation /
+    // emoji) — a spaced username breaks @mention parsing (@([a-zA-Z0-9_]+)).
+    if (typeof patch.username !== 'string' || !/^[a-zA-Z0-9_]{3,30}$/.test(patch.username)) {
+      return res.status(400).json({
+        error: 'Username must be 3–30 characters, using only letters, numbers, and underscores.',
+        code: 'INVALID_USERNAME',
+      });
+    }
     const { data: current } = await supabase
       .from('users')
       .select('username, last_username_changed_at')

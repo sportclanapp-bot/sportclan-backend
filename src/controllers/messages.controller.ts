@@ -5,6 +5,73 @@ import { isBlockedBetween, blockedUserIds } from '../utils/blocks';
 import { LIMITS, firstInvalidUrl, ARRAY_LIMITS, tooManyItems, firstDisallowedImageUrl } from '../utils/validation';
 import { parsePagination } from '../utils/pagination';
 
+// ─── SC-241: 1:1 DM block/privacy gate for EXISTING conversations ────────────
+// getOrCreateDM enforces block + message_privacy ONLY when a DM is first created.
+// Every path that acts on an existing chat (send/read/react/mark-read) must apply
+// the same gate, or a block/privacy setting is bypassed for any thread that
+// already exists. These helpers isolate the 1:1 case: a GROUP chat (is_group) or
+// any chat without EXACTLY one counterpart returns null → the caller skips the
+// gate, so group sends are never affected by a block between two members.
+async function dmCounterpartId(chatId: string, userId: string): Promise<string | null> {
+  const { data: chat } = await supabase
+    .from('chats')
+    .select('is_group')
+    .eq('id', chatId)
+    .maybeSingle();
+  if (!chat || chat.is_group) return null; // group or missing → not a 1:1 DM
+  const { data: parts } = await supabase
+    .from('chat_participants')
+    .select('user_id')
+    .eq('chat_id', chatId)
+    .neq('user_id', userId);
+  const others = (parts ?? []).map((p) => p.user_id as string);
+  return others.length === 1 ? others[0] : null;
+}
+
+// Block-only gate (read/react/mark-read): true when the caller is blocked
+// either-direction with the 1:1 counterpart. Groups → false (never gated).
+async function isDmBlocked(chatId: string, userId: string): Promise<boolean> {
+  const other = await dmCounterpartId(chatId, userId);
+  if (!other) return false;
+  return isBlockedBetween(userId, other);
+}
+
+// Send gate (sendMessage): block (either direction) AND the recipient's
+// message_privacy, mirroring getOrCreateDM so privacy→nobody/followers is
+// honoured in an existing thread too. Returns an error {status,error} or null.
+async function dmSendGate(
+  chatId: string,
+  userId: string,
+): Promise<{ status: number; error: string } | null> {
+  const other = await dmCounterpartId(chatId, userId);
+  if (!other) return null; // group / non-1:1 → no DM gate
+  if (await isBlockedBetween(userId, other)) {
+    return { status: 403, error: 'You can’t message this user.' };
+  }
+  const { data: target } = await supabase
+    .from('users')
+    .select('message_privacy')
+    .eq('id', other)
+    .maybeSingle();
+  const privacy = (target?.message_privacy as string) ?? 'everyone';
+  if (privacy === 'nobody') {
+    return { status: 403, error: 'This user isn’t accepting new messages.' };
+  }
+  if (privacy === 'followers') {
+    const { data: follows } = await supabase
+      .from('follow_relationships')
+      .select('id')
+      .eq('follower_id', userId)
+      .eq('following_id', other)
+      .limit(1)
+      .maybeSingle();
+    if (!follows) {
+      return { status: 403, error: 'Only people they follow can message this user.' };
+    }
+  }
+  return null;
+}
+
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
 export async function listChats(req: Request, res: Response) {
   const userId = req.userId!;
@@ -442,6 +509,14 @@ export async function getMessages(req: Request, res: Response) {
 
   if (!participant) return res.status(403).json({ error: 'Not a member of this chat' });
 
+  // SC-241: don't serve a 1:1 thread's history to a party blocked either
+  // direction (consistent with the sendMessage gate + getOrCreateDM). 403 rather
+  // than an empty list so the client shows the same "can't open" state it shows
+  // for a blocked profile. Groups → not gated.
+  if (await isDmBlocked(id, userId)) {
+    return res.status(403).json({ error: 'You can’t view this conversation.' });
+  }
+
   let query = supabase
     .from('messages')
     .select(`
@@ -512,6 +587,11 @@ export async function sendMessage(req: Request, res: Response) {
     .maybeSingle();
 
   if (!participant) return res.status(403).json({ error: 'Not a member of this chat' });
+
+  // SC-241: a block/privacy setting must gate an EXISTING 1:1 thread, not only
+  // new-DM creation. Groups return null from the gate → unaffected.
+  const gate = await dmSendGate(id, userId);
+  if (gate) return res.status(gate.status).json({ error: gate.error });
 
   // Build insert payload. Some columns may not exist on older schemas;
   // pgrest will surface an error if so, which we propagate.
@@ -696,8 +776,34 @@ export async function batchMarkRead(req: Request, res: Response) {
     .from('chat_participants')
     .select('chat_id')
     .eq('user_id', userId);
-  const callerChatIds = (myChats ?? []).map((c) => c.chat_id);
+  let callerChatIds = (myChats ?? []).map((c) => c.chat_id);
   if (callerChatIds.length === 0) return res.json({ success: true, updated: 0 });
+
+  // SC-241: drop any 1:1 chat whose counterpart is blocked (either direction) so
+  // a blocked party can't emit read-receipts into that thread. This spans many
+  // chats, so we filter the chat set rather than 403 the whole batch. Groups are
+  // kept (a block between two members doesn't gate the group). One query:
+  const blocked = await blockedUserIds(userId);
+  if (blocked.size > 0) {
+    const { data: parts } = await supabase
+      .from('chat_participants')
+      .select('chat_id, user_id')
+      .in('chat_id', callerChatIds)
+      .neq('user_id', userId);
+    const counts = new Map<string, number>();
+    const blockedDm = new Set<string>();
+    for (const p of parts ?? []) {
+      counts.set(p.chat_id, (counts.get(p.chat_id) ?? 0) + 1);
+    }
+    for (const p of parts ?? []) {
+      // exactly-one-counterpart (1:1) AND that counterpart is blocked
+      if (counts.get(p.chat_id) === 1 && blocked.has(p.user_id as string)) {
+        blockedDm.add(p.chat_id as string);
+      }
+    }
+    if (blockedDm.size > 0) callerChatIds = callerChatIds.filter((c) => !blockedDm.has(c));
+    if (callerChatIds.length === 0) return res.json({ success: true, updated: 0 });
+  }
 
   // Pull the rows whose read_by doesn't already contain the caller.
   const { data: rows, error } = await supabase
@@ -735,6 +841,11 @@ export async function markAsRead(req: Request, res: Response) {
     .eq('user_id', userId)
     .maybeSingle();
   if (!participant) return res.status(403).json({ error: 'Not a member of this chat' });
+
+  // SC-241: a blocked 1:1 party must not emit a read-receipt into the thread.
+  if (await isDmBlocked(id, userId)) {
+    return res.status(403).json({ error: 'You can’t view this conversation.' });
+  }
 
   // Get unread messages in this chat not sent by me
   const { data: unread } = await supabase
@@ -788,10 +899,21 @@ export async function reactToMessage(req: Request, res: Response) {
 
     const { data: msg, error } = await supabase
       .from('messages')
-      .select('id, reactions')
+      .select('id, chat_id, reactions')
       .eq('id', messageId)
       .maybeSingle();
     if (error || !msg) return res.status(404).json({ error: 'Message not found' });
+
+    // SC-242: reactToMessage had NO membership check — any authenticated user
+    // could react to any message by id (IDOR, SC-94/SC-107 class). Require the
+    // caller to be a participant of the message's chat…
+    if (!(await isChatParticipant(msg.chat_id as string, userId))) {
+      return res.status(403).json({ error: 'Not a member of this chat' });
+    }
+    // …and (SC-241) don't let a blocked 1:1 party react into the thread.
+    if (await isDmBlocked(msg.chat_id as string, userId)) {
+      return res.status(403).json({ error: 'You can’t react in this conversation.' });
+    }
 
     const reactions: Record<string, string[]> = msg.reactions ?? {};
     const current = reactions[emoji] ?? [];

@@ -65,6 +65,14 @@ const PREF_CATEGORY: Record<string, string> = {
   // Digests & nudges
   weekly_digest: 'digests',
   reengagement: 'digests',
+  // SC-233 (intentional, by design — do NOT gate): match_cancelled /
+  // match_abandoned are deliberately UNMAPPED here, so they ignore the 'matches'
+  // toggle and always deliver. Rationale: a cancellation/abandonment is a
+  // critical, actionable, one-time status change — not match-noise. A user
+  // missing that their match died is worse than an unwanted ping. This is
+  // consistent with the other ungated status-changes (tournament entry
+  // decisions, added_to_team, match_umpire_assigned/assigned_as_official).
+  // NOT a bug.
 };
 
 // Opt-out model: a category is allowed unless the user has explicitly set it

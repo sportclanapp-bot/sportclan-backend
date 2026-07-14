@@ -70,7 +70,10 @@ async function searchPlayers(res: Response, q: string, sportId: string | undefin
     .limit(limit);
 
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ data: await applyDiscoverability(data || [], callerId) });
+  // The dynamic select() string loses supabase's row-type inference, so cast to
+  // the shape applyDiscoverability expects (id + optional discoverability).
+  const rows = (data || []) as unknown as Array<{ id: string; discoverability?: string }>;
+  return res.json({ data: await applyDiscoverability(rows, callerId) });
 }
 
 // SC-A1 — respect the "who can find me" setting on the people-directory

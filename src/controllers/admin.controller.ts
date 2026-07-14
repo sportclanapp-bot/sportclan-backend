@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
+import { orIlikeContains } from '../utils/likeSearch'; // SC-237
 
 /**
  * Admin controller · stats + moderation + broadcast.
@@ -313,7 +314,7 @@ export async function adminListUsers(req: Request, res: Response) {
       .select(ADMIN_USER_FIELDS, { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(p.from, p.to);
-    if (q) query = query.or(`name.ilike.%${q}%,username.ilike.%${q}%,phone.ilike.%${q}%`);
+    if (q) query = query.or(orIlikeContains(['name', 'username', 'phone'], q)); // SC-237: injection-safe
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ users: data ?? [], ...pageMeta(count, p) });

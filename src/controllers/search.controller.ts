@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds } from '../utils/blocks';
+import { escapeLike, orIlikeContains } from '../utils/likeSearch'; // SC-237
 
 // ─── UNIFIED SEARCH ─────────────────────────────────────────────────────────
 export async function search(req: Request, res: Response) {
@@ -46,14 +47,26 @@ export async function search(req: Request, res: Response) {
 
 async function searchPlayers(res: Response, q: string, sportId: string | undefined, limit: number, callerId?: string) {
   const blocked = await blockedUserIds(callerId); // SC-82
-  const { data, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
+  // SC-238: apply the sport filter (was accepted but ignored). Restrict to users
+  // who have a user_sports row for that sport; if none, the result is empty.
+  let sportUserIds: string[] | null = null;
+  if (sportId) {
+    const { data: us } = await supabase.from('user_sports').select('user_id').eq('sport_id', sportId);
+    sportUserIds = (us || []).map((r) => r.user_id as string);
+    if (sportUserIds.length === 0) return res.json({ data: [] });
+  }
+  let base = supabase
     .from('users')
     .select(`
       id, name, username, profile_picture_url, is_premium, discoverability,
       city:cities!city_id(id, name),
       sports:user_sports(sport:sports(id, name, emoji))
     `)
-    .or(`username.ilike.%${q}%,name.ilike.%${q}%`)), 'id', blocked)
+    // SC-237: injection-safe OR-of-ilike (double-quoted value → commas/parens are
+    // literal, LIKE metachars escaped → literal % / _ matching).
+    .or(orIlikeContains(['username', 'name'], q));
+  if (sportUserIds) base = base.in('id', sportUserIds);
+  const { data, error } = await excludeIds(excludeDeleted(base), 'id', blocked) // SC-77 deleted + SC-82 blocked
     // Premium users appear first — delivers the "Boosted ranking" promise
     .order('is_premium', { ascending: false })
     .order('name', { ascending: true })
@@ -99,7 +112,7 @@ async function searchTeams(res: Response, q: string, sportId: string | undefined
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
     `)
-    .ilike('name', `%${q}%`)
+    .ilike('name', `%${escapeLike(q)}%`)
     .limit(limit);
 
   if (sportId) query = query.eq('sport_id', sportId);
@@ -116,7 +129,7 @@ async function searchTournaments(res: Response, q: string, sportId: string | und
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name)
     `)
-    .ilike('name', `%${q}%`)
+    .ilike('name', `%${escapeLike(q)}%`)
     .order('start_date', { ascending: false })
     .limit(limit);
 
@@ -136,7 +149,7 @@ async function searchUmpires(res: Response, q: string, sportId: string | undefin
       city:cities!city_id(id, name)
     `)
     .eq('is_premium', true)
-    .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
+    .or(orIlikeContains(['username', 'name'], q))
     .limit(limit)), 'id', blocked);
 
   if (error) return res.status(500).json({ error: error.message });
@@ -165,7 +178,7 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
       author:users!author_id!inner(id, name, username, profile_picture_url),
       sport:sports!sport_id(id, name, emoji)
     `)
-    .ilike('content', `%${q}%`)
+    .ilike('content', `%${escapeLike(q)}%`)
     .order('created_at', { ascending: false })
     .limit(limit);
   query = excludeDeletedEmbed(query, 'author'); // SC-77
@@ -193,7 +206,7 @@ async function searchBusinesses(res: Response, q: string, limit: number, callerI
       city:cities!city_id(id, name)
     `)
     .eq('is_premium', true)
-    .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
+    .or(orIlikeContains(['username', 'name'], q))
     .limit(limit)), 'id', blocked);
 
   if (error) return res.status(500).json({ error: error.message });
@@ -224,7 +237,7 @@ async function searchByAccountType(res: Response, q: string, accountType: string
   const { data: users, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
     .from('users')
     .select('id, name, username, profile_picture_url, bio, is_premium, city:cities!city_id(id, name)')
-    .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
+    .or(orIlikeContains(['username', 'name'], q))
     .order('is_premium', { ascending: false })
     .order('name', { ascending: true })
     .limit(limit)), 'id', blocked);

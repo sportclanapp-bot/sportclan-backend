@@ -46,6 +46,10 @@ const PREF_CATEGORY: Record<string, string> = {
   comment: 'social',
   like: 'social',
   reaction: 'social',
+  // SC-235: post @mention — a tagged user is notified they were mentioned in a
+  // post. Social-gated (a mention is social engagement), so the Social toggle
+  // silences it. Must be here or it would be an ungated bypass (the SC-232 class).
+  mention: 'social',
   invite: 'social',
   play_invite: 'social',
   invite_accepted: 'social',

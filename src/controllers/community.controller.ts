@@ -93,6 +93,29 @@ function detectProfanity(text: string): string[] {
   return [...hits];
 }
 
+// SC-234: attach the viewer's OWN poll vote to each poll post so the FE can mark
+// the selected option (✓ + highlight) after a reload. votePoll returns
+// my_vote_option_id inline, but the feed/detail reads (listPosts + getPost — the
+// same sibling pair as SC-193/SC-229) never joined poll_votes, so a voted poll
+// rendered "unvoted" once the vote response was gone. One batched query per page.
+async function attachMyVotes<T extends { id: string; poll_options?: unknown; my_vote_option_id?: string | null }>(
+  posts: T[],
+  userId: string | undefined,
+): Promise<void> {
+  if (!userId || posts.length === 0) return;
+  const pollIds = posts.filter((p) => p.poll_options).map((p) => p.id);
+  if (pollIds.length === 0) return;
+  const { data: votes } = await supabase
+    .from('poll_votes')
+    .select('post_id, option_id')
+    .eq('user_id', userId)
+    .in('post_id', pollIds);
+  const voteMap = new Map((votes ?? []).map((v: { post_id: string; option_id: string }) => [v.post_id, v.option_id]));
+  for (const p of posts) {
+    if (p.poll_options) p.my_vote_option_id = voteMap.get(p.id) ?? null;
+  }
+}
+
 // ─── LIST POSTS (feed) ──────────────────────────────────────────────────────
 export async function listPosts(req: Request, res: Response) {
   const { sport_id, city_id, post_type, author_id, user_id, cursor, limit = '20', sort } = req.query;
@@ -195,6 +218,7 @@ export async function listPosts(req: Request, res: Response) {
   if (result.error) return res.status(500).json({ error: sanitizeError(result.error) });
 
   const items = result.data || [];
+  await attachMyVotes(items as Array<{ id: string; poll_options?: unknown; my_vote_option_id?: string | null }>, req.userId);
   return res.json({
     items,
     posts: items,
@@ -277,6 +301,10 @@ export async function getPost(req: Request, res: Response) {
   if (sa && new Date(sa).getTime() > Date.now() && (data as { author_id?: string }).author_id !== req.userId) {
     return res.status(404).json({ error: 'Post not found' });
   }
+  // SC-234: include the viewer's own poll vote on the single-post read too (the
+  // getPost sibling of the listPosts fix), so a voted poll opened via detail /
+  // deep-link / notification still shows the selected option.
+  await attachMyVotes([data as { id: string; poll_options?: unknown; my_vote_option_id?: string | null }], req.userId);
   return res.json({ data, post: data });
 }
 
@@ -288,6 +316,12 @@ export async function createPost(req: Request, res: Response) {
     text: textAlias, // frontend historically sends `text`
     image_url,
     media_urls, // frontend historically sends `media_urls: string[]`
+    // SC-236 (LOW, DEFERRED): link_url is stored WITHOUT scheme/host validation —
+    // the SC-146/147 allowlist below covers image URLs only. Harmless TODAY: link
+    // posts aren't a user-facing feature (no compose type, no FE render/open). But
+    // BEFORE adding any link rendering/opening, validate link_url here (reject
+    // javascript:/data:, enforce http/https) or it becomes an injection/tapjacking
+    // vector — the same class as the image-URL fix.
     link_url,
     sport_id,
     city_id,
@@ -475,7 +509,36 @@ export async function createPost(req: Request, res: Response) {
   } catch {
     // best-effort
   }
-  return res.status(201).json({ data, post: data });
+
+  // SC-235: notify each @mentioned user that they were tagged in this post. Chat
+  // mentions already notified; post mentions were render-only, so a tagged user
+  // never knew. notifyUsers applies dedup + self + block(either-direction) +
+  // deleted + the 'mention' prefs gate (social — see PREF_CATEGORY), so we never
+  // notify a self-mention or a blocked target, and a user mentioned twice gets
+  // one notification. Routes to the post (data.post_id → PostDetail). Best-effort
+  // and not awaited — a notification failure must not block the post response.
+  try {
+    const newPostId = (data as { id?: string })?.id;
+    const mentionIds = Array.isArray(mentions)
+      ? mentions.filter((m: unknown): m is string => typeof m === 'string')
+      : [];
+    if (newPostId && mentionIds.length > 0) {
+      const authorName = await displayName(userId);
+      void notifyUsers(
+        mentionIds,
+        {
+          type: 'mention',
+          title: 'You were mentioned',
+          body: `${authorName} mentioned you in a post`,
+          data: { post_id: newPostId, actor_id: userId, screen: 'PostDetail' },
+        },
+        { actorId: userId },
+      );
+    }
+  } catch {
+    // best-effort — never block the post response on a mention fan-out failure
+  }
+
   return res.status(201).json({ data, post: data });
 }
 

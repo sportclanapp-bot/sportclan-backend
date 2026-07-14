@@ -1025,6 +1025,28 @@ export async function completeMatch(req: Request, res: Response) {
       });
     }
 
+    // SC-227: basketball can't end level — a tie isn't a valid final (OT = more
+    // points until decisive). Football/hockey/cricket/etc. may legitimately draw,
+    // so this guard is basketball-only.
+    {
+      const { data: sportRow } = await supabase
+        .from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
+      const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
+      if (slug === 'basketball') {
+        const { data: mrow } = await supabase
+          .from('matches').select('score_summary').eq('id', id).maybeSingle();
+        const ss = (mrow?.score_summary ?? {}) as { A?: any; B?: any };
+        const a = Number(ss?.A?.points ?? ss?.A?.score ?? 0);
+        const b = Number(ss?.B?.points ?? ss?.B?.score ?? 0);
+        if (a === b) {
+          return res.status(400).json({
+            error: "Basketball can't end in a tie — play overtime until there's a winner.",
+            code: 'BASKETBALL_TIE',
+          });
+        }
+      }
+    }
+
     // Get participants grouped by team side
     const { data: participants } = await supabase
       .from('match_participants')

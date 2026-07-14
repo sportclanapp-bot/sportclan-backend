@@ -68,6 +68,31 @@ export async function createEvent(req: Request, res: Response) {
       return res.status(409).json({ error: 'This match is finished and can no longer be scored' });
     }
 
+    // SC-228: validate numeric scoring inputs so a buggy/malicious client can't
+    // corrupt a score (negative subtracts, huge inflates). Clean 400, no write.
+    // Bounds by family: point/board `value` 1..3 (basketball 3-pointer, carrom
+    // queen 3, rally 1); cricket `runs` 0..7 (dot ball .. six + overthrow buffer);
+    // `period`/set/ply 0..2000; `clock_seconds` 0..86400 (≤24h). team_side A|B.
+    const outOfRange = (v: unknown, min: number, max: number): boolean =>
+      v != null && (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max);
+    if (outOfRange(period, 0, 2000)) {
+      return res.status(400).json({ error: 'period must be an integer between 0 and 2000' });
+    }
+    if (outOfRange(clock_seconds, 0, 86400)) {
+      return res.status(400).json({ error: 'clock_seconds must be an integer between 0 and 86400' });
+    }
+    if (payload && typeof payload === 'object') {
+      if (payload.team_side != null && payload.team_side !== 'A' && payload.team_side !== 'B') {
+        return res.status(400).json({ error: 'team_side must be "A" or "B"' });
+      }
+      if (outOfRange(payload.value, 1, 3)) {
+        return res.status(400).json({ error: 'value must be an integer between 1 and 3' });
+      }
+      if (outOfRange(payload.runs, 0, 7)) {
+        return res.status(400).json({ error: 'runs must be an integer between 0 and 7' });
+      }
+    }
+
     // Catch-all: any scored event means the match is in progress, so promote it
     // to `live`. The toss handler already does this for the normal flow; this
     // covers the "skip toss" path where scoring starts without a recorded toss.

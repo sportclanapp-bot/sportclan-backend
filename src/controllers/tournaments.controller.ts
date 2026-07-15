@@ -11,6 +11,8 @@ import {
   buildSchedule, timeToMinutes, keyOf, formatSlotIst,
   type SchedulingConfig, type FixtureShape, type SlotAssign,
 } from '../utils/scheduleFixtures';
+import { isTournamentOrganiser, authorizeCarveout, logAdminAction } from '../utils/tournamentAuth';
+import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers } from '../utils/notify';
 
 function generateEntryCode(): string {
@@ -327,7 +329,8 @@ export async function directAddTeam(req: Request, res: Response) {
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
-    if (tournament.created_by !== userId) {
+    // Operational action → any organiser (creator or co-organiser).
+    if (!(await isTournamentOrganiser(id, userId))) {
       return res.status(403).json({ error: 'Only the organiser can directly add teams' });
     }
     // SC-99: once the bracket is generated a new team would never appear in the
@@ -530,7 +533,8 @@ export async function updateEntry(req: Request, res: Response) {
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
 
-    const isCreator = tournament.created_by === userId;
+    // Operational: any organiser (creator or co-organiser) may approve/reject/manage entries.
+    const isCreator = await isTournamentOrganiser(id, userId);
     const { data: membership } = await supabase
       .from('team_members')
       .select('role')
@@ -540,7 +544,7 @@ export async function updateEntry(req: Request, res: Response) {
     const isTeamCaptain = membership?.role === 'captain';
 
     if (status === 'approved' || status === 'rejected') {
-      if (!isCreator) return res.status(403).json({ error: 'Only the tournament creator can approve/reject' });
+      if (!isCreator) return res.status(403).json({ error: 'Only the tournament organiser can approve/reject' });
       // SC-99: can't approve a NEW team into the bracket after it's generated.
       // (reject stays allowed for pending cleanup; withdrawn → SC-88 walkover.)
       if (status === 'approved' && (tournament as any).fixtures_generated) {
@@ -614,7 +618,22 @@ export async function updateTournament(req: Request, res: Response) {
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
-    if (tournament.created_by !== userId) return res.status(403).json({ error: 'Only the creator can update' });
+    // Auth split: cancelling or force-completing a tournament is a CARVE-OUT
+    // (creator OR admin, logged) — a co-organiser can't nuke the cup. Every other
+    // edit (details/schedule/venue/window) is operational → any organiser
+    // (creator or co-org). An admin editing a non-status field is NOT authorized
+    // (narrow override set) and gets 403.
+    const isTerminalStatusChange = req.body?.status === 'cancelled' || req.body?.status === 'completed';
+    let carveoutViaAdmin = false;
+    if (isTerminalStatusChange) {
+      const auth = await authorizeCarveout(tournament.created_by, userId);
+      if (!auth.ok) {
+        return res.status(403).json({ error: 'Only the tournament creator (or a platform admin) can cancel or complete a tournament.' });
+      }
+      carveoutViaAdmin = auth.viaAdmin;
+    } else if (!(await isTournamentOrganiser(id, userId))) {
+      return res.status(403).json({ error: 'Only the organiser can update' });
+    }
     // SC-95/96: same bounds on edit.
     const uLong = firstTooLong(req.body || {}, [['name', LIMITS.tournamentNameMax], ['description', LIMITS.descriptionMax]]);
     if (uLong) return res.status(400).json({ error: `${uLong[0]} must be ${uLong[1]} characters or fewer` });
@@ -695,6 +714,13 @@ export async function updateTournament(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // Attribution: this cancel/complete was authorized ONLY by is_admin (not the
+    // creator) → write the audit row. A creator/co-org doing it is NOT logged.
+    if (carveoutViaAdmin) {
+      void logAdminAction(userId, req.body?.status === 'cancelled' ? 'cancel_tournament' : 'force_complete_tournament',
+        'tournament', id, `status → ${req.body?.status} on "${tournament.name ?? id}"`);
+    }
 
     // Per-day window overrides (optional).
     await upsertDayWindows(id, req.body?.day_windows);
@@ -861,6 +887,153 @@ async function notifyTournamentUpdated(
   );
 }
 
+// ─── CO-ORGANISERS ──────────────────────────────────────────────────────────
+// A co-organiser does every OPERATIONAL action; managing co-orgs and cancelling/
+// completing the tournament stay creator-only (or admin, logged). added/removed
+// by the CREATOR only (or admin, logged) so the creator can't be locked out; a
+// co-organiser may always remove THEMSELVES (self-leave / decline).
+
+// GET /tournaments/:id/organisers — the creator + co-organisers.
+export async function getTournamentOrganisers(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data: t } = await supabase
+      .from('tournaments')
+      .select('created_by, creator:users!created_by(id, name, username, profile_picture_url)')
+      .eq('id', id).maybeSingle();
+    if (!t) return res.status(404).json({ error: 'Tournament not found' });
+    const { data: co } = await supabase
+      .from('tournament_organisers')
+      .select('user_id, role, created_at, user:users!user_id(id, name, username, profile_picture_url)')
+      .eq('tournament_id', id)
+      .order('created_at', { ascending: true });
+    return res.json({
+      creator: (t as any).creator ?? { id: t.created_by },
+      co_organisers: (co ?? []).map((c: any) => ({ ...c.user, role: c.role, since: c.created_at })),
+    });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// POST /tournaments/:id/organisers { user_id } — creator OR admin (logged).
+export async function addTournamentOrganiser(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { user_id } = req.body || {};
+    if (!user_id || !isUuid(user_id)) return res.status(400).json({ error: 'A valid user_id is required.' });
+    const { data: t } = await supabase.from('tournaments').select('created_by, name').eq('id', id).maybeSingle();
+    if (!t) return res.status(404).json({ error: 'Tournament not found' });
+    // Managing co-organisers is a CARVE-OUT: creator or admin only (NOT a co-org).
+    const auth = await authorizeCarveout(t.created_by, userId);
+    if (!auth.ok) return res.status(403).json({ error: 'Only the tournament creator can manage co-organisers.' });
+    if (user_id === t.created_by) return res.status(400).json({ error: 'That user is already the tournament creator.' });
+    const { data: target } = await supabase.from('users').select('id, name').eq('id', user_id).maybeSingle();
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+
+    const { error: insErr } = await supabase
+      .from('tournament_organisers')
+      .insert({ tournament_id: id, user_id, added_by: userId });
+    if (insErr && (insErr as { code?: string }).code === '23505') {
+      return res.status(409).json({ error: 'That user is already a co-organiser.' });
+    }
+    if (insErr) return res.status(500).json({ error: sanitizeError(insErr) });
+
+    // Conflict-of-interest SOFT WARNING: a co-org who is also a captain of a team
+    // entered in THIS tournament. Allowed (community tournaments have playing
+    // organisers) — surfaced, not blocked.
+    let warning: string | undefined;
+    const { data: entries } = await supabase
+      .from('tournament_entries').select('team_id').eq('tournament_id', id).in('status', ['approved', 'pending']);
+    const teamIds = (entries ?? []).map((e) => e.team_id);
+    if (teamIds.length > 0) {
+      const { data: cap } = await supabase
+        .from('team_members').select('team_id').eq('user_id', user_id).eq('role', 'captain').in('team_id', teamIds);
+      if (cap && cap.length > 0) {
+        warning = `${target.name ?? 'This user'} captains a team competing in this tournament — heads up on the conflict of interest.`;
+      }
+    }
+
+    if (auth.viaAdmin) {
+      void logAdminAction(userId, 'add_co_organiser', 'tournament', id, `added ${target.name ?? user_id} as co-organiser`);
+    }
+    // Notify the new co-organiser (ungated — a responsibility, like added_to_team).
+    void notifyUsers([user_id], {
+      type: 'added_as_co_organiser',
+      title: 'You’re a co-organiser',
+      body: `You were added as a co-organiser of "${t.name ?? 'a tournament'}".`,
+      data: { tournamentId: id },
+    }, { actorId: userId });
+
+    return res.json({ success: true, warning });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// DELETE /tournaments/:id/organisers/:userId — creator OR admin (logged), OR self-leave.
+export async function removeTournamentOrganiser(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id, userId: targetId } = req.params;
+    const { data: t } = await supabase.from('tournaments').select('created_by, name').eq('id', id).maybeSingle();
+    if (!t) return res.status(404).json({ error: 'Tournament not found' });
+    const isSelf = targetId === userId;
+    let viaAdmin = false;
+    if (!isSelf) {
+      const auth = await authorizeCarveout(t.created_by, userId);
+      if (!auth.ok) return res.status(403).json({ error: 'Only the tournament creator can remove a co-organiser.' });
+      viaAdmin = auth.viaAdmin;
+    }
+    await supabase.from('tournament_organisers').delete().eq('tournament_id', id).eq('user_id', targetId);
+    if (viaAdmin) void logAdminAction(userId, 'remove_co_organiser', 'tournament', id, `removed co-organiser ${targetId}`);
+    return res.json({ success: true });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// POST /tournaments/:id/reassign-organiser { user_id } — hand the tournament to a
+// new organiser. Creator OR admin (logged). The admin's ELEGANT escape hatch: a
+// stranded tournament gets a real organiser with legitimate authority, rather
+// than the admin running it.
+export async function reassignTournamentOrganiser(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { user_id } = req.body || {};
+    if (!user_id || !isUuid(user_id)) return res.status(400).json({ error: 'A valid user_id is required.' });
+    const { data: t } = await supabase.from('tournaments').select('created_by, name').eq('id', id).maybeSingle();
+    if (!t) return res.status(404).json({ error: 'Tournament not found' });
+    const auth = await authorizeCarveout(t.created_by, userId);
+    if (!auth.ok) return res.status(403).json({ error: 'Only the tournament creator (or a platform admin) can reassign the organiser.' });
+    const { data: target } = await supabase.from('users').select('id, name').eq('id', user_id).maybeSingle();
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+
+    await supabase.from('tournaments').update({ created_by: user_id, updated_at: new Date().toISOString() }).eq('id', id);
+    // The new organiser can't also be a co-organiser (would be redundant).
+    await supabase.from('tournament_organisers').delete().eq('tournament_id', id).eq('user_id', user_id);
+    if (auth.viaAdmin) {
+      void logAdminAction(userId, 'reassign_organiser', 'tournament', id, `organiser ${t.created_by} → ${target.name ?? user_id}`);
+    }
+    void notifyUsers([user_id], {
+      type: 'added_as_co_organiser',
+      title: 'You’re now the organiser',
+      body: `You were made the organiser of "${t.name ?? 'a tournament'}".`,
+      data: { tournamentId: id },
+    }, { actorId: userId });
+    return res.json({ success: true });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 // GET /tournaments/:id/bracket — returns the knockout bracket grouped
 // into named rounds. Infers the round-count from the total match count:
 //   8 matches → Round of 16 → QF → SF → F (if we ever get there)
@@ -996,8 +1169,9 @@ export async function updateFixtures(req: Request, res: Response) {
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
-    if (tournament.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the creator can update fixtures' });
+    // Operational → any organiser (creator or co-organiser).
+    if (!(await isTournamentOrganiser(id, userId))) {
+      return res.status(403).json({ error: 'Only the organiser can update fixtures' });
     }
 
     const results: any[] = [];
@@ -1795,7 +1969,7 @@ export async function generateFixtures(req: Request, res: Response) {
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
-    if (tournament.created_by !== userId) {
+    if (!(await isTournamentOrganiser(id, userId))) {
       return res.status(403).json({ error: 'Only the organiser can generate fixtures' });
     }
 

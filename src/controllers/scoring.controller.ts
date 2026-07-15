@@ -4,6 +4,7 @@ import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
 import { isTerminalMatchStatus } from '../utils/validation';
+import { canOfficiateMatch } from '../utils/tournamentAuth';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
 // every participant in the match. Failures are swallowed — the fan-out must
@@ -40,12 +41,12 @@ async function fanoutScoreUpdate(
 async function authorizeScorer(matchId: string, userId: string) {
   const { data: match } = await supabase
     .from('matches')
-    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked')
+    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked, tournament_id')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return { ok: false as const, status: 404, error: 'Match not found' };
-  if (match.created_by !== userId && match.umpire_id !== userId) {
-    return { ok: false as const, status: 403, error: 'Only the umpire or creator can score' };
+  if (!(await canOfficiateMatch(match, userId))) {
+    return { ok: false as const, status: 403, error: match.tournament_id ? 'Only a tournament organiser or the umpire can score' : 'Only the umpire or creator can score' };
   }
   return { ok: true as const, match };
 }

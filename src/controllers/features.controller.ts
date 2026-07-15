@@ -4,6 +4,7 @@ import { sanitizeError } from '../utils/response';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers } from '../utils/notify';
 import { rankTeams } from '../utils/standings';
 import { istDay } from '../utils/appTime';
+import { isTournamentOrganiser } from '../utils/tournamentAuth';
 
 // ────────────────────────────────────────────────────────────────────────────
 // TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
@@ -229,7 +230,7 @@ export async function addTournamentOfficial(req: Request, res: Response) {
 
     const { data: tournament } = await supabase.from('tournaments').select('created_by').eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
-    if (tournament.created_by !== userId) return res.status(403).json({ error: 'Only organiser can add officials' });
+    if (!(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only organiser can add officials' });
 
     const { data, error } = await supabase
       .from('tournament_officials')
@@ -270,7 +271,7 @@ export async function removeTournamentOfficial(req: Request, res: Response) {
     const { data: official } = await supabase
       .from('tournament_officials').select('user_id').eq('id', officialId).eq('tournament_id', id).maybeSingle();
     if (!official) return res.status(404).json({ error: 'Official not found' });
-    const isOrganiser = tournament.created_by === userId;
+    const isOrganiser = await isTournamentOrganiser(id, userId);
     const isSelf = official.user_id === userId;
     if (!isOrganiser && !isSelf) {
       return res.status(403).json({ error: 'Only the organiser or the official themselves can remove' });
@@ -309,7 +310,7 @@ export async function getTournamentAnalytics(req: Request, res: Response) {
     const { id } = req.params;
     const { data: t } = await supabase.from('tournaments').select('created_by').eq('id', id).maybeSingle();
     if (!t) return res.status(404).json({ error: 'Tournament not found' });
-    if (t.created_by !== userId) return res.status(403).json({ error: 'Only the organiser can view analytics' });
+    if (!(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only the organiser can view analytics' });
 
     const [entriesRes, matchesRes] = await Promise.all([
       supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id),

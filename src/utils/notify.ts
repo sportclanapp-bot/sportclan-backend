@@ -94,6 +94,11 @@ const PREF_CATEGORY: Record<string, string> = {
   // delivers). It fires once, when a tournament crowns its winner — a one-time
   // terminal result to the people who played, not recurring engagement noise.
   // Sibling of tournament_cancelled.
+  //
+  // SC-266: added_as_co_organiser is UNMAPPED by design (ungated — always
+  // delivers). A role grant that hands operational authority over a tournament
+  // is a status change the recipient must always see, sibling of added_to_team
+  // and assigned_as_official.
 };
 
 // Opt-out model: a category is allowed unless the user has explicitly set it

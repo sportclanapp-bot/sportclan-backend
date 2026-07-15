@@ -12,6 +12,10 @@ import {
   updateFixtures,
   getTournamentChat,
   generateFixtures,
+  getTournamentOrganisers,
+  addTournamentOrganiser,
+  removeTournamentOrganiser,
+  reassignTournamentOrganiser,
 } from '../controllers/tournaments.controller';
 import {
   getTournamentAnalytics,
@@ -40,6 +44,10 @@ router.get('/:id/chat', authenticateToken, getTournamentChat);
 router.get('/:id/officials', authenticateToken, getTournamentOfficials);
 router.post('/:id/officials', authenticateToken, addTournamentOfficial);
 router.delete('/:id/officials/:officialId', authenticateToken, removeTournamentOfficial);
+router.get('/:id/organisers', authenticateToken, getTournamentOrganisers);
+router.post('/:id/organisers', authenticateToken, addTournamentOrganiser);
+router.delete('/:id/organisers/:userId', authenticateToken, removeTournamentOrganiser);
+router.post('/:id/reassign-organiser', authenticateToken, reassignTournamentOrganiser);
 router.post('/:id/entries/direct', authenticateToken, directAddTeam);
 router.post('/:id/entries', authenticateToken, createEntry);
 router.patch('/:id/entries/:entryId', authenticateToken, updateEntry);

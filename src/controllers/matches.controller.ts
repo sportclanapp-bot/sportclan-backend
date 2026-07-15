@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers } from '../utils/notify';
+import { isTournamentOrganiser, canOfficiateMatch } from '../utils/tournamentAuth';
 import { blockedUserIds } from '../utils/blocks';
 import { upsertVenue } from './venues.controller';
 import { awardCoins } from '../utils/coins';
@@ -191,12 +192,12 @@ export async function setMatchTossHandler(req: Request, res: Response) {
 
   const { data: match } = await supabase
     .from('matches')
-    .select('created_by, umpire_id, status, score_summary')
+    .select('created_by, umpire_id, status, score_summary, tournament_id')
     .eq('id', id)
     .maybeSingle();
   if (!match) return res.status(404).json({ error: 'Match not found' });
-  if (match.created_by !== userId && match.umpire_id !== userId) {
-    return res.status(403).json({ error: 'Only the creator or umpire can record the toss' });
+  if (!(await canOfficiateMatch(match, userId))) {
+    return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can record the toss' : 'Only the creator or umpire can record the toss' });
   }
   // SC-42: a finished match is immutable — no toss changes.
   if (isTerminalMatchStatus(match.status)) {
@@ -699,7 +700,11 @@ export async function updateMatch(req: Request, res: Response) {
     // is unchanged), they don't reschedule/reteam. Casual matches keep
     // creator-OR-umpire.
     const isTournamentMatch = !!match.tournament_id;
-    const authed = match.created_by === userId || (!isTournamentMatch && match.umpire_id === userId);
+    // Structural edit: a tournament fixture → any organiser (creator/co-org), NOT
+    // the umpire (they score, not reschedule). Casual match → creator OR umpire.
+    const authed = isTournamentMatch
+      ? await isTournamentOrganiser(match.tournament_id, userId)
+      : (match.created_by === userId || match.umpire_id === userId);
     if (!authed) {
       return res.status(403).json({
         error: isTournamentMatch
@@ -780,12 +785,12 @@ export async function addParticipants(req: Request, res: Response) {
     }
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id, status')
+      .select('created_by, umpire_id, status, tournament_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
-    if (match.created_by !== userId && match.umpire_id !== userId) {
-      return res.status(403).json({ error: 'Only the creator or umpire can add participants' });
+    if (!(await canOfficiateMatch(match, userId))) {
+      return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can add participants' : 'Only the creator or umpire can add participants' });
     }
     // SC-98/SC-110: a finished match's lineup is frozen — no adding participants
     // to a completed/abandoned/cancelled match.
@@ -1032,8 +1037,8 @@ export async function abandonMatch(req: Request, res: Response) {
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
-    if (match.created_by !== userId && match.umpire_id !== userId) {
-      return res.status(403).json({ error: 'Only the creator or umpire can abandon' });
+    if (!(await canOfficiateMatch(match, userId))) {
+      return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can abandon' : 'Only the creator or umpire can abandon' });
     }
     if (match.status !== 'scheduled' && match.status !== 'live') {
       return res.status(409).json({ error: 'Only a scheduled or live match can be abandoned.' });
@@ -1109,11 +1114,12 @@ export async function cancelMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, team_a_name, team_b_name, status')
+      .select('id, created_by, team_a_name, team_b_name, status, tournament_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
-    if (match.created_by !== userId) return res.status(403).json({ error: 'Only the creator can cancel' });
+    const authed = match.tournament_id ? await isTournamentOrganiser(match.tournament_id, userId) : match.created_by === userId;
+    if (!authed) return res.status(403).json({ error: match.tournament_id ? 'Only the tournament organiser can cancel this match.' : 'Only the creator can cancel' });
     // SC-84: a finished match is terminal — cancelling it would strand the ELO
     // and stats it already applied (ghost ratings). Only scheduled/live cancel.
     // Mirrors the isTerminalMatchStatus guard in completeMatch/abandonMatch.
@@ -1173,8 +1179,8 @@ export async function completeMatch(req: Request, res: Response) {
     if (!match) return res.status(404).json({ error: 'Match not found' });
     // Authorization before status (SC-33): a non-owner must get 403, not learn
     // the match state via a 400.
-    if (match.created_by !== userId && match.umpire_id !== userId) {
-      return res.status(403).json({ error: 'Only the creator or umpire can complete' });
+    if (!(await canOfficiateMatch(match, userId))) {
+      return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can complete' : 'Only the creator or umpire can complete' });
     }
     if (match.status === 'completed') return res.status(400).json({ error: 'Match already completed' });
     // SC-42: an abandoned/cancelled match is already terminal — can't complete it.

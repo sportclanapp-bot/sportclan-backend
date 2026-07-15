@@ -3,6 +3,7 @@ import { requireCronSecret } from '../middleware/cron.middleware';
 import {
   runPublishScheduledPosts,
   runSmartMatchNotifications,
+  runMatchReminderSweep,
   runReEngagement,
   runWeeklyDigest,
 } from '../controllers/features.controller';
@@ -27,6 +28,16 @@ router.post('/publish-scheduled-posts', async (_req, res) => {
 router.post('/smart-match', async (_req, res) => {
   try {
     return res.json(await runSmartMatchNotifications());
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Fire the 15-min pre-match reminder sweep on demand (also runs on a 5-min
+// in-process interval). Idempotent via notification_sends.
+router.post('/match-reminders', async (_req, res) => {
+  try {
+    return res.json(await runMatchReminderSweep());
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

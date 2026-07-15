@@ -545,6 +545,17 @@ export async function getMatch(req: Request, res: Response) {
     matchWithRating.follower_count = followerCount ?? 0;
     matchWithRating.is_following = !!myFollow;
 
+    // SC-259: expose the parent tournament's FORMAT so the client can tell a real
+    // knockout bracket match (needs a decisive winner / walkover advancing-team)
+    // from a round_robin/league match (round=1 but NOT a bracket — may draw /
+    // plainly abandon). Mirrors the server's isKnockoutBracketMatch discriminator;
+    // `round` alone can't distinguish them. Null for casual (no tournament).
+    if (match.tournament_id) {
+      const { data: tf } = await supabase
+        .from('tournaments').select('format').eq('id', match.tournament_id).maybeSingle();
+      matchWithRating.tournament_format = (tf as any)?.format ?? null;
+    }
+
     // Chess: attach both players' real ELO for this sport (ranked 1v1). Null for
     // guests/casual — never faked.
     await attachChessElo([matchWithRating]);

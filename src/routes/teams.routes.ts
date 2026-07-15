@@ -9,6 +9,10 @@ import {
   updateTeam,
   joinTeamByCode,
   disbandTeam,
+  requestToJoin,
+  listJoinRequests,
+  decideJoinRequest,
+  withdrawJoinRequest,
 } from '../controllers/teams.controller';
 import { listExpenses, addExpense, deleteExpense, getExpenseSummary } from '../controllers/teamExpenses.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
@@ -24,6 +28,10 @@ router.delete('/:id/members/:userId', authenticateToken, removeTeamMember);
 router.patch('/:id/members/:userId/role', authenticateToken, updateMemberRole);
 router.patch('/:id', authenticateToken, updateTeam);
 router.delete('/:id', authenticateToken, disbandTeam);
+router.post('/:id/join-requests', authenticateToken, requestToJoin);
+router.get('/:id/join-requests', authenticateToken, listJoinRequests);
+router.patch('/:id/join-requests/:userId', authenticateToken, decideJoinRequest);
+router.delete('/:id/join-requests/me', authenticateToken, withdrawJoinRequest);
 router.get('/:id/expenses', authenticateToken, listExpenses);
 router.get('/:id/expenses/summary', authenticateToken, getExpenseSummary);
 router.post('/:id/expenses', authenticateToken, addExpense);

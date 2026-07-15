@@ -395,8 +395,9 @@ export async function createEntry(req: Request, res: Response) {
       .eq('team_id', team_id)
       .eq('user_id', userId)
       .maybeSingle();
-    if (membership?.role !== 'captain') {
-      return res.status(403).json({ error: 'Only the team captain can enter a tournament' });
+    // SC-267: a co-captain (vice_captain) may also enter the team into a tournament.
+    if (membership?.role !== 'captain' && membership?.role !== 'vice_captain') {
+      return res.status(403).json({ error: 'Only the team captain or a co-captain can enter a tournament' });
     }
 
     // Check registration deadline and max_teams cap
@@ -541,7 +542,8 @@ export async function updateEntry(req: Request, res: Response) {
       .eq('team_id', entry.team_id)
       .eq('user_id', userId)
       .maybeSingle();
-    const isTeamCaptain = membership?.role === 'captain';
+    // SC-267: a co-captain may also withdraw the team (operational).
+    const isTeamCaptain = membership?.role === 'captain' || membership?.role === 'vice_captain';
 
     if (status === 'approved' || status === 'rejected') {
       if (!isCreator) return res.status(403).json({ error: 'Only the tournament organiser can approve/reject' });
@@ -1131,8 +1133,9 @@ export async function joinByCode(req: Request, res: Response) {
       .eq('team_id', team_id)
       .eq('user_id', userId)
       .maybeSingle();
-    if (membership?.role !== 'captain') {
-      return res.status(403).json({ error: 'Only the team captain can enter a tournament' });
+    // SC-267: a co-captain (vice_captain) may also enter the team into a tournament.
+    if (membership?.role !== 'captain' && membership?.role !== 'vice_captain') {
+      return res.status(403).json({ error: 'Only the team captain or a co-captain can enter a tournament' });
     }
     const { data, error } = await supabase
       .from('tournament_entries')

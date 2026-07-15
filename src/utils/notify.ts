@@ -99,6 +99,12 @@ const PREF_CATEGORY: Record<string, string> = {
   // delivers). A role grant that hands operational authority over a tournament
   // is a status change the recipient must always see, sibling of added_to_team
   // and assigned_as_official.
+  //
+  // SC-267: added_as_co_captain (a team role grant — sibling of added_to_team)
+  // and the team-join lifecycle — team_join_requested (→ managers, actionable),
+  // team_join_approved / team_join_rejected (→ requester, a decision they asked
+  // for) — are ALL UNMAPPED by design (ungated). They mirror the tournament-entry
+  // decisions (entry_approved/rejected), which are ungated for the same reason.
 };
 
 // Opt-out model: a category is allowed unless the user has explicitly set it

@@ -923,6 +923,12 @@ export async function getBracket(req: Request, res: Response) {
           winner_team_id: m.winner_team_id,
           status: m.status,
           scheduled_at: m.scheduled_at,
+          // SC-264: forward the scheduled slot so the bracket / fixture list can
+          // render "date · time · Ground N". The SELECT already fetched these; the
+          // response mapping was dropping ground_label/venue → the ground never
+          // reached the FE (invisible on every getBracket-backed surface).
+          ground_label: (m as any).ground_label ?? null,
+          venue: (m as any).venue ?? null,
         };
       }),
     }));

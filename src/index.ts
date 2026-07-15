@@ -110,8 +110,14 @@ const cacheFor = (seconds: number) => (_req: any, res: any, next: any) => {
 
 app.use('/auth/send-otp', sendOtpLimiter);
 app.use('/auth', authLimiter, authRoutes);
-app.use('/cities', cacheFor(86400), citiesRoutes);      // 24h
-app.use('/sports', cacheFor(86400), sportsRoutes);      // 24h
+app.use('/cities', cacheFor(86400), citiesRoutes);      // 24h — pure static reference (id/name/state)
+// SC-269: /sports was 24h, but it now carries OPERATIONAL config (is_active
+// deactivations, allows_draw, default_duration_minutes), not just static
+// reference. 24h meant a config change took a day to reach existing installs
+// (a deactivated sport lingered in pickers; the duration prefill read a stale
+// pre-migration payload). 5m keeps the caching benefit — sport config changes
+// ~never — while letting real changes propagate promptly.
+app.use('/sports', cacheFor(300), sportsRoutes);        // 5m (SC-269)
 app.use('/users', usersRoutes);
 app.use('/notifications', notificationsRoutes);
 app.use('/uploads', uploadsRoutes);

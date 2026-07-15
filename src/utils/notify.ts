@@ -34,6 +34,10 @@ const PREF_CATEGORY: Record<string, string> = {
   match_reminder: 'matches',
   match_start: 'matches',
   match_result: 'matches',
+  // SC-260: open-match join/leave pings to the organiser — match engagement, so
+  // the 'matches' toggle silences them (not a critical status change).
+  match_joined: 'matches',
+  match_left: 'matches',
   score_update: 'matches',
   smart_match: 'matches',
   weekend_nudge: 'matches',

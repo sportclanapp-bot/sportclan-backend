@@ -14,6 +14,7 @@ import {
   completeMatch,
   listOpenMatches,
   joinOpenMatch,
+  leaveMatch,
   rateMatchHandler,
   setMatchTossHandler,
   getCommentary,
@@ -45,6 +46,7 @@ router.post('/:id/participants', authenticateToken, addParticipants);
 router.post('/:id/umpire/self-assign', authenticateToken, selfAssignUmpire);
 router.post('/:id/complete', authenticateToken, completeMatch);
 router.post('/:id/join', authenticateToken, joinOpenMatch);
+router.post('/:id/leave', authenticateToken, leaveMatch);
 router.post('/:id/rate', authenticateToken, rateMatchHandler);
 router.patch('/:id/toss', authenticateToken, setMatchTossHandler);
 router.get('/:id/mvp', authenticateToken, getMatchMVP);

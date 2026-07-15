@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers } from '../utils/notify';
+import { blockedUserIds } from '../utils/blocks';
 import { upsertVenue } from './venues.controller';
 import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
@@ -96,13 +97,23 @@ export async function listOpenMatches(req: Request, res: Response) {
   try {
     const { sport_id, city_id } = req.query as Record<string, string | undefined>;
     const resolvedSportId = await resolveSportId(sport_id);
+    // SC-263: a "suggested for you" match you CREATED, one that's already FULL, or
+    // one you've already JOINED is a silly suggestion. Exclude all three. (Single
+    // caller = HomeScreen, verified — safe to filter server-side. Sport/city
+    // relevance ranking is a later feature, not this bug.)
+    const { data: joinedRows } = await supabase
+      .from('match_participants').select('match_id').eq('user_id', userId);
+    const joinedIds = Array.from(new Set((joinedRows ?? []).map((r) => r.match_id as string)));
     let query = supabase
       .from('matches')
       .select('*')
       .eq('is_open', true)
       .in('status', ['scheduled', 'upcoming'])
+      .neq('created_by', userId) // not your own
+      .gt('players_needed', 0) // not full (also drops null)
       .order('scheduled_at', { ascending: true })
       .limit(100);
+    if (joinedIds.length > 0) query = query.not('id', 'in', `(${joinedIds.join(',')})`);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
     const { data, error } = await query;
@@ -234,6 +245,27 @@ export async function joinOpenMatch(req: Request, res: Response) {
   try {
     const { id } = req.params;
 
+    // SC-261: joining a match drops you into its shared match chat with the
+    // creator and every current participant — so it's block-gated exactly like
+    // joinTeamByCode: a user blocked (either direction) with the creator OR any
+    // participant can't join, else a block is bypassed into a shared space.
+    // Creator-only would still leak a blocked CO-PLAYER into the chat. Checked in
+    // the controller (not the capacity RPC) so the RPC stays capacity-only.
+    const blocked = await blockedUserIds(userId);
+    if (blocked.size > 0) {
+      const { data: mrow } = await supabase
+        .from('matches').select('created_by').eq('id', id).maybeSingle();
+      const { data: parts } = await supabase
+        .from('match_participants').select('user_id').eq('match_id', id);
+      const others = new Set<string>([
+        ...(mrow?.created_by ? [mrow.created_by as string] : []),
+        ...((parts ?? []).map((p) => p.user_id as string)),
+      ]);
+      if ([...others].some((uid) => blocked.has(uid))) {
+        return res.status(403).json({ error: 'You can’t join this match.', code: 'BLOCKED_FROM_MATCH' });
+      }
+    }
+
     // SC-59: capacity check + participant insert + players_needed decrement are
     // done atomically in one transaction (join_open_match, migration 039). The
     // old JS read-modify-write on a stale snapshot let N concurrent joins all
@@ -254,6 +286,9 @@ export async function joinOpenMatch(req: Request, res: Response) {
 
     switch (status) {
       case 'joined':
+        // SC-260: tell the pickup organiser someone joined — their whole reason
+        // to care. Best-effort, 'matches'-gated (see PREF_CATEGORY).
+        void notifyMatchParticipation(id, userId, 'joined');
         return res.json({ success: true, players_needed: playersNeeded });
       case 'already_joined':
         return res.json({ success: true, alreadyJoined: true, players_needed: playersNeeded });
@@ -261,6 +296,86 @@ export async function joinOpenMatch(req: Request, res: Response) {
         return res.status(409).json({ error: 'Match is full' });
       case 'not_open':
         return res.status(400).json({ error: 'Match is not open' });
+      case 'not_found':
+        return res.status(404).json({ error: 'Match not found' });
+      default:
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// SC-260: notify the match creator when a player joins/leaves their open match.
+// Best-effort (never blocks the join/leave); self-actions don't self-notify
+// (actorId filter). 'matches'-gated via PREF_CATEGORY. actor != creator only.
+async function notifyMatchParticipation(
+  matchId: string,
+  actorId: string,
+  kind: 'joined' | 'left',
+): Promise<void> {
+  try {
+    const { data: m } = await supabase
+      .from('matches')
+      .select('created_by, sport_id, team_a_name, team_b_name')
+      .eq('id', matchId)
+      .maybeSingle();
+    if (!m?.created_by || m.created_by === actorId) return;
+    const { data: actor } = await supabase.from('users').select('name').eq('id', actorId).maybeSingle();
+    let sportName = 'match';
+    if (m.sport_id) {
+      const { data: sp } = await supabase.from('sports').select('name').eq('id', m.sport_id).maybeSingle();
+      if (sp?.name) sportName = `${sp.name} match`;
+    }
+    const who = actor?.name ?? 'A player';
+    await notifyUsers(
+      [m.created_by as string],
+      {
+        type: kind === 'joined' ? 'match_joined' : 'match_left',
+        title: kind === 'joined' ? 'New player joined' : 'A player left',
+        body: `${who} ${kind === 'joined' ? 'joined' : 'left'} your ${sportName}.`,
+        data: { matchId, screen: 'MatchDetail' },
+      },
+      { actorId },
+    );
+  } catch {
+    // best-effort
+  }
+}
+
+// POST /matches/:id/leave — SC-262: a joined player withdraws from an open match.
+// Symmetric to join_open_match: frees the slot (players_needed +1, is_open=true)
+// atomically under a row lock (leave_open_match, migration 061) so concurrent
+// leaves can't lose the increment. Allowed ONLY while status ∈ (scheduled,
+// upcoming) — leaving a live match would strand the scorecard, a completed one
+// is history. Self-leave only. The creator MAY leave as a player: created_by is
+// immutable and independent of participation, so no captain-orphan (unlike
+// SC-243 teams). NOTE: players_needed is a soft "still looking" hint — a
+// lineup-added participant (never decremented it) leaving bumps it by 1, an
+// accepted imprecision, not an invariant.
+export async function leaveMatch(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase.rpc('leave_open_match', {
+      p_match_id: id,
+      p_user_id: userId,
+    });
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    const row = (Array.isArray(data) ? data[0] : data) as
+      | { status: string; players_needed: number | null }
+      | undefined;
+    const status = row?.status;
+    const playersNeeded = row?.players_needed ?? 0;
+    switch (status) {
+      case 'left':
+        void notifyMatchParticipation(id, userId, 'left');
+        return res.json({ success: true, players_needed: playersNeeded });
+      case 'not_participant':
+        return res.status(400).json({ error: 'You are not in this match' });
+      case 'not_leavable':
+        return res.status(409).json({ error: 'This match can no longer be left' });
       case 'not_found':
         return res.status(404).json({ error: 'Match not found' });
       default:

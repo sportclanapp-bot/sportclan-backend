@@ -1227,27 +1227,26 @@ export async function completeMatch(req: Request, res: Response) {
       });
     }
 
-    // SC-227: basketball can't end level — a tie isn't a valid final (OT = more
-    // points until decisive). Football/hockey/cricket/etc. may legitimately draw,
-    // so this guard is basketball-only.
-    {
+    // SC-268: a DECISIVE sport (sports.allows_draw = false — badminton, TT,
+    // pickleball, volleyball, tennis, carrom, basketball) can't end without a
+    // winner. Draw-capable sports (cricket/chess/football/hockey, allows_draw
+    // = true) fall through and may legitimately tie. This GENERALISES + REPLACES
+    // the old basketball-specific SC-227 block — basketball is just one
+    // allows_draw=false sport. Orthogonal to the bracket guard above (format vs
+    // sport), which stays FIRST so a knockout tie reports BRACKET_NEEDS_WINNER.
+    // Fires only on a genuine no-winner completion: the live scorer already sets
+    // winner_team_id via ruleset.detectWinner for these sports, so the only way
+    // here is e.g. an organiser "record result" that left the winner blank.
+    // `=== false` (not `!allows_draw`) so it fails OPEN if the column is ever
+    // absent — never wrongly blocks a legitimate tie.
+    if (!winner_team_id) {
       const { data: sportRow } = await supabase
-        .from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
-      const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
-      // Only block a level score when NO winner is declared — an explicit
-      // winner_team_id (forfeit / walkover / organiser record-result) is allowed.
-      if (slug === 'basketball' && !winner_team_id) {
-        const { data: mrow } = await supabase
-          .from('matches').select('score_summary').eq('id', id).maybeSingle();
-        const ss = (mrow?.score_summary ?? {}) as { A?: any; B?: any };
-        const a = Number(ss?.A?.points ?? ss?.A?.score ?? 0);
-        const b = Number(ss?.B?.points ?? ss?.B?.score ?? 0);
-        if (a === b) {
-          return res.status(400).json({
-            error: "Basketball can't end in a tie — play overtime until there's a winner.",
-            code: 'BASKETBALL_TIE',
-          });
-        }
+        .from('sports').select('allows_draw').eq('id', match.sport_id).maybeSingle();
+      if ((sportRow as { allows_draw?: boolean } | null)?.allows_draw === false) {
+        return res.status(400).json({
+          error: "This sport can't end level — pick the winning team (play on until there's a winner).",
+          code: 'NEEDS_DECISIVE_WINNER',
+        });
       }
     }
 

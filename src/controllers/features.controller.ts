@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers } from '../utils/notify';
-import { rankTeams } from '../utils/standings';
+import { rankTeams, parseScoreNum } from '../utils/standings';
 import { istDay } from '../utils/appTime';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 
@@ -43,6 +43,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const table = new Map<string, {
       teamId: string; team: string; groupLabel: string | null;
       played: number; won: number; lost: number; drawn: number; points: number;
+      scored: number; conceded: number; diff: number;
       nrr: number; runsScored: number; oversFaced: number; runsConceded: number; oversBowled: number;
     }>();
 
@@ -51,6 +52,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
       table.set(e.team_id, {
         teamId: e.team_id, team: t?.name ?? 'TBD', groupLabel: e.group_label ?? null,
         played: 0, won: 0, lost: 0, drawn: 0, points: 0,
+        scored: 0, conceded: 0, diff: 0,
         nrr: 0, runsScored: 0, oversFaced: 0, runsConceded: 0, oversBowled: 0,
       });
     }
@@ -60,6 +62,17 @@ export async function getTournamentStandings(req: Request, res: Response) {
       const b = table.get(m.team_b_id);
       if (a) a.played++;
       if (b) b.played++;
+
+      // SC-268: generic score for/against (goals/points/runs) → diff. The single
+      // cross-sport comparator score_summary.team_a_score ?? A.score, mirroring
+      // standings.ts. Surfaces GD (football/hockey) / PD (basketball) in the row.
+      {
+        const ss: any = m.score_summary ?? {};
+        const sa = parseScoreNum(ss.team_a_score ?? ss?.A?.score);
+        const sb = parseScoreNum(ss.team_b_score ?? ss?.B?.score);
+        if (a) { a.scored += sa; a.conceded += sb; }
+        if (b) { b.scored += sb; b.conceded += sa; }
+      }
 
       if (m.winner_team_id) {
         const winner = table.get(m.winner_team_id);
@@ -111,11 +124,12 @@ export async function getTournamentStandings(req: Request, res: Response) {
       }
     }
 
-    // Calculate NRR
+    // Calculate NRR (cricket) + generic goal/point difference (all sports).
     for (const row of table.values()) {
       if (isCricket && row.oversFaced > 0 && row.oversBowled > 0) {
         row.nrr = parseFloat(((row.runsScored / row.oversFaced) - (row.runsConceded / row.oversBowled)).toFixed(3));
       }
+      row.diff = row.scored - row.conceded;
     }
 
     // SC-89: rank with the shared tiebreak ladder (points -> head-to-head ->
@@ -161,7 +175,9 @@ export async function getTournamentStandings(req: Request, res: Response) {
       team_id: (r as any).teamId,
     }));
 
-    return res.json({ standings: aliased, isCricket });
+    // SC-268: sport slug → the FE picks the secondary standings column
+    // (NRR cricket · GD football/hockey · PD basketball · none for rally/carrom).
+    return res.json({ standings: aliased, isCricket, sportSlug: sport?.slug ?? null });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

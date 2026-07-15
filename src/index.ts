@@ -45,6 +45,7 @@ import { purgeExpiredAccountsCore } from './controllers/account.controller';
 import {
   runPublishScheduledPosts,
   runSmartMatchNotifications,
+  runMatchReminderSweep,
   runReEngagement,
   runWeeklyDigest,
 } from './controllers/features.controller';
@@ -217,6 +218,20 @@ app.listen(PORT, () => {
   };
   void runPublish();
   setInterval(runPublish, 2 * 60 * 1000).unref();
+
+  // 15-min pre-match reminder sweep. Runs every 5 min so a participant NOT in the
+  // app still gets reminded (the app-open trigger alone missed them). Idempotent
+  // via notification_sends, so a double-fire (restart / multi-instance) is safe.
+  const runReminders = async () => {
+    try {
+      const { sent } = await runMatchReminderSweep();
+      if (sent > 0) console.log(`[match-reminder] sent ${sent}`); // eslint-disable-line no-console
+    } catch (e) {
+      console.warn('[match-reminder] failed', e instanceof Error ? e.message : e); // eslint-disable-line no-console
+    }
+  };
+  void runReminders();
+  setInterval(runReminders, 5 * 60 * 1000).unref();
 
   // Daily notification jobs at ~09:00 IST; weekly digest additionally on Monday.
   // The hourly tick acts only when the IST hour is 9; the per-user/day dedupe

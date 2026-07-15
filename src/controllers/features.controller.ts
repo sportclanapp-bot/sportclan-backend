@@ -762,6 +762,52 @@ export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
   return { sent: toSend.length };
 }
 
+// 15-MINUTE PRE-MATCH REMINDER SWEEP. The reminder LOGIC already existed but only
+// fired from GET /users/me (app-open) — so a participant NOT in the app never got
+// it. This dedicated sweep (wired to a 5-min in-process interval, like the
+// scheduled-post publisher) makes it reliable: it scans matches starting in the
+// next 15 minutes and notifies each match's PARTICIPANTS + assigned UMPIRE
+// (in-app notification always lands; FCM push is best-effort — push delivery is a
+// deferred launch gate). Idempotent via notification_sends: job_type
+// 'match_reminder:<matchId>' + sent_on = the match's date → once per user/match.
+export async function runMatchReminderSweep(): Promise<{ sent: number }> {
+  const now = new Date();
+  const in15 = new Date(now.getTime() + 15 * 60 * 1000);
+  const { data: soon } = await supabase
+    .from('matches')
+    .select('id, team_a_name, team_b_name, scheduled_at, umpire_id, status')
+    .gte('scheduled_at', now.toISOString())
+    .lte('scheduled_at', in15.toISOString())
+    .in('status', ['scheduled', 'upcoming', 'live']);
+  if (!soon || soon.length === 0) return { sent: 0 };
+
+  let sent = 0;
+  for (const m of soon) {
+    const matchDate = String(m.scheduled_at).slice(0, 10);
+    const { data: parts } = await supabase
+      .from('match_participants').select('user_id').eq('match_id', m.id);
+    const recipients = new Set<string>((parts ?? []).map((p) => p.user_id as string).filter(Boolean));
+    if (m.umpire_id) recipients.add(m.umpire_id as string);
+    for (const uid of recipients) {
+      // Claim first — a UNIQUE(user_id, job_type, sent_on) violation means this
+      // user was already reminded for this match (safe across restarts / ticks).
+      const { error: claimErr } = await supabase
+        .from('notification_sends')
+        .insert({ user_id: uid, job_type: `match_reminder:${m.id}`, sent_on: matchDate });
+      if (claimErr) continue;
+      await notifyUser({
+        userId: uid,
+        type: 'match_reminder',
+        title: 'Match reminder',
+        body: `⏰ ${m.team_a_name ?? 'Team A'} vs ${m.team_b_name ?? 'Team B'} starts in ~15 minutes!`,
+        data: { matchId: m.id, screen: 'MatchDetail' },
+      });
+      sent++;
+    }
+  }
+  return { sent };
+}
+
 export async function triggerSmartMatchNotifications(_req: Request, res: Response) {
   try {
     return res.json({ success: true, ...(await runSmartMatchNotifications()) });

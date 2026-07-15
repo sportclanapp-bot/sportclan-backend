@@ -689,12 +689,23 @@ export async function updateMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id, status, team_a_id, team_b_id')
+      .select('created_by, umpire_id, status, team_a_id, team_b_id, tournament_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
-    if (match.created_by !== userId && match.umpire_id !== userId) {
-      return res.status(403).json({ error: 'Only the creator or umpire can update' });
+    // Organiser-only for TOURNAMENT matches: structural edits (teams / schedule /
+    // ground / status) to a tournament fixture belong to the organiser
+    // (match.created_by), NOT the assigned umpire — the umpire scores (officiating
+    // is unchanged), they don't reschedule/reteam. Casual matches keep
+    // creator-OR-umpire.
+    const isTournamentMatch = !!match.tournament_id;
+    const authed = match.created_by === userId || (!isTournamentMatch && match.umpire_id === userId);
+    if (!authed) {
+      return res.status(403).json({
+        error: isTournamentMatch
+          ? 'Only the tournament organiser can change a tournament fixture.'
+          : 'Only the creator or umpire can update',
+      });
     }
     const allowedKeys = [
       'status',

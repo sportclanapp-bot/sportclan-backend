@@ -8,7 +8,7 @@ import { validateSportForCreate } from '../utils/sports';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { rankTeams, computeStats } from '../utils/standings';
 import {
-  buildSchedule, timeToMinutes, keyOf,
+  buildSchedule, timeToMinutes, keyOf, formatSlotIst,
   type SchedulingConfig, type FixtureShape, type SlotAssign,
 } from '../utils/scheduleFixtures';
 import { notifyUnlessBlocked, notifyUsers } from '../utils/notify';
@@ -66,6 +66,7 @@ export async function createTournament(req: Request, res: Response) {
       buffer_minutes,
       ground_count,
       ground_names,
+      day_windows,
       home_away,
       num_groups,
       group_size,
@@ -211,6 +212,9 @@ export async function createTournament(req: Request, res: Response) {
         await supabase.from('tournaments').update({ sport_metadata: { ...metadata, _chat_id: chat.id } }).eq('id', tournament.id);
       }
     } catch { /* chat creation is best-effort */ }
+
+    // Per-day window overrides (optional).
+    await upsertDayWindows(tournament.id, day_windows);
 
     return res.json({ tournament });
   } catch (e) {
@@ -606,7 +610,7 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, status, name')
+      .select('created_by, status, name, start_date, end_date, venue')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -691,6 +695,24 @@ export async function updateTournament(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // Per-day window overrides (optional).
+    await upsertDayWindows(id, req.body?.day_windows);
+
+    // CHANGE NOTIF: a schedule/location change (start/end date, venue, or the
+    // window/grounds that move fixtures) affects everyone entered — notify the
+    // approved-team members. NOT description/banner/logo/sponsor/prize (noise).
+    // Skipped on cancel (that has its own tournament_cancelled fan-out below).
+    try {
+      const scheduleKeys = ['start_date', 'end_date', 'venue', 'daily_start_time', 'daily_end_time', 'match_duration_minutes', 'buffer_minutes', 'ground_count'];
+      const changed =
+        update.status !== 'cancelled' &&
+        scheduleKeys.some((k) => k in update && String(update[k] ?? '') !== String((tournament as any)[k] ?? ''));
+      const dayWindowsChanged = Array.isArray(req.body?.day_windows) && req.body.day_windows.length > 0;
+      if (changed || dayWindowsChanged) {
+        await notifyTournamentUpdated(id, (data as any)?.name ?? tournament.name ?? null, userId);
+      }
+    } catch { /* best-effort */ }
 
     // SC-239: cancelling a tournament must not leave its bracket orphaned. On the
     // TRANSITION into 'cancelled' (from a non-cancelled status), abandon every
@@ -806,6 +828,37 @@ async function notifyTournamentChampion(
       data: { tournamentId },
     });
   }
+}
+
+// CHANGE NOTIF: a tournament's schedule/venue changed → tell everyone entered
+// (all members of every APPROVED team). Gated 'matches'. Actor (organiser) is
+// filtered out. Only called for schedule/location edits (updateTournament), never
+// for cosmetic ones.
+async function notifyTournamentUpdated(
+  tournamentId: string,
+  tournamentName: string | null,
+  actorId: string,
+): Promise<void> {
+  const { data: entries } = await supabase
+    .from('tournament_entries')
+    .select('team_id')
+    .eq('tournament_id', tournamentId)
+    .eq('status', 'approved');
+  const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
+  if (teamIds.length === 0) return;
+  const { data: members } = await supabase.from('team_members').select('user_id').in('team_id', teamIds);
+  const userIds = Array.from(new Set((members ?? []).map((m) => m.user_id).filter(Boolean)));
+  if (userIds.length === 0) return;
+  await notifyUsers(
+    userIds,
+    {
+      type: 'tournament_updated',
+      title: 'Tournament updated',
+      body: `${tournamentName ?? 'A tournament'}'s schedule or venue changed — check the new details.`,
+      data: { tournamentId },
+    },
+    { actorId },
+  );
 }
 
 // GET /tournaments/:id/bracket — returns the knockout bracket grouped
@@ -944,6 +997,10 @@ export async function updateFixtures(req: Request, res: Response) {
     const results: any[] = [];
     const blocked: string[] = [];
     const warnings: string[] = []; // SC-scheduling: soft team-double-book warnings (never block)
+    // CHANGE NOTIF: collect affected participants across the whole call, then send
+    // ONE batched notification per user (dragging 12 fixtures ≠ 12×N pings).
+    const RESCHED_KEYS = ['scheduled_at', 'ground_label', 'venue', 'team_a_id', 'team_b_id'];
+    const affectedByUser = new Map<string, Array<{ matchId: string; slot: string }>>();
     for (const upd of items) {
       const fixtureId = upd.id ?? upd.fixture_id;
       if (!fixtureId) continue;
@@ -983,6 +1040,20 @@ export async function updateFixtures(req: Request, res: Response) {
         }
       }
 
+      // Capture old schedule fields for change detection (notify only on a REAL
+      // change, not on a no-op re-save of the same value).
+      const touchesResched = RESCHED_KEYS.some((k) => k in patch);
+      let oldResched: any = null;
+      if (touchesResched) {
+        const { data: o } = await supabase
+          .from('matches')
+          .select('scheduled_at, ground_label, venue, team_a_id, team_b_id')
+          .eq('id', fixtureId)
+          .eq('tournament_id', id)
+          .maybeSingle();
+        oldResched = o;
+      }
+
       // Allow updates even when status isn't 'scheduled' if explicitly setting
       // a new status (e.g. organizer marking 'completed' for an offline match)
       let query = supabase
@@ -996,6 +1067,19 @@ export async function updateFixtures(req: Request, res: Response) {
       const { data, error } = await query.select('*').single();
       if (!error && data) {
         results.push(data);
+        // CHANGE NOTIF: collect participants of a genuinely-rescheduled match.
+        if (touchesResched && oldResched) {
+          const changed = RESCHED_KEYS.some((k) => String(oldResched[k] ?? '') !== String((data as any)[k] ?? ''));
+          if (changed) {
+            const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', fixtureId);
+            const slot = formatSlotIst(data.scheduled_at, data.ground_label);
+            for (const p of parts ?? []) {
+              const arr = affectedByUser.get(p.user_id as string) ?? [];
+              arr.push({ matchId: fixtureId, slot });
+              affectedByUser.set(p.user_id as string, arr);
+            }
+          }
+        }
         // Scheduling: a manual slot move can create a team double-book. SOFT-WARN
         // (the organiser knows their ground) — never block. A clash = another
         // match of this tournament at the SAME scheduled_at sharing a team.
@@ -1024,6 +1108,19 @@ export async function updateFixtures(req: Request, res: Response) {
           }
         }
       }
+    }
+
+    // CHANGE NOTIF: one batched match_rescheduled per affected user. >1 match →
+    // a summary; exactly 1 → the specific "moved to …" line. Gated 'matches',
+    // actor filtered. Best-effort.
+    for (const [uid, arr] of affectedByUser) {
+      const body = arr.length === 1
+        ? `Your match moved to ${arr[0]!.slot}.`
+        : `${arr.length} of your matches were rescheduled — check the new times.`;
+      const data: Record<string, string> = arr.length === 1
+        ? { matchId: arr[0]!.matchId, screen: 'MatchDetail' }
+        : { tournamentId: id };
+      void notifyUsers([uid], { type: 'match_rescheduled', title: 'Match rescheduled', body, data }, { actorId: userId });
     }
 
     return res.json({
@@ -1575,7 +1672,11 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
 // Build the scheduler config from the tournament row. When the daily window /
 // duration aren't set, fall back to an unbounded single-ground sequential
 // schedule so create still works. end_date absent (but window set) → single day.
-function buildTournamentScheduleConfig(t: any, startDateYmd: string): SchedulingConfig {
+function buildTournamentScheduleConfig(
+  t: any,
+  startDateYmd: string,
+  dayWindows?: Map<string, { startMin: number; endMin: number }>,
+): SchedulingConfig {
   const hasWindow = !!(t.daily_start_time && t.daily_end_time && t.match_duration_minutes);
   if (!hasWindow) {
     return {
@@ -1595,7 +1696,51 @@ function buildTournamentScheduleConfig(t: any, startDateYmd: string): Scheduling
     groundCount: Math.max(1, Number(t.ground_count ?? 1)),
     groundNames: Array.isArray(t.ground_names) ? (t.ground_names as string[]) : null,
     bounded: true,
+    dayWindows: dayWindows && dayWindows.size > 0 ? dayWindows : undefined,
   };
+}
+
+// Load per-day window overrides (tournament_days) into a Map<'YYYY-MM-DD', {startMin,endMin}>.
+// Read defensively so generation still runs if migration 063 hasn't been applied.
+async function loadDayWindows(tournamentId: string): Promise<Map<string, { startMin: number; endMin: number }>> {
+  const map = new Map<string, { startMin: number; endMin: number }>();
+  try {
+    const { data } = await supabase
+      .from('tournament_days')
+      .select('day_date, start_time, end_time')
+      .eq('tournament_id', tournamentId);
+    for (const row of data ?? []) {
+      const ymd = String(row.day_date).slice(0, 10);
+      map.set(ymd, {
+        startMin: timeToMinutes(row.start_time, 9 * 60),
+        endMin: timeToMinutes(row.end_time, 21 * 60),
+      });
+    }
+  } catch {
+    // table missing / read error → no overrides (single-window behavior).
+  }
+  return map;
+}
+
+// Persist per-day window overrides (tournament_days). Accepts an array of
+// { day_date, start_time, end_time }; upserts by (tournament_id, day_date).
+// Only rows that DIFFER from the default need to be sent (the FE does this).
+async function upsertDayWindows(tournamentId: string, rows: any): Promise<void> {
+  if (!Array.isArray(rows) || rows.length === 0) return;
+  const valid = rows
+    .filter((r) => r && r.day_date && r.start_time && r.end_time)
+    .map((r) => ({
+      tournament_id: tournamentId,
+      day_date: String(r.day_date).slice(0, 10),
+      start_time: r.start_time,
+      end_time: r.end_time,
+    }));
+  if (valid.length === 0) return;
+  try {
+    await supabase.from('tournament_days').upsert(valid, { onConflict: 'tournament_id,day_date' });
+  } catch {
+    // best-effort; table may not exist until migration 063 is applied.
+  }
 }
 
 // Fixture shape of a single-elim bracket (round 1 carries the real round-1
@@ -1713,7 +1858,8 @@ export async function generateFixtures(req: Request, res: Response) {
 
     const startDateYmd = (tournament.start_date ?? new Date().toISOString().slice(0, 10)) as string;
     const fallbackStartIso = new Date(`${startDateYmd}T00:00:00.000Z`).toISOString();
-    const schedCfg = buildTournamentScheduleConfig(tournament, startDateYmd);
+    const dayWindows = await loadDayWindows(id);
+    const schedCfg = buildTournamentScheduleConfig(tournament, startDateYmd, dayWindows);
     const format = (tournament.format ?? 'knockout').toLowerCase();
     const base: BracketBase = {
       sport_id: tournament.sport_id,

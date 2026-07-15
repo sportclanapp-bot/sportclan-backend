@@ -14,13 +14,16 @@ export const TOURNAMENT_TZ_OFFSET_MIN = 330; // IST = UTC+05:30
 export interface SchedulingConfig {
   startDateYmd: string; // 'YYYY-MM-DD'
   endDateYmd: string | null; // null → unbounded (fallback rolls forward as needed)
-  dailyStartMin: number; // minutes from local midnight
+  dailyStartMin: number; // default daily window — minutes from local midnight
   dailyEndMin: number;
   durationMin: number;
   bufferMin: number;
   groundCount: number;
   groundNames: string[] | null;
   bounded: boolean; // true = real config (capacity can fail); false = fallback (never fails)
+  // Per-day window overrides (tournament_days), keyed 'YYYY-MM-DD'. Any day
+  // without an entry uses the default window above. (Sat 8–8, Sun 8–2.)
+  dayWindows?: Map<string, { startMin: number; endMin: number }>;
 }
 
 export interface FixtureShape {
@@ -76,12 +79,41 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
   const G = Math.max(1, cfg.groundCount || 1);
   const D = Math.max(1, cfg.durationMin || 1);
   const B = Math.max(0, cfg.bufferMin || 0);
-  const window = cfg.dailyEndMin - cfg.dailyStartMin;
-  // k matches fit a day when k·D + (k−1)·B ≤ window → k ≤ (window + B)/(D + B).
-  const slotsPerDay = Math.max(0, Math.floor((window + B) / (D + B)));
   const N = fixtures.length;
+  const slotsInWindow = (winMin: number) => Math.max(0, Math.floor((winMin + B) / (D + B)));
+  const defaultWindowMin = cfg.dailyEndMin - cfg.dailyStartMin;
 
-  if (slotsPerDay < 1) {
+  // Resolve the window for a given day (override row → else the default).
+  const windowForDay = (dayIndex: number): { startMin: number; endMin: number } => {
+    if (cfg.dayWindows && cfg.dayWindows.size > 0) {
+      const ymd = addDaysYmd(cfg.startDateYmd, dayIndex);
+      const ov = cfg.dayWindows.get(ymd);
+      if (ov) return ov;
+    }
+    return { startMin: cfg.dailyStartMin, endMin: cfg.dailyEndMin };
+  };
+
+  // Bounded (real config) → fixed day count from the date range; capacity can fail.
+  // Unbounded (fallback) → roll forward enough days that it always fits.
+  const days = cfg.bounded && cfg.endDateYmd
+    ? daysInclusive(cfg.startDateYmd, cfg.endDateYmd)
+    : Math.max(1, Math.ceil(N / (G * Math.max(1, slotsInWindow(defaultWindowMin)))) + N);
+
+  // Build the ordered time-slot list DAY BY DAY, each day using its OWN window
+  // (so slots-per-day varies with per-day overrides). Each entry is one time-slot
+  // holding G parallel ground-slots; global `order` preserves the round-ordering
+  // greedy below.
+  const timeSlotMeta: Array<{ dayIndex: number; wallMin: number }> = [];
+  for (let dayIndex = 0; dayIndex < days; dayIndex++) {
+    const win = windowForDay(dayIndex);
+    const slots = slotsInWindow(win.endMin - win.startMin);
+    for (let t = 0; t < slots; t++) {
+      timeSlotMeta.push({ dayIndex, wallMin: win.startMin + t * (D + B) });
+    }
+  }
+  const totalTimeSlots = timeSlotMeta.length;
+
+  if (totalTimeSlots < 1) {
     return {
       ok: false,
       code: 'CAPACITY',
@@ -89,17 +121,7 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
     };
   }
 
-  // Bounded (real config) → fixed day count from the date range; capacity can fail.
-  // Unbounded (fallback) → roll forward enough days that it always fits.
-  const days = cfg.bounded && cfg.endDateYmd
-    ? daysInclusive(cfg.startDateYmd, cfg.endDateYmd)
-    : Math.max(1, Math.ceil(N / (G * slotsPerDay)) + N); // generous; sequential fallback always fits
-
-  const rawCapacity = days * G * slotsPerDay;
-
-  // Time-slots ordered (day, timeIndex); each holds G parallel ground-slots.
-  // order = dayIndex*slotsPerDay + timeIndex.
-  const totalTimeSlots = days * slotsPerDay;
+  const rawCapacity = totalTimeSlots * G;
   const usedGround: boolean[][] = Array.from({ length: totalTimeSlots }, () => new Array(G).fill(false));
   const teamsAt: Array<Set<string>> = Array.from({ length: totalTimeSlots }, () => new Set<string>());
 
@@ -113,13 +135,14 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
   let curRoundMaxOrder = -1;
 
   const capacityError = (): ScheduleResult => {
-    const needDays = Math.ceil(N / (G * slotsPerDay));
+    const perDayDefault = Math.max(1, slotsInWindow(defaultWindowMin));
+    const needDays = Math.ceil(N / (G * perDayDefault));
     return {
       ok: false,
       code: 'CAPACITY',
       error:
-        `These ${N} fixtures need ${N} slots, but ${fmtWindow(cfg)} on ${G} ground${G > 1 ? 's' : ''} at ` +
-        `${D} min/match (${days} day${days > 1 ? 's' : ''}) fits only ${rawCapacity}. ` +
+        `These ${N} fixtures need ${N} slots, but the schedule (${G} ground${G > 1 ? 's' : ''} at ` +
+        `${D} min/match across ${days} day${days > 1 ? 's' : ''}) fits only ${rawCapacity}. ` +
         `Add a ground, extend to ${needDays} day${needDays > 1 ? 's' : ''}, or shorten the match duration.`,
     };
   };
@@ -144,11 +167,9 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
         teamsAt[order].add(f.team_a_id!);
         teamsAt[order].add(f.team_b_id!);
       }
-      const dayIndex = Math.floor(order / slotsPerDay);
-      const timeIndex = order % slotsPerDay;
-      const wallMin = cfg.dailyStartMin + timeIndex * (D + B);
+      const meta = timeSlotMeta[order]!;
       assignments.set(keyOf(f.round, f.match_no), {
-        scheduled_at: slotUtcIso(cfg.startDateYmd, dayIndex, wallMin),
+        scheduled_at: slotUtcIso(cfg.startDateYmd, meta.dayIndex, meta.wallMin),
         ground_label: groundLabelFor(groundIdx, cfg.groundNames),
       });
       curRoundMaxOrder = Math.max(curRoundMaxOrder, order);
@@ -161,7 +182,27 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
   return { ok: true, assignments };
 }
 
-function fmtWindow(cfg: SchedulingConfig): string {
-  const hhmm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
-  return `${hhmm(cfg.dailyStartMin)}–${hhmm(cfg.dailyEndMin)}`;
+// Format a stored UTC slot as "Sat 15 Jul · 14:00 · Ground 2" in IST (for
+// change-notification copy). Manual IST shift — no Intl/tz dependency.
+export function formatSlotIst(scheduledAt: string | null | undefined, groundLabel: string | null | undefined): string {
+  const parts: string[] = [];
+  if (scheduledAt) {
+    const d = new Date(scheduledAt);
+    if (!isNaN(d.getTime())) {
+      const ist = new Date(d.getTime() + TOURNAMENT_TZ_OFFSET_MIN * 60000);
+      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const mons = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const hh = String(ist.getUTCHours()).padStart(2, '0');
+      const mm = String(ist.getUTCMinutes()).padStart(2, '0');
+      parts.push(`${days[ist.getUTCDay()]} ${ist.getUTCDate()} ${mons[ist.getUTCMonth()]}`, `${hh}:${mm}`);
+    }
+  }
+  if (groundLabel) parts.push(groundLabel);
+  return parts.length ? parts.join(' · ') : 'a new slot';
+}
+
+/** 'YYYY-MM-DD' + n days → 'YYYY-MM-DD' (used to resolve per-day window overrides). */
+export function addDaysYmd(startYmd: string, n: number): string {
+  const [y, m, d] = startYmd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }

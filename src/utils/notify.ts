@@ -38,6 +38,9 @@ const PREF_CATEGORY: Record<string, string> = {
   // the 'matches' toggle silences them (not a critical status change).
   match_joined: 'matches',
   match_left: 'matches',
+  // Scheduling: a rescheduled fixture / a tournament schedule-or-venue change.
+  match_rescheduled: 'matches',
+  tournament_updated: 'matches',
   score_update: 'matches',
   smart_match: 'matches',
   weekend_nudge: 'matches',

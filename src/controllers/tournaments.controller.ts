@@ -7,6 +7,10 @@ import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { rankTeams, computeStats } from '../utils/standings';
+import {
+  buildSchedule, timeToMinutes, keyOf,
+  type SchedulingConfig, type FixtureShape, type SlotAssign,
+} from '../utils/scheduleFixtures';
 import { notifyUnlessBlocked, notifyUsers } from '../utils/notify';
 
 function generateEntryCode(): string {
@@ -56,6 +60,12 @@ export async function createTournament(req: Request, res: Response) {
       organiser_name,
       organiser_mobile,
       registration_deadline,
+      daily_start_time,
+      daily_end_time,
+      match_duration_minutes,
+      buffer_minutes,
+      ground_count,
+      ground_names,
       home_away,
       num_groups,
       group_size,
@@ -172,6 +182,14 @@ export async function createTournament(req: Request, res: Response) {
         organiser_name: organiser_name || null,
         organiser_mobile: organiser_mobile || null,
         registration_deadline: registration_deadline || null,
+        // Scheduling (feature): daily window + grounds + duration drive fixture
+        // slotting at generate time. All optional — absent → sequential fallback.
+        daily_start_time: daily_start_time || null,
+        daily_end_time: daily_end_time || null,
+        match_duration_minutes: match_duration_minutes ?? null,
+        buffer_minutes: buffer_minutes ?? null,
+        ground_count: ground_count ?? null,
+        ground_names: Array.isArray(ground_names) && ground_names.length > 0 ? ground_names : null,
         home_away: !!home_away,
         ...groupsConfigFields,
       })
@@ -646,6 +664,12 @@ export async function updateTournament(req: Request, res: Response) {
       'registration_deadline',
       'logo_url',
       'home_away',
+      'daily_start_time',
+      'daily_end_time',
+      'match_duration_minutes',
+      'buffer_minutes',
+      'ground_count',
+      'ground_names',
     ];
     const update: Record<string, any> = {};
     for (const key of allowedKeys) {
@@ -805,7 +829,7 @@ export async function getBracket(req: Request, res: Response) {
 
     const { data: matches, error } = await supabase
       .from('matches')
-      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label')
+      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label, venue, ground_label')
       .eq('tournament_id', id)
       .order('round', { ascending: true })
       .order('match_no', { ascending: true })
@@ -919,12 +943,14 @@ export async function updateFixtures(req: Request, res: Response) {
 
     const results: any[] = [];
     const blocked: string[] = [];
+    const warnings: string[] = []; // SC-scheduling: soft team-double-book warnings (never block)
     for (const upd of items) {
       const fixtureId = upd.id ?? upd.fixture_id;
       if (!fixtureId) continue;
       const patch: Record<string, any> = {};
       if (upd.scheduled_at) patch.scheduled_at = upd.scheduled_at;
       if (upd.venue) patch.venue = upd.venue;
+      if (upd.ground_label !== undefined) patch.ground_label = upd.ground_label; // scheduling: move a match to another ground
       if ('team_a_id' in upd) patch.team_a_id = upd.team_a_id;
       if ('team_b_id' in upd) patch.team_b_id = upd.team_b_id;
       if (upd.team_a_name) patch.team_a_name = upd.team_a_name;
@@ -970,6 +996,25 @@ export async function updateFixtures(req: Request, res: Response) {
       const { data, error } = await query.select('*').single();
       if (!error && data) {
         results.push(data);
+        // Scheduling: a manual slot move can create a team double-book. SOFT-WARN
+        // (the organiser knows their ground) — never block. A clash = another
+        // match of this tournament at the SAME scheduled_at sharing a team.
+        if (patch.scheduled_at && data.scheduled_at && (data.team_a_id || data.team_b_id)) {
+          const { data: siblings } = await supabase
+            .from('matches')
+            .select('id, team_a_id, team_b_id, team_a_name, team_b_name')
+            .eq('tournament_id', id)
+            .eq('scheduled_at', data.scheduled_at)
+            .neq('id', fixtureId);
+          const teamIds = new Set([data.team_a_id, data.team_b_id].filter(Boolean));
+          for (const s of siblings ?? []) {
+            const clashId = [s.team_a_id, s.team_b_id].find((t) => t && teamIds.has(t));
+            if (clashId) {
+              const name = clashId === data.team_a_id ? data.team_a_name : data.team_b_name;
+              warnings.push(`${name ?? 'A team'} is now double-booked at this time (also in ${s.team_a_name} vs ${s.team_b_name}).`);
+            }
+          }
+        }
         // Propagate the winner into the bracket (SC-23) / auto-complete (SC-24).
         if (settingWinner) {
           try {
@@ -981,7 +1026,12 @@ export async function updateFixtures(req: Request, res: Response) {
       }
     }
 
-    return res.json({ updated: results.length, fixtures: results, blocked: blocked.length ? blocked : undefined });
+    return res.json({
+      updated: results.length,
+      fixtures: results,
+      blocked: blocked.length ? blocked : undefined,
+      warnings: warnings.length ? warnings : undefined,
+    });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -1053,6 +1103,9 @@ interface BracketBase {
   venue: string | null;
   city_id: string | null;
   created_by: string;
+  // Fallback timestamp for any bracket slot the scheduler didn't cover (should
+  // not happen — the schedule is computed over the full bracket shape).
+  fallbackStartIso: string;
 }
 
 function nextPow2(n: number): number {
@@ -1149,14 +1202,12 @@ async function getGroupsConfig(tournamentId: string): Promise<GroupsConfig> {
 // matches that are byes (one real team) so the caller can auto-resolve them.
 async function insertSingleElim(
   base: BracketBase,
-  startDate: Date,
   round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>,
+  slotFor: (round: number, matchNo: number) => { scheduled_at: string; ground_label: string } | undefined,
 ): Promise<{ byeMatchIds: string[] }> {
-  const dayMs = 86400000;
   const bracketSize = round1.length * 2;
   const roundsCount = Math.max(1, Math.round(Math.log2(bracketSize)));
   const created: Record<string, string> = {}; // `${round}:${matchNo}` -> id
-  let dayCursor = 0;
 
   for (let r = roundsCount; r >= 1; r--) {
     const matchesInRound = bracketSize / Math.pow(2, r);
@@ -1172,6 +1223,7 @@ async function insertSingleElim(
         aName = a?.name ?? (b ? 'BYE' : 'TBD');
         bName = b?.name ?? (a ? 'BYE' : 'TBD');
       }
+      const slot = slotFor(r, m);
       rows.push({
         sport_id: base.sport_id,
         tournament_id: base.tournament_id,
@@ -1179,7 +1231,8 @@ async function insertSingleElim(
         team_b_id: b?.id ?? null,
         team_a_name: aName,
         team_b_name: bName,
-        scheduled_at: new Date(startDate.getTime() + dayCursor * dayMs).toISOString(),
+        scheduled_at: slot?.scheduled_at ?? base.fallbackStartIso,
+        ground_label: slot?.ground_label ?? null,
         venue: base.venue,
         city_id: base.city_id,
         status: 'scheduled',
@@ -1196,7 +1249,6 @@ async function insertSingleElim(
         // Forward-only: existing fixtures are untouched (never rewrite settled ELO).
         is_ranked: true,
       });
-      dayCursor++;
     }
     const { data, error } = await supabase.from('matches').insert(rows).select('id, match_no');
     if (error) throw new Error(error.message);
@@ -1511,6 +1563,76 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
 //   round_robin/league → every team plays every other (N*(N-1)/2 matches)
 //   groups_knockout → round-robin groups (round 0) + a linked KO bracket seeded
 //                     from group standings once the group stage completes
+//
+// SCHEDULING: every fixture is placed into a real slot (date + time + ground) by
+// the round-aware greedy scheduler (utils/scheduleFixtures) from the tournament's
+// date range, daily window, ground count, and match duration. If the organiser
+// didn't set the scheduling fields, a graceful fallback (single ground, sequential
+// from start_date) keeps generation working. Forward-only: the scheduler only
+// affects newly generated fixtures; completion/crown logic never reads
+// scheduled_at, so existing flows are undisturbed.
+
+// Build the scheduler config from the tournament row. When the daily window /
+// duration aren't set, fall back to an unbounded single-ground sequential
+// schedule so create still works. end_date absent (but window set) → single day.
+function buildTournamentScheduleConfig(t: any, startDateYmd: string): SchedulingConfig {
+  const hasWindow = !!(t.daily_start_time && t.daily_end_time && t.match_duration_minutes);
+  if (!hasWindow) {
+    return {
+      startDateYmd, endDateYmd: null,
+      dailyStartMin: 9 * 60, dailyEndMin: 21 * 60,
+      durationMin: 60, bufferMin: 10,
+      groundCount: 1, groundNames: null, bounded: false,
+    };
+  }
+  return {
+    startDateYmd,
+    endDateYmd: (t.end_date as string) ?? startDateYmd,
+    dailyStartMin: timeToMinutes(t.daily_start_time, 9 * 60),
+    dailyEndMin: timeToMinutes(t.daily_end_time, 21 * 60),
+    durationMin: Math.max(1, Number(t.match_duration_minutes)),
+    bufferMin: Math.max(0, Number(t.buffer_minutes ?? 10)),
+    groundCount: Math.max(1, Number(t.ground_count ?? 1)),
+    groundNames: Array.isArray(t.ground_names) ? (t.ground_names as string[]) : null,
+    bounded: true,
+  };
+}
+
+// Fixture shape of a single-elim bracket (round 1 carries the real round-1
+// matchups; later rounds are TBD). Mirrors insertSingleElim's round numbering.
+function bracketShape(round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>): FixtureShape[] {
+  const bracketSize = round1.length * 2;
+  const roundsCount = Math.max(1, Math.round(Math.log2(bracketSize)));
+  const shape: FixtureShape[] = [];
+  for (let r = roundsCount; r >= 1; r--) {
+    const matchesInRound = bracketSize / Math.pow(2, r);
+    for (let m = 0; m < matchesInRound; m++) {
+      const a = r === 1 ? round1[m].a : null;
+      const b = r === 1 ? round1[m].b : null;
+      shape.push({ round: r, match_no: m, team_a_id: a?.id ?? null, team_b_id: b?.id ?? null });
+    }
+  }
+  return shape;
+}
+
+// Compute the schedule from a set of match rows and assign scheduled_at +
+// ground_label to each in place. Returns {ok:false,error} on a capacity failure.
+function applyScheduleToRows(
+  rows: any[], cfg: SchedulingConfig, fallbackIso: string,
+): { ok: true } | { ok: false; error: string } {
+  const shape: FixtureShape[] = rows.map((r) => ({
+    round: r.round, match_no: r.match_no, team_a_id: r.team_a_id, team_b_id: r.team_b_id,
+  }));
+  const sched = buildSchedule(shape, cfg);
+  if (!sched.ok) return { ok: false, error: sched.error };
+  for (const r of rows) {
+    const slot = sched.assignments.get(keyOf(r.round, r.match_no));
+    r.scheduled_at = slot?.scheduled_at ?? fallbackIso;
+    r.ground_label = slot?.ground_label ?? null;
+  }
+  return { ok: true };
+}
+
 export async function generateFixtures(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1518,7 +1640,7 @@ export async function generateFixtures(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, sport_id, format, city_id, venue, start_date, created_by')
+      .select('id, sport_id, format, city_id, venue, start_date, end_date, created_by, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -1589,8 +1711,9 @@ export async function generateFixtures(req: Request, res: Response) {
       // Won the stuck-state recovery (flag already true, 0 matches, stale) → regenerate.
     }
 
-    const startDate = tournament.start_date ? new Date(tournament.start_date) : new Date();
-    const dayMs = 86400000;
+    const startDateYmd = (tournament.start_date ?? new Date().toISOString().slice(0, 10)) as string;
+    const fallbackStartIso = new Date(`${startDateYmd}T00:00:00.000Z`).toISOString();
+    const schedCfg = buildTournamentScheduleConfig(tournament, startDateYmd);
     const format = (tournament.format ?? 'knockout').toLowerCase();
     const base: BracketBase = {
       sport_id: tournament.sport_id,
@@ -1598,11 +1721,18 @@ export async function generateFixtures(req: Request, res: Response) {
       venue: tournament.venue ?? null,
       city_id: tournament.city_id ?? null,
       created_by: userId,
+      fallbackStartIso,
     };
 
     if (format === 'knockout') {
-      // Full single-elim bracket (all rounds, linked). Byes auto-advance.
-      const { byeMatchIds } = await insertSingleElim(base, startDate, buildRound1(teams));
+      // Schedule the whole bracket up front (round-aware: QF slots before SF
+      // before the Final), then insert with each row placed in its slot.
+      const round1 = buildRound1(teams);
+      const shape = bracketShape(round1);
+      const sched = buildSchedule(shape, schedCfg);
+      if (!sched.ok) return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' });
+      const slotFor = (r: number, m: number): SlotAssign | undefined => sched.assignments.get(keyOf(r, m));
+      const { byeMatchIds } = await insertSingleElim(base, round1, slotFor);
       for (const byeId of byeMatchIds) {
         const { data: bm } = await supabase
           .from('matches')
@@ -1640,7 +1770,6 @@ export async function generateFixtures(req: Request, res: Response) {
               team_b_id: teams[a].id,
               team_a_name: teams[h].name,
               team_b_name: teams[a].name,
-              scheduled_at: new Date(startDate.getTime() + mno * dayMs).toISOString(),
               venue: tournament.venue ?? null,
               city_id: tournament.city_id ?? null,
               status: 'scheduled',
@@ -1654,6 +1783,10 @@ export async function generateFixtures(req: Request, res: Response) {
           }
         }
       }
+      // Schedule: team-conflict matters here (everyone plays everyone) — no team
+      // may sit in two matches in the same time-slot.
+      const schedRR = applyScheduleToRows(matchRows, schedCfg, fallbackStartIso);
+      if (!schedRR.ok) return res.status(400).json({ error: schedRR.error, code: 'SCHEDULE_CAPACITY' });
       if (matchRows.length > 0) {
         const { error } = await supabase.from('matches').insert(matchRows).select('id');
         if (error) throw new Error('fixture insert failed');
@@ -1693,7 +1826,6 @@ export async function generateFixtures(req: Request, res: Response) {
               team_b_id: grp[j].id,
               team_a_name: grp[i].name,
               team_b_name: grp[j].name,
-              scheduled_at: new Date(startDate.getTime() + mno * dayMs).toISOString(),
               venue: tournament.venue ?? null,
               city_id: tournament.city_id ?? null,
               status: 'scheduled',
@@ -1708,14 +1840,26 @@ export async function generateFixtures(req: Request, res: Response) {
           }
         }
       }
+      const koSize = nextPow2(numGroups * qualsPerGroup);
+      const koRound1 = Array.from({ length: koSize / 2 }, () => ({ a: null as TeamSlot | null, b: null as TeamSlot | null }));
+      // Schedule the group stage (round 0) AND the KO bracket (rounds 1..R)
+      // together so the group stage entirely precedes the knockout in time.
+      const gkShape: FixtureShape[] = [
+        ...matchRows.map((r) => ({ round: r.round, match_no: r.match_no, team_a_id: r.team_a_id, team_b_id: r.team_b_id })),
+        ...bracketShape(koRound1),
+      ];
+      const schedGK = buildSchedule(gkShape, schedCfg);
+      if (!schedGK.ok) return res.status(400).json({ error: schedGK.error, code: 'SCHEDULE_CAPACITY' });
+      for (const r of matchRows) {
+        const slot = schedGK.assignments.get(keyOf(r.round, r.match_no));
+        r.scheduled_at = slot?.scheduled_at ?? fallbackStartIso;
+        r.ground_label = slot?.ground_label ?? null;
+      }
       if (matchRows.length > 0) {
         const { error } = await supabase.from('matches').insert(matchRows);
         if (error) throw new Error('fixture insert failed');
       }
-      const koSize = nextPow2(numGroups * qualsPerGroup);
-      const koRound1 = Array.from({ length: koSize / 2 }, () => ({ a: null as TeamSlot | null, b: null as TeamSlot | null }));
-      const koStart = new Date(startDate.getTime() + (matchRows.length + 1) * dayMs);
-      await insertSingleElim(base, koStart, koRound1);
+      await insertSingleElim(base, koRound1, (r, m) => schedGK.assignments.get(keyOf(r, m)));
 
       await supabase.from('tournaments').update({ status: 'live' }).eq('id', id);
       const { count } = await supabase

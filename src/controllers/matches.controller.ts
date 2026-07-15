@@ -1001,7 +1001,7 @@ export async function completeMatch(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
-    const { winner_team_id } = req.body || {};
+    const { winner_team_id, walkover, walkover_reason } = req.body || {};
 
     const { data: match } = await supabase
       .from('matches')
@@ -1030,6 +1030,18 @@ export async function completeMatch(req: Request, res: Response) {
       if (!count) {
         return res.status(400).json({ error: 'Cannot complete a match that has not started' });
       }
+    }
+
+    // SC-254: a walkover/forfeit records a winner WITHOUT a lineup or any scoring
+    // — a real tournament need (a team no-shows). It sets the winner, marks
+    // score_summary.walkover=true, advances the bracket, and applies NO
+    // attribution (no ELO / matches_played / W-L / coins), the same "forfeit, not
+    // a played game" rule as the team-withdraw walkover (walkoverOnWithdraw in
+    // tournaments.controller). That withdraw path uses status='abandoned'; this
+    // organiser-driven single-match walkover instead stays status='completed' — a
+    // decided result that advances the bracket. A walkover must name a winner.
+    if (walkover && !winner_team_id) {
+      return res.status(400).json({ error: 'A walkover needs a winning team.' });
     }
 
     // SC-23: knockout bracket matches can't end in a draw — a decisive winner is
@@ -1088,7 +1100,9 @@ export async function completeMatch(req: Request, res: Response) {
     // this table), and ranked guest scoring is already rejected at createEvent, so
     // ">=1 registered per side" keeps the anti-phantom guarantee while allowing
     // 1v1. Casual matches have no such requirement.
-    if (match.is_ranked) {
+    // SC-254: a walkover is exempt from the lineup requirement — a forfeited
+    // match has no lineup by definition; it just records the winner + advances.
+    if (match.is_ranked && !walkover) {
       const aCount = (participants ?? []).filter((p) => p.team_side === 'A').length;
       const bCount = (participants ?? []).filter((p) => p.team_side === 'B').length;
       if (aCount < 1 || bCount < 1) {
@@ -1100,8 +1114,11 @@ export async function completeMatch(req: Request, res: Response) {
     // then persist the core (profiles + rating_history + status) in ONE atomic
     // transaction via finalize_match (migration 051). ELO runs only for ranked
     // matches with a roster; casual matches just get status→completed.
+    // SC-254: a walkover skips ALL attribution — no ELO/mp/W-L (allPlayerIds stays
+    // empty, so the win-coins/streaks block and rating_change notifications below
+    // are naturally skipped too). A forfeit is not a played game.
     const corePayloadProfiles: Array<Record<string, any>> = [];
-    if (match.is_ranked && participants && participants.length > 0) {
+    if (match.is_ranked && !walkover && participants && participants.length > 0) {
       const teamA = participants.filter((p) => p.team_side === 'A').map((p) => p.user_id);
       const teamB = participants.filter((p) => p.team_side === 'B').map((p) => p.user_id);
       allPlayerIds = [...teamA, ...teamB];
@@ -1209,7 +1226,9 @@ export async function completeMatch(req: Request, res: Response) {
     }
 
     // ── Post-core best-effort (never blocks completion; all idempotent) ──
-    if (match.is_ranked && allPlayerIds.length > 0) {
+    // (walkover leaves allPlayerIds empty, so this is skipped either way — the
+    // explicit !walkover keeps the "no coins/streaks on a forfeit" intent local.)
+    if (match.is_ranked && !walkover && allPlayerIds.length > 0) {
       // Award 5 coins to winners — idempotent per (user,match) via coin_events.
       if (winner_team_id) {
         const winnerSide = winner_team_id === match.team_a_id ? 'A' : 'B';
@@ -1288,6 +1307,16 @@ export async function completeMatch(req: Request, res: Response) {
 
       ss.result = resultText;
       ss.winner_side = winnerSide;
+      // SC-254: mark a walkover so it's distinguishable from a genuine 0-0 played
+      // result, and override the score-derived text ("… won by 0 runs") with the
+      // forfeit label. winner_team_id is always present on a walkover → winnerSide
+      // is set here.
+      if (walkover && winnerSide) {
+        ss.walkover = true;
+        if (walkover_reason) ss.walkover_reason = String(walkover_reason).slice(0, 200);
+        const wName = winnerSide === 'A' ? aName : bName;
+        ss.result = `${wName} won by walkover`;
+      }
       const patch: Record<string, any> = { score_summary: ss };
       // Backfill winner_team_id when the client didn't send it but a real team
       // maps to the winning side. Free-text matches keep null team ids (winner

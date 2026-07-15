@@ -732,6 +732,58 @@ async function cancelTournamentSideEffects(
   );
 }
 
+// SC-253: announce the champion to everyone who played. Fanned out to ALL members
+// of every APPROVED team, with a differentiated body — the winning team's members
+// get "🏆 You won {tournament}!", everyone else "{champion} won {tournament}". The
+// type `tournament_champion` is UNGATED (unmapped in PREF_CATEGORY, sibling of the
+// ungated tournament_cancelled per SC-233): a one-time terminal result, always
+// delivered. Called once, from advanceTournamentWinner's crown transition.
+async function notifyTournamentChampion(
+  tournamentId: string,
+  championTeamId: string,
+  championName: string | null,
+  tournamentName: string | null,
+): Promise<void> {
+  const { data: entries } = await supabase
+    .from('tournament_entries')
+    .select('team_id')
+    .eq('tournament_id', tournamentId)
+    .eq('status', 'approved');
+  const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
+  if (teamIds.length === 0) return;
+  const { data: members } = await supabase
+    .from('team_members')
+    .select('user_id, team_id')
+    .in('team_id', teamIds);
+  // Partition into champion-team members vs. the rest. ROSTER_OVERLAP (SC-240)
+  // guarantees a user is on at most one entered team per tournament, so these
+  // two sets are disjoint.
+  const champIds = Array.from(
+    new Set((members ?? []).filter((mm) => mm.team_id === championTeamId).map((mm) => mm.user_id).filter(Boolean)),
+  );
+  const otherIds = Array.from(
+    new Set((members ?? []).filter((mm) => mm.team_id !== championTeamId).map((mm) => mm.user_id).filter(Boolean)),
+  );
+  const tName = tournamentName ?? 'the tournament';
+  const cName = championName ?? 'The winner';
+  if (champIds.length > 0) {
+    await notifyUsers(champIds, {
+      type: 'tournament_champion',
+      title: 'Champions! 🏆',
+      body: `🏆 You won ${tName}!`,
+      data: { tournamentId },
+    });
+  }
+  if (otherIds.length > 0) {
+    await notifyUsers(otherIds, {
+      type: 'tournament_champion',
+      title: 'Tournament complete',
+      body: `${cName} won ${tName}.`,
+      data: { tournamentId },
+    });
+  }
+}
+
 // GET /tournaments/:id/bracket — returns the knockout bracket grouped
 // into named rounds. Infers the round-count from the total match count:
 //   8 matches → Round of 16 → QF → SF → F (if we ever get there)
@@ -1137,6 +1189,12 @@ async function insertSingleElim(
         match_no: m,
         next_match_id: nextId,
         next_slot: nextSlot,
+        // SC-251: tournament matches are real ranked games — each bracket match
+        // attributes ELO / matches_played / W-L to its lineup on completion.
+        // Was omitted here → defaulted false → tournament play earned nothing on
+        // the ladder while runs/MVP (ungated) still accrued (the split bug).
+        // Forward-only: existing fixtures are untouched (never rewrite settled ELO).
+        is_ranked: true,
       });
       dayCursor++;
     }
@@ -1204,11 +1262,23 @@ export async function advanceTournamentWinner(matchId: string): Promise<void> {
     // scheduled/live (e.g. the final was recorded before a semi), do NOT crown.
     // The resolving final is already terminal here, so it is not self-counted.
     if (await hasUnplayedFixtures(m.tournament_id)) return;
-    await supabase
+    // SC-253: crown the champion AND auto-complete in ONE conditional update.
+    // The .eq('status','live') CAS makes it idempotent — a re-fire finds the
+    // tournament already 'completed', updates zero rows, and the read-back is
+    // null → we never re-notify. So the notification fires exactly once, on the
+    // real transition. champion_team_id is the final's winner.
+    const championName =
+      winnerId === m.team_a_id ? m.team_a_name : winnerId === m.team_b_id ? m.team_b_name : null;
+    const { data: crowned } = await supabase
       .from('tournaments')
-      .update({ status: 'completed', updated_at: new Date().toISOString() })
+      .update({ status: 'completed', champion_team_id: winnerId, updated_at: new Date().toISOString() })
       .eq('id', m.tournament_id)
-      .eq('status', 'live');
+      .eq('status', 'live')
+      .select('id, name')
+      .maybeSingle();
+    if (crowned) {
+      await notifyTournamentChampion(m.tournament_id, winnerId, championName, crowned.name ?? null);
+    }
     return;
   }
 
@@ -1516,6 +1586,7 @@ export async function generateFixtures(req: Request, res: Response) {
               created_by: userId,
               round: 1,
               match_no: mno,
+              is_ranked: true, // SC-251: round-robin / league matches are ranked too.
             });
             mno++;
           }
@@ -1569,6 +1640,7 @@ export async function generateFixtures(req: Request, res: Response) {
               round: 0,
               match_no: mno,
               group_label: label,
+              is_ranked: true, // SC-251: group-stage matches are ranked too.
             });
             mno++;
           }

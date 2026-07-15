@@ -82,6 +82,11 @@ const PREF_CATEGORY: Record<string, string> = {
   // delivers), the tournament-level sibling of match_cancelled. An entrant losing
   // track of a cancelled tournament is a critical status miss, not noise. Named
   // here so it reads as classified-ungated, not accidentally-unmapped.
+  //
+  // SC-253: tournament_champion is UNMAPPED by design too (ungated — always
+  // delivers). It fires once, when a tournament crowns its winner — a one-time
+  // terminal result to the people who played, not recurring engagement noise.
+  // Sibling of tournament_cancelled.
 };
 
 // Opt-out model: a category is allowed unless the user has explicitly set it

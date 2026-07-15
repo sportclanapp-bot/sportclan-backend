@@ -1234,6 +1234,53 @@ async function hasUnplayedFixtures(tournamentId: string): Promise<boolean> {
   return (count ?? 0) > 0;
 }
 
+// SC-255: crown the champion of a round_robin / league tournament — the STANDINGS
+// LEADER, not whoever won the last match. Called from advanceTournamentWinner on
+// every RR/league completion; no-ops until the whole schedule is played
+// (hasUnplayedFixtures). Uses the SAME rankTeams ladder as the KO qualification
+// path (maybeSeedKnockout) and the standings display, so they always agree. The
+// team_id terminator in rankTeams guarantees a single deterministic ordered[0]
+// even on a genuine tie — so a completed tournament always has a champion, never
+// null. Independent of the completing match's winner, so a DRAWN last match still
+// crowns the leader (the old crown branch's `if (!winnerId) return` stranded it).
+// Idempotent via the .eq('status','live') CAS + read-back (SC-253 pattern) →
+// notify exactly once.
+async function crownLeagueChampion(tournamentId: string): Promise<void> {
+  if (await hasUnplayedFixtures(tournamentId)) return;
+  const { data: entries } = await supabase
+    .from('tournament_entries')
+    .select('team_id, team:teams!team_id(id, name)')
+    .eq('tournament_id', tournamentId)
+    .eq('status', 'approved');
+  const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
+  if (teamIds.length === 0) return;
+  const nameOf: Record<string, string> = {};
+  for (const e of entries ?? []) nameOf[e.team_id as string] = (e.team as any)?.name ?? 'Team';
+
+  const { data: matches } = await supabase
+    .from('matches')
+    .select('team_a_id, team_b_id, winner_team_id, status, score_summary')
+    .eq('tournament_id', tournamentId);
+  const { data: trow } = await supabase
+    .from('tournaments').select('tiebreaker_rules').eq('id', tournamentId).maybeSingle();
+  const tiebreakerRules = ((trow as any)?.tiebreaker_rules ?? []) as any[];
+
+  const ordered = rankTeams(teamIds, (matches ?? []) as any[], tiebreakerRules);
+  const championId = ordered[0];
+  if (!championId) return;
+
+  const { data: crowned } = await supabase
+    .from('tournaments')
+    .update({ status: 'completed', champion_team_id: championId, updated_at: new Date().toISOString() })
+    .eq('id', tournamentId)
+    .eq('status', 'live')
+    .select('id, name')
+    .maybeSingle();
+  if (crowned) {
+    await notifyTournamentChampion(tournamentId, championId, nameOf[championId] ?? null, crowned.name ?? null);
+  }
+}
+
 export async function advanceTournamentWinner(matchId: string): Promise<void> {
   const { data: m } = await supabase
     .from('matches')
@@ -1248,7 +1295,22 @@ export async function advanceTournamentWinner(matchId: string): Promise<void> {
     return;
   }
 
-  // Non-bracket format (round_robin/league) has no round/linkage to advance.
+  // SC-255: round_robin / league have no bracket and no Final. The old
+  // `if (m.round == null) return` guard NEVER fired (fixture-gen sets round=1 on
+  // these — it always has), so they fell into the Final-crown branch below and
+  // crowned whichever match COMPLETED LAST, not the standings leader. Route them
+  // to a standings-based crown instead (leaving `round` alone — it's load-bearing
+  // for maybeSeedKnockout / getBracket). Bracket formats (knockout,
+  // groups_knockout) don't match here and fall through to the unchanged logic.
+  const { data: fmtRow } = await supabase
+    .from('tournaments').select('format').eq('id', m.tournament_id).maybeSingle();
+  const fmt = (fmtRow as any)?.format;
+  if (fmt === 'round_robin' || fmt === 'league') {
+    await crownLeagueChampion(m.tournament_id);
+    return;
+  }
+  // Defensive: a non-bracket match with no round somehow reaching here has no
+  // linkage to advance.
   if (m.round == null) return;
 
   const winnerId = m.winner_team_id;

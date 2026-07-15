@@ -83,17 +83,29 @@ export async function getTournamentStandings(req: Request, res: Response) {
           const o = parseFloat(String(s));
           return isNaN(o) ? 0 : o;
         };
-        if (a && ss.team_a_score) {
-          a.runsScored += parseScore(ss.team_a_score);
-          a.oversFaced += parseOvers(ss.team_a_overs ?? '20');
-          a.runsConceded += parseScore(ss.team_b_score ?? '0');
-          a.oversBowled += parseOvers(ss.team_b_overs ?? '20');
+        // SC-256: the live cricket scorer writes the NESTED per-side summary
+        // ({ runs, balls, score, wickets }), NOT the flat team_a_score/overs keys
+        // this used to read — so runsScored + NRR were always 0 for cricket.
+        // Mirror computeStats' fallback for runs, and derive overs from `balls`
+        // (legal deliveries; overs = balls/6) since there's no overs field. The
+        // flat keys still win when present (organiser fixture-editor results).
+        // KNOWN SIMPLIFICATION: a side bowled out should count its FULL allotted
+        // overs for NRR (ICC rule); we use actual balls/6. Deferred refinement.
+        const aScore = ss.team_a_score ?? ss?.A?.score;
+        const bScore = ss.team_b_score ?? ss?.B?.score;
+        const oversOf = (flat: any, side: any) =>
+          flat != null ? parseOvers(flat) : (side?.balls != null ? side.balls / 6 : 20);
+        if (a && aScore != null) {
+          a.runsScored += parseScore(aScore);
+          a.oversFaced += oversOf(ss.team_a_overs, ss?.A);
+          a.runsConceded += parseScore(bScore ?? '0');
+          a.oversBowled += oversOf(ss.team_b_overs, ss?.B);
         }
-        if (b && ss.team_b_score) {
-          b.runsScored += parseScore(ss.team_b_score);
-          b.oversFaced += parseOvers(ss.team_b_overs ?? '20');
-          b.runsConceded += parseScore(ss.team_a_score ?? '0');
-          b.oversBowled += parseOvers(ss.team_a_overs ?? '20');
+        if (b && bScore != null) {
+          b.runsScored += parseScore(bScore);
+          b.oversFaced += oversOf(ss.team_b_overs, ss?.B);
+          b.runsConceded += parseScore(aScore ?? '0');
+          b.oversBowled += oversOf(ss.team_a_overs, ss?.A);
         }
       }
     }

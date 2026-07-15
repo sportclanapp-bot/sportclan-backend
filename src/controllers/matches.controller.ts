@@ -859,6 +859,25 @@ export async function getMatchChat(req: Request, res: Response) {
 }
 
 // ── Abandon a match (SC-A1) ───────────────────────────────────────────────────
+// SC-257 / SC-258: a match is a KNOCKOUT BRACKET match — one that advances a
+// winner and therefore CANNOT end in a draw — only for format=knockout, or the
+// knockout stage of groups_knockout (round>0 with no group_label; group matches
+// CAN draw). round_robin and league carry round=1 too, but they are NOT brackets:
+// a league match can legitimately tie (1 point each, standings already handle it).
+// The old `round>0 && !group_label` inference silently treated RR/league as
+// brackets (round=1) — blocking ties at completion (SC-257) and forcing a walkover
+// winner on abandon (SC-258). The reliable discriminator is the tournament FORMAT,
+// not the round value (which is load-bearing for maybeSeedKnockout / getBracket).
+async function isKnockoutBracketMatch(match: {
+  tournament_id: string | null; round: number | null; group_label: string | null;
+}): Promise<boolean> {
+  if (!match.tournament_id || match.round == null || match.round <= 0 || match.group_label) return false;
+  const { data: t } = await supabase
+    .from('tournaments').select('format').eq('id', match.tournament_id).maybeSingle();
+  const fmt = (t as any)?.format;
+  return fmt === 'knockout' || fmt === 'groups_knockout';
+}
+
 // POST /matches/:id/abandon  { advancing_team_id? } — creator/umpire only.
 // Casual matches simply go 'abandoned' (no result). For a knockout bracket
 // match, a walkover is recorded: the non-forfeiting side (advancing_team_id)
@@ -883,7 +902,10 @@ export async function abandonMatch(req: Request, res: Response) {
       return res.status(409).json({ error: 'Only a scheduled or live match can be abandoned.' });
     }
 
-    const isBracketMatch = !!match.tournament_id && match.round != null && match.round > 0 && !match.group_label;
+    // SC-258: only a real knockout bracket match needs an advancing team on
+    // abandon. RR/league (round=1) and groups_knockout GROUP matches just go
+    // 'abandoned' with no winner (a no-result → a draw in the standings).
+    const isBracketMatch = await isKnockoutBracketMatch(match);
     let walkoverWinner: string | null = null;
 
     if (isBracketMatch) {
@@ -913,9 +935,12 @@ export async function abandonMatch(req: Request, res: Response) {
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
-    // Bracket walkover advances through the one shared engine.
-    if (isBracketMatch && walkoverWinner) {
-      try { await advanceTournamentWinner(id); } catch (e) { console.error('walkover advance failed:', e instanceof Error ? e.message : e); }
+    // Route through the shared engine for ANY tournament match: a bracket
+    // walkover advances its winner; an abandoned RR/league match (SC-255) still
+    // lets crownLeagueChampion crown the leader if this was the last fixture; an
+    // abandoned groups_knockout group match still triggers maybeSeedKnockout.
+    if (match.tournament_id) {
+      try { await advanceTournamentWinner(id); } catch (e) { console.error('abandon advance failed:', e instanceof Error ? e.message : e); }
     }
 
     // Notify participants (best-effort).
@@ -1047,10 +1072,14 @@ export async function completeMatch(req: Request, res: Response) {
     // SC-23: knockout bracket matches can't end in a draw — a decisive winner is
     // required so the bracket can advance. (Group-stage matches, round=0, and
     // non-bracket formats may draw.)
-    const isBracketMatch = !!match.tournament_id && match.round != null && match.round > 0 && !match.group_label;
+    // SC-257: only a real knockout bracket match needs a decisive winner (a
+    // bracket can't advance on a tie). round_robin / league (round=1) and
+    // groups_knockout GROUP matches may legitimately draw — a tie is a valid
+    // 1-point-each league result, and standings already handle it.
+    const isBracketMatch = await isKnockoutBracketMatch(match);
     if (isBracketMatch && !winner_team_id) {
       return res.status(400).json({
-        error: 'Knockout matches need a decisive winner — pick the winning team (no draws in a bracket).',
+        error: 'Bracket matches need a decisive winner — pick the winning team (a bracket can\'t advance on a tie).',
         code: 'BRACKET_NEEDS_WINNER',
       });
     }

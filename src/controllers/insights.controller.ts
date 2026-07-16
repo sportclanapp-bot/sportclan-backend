@@ -56,38 +56,48 @@ export async function getUserInsights(req: Request, res: Response) {
   try {
     const { id } = req.params;
 
-    // Get all match participations
+    // SC-276: the previous query ordered by an EMBEDDED column
+    // (`.order('match.created_at')`). PostgREST can't order the parent rows by a
+    // to-one embed, so it errored; because only `data` was destructured (the
+    // `error` was ignored), `parts` came back null and EVERY embed-derived field
+    // (totalMatches / streaks / formTrend / formLabel) was silently empty for
+    // EVERY user. Fix: keep the working embed (it's only the order clause that
+    // was invalid), drop the bad order, and sort in JS. Semantics unchanged —
+    // ALL completed matches the user played (ranked + casual), decided by
+    // winner_team_id — NOT narrowed to ranked.
+    type MatchLite = {
+      id: string; status: string | null; winner_team_id: string | null;
+      team_a_id: string | null; team_b_id: string | null; created_at: string | null;
+    };
     const { data: parts } = await supabase
       .from('match_participants')
-      .select('match_id, team_side, batting_order, match:matches!inner(id, status, winner_team_id, team_a_id, team_b_id, score_summary, created_at)')
-      .eq('user_id', id)
-      .order('match.created_at', { ascending: false } as any)
-      .limit(50);
+      .select('team_side, match:matches!inner(id, status, winner_team_id, team_a_id, team_b_id, created_at)')
+      .eq('user_id', id);
 
-    const completed = (parts ?? []).filter((p: any) => p.match?.status === 'completed');
+    // Completed matches, newest-first (ISO timestamps sort lexically).
+    const completed = (parts ?? [])
+      .map((p) => ({ side: (p as { team_side: string }).team_side, m: (p as unknown as { match: MatchLite }).match }))
+      .filter((x) => x.m && x.m.status === 'completed')
+      .sort((a, b) => (b.m.created_at ?? '').localeCompare(a.m.created_at ?? ''));
 
-    // Win streak calculation
-    let currentStreak = 0;
-    let bestStreak = 0;
-    let streak = 0;
-    for (const p of completed) {
-      const m: any = p.match;
-      const myTeamId = p.team_side === 'A' ? m.team_a_id : m.team_b_id;
-      const won = m.winner_team_id === myTeamId;
-      if (won) { streak++; if (streak > bestStreak) bestStreak = streak; }
-      else { streak = 0; }
-    }
-    currentStreak = streak;
-
-    // Form trend (last 10 match results: W/L)
-    const formTrend = completed.slice(0, 10).map((p: any) => {
-      const m = p.match;
-      const myTeamId = p.team_side === 'A' ? m.team_a_id : m.team_b_id;
+    // Result per completed match (newest-first) via winner_team_id.
+    const results: Array<'W' | 'L' | 'D'> = completed.map(({ side, m }) => {
+      const myTeamId = side === 'A' ? m.team_a_id : m.team_b_id;
       return m.winner_team_id === myTeamId ? 'W' : m.winner_team_id ? 'L' : 'D';
     });
 
-    // Recent form label
-    const recentWins = formTrend.slice(0, 5).filter((f: string) => f === 'W').length;
+    // SC-277: currentWinStreak = consecutive wins from the MOST RECENT match.
+    // The old loop set it from the OLDEST match (wrong direction) — masked while
+    // `completed` was always empty. bestWinStreak = longest run anywhere.
+    let currentStreak = 0;
+    for (const r of results) { if (r === 'W') currentStreak++; else break; }
+    let bestStreak = 0;
+    let run = 0;
+    for (const r of results) { if (r === 'W') { run++; if (run > bestStreak) bestStreak = run; } else run = 0; }
+
+    // Form trend (last 10 results, newest-first).
+    const formTrend = results.slice(0, 10);
+    const recentWins = formTrend.slice(0, 5).filter((f) => f === 'W').length;
     const formLabel = recentWins >= 4 ? 'Excellent' : recentWins >= 3 ? 'Good' : recentWins >= 2 ? 'Average' : 'Poor';
 
     // Rating trend from rating_history

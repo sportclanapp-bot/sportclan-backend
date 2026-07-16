@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers } from '../utils/notify';
+import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers, matchAudienceIds } from '../utils/notify';
 import { rankTeams, parseScoreNum } from '../utils/standings';
 import { istDay } from '../utils/appTime';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
@@ -792,7 +792,7 @@ export async function runMatchReminderSweep(): Promise<{ sent: number }> {
   const in15 = new Date(now.getTime() + 15 * 60 * 1000);
   const { data: soon } = await supabase
     .from('matches')
-    .select('id, team_a_name, team_b_name, scheduled_at, umpire_id, status')
+    .select('id, team_a_name, team_b_name, team_a_id, team_b_id, scheduled_at, umpire_id, status')
     .gte('scheduled_at', now.toISOString())
     .lte('scheduled_at', in15.toISOString())
     .in('status', ['scheduled', 'upcoming', 'live']);
@@ -801,9 +801,11 @@ export async function runMatchReminderSweep(): Promise<{ sent: number }> {
   let sent = 0;
   for (const m of soon) {
     const matchDate = String(m.scheduled_at).slice(0, 10);
-    const { data: parts } = await supabase
-      .from('match_participants').select('user_id').eq('match_id', m.id);
-    const recipients = new Set<string>((parts ?? []).map((p) => p.user_id as string).filter(Boolean));
+    // SC-272: the lineup UNION the entrant teams' members (+ the umpire). A
+    // tournament fixture has no participants until scoring, so a pre-match
+    // reminder — which fires BEFORE scoring — used to reach nobody. Same
+    // composition gap as SC-270 (reschedule/cancel/abandon).
+    const recipients = new Set<string>(await matchAudienceIds(m.id, m.team_a_id, m.team_b_id));
     if (m.umpire_id) recipients.add(m.umpire_id as string);
     for (const uid of recipients) {
       // Claim first — a UNIQUE(user_id, job_type, sent_on) violation means this

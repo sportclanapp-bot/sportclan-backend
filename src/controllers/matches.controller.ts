@@ -781,6 +781,15 @@ export async function getMatch(req: Request, res: Response) {
     matchWithRating.follower_count = followerCount ?? 0;
     matchWithRating.is_following = !!myFollow;
 
+    // SC-287: authoritative "can this caller score/officiate this match" flag,
+    // computed with the SAME canOfficiateMatch the scoring/toss/complete APIs
+    // enforce — so the FE Score gate can't drift from the API. For a CASUAL
+    // match this equals creator||umpire (unchanged); for a TOURNAMENT fixture it
+    // is umpire||organiser (via isTournamentOrganiser), which the FE couldn't
+    // compute from created_by alone — that gap under-showed Score to co-organisers
+    // and over-showed it (→403) to a fixture creator later removed as organiser.
+    matchWithRating.can_officiate = await canOfficiateMatch(match, userId);
+
     // SC-259: expose the parent tournament's FORMAT so the client can tell a real
     // knockout bracket match (needs a decisive winner / walkover advancing-team)
     // from a round_robin/league match (round=1 but NOT a bracket — may draw /

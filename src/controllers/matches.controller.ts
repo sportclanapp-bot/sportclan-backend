@@ -82,6 +82,21 @@ export async function createMatch(req: Request, res: Response) {
       .single();
     if (error || !data) return res.status(500).json({ error: sanitizeError(error) || 'Failed to create match' });
 
+    // SC-281: seed the CREATOR into an open/pickup match. A pickup organiser is
+    // a player ("I + N more"), but createMatch never added them to
+    // match_participants — so they got no matches_played/MVP credit at
+    // completion and the slot math was off by one (players_needed = players
+    // needed BESIDES the creator). Side 'A' (same default as join_open_match).
+    // Best-effort: a failure here doesn't fail the create.
+    if (data.is_open) {
+      const { error: seedErr } = await supabase
+        .from('match_participants')
+        .insert({ match_id: data.id, user_id: userId, team_side: 'A' });
+      if (seedErr && (seedErr as { code?: string }).code !== '23505') {
+        console.warn('[create-match] creator seed failed', (seedErr as { message?: string }).message); // eslint-disable-line no-console
+      }
+    }
+
     // Best-effort venue upsert — tracks frequently-used venues for the
     // autocomplete in CreateMatchScreen. Errors are swallowed.
     if (venue && typeof venue === 'string') {

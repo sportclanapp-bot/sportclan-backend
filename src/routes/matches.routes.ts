@@ -21,6 +21,12 @@ import {
 } from '../controllers/matches.controller';
 import { getNearbyMatches } from '../controllers/features.controller';
 import {
+  requestToJoinMatch,
+  listMatchJoinRequests,
+  decideMatchJoinRequest,
+  withdrawMatchJoinRequest,
+} from '../controllers/matchJoinRequests.controller';
+import {
   getMatchMVP, getMatchAvailability, setMatchAvailability,
   applyDLS, editMatchEvent, deleteMatchEvent, upsertInningsStats,
 } from '../controllers/matchFeatures.controller';
@@ -47,6 +53,11 @@ router.post('/:id/umpire/self-assign', authenticateToken, selfAssignUmpire);
 router.post('/:id/complete', authenticateToken, completeMatch);
 router.post('/:id/join', authenticateToken, joinOpenMatch);
 router.post('/:id/leave', authenticateToken, leaveMatch);
+// SC-279: match join request/approve (approval-policy matches). Creator approves.
+router.post('/:id/join-requests', authenticateToken, requestToJoinMatch);
+router.get('/:id/join-requests', authenticateToken, listMatchJoinRequests);
+router.delete('/:id/join-requests/me', authenticateToken, withdrawMatchJoinRequest);
+router.patch('/:id/join-requests/:userId', authenticateToken, decideMatchJoinRequest);
 router.post('/:id/rate', authenticateToken, rateMatchHandler);
 router.patch('/:id/toss', authenticateToken, setMatchTossHandler);
 router.get('/:id/mvp', authenticateToken, getMatchMVP);

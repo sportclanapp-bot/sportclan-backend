@@ -35,8 +35,12 @@ export async function createMatch(req: Request, res: Response) {
       is_open,
       players_needed,
       is_ranked,
+      join_policy,
     } = req.body || {};
     if (!sport_id) return res.status(400).json({ error: 'sport_id is required' });
+    // SC-279: per-match join policy. 'open' (default) = instant join_open_match;
+    // 'approval' routes joins through match_join_requests (creator approves).
+    const joinPolicy = join_policy === 'approval' ? 'approval' : 'open';
     // Validate the sport (unknown/malformed/deactivated → clean 400, not a 500).
     const sportErr = await validateSportForCreate(sport_id);
     if (sportErr) return res.status(400).json({ error: sportErr });
@@ -71,6 +75,7 @@ export async function createMatch(req: Request, res: Response) {
         is_open: !!is_open,
         players_needed: players_needed ?? 0,
         is_ranked: !!is_ranked,
+        join_policy: joinPolicy,
         created_by: userId,
       })
       .select('*')
@@ -334,6 +339,17 @@ export async function joinOpenMatch(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
+
+    // SC-279: an 'approval' match can't be instant-joined — the creator gates it.
+    // Tell the FE to use the request flow. Read is cheap and before any mutation.
+    const { data: policyRow } = await supabase
+      .from('matches').select('join_policy').eq('id', id).maybeSingle();
+    if (policyRow?.join_policy === 'approval') {
+      return res.status(409).json({
+        error: 'This match requires the creator’s approval. Request to join instead.',
+        code: 'APPROVAL_REQUIRED',
+      });
+    }
 
     // SC-261: joining a match drops you into its shared match chat with the
     // creator and every current participant — so it's block-gated exactly like

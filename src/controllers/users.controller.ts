@@ -880,7 +880,7 @@ export async function getActivityHeatmap(req: Request, res: Response) {
   // can tell who won. Cast team_side to 'A' | 'B' for the winner check.
   const { data, error } = await supabase
     .from('match_participants')
-    .select('team_side, match:matches(id, scheduled_at, status, winner_team_id, team_a_id, team_b_id, updated_at)')
+    .select('team_side, match:matches(id, scheduled_at, status, winner_team_id, team_a_id, team_b_id, score_summary, updated_at)')
     .eq('user_id', id)
     .limit(500);
 
@@ -897,9 +897,16 @@ export async function getActivityHeatmap(req: Request, res: Response) {
     if (d < since) continue;
     const key = d.toISOString().slice(0, 10);
 
-    // Winner detection: winner_team_id matches the side's team id.
+    // Winner detection: my side won the match. SC-285: a TEAMLESS pickup has no
+    // winner_team_id (free-text sides) — its winner is score-derived and stored
+    // as score_summary.winner_side (the SAME signal Z-10/completeMatch uses to
+    // count the win on the profile). Use both so a real pickup WIN shows 'won',
+    // not a grey 'played' that disagrees with the participation card.
     const mySideTeamId = row.team_side === 'A' ? match.team_a_id : match.team_b_id;
-    const iWon = match.winner_team_id && match.winner_team_id === mySideTeamId;
+    const winnerSide = (match.score_summary as { winner_side?: 'A' | 'B' } | null)?.winner_side ?? null;
+    const iWon =
+      (match.winner_team_id && match.winner_team_id === mySideTeamId) ||
+      (winnerSide != null && winnerSide === row.team_side);
 
     // "won" is more interesting than "played", so upgrade but never downgrade.
     if (iWon) {

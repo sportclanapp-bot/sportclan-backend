@@ -68,10 +68,11 @@ export async function getUserInsights(req: Request, res: Response) {
     type MatchLite = {
       id: string; status: string | null; winner_team_id: string | null;
       team_a_id: string | null; team_b_id: string | null; created_at: string | null;
+      score_summary: { winner_side?: 'A' | 'B' } | null;
     };
     const { data: parts } = await supabase
       .from('match_participants')
-      .select('team_side, match:matches!inner(id, status, winner_team_id, team_a_id, team_b_id, created_at)')
+      .select('team_side, match:matches!inner(id, status, winner_team_id, team_a_id, team_b_id, score_summary, created_at)')
       .eq('user_id', id);
 
     // Completed matches, newest-first (ISO timestamps sort lexically).
@@ -80,20 +81,23 @@ export async function getUserInsights(req: Request, res: Response) {
       .filter((x) => x.m && x.m.status === 'completed')
       .sort((a, b) => (b.m.created_at ?? '').localeCompare(a.m.created_at ?? ''));
 
-    // Result per completed match (newest-first) via winner_team_id.
-    // SC-278: guard `null === null`. When the user's side has a null team id
-    // (a draw with no winner, a teamless/1v1 match, or a partial-team bracket
-    // fixture) the old `winner_team_id === myTeamId` read null===null as a WIN —
-    // fabricating wins and inflating the streak (this surfaced the moment
-    // SC-276 made formTrend non-empty). Now: only a real winner matching my
-    // NON-null team is a W; another team winning is an L; no winner is a D.
-    // (1v1 W/L can't be decided from winner_team_id — it's teamless — so it
-    // honestly reads D rather than a fabricated result; matches advanced-stats
-    // for team draws. Improving 1v1 form via rating delta is future work.)
+    // Result per completed match (newest-first). Two winner signals, unified:
+    //   • winner_team_id === my team  → team/ranked win
+    //   • score_summary.winner_side === my side → TEAMLESS pickup win (SC-285;
+    //     the SAME score-derived signal Z-10/completeMatch counts on the profile)
+    // SC-278 guarded `null === null` (a null team + null winner is NOT a win);
+    // SC-285 adds the winner_side fallback so a real teamless pickup WIN reads
+    // 'W' (not the 'D' the winner_team_id-only test gave), agreeing with the
+    // participation card. A loser (some winner signal present, not me) → 'L';
+    // no winner at all → 'D'.
     const results: Array<'W' | 'L' | 'D'> = completed.map(({ side, m }) => {
       const myTeamId = side === 'A' ? m.team_a_id : m.team_b_id;
-      if (myTeamId != null && m.winner_team_id === myTeamId) return 'W';
-      return m.winner_team_id != null ? 'L' : 'D';
+      const winnerSide = m.score_summary?.winner_side ?? null;
+      const iWon =
+        (myTeamId != null && m.winner_team_id === myTeamId) ||
+        (winnerSide != null && winnerSide === side);
+      if (iWon) return 'W';
+      return (m.winner_team_id != null || winnerSide != null) ? 'L' : 'D';
     });
 
     // SC-277: currentWinStreak = consecutive wins from the MOST RECENT match.

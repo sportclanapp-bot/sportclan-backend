@@ -24,6 +24,7 @@ import {
 } from '../controllers/users.controller';
 import { getSeasonRecap } from '../controllers/features.controller';
 import { getUserInsights } from '../controllers/insights.controller';
+import { getAdvancedStats } from '../controllers/advancedStats.controller';
 import { authenticateToken, optionalAuth } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -35,6 +36,9 @@ router.patch('/me/account-types', authenticateToken, updateAccountTypes);
 router.post('/me/check-in', authenticateToken, checkIn);
 router.get('/me/blocked', authenticateToken, getBlockedUsers);
 router.get('/me/profile-completeness', authenticateToken, getProfileCompleteness);
+// SC-275: Advanced Stats (PREMIUM-gated inside the handler). Additive only —
+// this is the sole new fence; no existing read is gated.
+router.get('/me/advanced-stats', authenticateToken, getAdvancedStats);
 router.get('/discover', authenticateToken, discoverPlayers);
 
 router.get('/:id', optionalAuth, getUserById);

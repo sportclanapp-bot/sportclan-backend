@@ -1474,6 +1474,48 @@ export async function completeMatch(req: Request, res: Response) {
       }
     }
 
+    // ── SC-283: CASUAL participation attribution (matches_played + W/L/D count
+    // for casual too — the field is matches_played, not ranked_matches_played;
+    // the person DID play). Rating/coins stay RANKED-ONLY (below).
+    //   Anti-farm: participants.length >= 2. match_participants rows are ALWAYS
+    //   real user_ids (a free-text "opponent" name contributes no participant),
+    //   so solo-vs-phantom = 1 participant = no-op → solo-farming is structurally
+    //   dead, and casual attribution naturally scopes to real pickups.
+    //   Mechanism: reuse finalize_match's ATOMIC per-player FOR-UPDATE path with
+    //   rating_delta:0 (rating unchanged). finalize_match unconditionally writes
+    //   one rating_history row per profile, so we DELETE the delta-0 rows right
+    //   after (casual isn't rated — a rating_history row would pollute the ranked
+    //   trajectory + SC-275 advanced-stats, which reads rating_history as the
+    //   ranked universe). No migration.
+    let casualAttribution = false;
+    if (!match.is_ranked && !walkover && participants && participants.length >= 2) {
+      casualAttribution = true;
+      allPlayerIds = participants.map((p) => p.user_id);
+      // Winner by SIDE — casual/free-text matches have no winner_team_id, so the
+      // result is score-derived (computed early; recomputeSummary is idempotent).
+      let casualWinnerSide: 'A' | 'B' | null = null;
+      try {
+        const ss = (await recomputeSummary(id)) as Record<string, any> | null;
+        const aS = Number(ss?.A?.score ?? ss?.A?.runs ?? 0);
+        const bS = Number(ss?.B?.score ?? ss?.B?.runs ?? 0);
+        casualWinnerSide = aS > bS ? 'A' : bS > aS ? 'B' : null;
+        if (winner_team_id === match.team_a_id) casualWinnerSide = 'A';
+        else if (winner_team_id === match.team_b_id) casualWinnerSide = 'B';
+      } catch { /* no scores → draw */ }
+      for (const p of participants) {
+        const isWin = casualWinnerSide != null && p.team_side === casualWinnerSide;
+        const isLoss = casualWinnerSide != null && p.team_side !== casualWinnerSide;
+        corePayloadProfiles.push({
+          user_id: p.user_id,
+          sport_id: match.sport_id,
+          rating_delta: 0, // no rating movement — casual isn't rated
+          win_inc: isWin ? 1 : 0,
+          loss_inc: isLoss ? 1 : 0,
+          draw_inc: casualWinnerSide == null ? 1 : 0,
+        });
+      }
+    }
+
     // ── ATOMIC CORE (finalize_match, migration 051): profiles + rating_history +
     // status→completed in ONE transaction. Any failure → full rollback (match stays
     // not-completed, retryable); the in-txn status CAS blocks the double-apply.
@@ -1515,9 +1557,21 @@ export async function completeMatch(req: Request, res: Response) {
       updatedMatch = out?.match ?? null;
     }
 
+    // SC-283: casual isn't rated — remove the delta-0 rating_history rows
+    // finalize_match wrote for a casual match, so casual never pollutes the
+    // rating trajectory or the ranked analytics (SC-275 reads rating_history as
+    // the ranked-match universe). Scoped by match_id — a casual match has no
+    // legit rating_history, so this only removes our own delta-0 rows.
+    if (casualAttribution) {
+      const { error: rhDelErr } = await supabase.from('rating_history').delete().eq('match_id', id);
+      if (rhDelErr) console.warn('[SC-283] casual rating_history cleanup failed:', rhDelErr.message); // eslint-disable-line no-console
+    }
+
     // ── Post-core best-effort (never blocks completion; all idempotent) ──
     // (walkover leaves allPlayerIds empty, so this is skipped either way — the
     // explicit !walkover keeps the "no coins/streaks on a forfeit" intent local.)
+    // SC-283: WIN-COINS stay RANKED-ONLY — coins are the economy anchor (they buy
+    // gifts), a casual win must never mint currency.
     if (match.is_ranked && !walkover && allPlayerIds.length > 0) {
       // Award 5 coins to winners — idempotent per (user,match) via coin_events.
       if (winner_team_id) {
@@ -1525,7 +1579,12 @@ export async function completeMatch(req: Request, res: Response) {
         const winnerIds = (participants ?? []).filter((p) => p.team_side === winnerSide).map((p) => p.user_id);
         for (const uid of winnerIds) void awardCoins(uid, `win_match_${id}`, 5);
       }
-      // Activity streaks — best-effort.
+    }
+
+    // SC-283: Activity streaks are PARTICIPATION (activity, not skill) — they move
+    // for casual (>=2 participants) AND ranked. allPlayerIds carries the >=2 casual
+    // guard already, and is empty for a solo/phantom match → no-op. Best-effort.
+    if (!walkover && allPlayerIds.length > 0) {
       try {
         const todayStr = new Date().toISOString().slice(0, 10);
         const { data: currentUsers } = await supabase

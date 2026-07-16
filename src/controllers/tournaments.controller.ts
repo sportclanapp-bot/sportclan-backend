@@ -13,7 +13,7 @@ import {
 } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser, authorizeCarveout, logAdminAction } from '../utils/tournamentAuth';
 import { isUuid } from '../utils/uuid';
-import { notifyUnlessBlocked, notifyUsers } from '../utils/notify';
+import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -1250,16 +1250,20 @@ export async function updateFixtures(req: Request, res: Response) {
       const { data, error } = await query.select('*').single();
       if (!error && data) {
         results.push(data);
-        // CHANGE NOTIF: collect participants of a genuinely-rescheduled match.
+        // CHANGE NOTIF: collect who needs to know this fixture moved.
         if (touchesResched && oldResched) {
           const changed = RESCHED_KEYS.some((k) => String(oldResched[k] ?? '') !== String((data as any)[k] ?? ''));
           if (changed) {
-            const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', fixtureId);
+            // SC-270: the ENTRANT TEAMS' members UNION any lineup already set,
+            // deduped (matchAudienceIds). Participants-only reached NOBODY on a
+            // pre-match reschedule (the normal case) — a bracket fixture has no
+            // participants until scoring.
+            const recipients = await matchAudienceIds(fixtureId, data.team_a_id, data.team_b_id);
             const slot = formatSlotIst(data.scheduled_at, data.ground_label);
-            for (const p of parts ?? []) {
-              const arr = affectedByUser.get(p.user_id as string) ?? [];
+            for (const uid of recipients) {
+              const arr = affectedByUser.get(uid) ?? [];
               arr.push({ matchId: fixtureId, slot });
-              affectedByUser.set(p.user_id as string, arr);
+              affectedByUser.set(uid, arr);
             }
           }
         }

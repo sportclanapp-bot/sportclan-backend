@@ -305,3 +305,28 @@ export async function notifyUnlessBlocked(actorId: string, args: NotifyArgs): Pr
   }
   await notifyUser(args);
 }
+
+// SC-270: the audience for a match change (reschedule / cancel / abandon) = its
+// lineup (match_participants) UNION the two teams' rosters (team_members of
+// team_a_id / team_b_id), deduped. A tournament BRACKET fixture has no
+// participants until scoring, so a participants-only audience reached NOBODY on
+// a pre-match change (the normal case) — the entered teams were never told. A
+// TBD/null team side is skipped (nobody there yet). Casual matches with
+// free-text teams (null team ids) fall back to participants only.
+export async function matchAudienceIds(
+  matchId: string,
+  teamAId: string | null | undefined,
+  teamBId: string | null | undefined,
+): Promise<string[]> {
+  const teamIds = [teamAId, teamBId].filter(Boolean) as string[];
+  const [pRes, mRes] = await Promise.all([
+    supabase.from('match_participants').select('user_id').eq('match_id', matchId),
+    teamIds.length
+      ? supabase.from('team_members').select('user_id').in('team_id', teamIds)
+      : Promise.resolve({ data: [] as { user_id: string }[] }),
+  ]);
+  const set = new Set<string>();
+  for (const p of (pRes.data ?? [])) if (p.user_id) set.add(p.user_id as string);
+  for (const m of ((mRes as { data: { user_id: string }[] | null }).data ?? [])) if (m.user_id) set.add(m.user_id as string);
+  return Array.from(set);
+}

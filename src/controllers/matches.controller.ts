@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
-import { notifyUser, notifyUsers } from '../utils/notify';
+import { notifyUser, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { isTournamentOrganiser, canOfficiateMatch } from '../utils/tournamentAuth';
 import { blockedUserIds } from '../utils/blocks';
 import { upsertVenue } from './venues.controller';
@@ -1085,10 +1085,11 @@ export async function abandonMatch(req: Request, res: Response) {
       try { await advanceTournamentWinner(id); } catch (e) { console.error('abandon advance failed:', e instanceof Error ? e.message : e); }
     }
 
-    // Notify participants (best-effort).
+    // Notify the audience (best-effort). SC-270: lineup UNION entrant teams'
+    // members — a bracket fixture has no participants until scoring, so
+    // participants-only told nobody a pre-lineup abandonment happened.
     try {
-      const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', id);
-      const ids = (parts || []).map((p) => p.user_id).filter((uid) => uid !== userId);
+      const ids = (await matchAudienceIds(id, match.team_a_id, match.team_b_id)).filter((uid) => uid !== userId);
       const label = (match.team_a_name && match.team_b_name) ? `${match.team_a_name} vs ${match.team_b_name}` : 'Your match';
       if (ids.length > 0) {
         await notifyUsers(ids, {
@@ -1114,7 +1115,7 @@ export async function cancelMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, team_a_name, team_b_name, status, tournament_id')
+      .select('id, created_by, team_a_name, team_b_name, status, tournament_id, team_a_id, team_b_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1134,13 +1135,11 @@ export async function cancelMatch(req: Request, res: Response) {
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
-    // PRD Addition #17: notify every participant of the cancellation.
+    // PRD Addition #17: notify the audience of the cancellation. SC-270: lineup
+    // UNION entrant teams' members — a bracket fixture has no participants until
+    // scoring, so participants-only told nobody a pre-lineup cancellation happened.
     try {
-      const { data: participants } = await supabase
-        .from('match_participants')
-        .select('user_id')
-        .eq('match_id', id);
-      const participantIds = (participants || []).map((p) => p.user_id);
+      const participantIds = await matchAudienceIds(id, match.team_a_id, match.team_b_id);
       const matchLabel = (match.team_a_name && match.team_b_name)
         ? `${match.team_a_name} vs ${match.team_b_name}`
         : 'Your match';

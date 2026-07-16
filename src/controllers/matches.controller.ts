@@ -119,7 +119,96 @@ export async function listOpenMatches(req: Request, res: Response) {
     if (city_id) query = query.eq('city_id', city_id);
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ matches: data ?? [] });
+    const matches = data ?? [];
+
+    // SC-273: relevance ranking. A deterministic, EXPLAINABLE weighted sort —
+    // not AI/ML. We reorder the open matches by how relevant each is to THIS
+    // user, using data we already have. SOFT not HARD: this only re-orders;
+    // nothing is filtered out here (the only excludes are the SC-263
+    // correctness ones above). A user with no sports / no city contributes 0
+    // on those axes and degrades cleanly to soonest-first — never an empty
+    // card. All context reads are best-effort: any failure just means that
+    // signal scores 0, so a DB hiccup degrades ordering, it never errors.
+    //
+    // Weights, and why:
+    //   sport you play    +100   dominant axis — a match in a sport you don't
+    //                            play is near-useless however near/soon it is.
+    //   same city          +40   you can physically show up; ranks below sport
+    //                            but above any combination of refinements
+    //                            (40 > 15 + 15).
+    //   close ELO band  +15/+8   a competitive, balanced game — within 150 /
+    //                            300 rating points of the match creator in the
+    //                            match's sport (only when you're rated in it).
+    //   timing     +15/10/5/0    a soon match needs players NOW (≤48h / ≤7d /
+    //                            ≤30d / farther); a stale past-dated open match
+    //                            is penalised −25.
+    // Everything is additive onto 0, ties break by soonest scheduled_at then id
+    // (fully deterministic).
+    if (matches.length > 1) {
+      const [meRes, sportsRes, myRatingsRes] = await Promise.all([
+        supabase.from('users').select('city_id').eq('id', userId).maybeSingle(),
+        supabase.from('user_sports').select('sport_id').eq('user_id', userId),
+        supabase.from('user_sport_profiles').select('sport_id, rating').eq('user_id', userId),
+      ]);
+      const myCityId = (meRes.data?.city_id as string | null) ?? null;
+      const mySports = new Set<string>((sportsRes.data ?? []).map((r) => r.sport_id as string));
+      const myRating = new Map<string, number>();
+      for (const r of myRatingsRes.data ?? []) {
+        if (r.sport_id != null && r.rating != null) myRating.set(r.sport_id as string, Number(r.rating));
+      }
+
+      // Match skill proxy = the creator's rating in the match's sport. One
+      // bounded query for all candidate creators.
+      const creatorIds = Array.from(
+        new Set(matches.map((m) => m.created_by as string | null).filter(Boolean) as string[]),
+      );
+      const creatorRating = new Map<string, number>(); // key `${creatorId}:${sportId}`
+      if (creatorIds.length > 0) {
+        const { data: crs } = await supabase
+          .from('user_sport_profiles')
+          .select('user_id, sport_id, rating')
+          .in('user_id', creatorIds);
+        for (const r of crs ?? []) {
+          if (r.rating != null) creatorRating.set(`${r.user_id}:${r.sport_id}`, Number(r.rating));
+        }
+      }
+
+      const now = Date.now();
+      const DAY = 86400000;
+      const relevance = (m: (typeof matches)[number]): number => {
+        let s = 0;
+        const sport = m.sport_id as string | null;
+        if (sport && mySports.has(sport)) s += 100;
+        if (myCityId && m.city_id && m.city_id === myCityId) s += 40;
+        if (sport && myRating.has(sport)) {
+          const cr = creatorRating.get(`${m.created_by}:${sport}`);
+          if (cr != null) {
+            const gap = Math.abs(myRating.get(sport)! - cr);
+            if (gap <= 150) s += 15;
+            else if (gap <= 300) s += 8;
+          }
+        }
+        const when = m.scheduled_at ? new Date(m.scheduled_at as string).getTime() : NaN;
+        if (!Number.isNaN(when)) {
+          const dt = when - now;
+          if (dt < 0) s -= 25;
+          else if (dt <= 2 * DAY) s += 15;
+          else if (dt <= 7 * DAY) s += 10;
+          else if (dt <= 30 * DAY) s += 5;
+        }
+        return s;
+      };
+
+      const scored = matches.map((m) => ({
+        m,
+        s: relevance(m),
+        t: m.scheduled_at ? new Date(m.scheduled_at as string).getTime() : Infinity,
+      }));
+      scored.sort((a, b) => (b.s - a.s) || (a.t - b.t) || String(a.m.id).localeCompare(String(b.m.id)));
+      return res.json({ matches: scored.map((x) => x.m) });
+    }
+
+    return res.json({ matches });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

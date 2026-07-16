@@ -81,9 +81,19 @@ export async function getUserInsights(req: Request, res: Response) {
       .sort((a, b) => (b.m.created_at ?? '').localeCompare(a.m.created_at ?? ''));
 
     // Result per completed match (newest-first) via winner_team_id.
+    // SC-278: guard `null === null`. When the user's side has a null team id
+    // (a draw with no winner, a teamless/1v1 match, or a partial-team bracket
+    // fixture) the old `winner_team_id === myTeamId` read null===null as a WIN —
+    // fabricating wins and inflating the streak (this surfaced the moment
+    // SC-276 made formTrend non-empty). Now: only a real winner matching my
+    // NON-null team is a W; another team winning is an L; no winner is a D.
+    // (1v1 W/L can't be decided from winner_team_id — it's teamless — so it
+    // honestly reads D rather than a fabricated result; matches advanced-stats
+    // for team draws. Improving 1v1 form via rating delta is future work.)
     const results: Array<'W' | 'L' | 'D'> = completed.map(({ side, m }) => {
       const myTeamId = side === 'A' ? m.team_a_id : m.team_b_id;
-      return m.winner_team_id === myTeamId ? 'W' : m.winner_team_id ? 'L' : 'D';
+      if (myTeamId != null && m.winner_team_id === myTeamId) return 'W';
+      return m.winner_team_id != null ? 'L' : 'D';
     });
 
     // SC-277: currentWinStreak = consecutive wins from the MOST RECENT match.

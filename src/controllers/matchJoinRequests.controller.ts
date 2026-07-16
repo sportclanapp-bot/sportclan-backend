@@ -170,7 +170,7 @@ export async function decideMatchJoinRequest(req: Request, res: Response) {
     }
 
     const { data: match } = await supabase
-      .from('matches').select('created_by, sport_id').eq('id', id).maybeSingle();
+      .from('matches').select('created_by, sport_id, status').eq('id', id).maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
     // Creator only — NOT the umpire (who plays is structural, not officiating).
     if (match.created_by !== userId) {
@@ -185,6 +185,14 @@ export async function decideMatchJoinRequest(req: Request, res: Response) {
     }
 
     if (status === 'approved') {
+      // SC-280: you can't add a player to a match that has already started. The
+      // join_open_match RPC only rejects completed/cancelled (a 'live' match is
+      // still slot-joinable by design), so the started-match guard lives HERE —
+      // a stale pending request on a now-live match stays pending (inert), it is
+      // not silently approved onto an in-progress game. (Reject stays allowed.)
+      if (match.status !== 'scheduled') {
+        return res.status(409).json({ error: 'This match has already started or finished.', code: 'MATCH_NOT_JOINABLE' });
+      }
       // Re-check the block gate — a block may have landed BETWEEN request and
       // approve (the both-ends gate). Same semantics as instant-join.
       const blocked = await blockedUserIds(targetUserId);

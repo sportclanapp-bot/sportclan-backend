@@ -20,6 +20,7 @@ import {
   getRatingHistory,
   getReviews,
   submitReview,
+  deleteReview,
   checkIn,
 } from '../controllers/users.controller';
 import { getSeasonRecap } from '../controllers/features.controller';
@@ -54,6 +55,7 @@ router.get('/:id/insights', getUserInsights);
 
 router.get('/:id/reviews', optionalAuth, getReviews);
 router.post('/:id/reviews', authenticateToken, submitReview);
+router.delete('/:id/reviews', authenticateToken, deleteReview);
 
 router.post('/:id/follow', authenticateToken, followUser);
 router.delete('/:id/follow', authenticateToken, unfollowUser);

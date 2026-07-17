@@ -1365,6 +1365,62 @@ export async function getReviews(req: Request, res: Response) {
   }
 }
 
+// SC-324: reviews are for PROFESSIONALS, not players. Type sets drive the gate.
+//   ungated (offline services, no in-app proof) → anyone may review
+//   gated (in-app proof exists)                 → only someone who was in the match/tournament
+//   player only                                 → no reviews at all
+const REVIEW_UNGATED_TYPES = new Set([
+  'coach', 'commentator', 'business', 'association', 'club', 'leagues', 'other',
+]);
+const REVIEW_GATED_TYPES = new Set(['umpire', 'organiser']);
+
+/** The reviewed user's account types (multi-type; legacy singular fallback). */
+async function reviewedUserTypes(reviewedId: string): Promise<string[]> {
+  const { data: atRows } = await supabase
+    .from('user_account_types')
+    .select('account_type')
+    .eq('user_id', reviewedId);
+  const types = (atRows ?? []).map((r: { account_type: string }) => r.account_type);
+  if (types.length > 0) return types;
+  const { data: u } = await supabase
+    .from('users').select('account_type').eq('id', reviewedId).maybeSingle();
+  return u?.account_type ? [u.account_type] : ['player'];
+}
+
+/** SC-324 UMPIRE proof — the reviewer played in a match this user umpired. */
+async function playedUnderUmpire(reviewerId: string, umpireId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('match_participants')
+    .select('match_id, match:matches!inner(umpire_id)')
+    .eq('user_id', reviewerId)
+    .eq('match.umpire_id', umpireId)
+    .limit(1);
+  return !!(data && data.length > 0);
+}
+
+/** SC-324 ORGANISER proof — the reviewer played in a tournament this user ran
+ *  (organiser set = created_by ∪ tournament_organisers, per SC-266). */
+async function playedInTournamentOrganisedBy(reviewerId: string, organiserId: string): Promise<boolean> {
+  const { data: tms } = await supabase
+    .from('team_members').select('team_id').eq('user_id', reviewerId);
+  const teamIds = (tms ?? []).map((t: { team_id: string }) => t.team_id);
+  if (teamIds.length === 0) return false;
+  const { data: entries } = await supabase
+    .from('tournament_entries')
+    .select('tournament_id')
+    .in('team_id', teamIds)
+    .eq('status', 'approved');
+  const tourIds = Array.from(new Set((entries ?? []).map((e: { tournament_id: string }) => e.tournament_id)));
+  if (tourIds.length === 0) return false;
+  const { data: owned } = await supabase
+    .from('tournaments').select('id').in('id', tourIds).eq('created_by', organiserId).limit(1);
+  if (owned && owned.length > 0) return true;
+  const { data: coOrg } = await supabase
+    .from('tournament_organisers')
+    .select('tournament_id').in('tournament_id', tourIds).eq('user_id', organiserId).limit(1);
+  return !!(coOrg && coOrg.length > 0);
+}
+
 export async function submitReview(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1375,9 +1431,39 @@ export async function submitReview(req: Request, res: Response) {
     if (await isBlockedBetween(userId, id)) {
       return res.status(403).json({ error: 'You can’t review this user.' });
     }
+
+    // SC-324: the review GATE MATRIX, keyed on the reviewed user's account types.
+    const types = await reviewedUserTypes(id);
+    const hasUngated = types.some((t) => REVIEW_UNGATED_TYPES.has(t));
+    const hasGated = types.some((t) => REVIEW_GATED_TYPES.has(t));
+    if (hasUngated) {
+      // Offline professional (coach/vendor/…) — no in-app proof to gate on; anyone
+      // may review. Mixed types resolve here too: ungated wins.
+    } else if (hasGated) {
+      // Umpire / organiser — must have a real in-app relationship.
+      let eligible = false;
+      if (types.includes('umpire')) eligible = await playedUnderUmpire(userId, id);
+      if (!eligible && types.includes('organiser')) {
+        eligible = await playedInTournamentOrganisedBy(userId, id);
+      }
+      if (!eligible) {
+        return res.status(403).json({
+          error: 'You can only review them if you played in a match they officiated or a tournament they ran.',
+          code: 'REVIEW_NOT_ELIGIBLE',
+        });
+      }
+    } else {
+      // Player only — a player's quality is their ELO / W-L / H2H, not stars.
+      return res.status(403).json({
+        error: 'Players are rated by their match record, not reviews.',
+        code: 'REVIEW_PLAYER_NOT_REVIEWABLE',
+      });
+    }
+
     const { rating } = req.body || {};
     const comment = req.body?.comment ?? req.body?.text;
     if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: 'rating 1-5 required' });
+    // Person-level one-per-pair: UNIQUE(reviewer_id, reviewed_id) + upsert = edit.
     const { data, error } = await supabase
       .from('user_reviews')
       .upsert({ reviewer_id: userId, reviewed_id: id, rating, comment: comment ?? null }, { onConflict: 'reviewer_id,reviewed_id' })
@@ -1385,6 +1471,24 @@ export async function submitReview(req: Request, res: Response) {
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ review: data });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// DELETE /users/:id/reviews — remove the caller's OWN review of :id (SC-324).
+export async function deleteReview(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { error } = await supabase
+      .from('user_reviews')
+      .delete()
+      .eq('reviewer_id', userId) // own row only — can't delete someone else's review
+      .eq('reviewed_id', id);
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    return res.json({ success: true });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

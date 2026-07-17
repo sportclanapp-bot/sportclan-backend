@@ -614,7 +614,8 @@ export async function getFollowers(req: Request, res: Response) {
     .order('created_at', { ascending: false })
     .range(p.from, p.to), 'users'), 'follower_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean) });
+  // SC-307: length-based has_more (block/deleted post-filter may shrink the page).
+  return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean), has_more: (data || []).length === p.limit });
 }
 
 // GET /users/:id/following
@@ -631,7 +632,8 @@ export async function getFollowing(req: Request, res: Response) {
     .order('created_at', { ascending: false })
     .range(pg.from, pg.to), 'users'), 'following_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean) });
+  // SC-307: length-based has_more.
+  return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean), has_more: (data || []).length === pg.limit });
 }
 
 // POST /users/:id/block

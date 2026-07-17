@@ -4,6 +4,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
+import { parsePagination, pageMeta } from '../utils/pagination'; // SC-306
 import { isBlockedBetween } from '../utils/blocks';
 
 // ─── Change #7 CRITICAL: ALL 10 PRD gifts ──────────────────────────────────────
@@ -163,29 +164,33 @@ export async function sendGift(req: Request, res: Response) {
 // GET /gifts/received?userId=
 export async function getReceivedGifts(req: Request, res: Response) {
   const userId = (req.query.userId as string) || req.userId!;
+  const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 50, maxLimit: 100 }); // SC-306
 
-  const { data, error } = await supabase
+  const { data, error, count } = await supabase
     .from('gift_transactions')
-    .select('*, sender:sender_id(id, name, username, profile_picture_url)')
+    .select('*, sender:sender_id(id, name, username, profile_picture_url)', { count: 'exact' })
     .eq('receiver_id', userId)
     .order('created_at', { ascending: false })
-    .limit(50);
+    .order('id', { ascending: false }) // stable tiebreaker for offset paging
+    .range(p.from, p.to);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
-  return res.json({ gifts: data ?? [] });
+  return res.json({ gifts: data ?? [], ...pageMeta(count ?? 0, p) });
 }
 
 // GET /gifts/sent
 export async function getSentGifts(req: Request, res: Response) {
   const userId = req.userId!;
+  const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 50, maxLimit: 100 }); // SC-306
 
-  const { data, error } = await supabase
+  const { data, error, count } = await supabase
     .from('gift_transactions')
-    .select('*, receiver:receiver_id(id, name, username, profile_picture_url)')
+    .select('*, receiver:receiver_id(id, name, username, profile_picture_url)', { count: 'exact' })
     .eq('sender_id', userId)
     .order('created_at', { ascending: false })
-    .limit(50);
+    .order('id', { ascending: false }) // stable tiebreaker
+    .range(p.from, p.to);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
-  return res.json({ gifts: data ?? [] });
+  return res.json({ gifts: data ?? [], ...pageMeta(count ?? 0, p) });
 }

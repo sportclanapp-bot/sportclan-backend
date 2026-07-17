@@ -71,6 +71,7 @@ async function searchPlayers(res: Response, q: string, sportId: string | undefin
     // Premium users appear first — delivers the "Boosted ranking" promise
     .order('is_premium', { ascending: false })
     .order('name', { ascending: true })
+    .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging (no overlap/gaps)
     .range(p.from, p.to);
 
   if (error) return res.status(500).json({ error: error.message });
@@ -119,6 +120,7 @@ async function searchTeams(res: Response, q: string, sportId: string | undefined
       city:cities!city_id(id, name)
     `)
     .ilike('name', `%${escapeLike(q)}%`)
+    .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging (no overlap/gaps)
     .range(p.from, p.to);
 
   if (sportId) query = query.eq('sport_id', sportId);
@@ -137,6 +139,7 @@ async function searchTournaments(res: Response, q: string, sportId: string | und
     `)
     .ilike('name', `%${escapeLike(q)}%`)
     .order('start_date', { ascending: false })
+    .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging (no overlap/gaps)
     .range(p.from, p.to);
 
   if (sportId) query = query.eq('sport_id', sportId);
@@ -156,6 +159,7 @@ async function searchUmpires(res: Response, q: string, sportId: string | undefin
     `)
     .eq('is_premium', true)
     .or(orIlikeContains(['username', 'name'], q))
+    .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
     .range(p.from, p.to)), 'id', blocked);
 
   if (error) return res.status(500).json({ error: error.message });
@@ -189,6 +193,7 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
     `)
     .ilike('content', `%${escapeLike(q)}%`)
     .order('created_at', { ascending: false })
+    .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging (no overlap/gaps)
     .range(p.from, p.to);
   query = excludeDeletedEmbed(query, 'author'); // SC-77
   query = excludeIds(query, 'author_id', await blockedUserIds(callerId)); // SC-81
@@ -216,6 +221,7 @@ async function searchBusinesses(res: Response, q: string, p: Pagination, callerI
     `)
     .eq('is_premium', true)
     .or(orIlikeContains(['username', 'name'], q))
+    .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
     .range(p.from, p.to)), 'id', blocked);
 
   if (error) return res.status(500).json({ error: error.message });
@@ -250,6 +256,7 @@ async function searchByAccountType(res: Response, q: string, accountType: string
     .or(orIlikeContains(['username', 'name'], q))
     .order('is_premium', { ascending: false })
     .order('name', { ascending: true })
+    .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
     .range(p.from, p.to)), 'id', blocked);
   if (error) return res.status(500).json({ error: error.message });
 

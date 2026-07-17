@@ -4,6 +4,7 @@ import { sanitizeError } from '../utils/response';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers, matchAudienceIds } from '../utils/notify';
 import { rankTeams, parseScoreNum } from '../utils/standings';
 import { istDay } from '../utils/appTime';
+import { formatTimeIst } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -814,11 +815,15 @@ export async function runMatchReminderSweep(): Promise<{ sent: number }> {
         .from('notification_sends')
         .insert({ user_id: uid, job_type: `match_reminder:${m.id}`, sent_on: matchDate });
       if (claimErr) continue;
+      // SC-296 nit: include the IST kickoff time so two different matches
+      // between similarly-named teams aren't indistinguishable in the list (the
+      // "duplicate reminders" that weren't duplicates — Z-11).
+      const kickoff = formatTimeIst(m.scheduled_at as string);
       await notifyUser({
         userId: uid,
         type: 'match_reminder',
         title: 'Match reminder',
-        body: `⏰ ${m.team_a_name ?? 'Team A'} vs ${m.team_b_name ?? 'Team B'} starts in ~15 minutes!`,
+        body: `⏰ ${m.team_a_name ?? 'Team A'} vs ${m.team_b_name ?? 'Team B'} starts ${kickoff ? `at ${kickoff} (~15 min)` : 'in ~15 minutes'}!`,
         data: { matchId: m.id, screen: 'MatchDetail' },
       });
       sent++;

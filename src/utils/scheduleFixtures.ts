@@ -201,6 +201,19 @@ export function formatSlotIst(scheduledAt: string | null | undefined, groundLabe
   return parts.length ? parts.join(' · ') : 'a new slot';
 }
 
+// Stored UTC slot → "HH:MM" in IST. Same manual IST shift as formatSlotIst (one
+// timezone path, not a second — SC-271) but returns only the wall-clock time, for
+// imminent-reminder copy where the date is redundant.
+export function formatTimeIst(scheduledAt: string | null | undefined): string | null {
+  if (!scheduledAt) return null;
+  const d = new Date(scheduledAt);
+  if (isNaN(d.getTime())) return null;
+  const ist = new Date(d.getTime() + TOURNAMENT_TZ_OFFSET_MIN * 60000);
+  const hh = String(ist.getUTCHours()).padStart(2, '0');
+  const mm = String(ist.getUTCMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
 /** 'YYYY-MM-DD' + n days → 'YYYY-MM-DD' (used to resolve per-day window overrides). */
 export function addDaysYmd(startYmd: string, n: number): string {
   const [y, m, d] = startYmd.split('-').map(Number);

@@ -265,6 +265,16 @@ export async function getTournament(req: Request, res: Response) {
       .from('tournament_entries')
       .select('id, status, seed, group_label, entered_at, team:team_id (id, name, logo_url, sport_id)')
       .eq('tournament_id', id);
+    // SC-293: authoritative fixture count so the Overview's Quick Stats agrees
+    // with the Bracket + Officials tabs. Was: the FE showed fixtures.length, but
+    // fixtures are only fetched on the Bracket tab → the Overview (landing tab)
+    // always showed "0 fixtures" even for a completed tournament with a full
+    // bracket. Counted server-side here (same universe the bracket renders).
+    const { count: fixturesCount } = await supabase
+      .from('matches')
+      .select('id', { count: 'exact', head: true })
+      .eq('tournament_id', id);
+    (tournament as { fixtures_count?: number }).fixtures_count = fixturesCount ?? 0;
     return res.json({ tournament, entries: entries || [] });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

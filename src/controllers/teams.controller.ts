@@ -10,6 +10,7 @@ import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/valid
 import { blockedUserIds } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
 import { isTeamManager, getTeamRole } from '../utils/teamAuth';
+import { computeTeamRecord } from '../utils/teamRecord';
 
 function generateJoinCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -133,6 +134,12 @@ export async function getTeam(req: Request, res: Response) {
       .from('team_members')
       .select('id, role, jersey_number, joined_at, user:user_id!inner (id, name, username, profile_picture_url)')
       .eq('team_id', id), 'user');
+    // SC-293: the team's W/L record — FREE (basic info; the team-detail header
+    // showed "— matches / — won" for a team that had actually played, disagreeing
+    // with the premium Team Insights). Same computeTeamRecord Insights uses, so
+    // header and Insights can't drift. (There is no global TEAM rank — the FE
+    // keeps an honest dash for that tile rather than fabricate one.)
+    (team as { record?: unknown }).record = await computeTeamRecord(id);
     return res.json({ team, members: members || [] });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

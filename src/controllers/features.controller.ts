@@ -379,7 +379,7 @@ export async function getSeasonRecap(req: Request, res: Response) {
         .select('sport_id, rating, matches_played, wins, losses, draws')
         .eq('user_id', id),
       supabase.from('match_participants')
-        .select('match_id, team_side, match:matches!inner(id, sport_id, status, winner_team_id, score_summary, created_at)')
+        .select('match_id, team_side, match:matches!inner(id, sport_id, status, winner_team_id, team_a_id, team_b_id, score_summary, created_at)')
         .eq('user_id', id)
         .gte('match.created_at', since),
       supabase.from('gift_transactions')
@@ -397,23 +397,39 @@ export async function getSeasonRecap(req: Request, res: Response) {
     ]);
 
     const profiles = profilesRes.data ?? [];
-    const matches = (matchesRes.data ?? []).map((p: any) => p.match).filter(Boolean);
-    const completed = matches.filter((m: any) => m.status === 'completed');
+
+    // SC-320: derive W/L/D from the 90-day COMPLETED matches — NOT lifetime
+    // user_sport_profiles totals. The card is "your last 90 days", so mixing a
+    // lifetime win count with a 90-day match count let wins EXCEED totalMatches
+    // (a visible lie). winner_side (set at completion) is authoritative; fall
+    // back to winner_team_id → side for team matches that predate it. Missing
+    // both (unscored / abandoned-as-completed) counts as a draw, not a phantom win.
+    let wins = 0, losses = 0, draws = 0, totalMatches = 0;
+    for (const row of (matchesRes.data ?? []) as any[]) {
+      const m = row.match;
+      if (!m || m.status !== 'completed') continue;
+      totalMatches += 1;
+      const ss = (m.score_summary ?? {}) as Record<string, any>;
+      let winnerSide: 'A' | 'B' | null = ss.winner_side ?? null;
+      if (!winnerSide && m.winner_team_id) {
+        if (m.winner_team_id === m.team_a_id) winnerSide = 'A';
+        else if (m.winner_team_id === m.team_b_id) winnerSide = 'B';
+      }
+      if (!winnerSide) draws += 1;
+      else if (winnerSide === row.team_side) wins += 1;
+      else losses += 1;
+    }
 
     // Best sport = highest rating
     const best = profiles.reduce((a: any, b: any) =>
       (b.rating ?? 0) > (a?.rating ?? 0) ? b : a, profiles[0] ?? null);
 
-    const totalWins = profiles.reduce((s: number, p: any) => s + (p.wins ?? 0), 0);
-    const totalLosses = profiles.reduce((s: number, p: any) => s + (p.losses ?? 0), 0);
-    const totalDraws = profiles.reduce((s: number, p: any) => s + (p.draws ?? 0), 0);
-
     return res.json({
       recap: {
-        totalMatches: completed.length,
-        wins: totalWins,
-        losses: totalLosses,
-        draws: totalDraws,
+        totalMatches,
+        wins,
+        losses,
+        draws,
         bestSportId: best?.sport_id ?? null,
         bestRating: best?.rating ?? 0,
         giftsReceived: giftsRecvRes.count ?? 0,

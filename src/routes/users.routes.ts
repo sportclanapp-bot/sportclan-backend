@@ -40,6 +40,9 @@ router.get('/me/profile-completeness', authenticateToken, getProfileCompleteness
 // SC-275: Advanced Stats (PREMIUM-gated inside the handler). Additive only —
 // this is the sole new fence; no existing read is gated.
 router.get('/me/advanced-stats', authenticateToken, getAdvancedStats);
+// SC-325: a premium viewer can scout ANOTHER player's advanced stats. Registered
+// AFTER /me/advanced-stats so the literal 'me' wins; the gate is on the VIEWER.
+router.get('/:id/advanced-stats', authenticateToken, getAdvancedStats);
 router.get('/discover', authenticateToken, discoverPlayers);
 
 router.get('/:id', optionalAuth, getUserById);

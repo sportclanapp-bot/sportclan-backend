@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { isPremiumActive } from '../utils/premium';
 import { resolveSportId } from '../utils/sportId';
 import { getTeamRole } from '../utils/teamAuth';
+import { isBlockedBetween } from '../utils/blocks';
 
 // SC-275: Advanced Stats (PREMIUM). Strictly ADDITIVE analytics that go BEYOND
 // the free surfaces. Free already gives, and STAYS free:
@@ -35,14 +36,33 @@ function resultFromDelta(delta: number): Result {
 
 // GET /users/me/advanced-stats?sport_id=  (PREMIUM)
 export async function getAdvancedStats(req: Request, res: Response) {
-  const userId = req.userId;
-  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  // SC-325: the premium fence is on the VIEWER; the DATA is the target user.
+  //   /users/me/advanced-stats  → target = self (no :id param)
+  //   /users/:id/advanced-stats → target = :id (a premium viewer scouting another
+  //     player). The card shows the TARGET's form/H2H/splits (Aarav's record vs
+  //     his opponents), never the viewer's record vs the target.
+  const viewerId = req.userId;
+  if (!viewerId) return res.status(401).json({ error: 'Unauthorized' });
 
-  // The ONLY new fence. No existing read is affected by this feature.
+  // The ONLY new fence — gates on the VIEWER's premium, never the target's, so a
+  // stranger's free stats card / badges / recap stay free (SC-275 additive rule).
   const { data: me } = await supabase
-    .from('users').select('is_premium, premium_expires_at').eq('id', userId).maybeSingle();
+    .from('users').select('is_premium, premium_expires_at').eq('id', viewerId).maybeSingle();
   if (!isPremiumActive(me)) {
     return res.status(403).json({ error: 'Premium required for advanced stats', code: 'PREMIUM_REQUIRED' });
+  }
+
+  const targetId = (req.params.id as string | undefined) ?? viewerId;
+  // SC-106: don't surface a soft-deleted or blocked-either-way target's stats.
+  if (targetId !== viewerId) {
+    const { data: t } = await supabase
+      .from('users').select('id, deleted_at').eq('id', targetId).maybeSingle();
+    if (!t || (t as { deleted_at?: string | null }).deleted_at) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (await isBlockedBetween(viewerId, targetId)) {
+      return res.status(404).json({ error: 'User not found' });
+    }
   }
 
   const rawSportId = req.query.sport_id as string | undefined;
@@ -54,14 +74,14 @@ export async function getAdvancedStats(req: Request, res: Response) {
     const { data: rh } = await supabase
       .from('rating_history')
       .select('match_id, old_rating, new_rating, delta, created_at')
-      .eq('user_id', userId)
+      .eq('user_id', targetId)
       .eq('sport_id', sportId)
       .order('created_at', { ascending: true });
     const history = rh ?? [];
 
     const { data: prof } = await supabase
       .from('user_sport_profiles').select('rating')
-      .eq('user_id', userId).eq('sport_id', sportId).maybeSingle();
+      .eq('user_id', targetId).eq('sport_id', sportId).maybeSingle();
     const lastRow = history.length ? history[history.length - 1] : null;
     const currentRating = prof?.rating != null
       ? Number(prof.rating)
@@ -96,7 +116,7 @@ export async function getAdvancedStats(req: Request, res: Response) {
 
     const { data: myParts } = await supabase
       .from('match_participants').select('match_id, team_side')
-      .eq('user_id', userId).in('match_id', idFilter);
+      .eq('user_id', targetId).in('match_id', idFilter);
     const mySideByMatch = new Map<string, 'A' | 'B'>();
     for (const p of myParts ?? []) if (p.match_id) mySideByMatch.set(p.match_id as string, p.team_side as 'A' | 'B');
 
@@ -151,7 +171,7 @@ export async function getAdvancedStats(req: Request, res: Response) {
       }
       for (const [mid, arr] of byMatch) {
         const mySide = mySideByMatch.get(mid);
-        const opps = arr.filter((x) => x.user_id !== userId && x.side !== mySide);
+        const opps = arr.filter((x) => x.user_id !== targetId && x.side !== mySide);
         if (mySide && opps.length === 1) oppUserByMatch.set(mid, opps[0]!.user_id);
       }
     }

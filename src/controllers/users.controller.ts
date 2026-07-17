@@ -346,6 +346,36 @@ export async function getUserById(req: Request, res: Response) {
     isFollowing = !!followRow;
   }
 
+  // SC-325: public game-stats aggregates for a stranger's stats card — total
+  // matches played + rank in their most-played sport. Same computation as getMe;
+  // both are PUBLIC-by-nature (an aggregate of user_sport_profiles). This does NOT
+  // re-leak anything SC-246 removed (phone/email/coin_balance/is_admin/prefs stay
+  // out of PUBLIC_USER_FIELDS). Best-effort — never fails the profile.
+  let total_matches = 0;
+  let city_rank: number | null = null;
+  try {
+    const { data: sp } = await supabase
+      .from('user_sport_profiles')
+      .select('sport_id, rating, matches_played')
+      .eq('user_id', id);
+    if (sp && sp.length) {
+      total_matches = sp.reduce((s, p: any) => s + (p.matches_played ?? 0), 0);
+      const primary = [...sp].sort((a: any, b: any) => (b.matches_played ?? 0) - (a.matches_played ?? 0))[0] as any;
+      if (primary && (primary.matches_played ?? 0) > 0) {
+        const { count } = await supabase
+          .from('user_sport_profiles')
+          .select('id', { count: 'exact', head: true })
+          .eq('sport_id', primary.sport_id)
+          .gt('rating', primary.rating);
+        city_rank = (count ?? 0) + 1;
+      }
+    }
+  } catch {
+    // best-effort — a stats hiccup must not fail the profile
+  }
+  safeUser.total_matches = total_matches;
+  safeUser.city_rank = city_rank;
+
   return res.json({
     user: safeUser,
     followers: followersRes.count ?? 0,

@@ -3,7 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { isBlockedBetween, blockedUserIds } from '../utils/blocks';
 import { LIMITS, firstInvalidUrl, ARRAY_LIMITS, tooManyItems, firstDisallowedImageUrl } from '../utils/validation';
-import { parsePagination } from '../utils/pagination';
+import { parsePagination, pageMeta } from '../utils/pagination';
 
 // ─── SC-241: 1:1 DM block/privacy gate for EXISTING conversations ────────────
 // getOrCreateDM enforces block + message_privacy ONLY when a DM is first created.
@@ -137,7 +137,10 @@ export async function listChats(req: Request, res: Response) {
     })
   );
 
-  return res.json({ data: enriched, chats: enriched });
+  // SC-299: pagination envelope so the FE knows whether older chats remain. The
+  // true total is the number of chats the user participates in (chatIds), not the
+  // ranged page — so has_more is accurate regardless of the page window.
+  return res.json({ data: enriched, chats: enriched, ...pageMeta(chatIds.length, lcp) });
 }
 
 // ─── GET OR CREATE DM CHAT ─────────────────────────────────────────────────
@@ -463,11 +466,62 @@ export async function leaveGroup(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
 
+  // SC-301 (SC-243 sibling): if an ADMIN leaves, hand the group to an heir BEFORE
+  // removing them — otherwise the group is left admin-less and becomes a
+  // "management zombie" (members can still chat, but nobody can add/remove/
+  // promote). Transfer-first-then-remove is the atomicity guarantee: a half-apply
+  // leaves a valid admin'd group, never an orphan (SC-243's ordering lesson).
+  const { data: me } = await supabase
+    .from('chat_participants')
+    .select('role')
+    .eq('chat_id', id)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (me?.role === 'admin') {
+    const { data: otherAdmins } = await supabase
+      .from('chat_participants')
+      .select('user_id')
+      .eq('chat_id', id)
+      .eq('role', 'admin')
+      .neq('user_id', userId)
+      .limit(1);
+    if (!otherAdmins || otherAdmins.length === 0) {
+      // Promote the oldest remaining member (by joined_at) — the SC-243 heir rule.
+      const { data: heir } = await supabase
+        .from('chat_participants')
+        .select('user_id')
+        .eq('chat_id', id)
+        .neq('user_id', userId)
+        .order('joined_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (heir) {
+        await supabase
+          .from('chat_participants')
+          .update({ role: 'admin' })
+          .eq('chat_id', id)
+          .eq('user_id', heir.user_id);
+      }
+    }
+  }
+
   await supabase
     .from('chat_participants')
     .delete()
     .eq('chat_id', id)
     .eq('user_id', userId);
+
+  // SC-301: if that was the LAST participant, delete the now-empty group so it
+  // can't linger as an undeletable orphan (deleteGroup requires created_by, which
+  // a departed creator can no longer satisfy). CASCADE clears participants+messages.
+  const { count: remaining } = await supabase
+    .from('chat_participants')
+    .select('id', { count: 'exact', head: true })
+    .eq('chat_id', id);
+  if ((remaining ?? 0) === 0) {
+    await supabase.from('chats').delete().eq('id', id);
+  }
 
   return res.json({ success: true });
 }

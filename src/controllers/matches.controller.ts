@@ -14,6 +14,7 @@ import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems } from '../utils/vali
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats } from './scoring.controller';
+import { awardBadgesSafe } from './badges.controller';
 
 // POST /matches — create. FREE for all (Change #6).
 export async function createMatch(req: Request, res: Response) {
@@ -1752,6 +1753,13 @@ export async function completeMatch(req: Request, res: Response) {
           data: { umpireId: match.umpire_id, matchId: id, screen: 'UmpireRatings' },
         });
       }
+    }
+
+    // SC-316: award milestone badges (First Match, Veteran, Legend, Winner,
+    // Champion…) to every participant now that matches_played/wins have moved.
+    // Best-effort per user — a badge failure never blocks completion.
+    for (const uid of Array.from(new Set((participants ?? []).map((p) => p.user_id).filter(Boolean)))) {
+      void awardBadgesSafe(uid as string);
     }
 
     // If this is a tournament bracket match, propagate the winner into the next

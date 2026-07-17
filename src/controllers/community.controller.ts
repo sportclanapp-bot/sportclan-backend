@@ -539,6 +539,14 @@ export async function createPost(req: Request, res: Response) {
     // best-effort — never block the post response on a mention fan-out failure
   }
 
+  // SC-316: post count moved → re-evaluate the Community Star badge (best-effort).
+  try {
+    const { awardBadgesSafe } = await import('./badges.controller');
+    void awardBadgesSafe(userId);
+  } catch {
+    // best-effort — never block the post response on a badge fan-out failure
+  }
+
   return res.status(201).json({ data, post: data });
 }
 

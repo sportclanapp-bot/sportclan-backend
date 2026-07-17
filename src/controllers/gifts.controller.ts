@@ -6,6 +6,13 @@ import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
 import { parsePagination, pageMeta } from '../utils/pagination'; // SC-306
 import { isBlockedBetween } from '../utils/blocks';
+import { awardBadgesSafe } from './badges.controller';
+
+// SC-316: re-evaluate the sender's Gift Giver badge after a genuine send.
+// Best-effort (awardBadgesSafe already swallows) — never blocks the gift.
+function awardGiftBadge(senderId: string): Promise<void> {
+  return awardBadgesSafe(senderId);
+}
 
 // ─── Change #7 CRITICAL: ALL 10 PRD gifts ──────────────────────────────────────
 const GIFT_CATALOGUE = [
@@ -140,6 +147,7 @@ export async function sendGift(req: Request, res: Response) {
     ]);
     // SC-206: gift committed → notify receiver (fire-and-forget, post-transaction).
     notifyGiftReceived(receiverId, senderId, senderName, gift);
+    void awardGiftBadge(senderId); // SC-316: sender's gift count moved → Gift Giver
     return res.json({ success: true, giftTransaction: giftTx, remainingBalance: newBalance });
   }
   if (rpc.error) return res.status(500).json({ error: sanitizeError(rpc.error) });
@@ -152,6 +160,7 @@ export async function sendGift(req: Request, res: Response) {
   // must NOT re-notify. Fired after the RPC's money transaction has committed.
   if (out.status === 'sent') {
     notifyGiftReceived(receiverId, senderId, senderName, gift);
+    void awardGiftBadge(senderId); // SC-316: sender's gift count moved → Gift Giver
   }
   return res.json({
     success: true,

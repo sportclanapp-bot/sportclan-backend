@@ -325,6 +325,22 @@ async function rosterOverlapConflict(
   return { teamName: clashTeam?.name ?? 'another team' };
 }
 
+// SC-316: when a team is approved into a tournament, re-evaluate the Tournament
+// Veteran badge for every roster member (their approved-entry count moved).
+// Best-effort — a badge failure never blocks the entry/approval.
+async function awardTournamentBadges(teamId: string): Promise<void> {
+  try {
+    const { awardBadgesSafe } = await import('./badges.controller');
+    const { data: members } = await supabase
+      .from('team_members')
+      .select('user_id')
+      .eq('team_id', teamId);
+    for (const m of members || []) void awardBadgesSafe(m.user_id);
+  } catch {
+    /* best-effort */
+  }
+}
+
 export async function directAddTeam(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -385,6 +401,7 @@ export async function directAddTeam(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    void awardTournamentBadges(team_id); // SC-316: Tournament Veteran
     return res.json({ entry: data });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
@@ -583,6 +600,10 @@ export async function updateEntry(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // SC-316: an approval moves the team's roster into a new tournament → re-check
+    // the Tournament Veteran badge for each member. Best-effort.
+    if (status === 'approved') void awardTournamentBadges(entry.team_id);
 
     // SC-88: a mid-bracket withdrawal must not orphan the opponent. Award any
     // unplayed match of the withdrawing team to its opponent by walkover and

@@ -581,6 +581,14 @@ export async function followUser(req: Request, res: Response) {
       // eslint-disable-next-line no-console
       console.error('[notify] follow failed', err),
     );
+
+    // SC-316: follower count moved → re-evaluate the Social Butterfly badge.
+    try {
+      const { awardBadgesSafe } = await import('./badges.controller');
+      void awardBadgesSafe(userId);
+    } catch {
+      // best-effort
+    }
   }
   return res.json({ success: true });
 }

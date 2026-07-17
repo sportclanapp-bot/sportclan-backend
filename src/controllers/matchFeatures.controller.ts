@@ -2,8 +2,9 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { calculateDLSTarget } from '../utils/dls';
-import { aggregatePlayers, isGuestId, type CricketPlayerLine } from './scoring.controller';
+import { aggregatePlayers, isGuestId, recomputeSummary, type CricketPlayerLine } from './scoring.controller';
 import { isTerminalMatchStatus } from '../utils/validation';
+import { canOfficiateMatch } from '../utils/tournamentAuth';
 
 /**
  * Shared gate for match-mutating feature endpoints (DLS, event edit/delete,
@@ -17,13 +18,18 @@ async function loadScorableMatch(
 ): Promise<{ error?: { status: number; msg: string } }> {
   const { data: match } = await supabase
     .from('matches')
-    .select('created_by, umpire_id, status')
+    .select('created_by, umpire_id, tournament_id, status')
     .eq('id', id)
     .maybeSingle();
   if (!match) return { error: { status: 404, msg: 'Match not found' } };
-  if (match.created_by !== userId && match.umpire_id !== userId) {
-    return { error: { status: 403, msg: 'Only the scorer or umpire can modify this match' } };
+  // SC-319: align to canOfficiateMatch (SC-287's single authority) so a tournament
+  // co-organiser acting as scorer isn't blocked — the old created_by||umpire_id
+  // check was narrower than the scoring API's own gate.
+  if (!(await canOfficiateMatch(match, userId))) {
+    return { error: { status: 403, msg: 'Only the scorer, umpire, or tournament organiser can modify this match' } };
   }
+  // Terminal-status matches stay FROZEN (SC-42/85) — an edit can never change a
+  // winner post-completion → no ELO double-apply. Keep exactly as-is.
   if (isTerminalMatchStatus(match.status)) {
     return { error: { status: 409, msg: 'This match is finished and can no longer be modified' } };
   }
@@ -338,7 +344,12 @@ export async function editMatchEvent(req: Request, res: Response) {
     // Update event
     await supabase.from('match_events').update({ payload: newPayload }).eq('id', event_id);
 
-    return res.json({ success: true, event: { id: event_id, payload: newPayload } });
+    // SC-319: rebuild the canonical score_summary from the full event log so the
+    // scoreboard reflects the edit IMMEDIATELY (was stale until the next event).
+    // recomputeSummary is stateless — the same recompute undo/completion use.
+    const summary = await recomputeSummary(id);
+
+    return res.json({ success: true, event: { id: event_id, payload: newPayload }, score_summary: summary });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -372,7 +383,10 @@ export async function deleteMatchEvent(req: Request, res: Response) {
     // Delete
     await supabase.from('match_events').delete().eq('id', eventId);
 
-    return res.json({ success: true });
+    // SC-319: rebuild score_summary from the remaining events (was left stale).
+    const summary = await recomputeSummary(id);
+
+    return res.json({ success: true, score_summary: summary });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -78,11 +78,13 @@ describe('SC-331 per-sport play invites', () => {
   let badmintonId: string;
   const createdIds = new Set<string>();
 
-  // Withdraw any A→B pending invites (used to reach a clean baseline + restore).
+  // Withdraw A→B pending invites for THIS suite's sports only (cricket+badminton),
+  // so it can run in parallel with the withdraw suite (which owns tennis) without
+  // stomping on its rows.
   async function clearPending(): Promise<void> {
     const inbox = (await call('GET', '/invites', bToken)).data.invites || [];
     for (const inv of inbox) {
-      if (inv.sender_id === aId && inv.status === 'pending') {
+      if (inv.sender_id === aId && inv.status === 'pending' && [cricketId, badmintonId].includes(inv.sport_id)) {
         await call('DELETE', `/invites/${inv.id}`, aToken);
       }
     }

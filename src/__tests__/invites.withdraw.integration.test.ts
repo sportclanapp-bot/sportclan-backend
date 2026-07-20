@@ -62,12 +62,14 @@ describe('SC-332 withdraw a sent play-invite', () => {
   let aId: string;
   let bToken: string;
   let bId: string;
-  let cricketId: string;
+  let tennisId: string;
 
+  // Scope cleanup to THIS suite's sport (tennis) so it can run in parallel with the
+  // SC-331 suite (cricket+badminton) without deleting its rows.
   async function clearPending(): Promise<void> {
     const inbox = (await call('GET', '/invites', bToken)).data.invites || [];
     for (const inv of inbox) {
-      if (inv.sender_id === aId && inv.status === 'pending') {
+      if (inv.sender_id === aId && inv.status === 'pending' && inv.sport_id === tennisId) {
         await call('DELETE', `/invites/${inv.id}`, aToken);
       }
     }
@@ -82,7 +84,7 @@ describe('SC-332 withdraw a sent play-invite', () => {
     bToken = await login('z19empty.qa@sportclan.test', 'SportClanZ19pass');
     bId = (await call('GET', '/users/me', bToken)).data.user.id;
     const sports = (await call('GET', '/sports', aToken)).data.sports as any[];
-    cricketId = sports.find((s) => s.name === 'Cricket').id;
+    tennisId = sports.find((s) => s.name === 'Tennis').id;
     await clearPending();
   });
 
@@ -92,14 +94,14 @@ describe('SC-332 withdraw a sent play-invite', () => {
 
   it('withdraw removes the pending row, frees the button, and clears the receiver’s invite', async () => {
     // Send → pending.
-    const send = await call('POST', '/invites', aToken, { receiver_id: bId, sport_id: cricketId });
+    const send = await call('POST', '/invites', aToken, { receiver_id: bId, sport_id: tennisId });
     expect(send.status).toBeLessThan(400);
     const inviteId = send.data.invite.id;
 
     const before = await getProfile();
-    expect(before.pending_invite_sport_ids).toContain(cricketId);
+    expect(before.pending_invite_sport_ids).toContain(tennisId);
     // getUser now exposes the invite id so the button can withdraw.
-    expect((before.pending_invites || []).some((p: any) => p.id === inviteId && p.sport_id === cricketId)).toBe(true);
+    expect((before.pending_invites || []).some((p: any) => p.id === inviteId && p.sport_id === tennisId)).toBe(true);
     // Receiver sees it pending.
     let inbox = (await call('GET', '/invites', bToken)).data.invites || [];
     expect(inbox.some((i: any) => i.id === inviteId && i.status === 'pending')).toBe(true);
@@ -111,7 +113,7 @@ describe('SC-332 withdraw a sent play-invite', () => {
 
     // Button freed: sport gone from both projections.
     const after = await getProfile();
-    expect(after.pending_invite_sport_ids).not.toContain(cricketId);
+    expect(after.pending_invite_sport_ids).not.toContain(tennisId);
     expect((after.pending_invites || []).some((p: any) => p.id === inviteId)).toBe(false);
 
     // Receiver's list no longer carries a pending invite from A for this sport.
@@ -120,7 +122,7 @@ describe('SC-332 withdraw a sent play-invite', () => {
   });
 
   it('withdrawing an already-withdrawn invite is a clean 4xx, not a 500', async () => {
-    const send = await call('POST', '/invites', aToken, { receiver_id: bId, sport_id: cricketId });
+    const send = await call('POST', '/invites', aToken, { receiver_id: bId, sport_id: tennisId });
     const inviteId = send.data.invite.id;
     const first = await call('DELETE', `/invites/${inviteId}`, aToken);
     expect(first.status).toBeLessThan(400);

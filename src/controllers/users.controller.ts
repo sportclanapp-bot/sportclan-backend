@@ -616,6 +616,20 @@ export async function unfollowUser(req: Request, res: Response) {
 }
 
 // GET /users/:id/followers
+// SC-330: annotate each listed user with is_following — the VIEWER's relationship
+// to them, so a follow/following toggle can render per row. One batch query.
+async function annotateFollowState(users: any[], viewerId: string | undefined): Promise<any[]> {
+  if (!viewerId || users.length === 0) return users.map((u) => ({ ...u, is_following: false }));
+  const ids = users.map((u) => u.id);
+  const { data: rels } = await supabase
+    .from('follow_relationships')
+    .select('following_id')
+    .eq('follower_id', viewerId)
+    .in('following_id', ids);
+  const followed = new Set((rels || []).map((r: any) => r.following_id));
+  return users.map((u) => ({ ...u, is_following: followed.has(u.id) }));
+}
+
 export async function getFollowers(req: Request, res: Response) {
   const { id } = req.params;
   // SC-77: hide soft-deleted accounts. Block edge: when a viewer is present
@@ -625,13 +639,14 @@ export async function getFollowers(req: Request, res: Response) {
   const blocked = await blockedUserIds(req.userId);
   const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
     .from('follow_relationships')
-    .select('follower_id, users:follower_id!inner (id, name, profile_picture_url, bio)')
+    .select('follower_id, users:follower_id!inner (id, name, username, profile_picture_url, bio, is_premium)')
     .eq('following_id', id)
     .order('created_at', { ascending: false })
     .range(p.from, p.to), 'users'), 'follower_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
+  const users = await annotateFollowState((data || []).map((r: any) => r.users).filter(Boolean), req.userId);
   // SC-307: length-based has_more (block/deleted post-filter may shrink the page).
-  return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean), has_more: (data || []).length === p.limit });
+  return res.json({ users, has_more: (data || []).length === p.limit });
 }
 
 // GET /users/:id/following
@@ -643,13 +658,14 @@ export async function getFollowing(req: Request, res: Response) {
   const blocked = await blockedUserIds(req.userId);
   const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
     .from('follow_relationships')
-    .select('following_id, users:following_id!inner (id, name, profile_picture_url, bio)')
+    .select('following_id, users:following_id!inner (id, name, username, profile_picture_url, bio, is_premium)')
     .eq('follower_id', id)
     .order('created_at', { ascending: false })
     .range(pg.from, pg.to), 'users'), 'following_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
+  const users = await annotateFollowState((data || []).map((r: any) => r.users).filter(Boolean), req.userId);
   // SC-307: length-based has_more.
-  return res.json({ users: (data || []).map((r: any) => r.users).filter(Boolean), has_more: (data || []).length === pg.limit });
+  return res.json({ users, has_more: (data || []).length === pg.limit });
 }
 
 // POST /users/:id/block

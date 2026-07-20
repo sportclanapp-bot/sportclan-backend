@@ -940,7 +940,10 @@ export async function getActivityHeatmap(req: Request, res: Response) {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  const byDay = new Map<string, 'played' | 'won'>();
+  // SC-334: count matches + wins PER DAY (not just a shade) so each cell is
+  // inspectable — the FE tooltip shows "N matches · M wins" and the legend maps
+  // count → shade.
+  const byDay = new Map<string, { matches: number; wins: number }>();
   for (const row of data || []) {
     const match: any = row.match;
     if (!match) continue;
@@ -954,7 +957,7 @@ export async function getActivityHeatmap(req: Request, res: Response) {
     // Winner detection: my side won the match. SC-285: a TEAMLESS pickup has no
     // winner_team_id (free-text sides) — its winner is score-derived and stored
     // as score_summary.winner_side (the SAME signal Z-10/completeMatch uses to
-    // count the win on the profile). Use both so a real pickup WIN shows 'won',
+    // count the win on the profile). Use both so a real pickup WIN counts as a win,
     // not a grey 'played' that disagrees with the participation card.
     const mySideTeamId = row.team_side === 'A' ? match.team_a_id : match.team_b_id;
     const winnerSide = (match.score_summary as { winner_side?: 'A' | 'B' } | null)?.winner_side ?? null;
@@ -962,21 +965,24 @@ export async function getActivityHeatmap(req: Request, res: Response) {
       (match.winner_team_id && match.winner_team_id === mySideTeamId) ||
       (winnerSide != null && winnerSide === row.team_side);
 
-    // "won" is more interesting than "played", so upgrade but never downgrade.
-    if (iWon) {
-      byDay.set(key, 'won');
-    } else if (!byDay.has(key)) {
-      byDay.set(key, 'played');
-    }
+    const cur = byDay.get(key) ?? { matches: 0, wins: 0 };
+    cur.matches += 1;
+    if (iWon) cur.wins += 1;
+    byDay.set(key, cur);
   }
 
-  // Emit an 84-day dense array, oldest first.
-  const out: Array<{ date: string; type: 'none' | 'played' | 'won' }> = [];
+  // Emit an 84-day dense array, oldest first. `type` is retained (backward-compat)
+  // and derived from the counts; `matches`/`wins` are the real per-day values.
+  const out: Array<{ date: string; matches: number; wins: number; type: 'none' | 'played' | 'won' }> = [];
   for (let i = 0; i < 84; i++) {
     const d = new Date(since);
     d.setDate(since.getDate() + i);
     const key = d.toISOString().slice(0, 10);
-    out.push({ date: key, type: byDay.get(key) ?? 'none' });
+    const cell = byDay.get(key);
+    const matches = cell?.matches ?? 0;
+    const wins = cell?.wins ?? 0;
+    const type = matches === 0 ? 'none' : wins > 0 ? 'won' : 'played';
+    out.push({ date: key, matches, wins, type });
   }
   return res.json({ heatmap: out });
 }

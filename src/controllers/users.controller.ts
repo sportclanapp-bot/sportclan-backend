@@ -1176,19 +1176,36 @@ export async function getSportProfile(req: Request, res: Response) {
       .gt('rating', p.rating);
     globalRank = (aboveGlobal ?? 0) + 1;
 
-    // City rank — need the user's city_id from the users table
+    // City rank (SC-326) — count ONLY players in the SAME city who stand above the
+    // target in this sport. Standing order: rating desc, then matches_played desc,
+    // then a stable user_id tie-break (so the rank is deterministic, not order-of-
+    // insertion). Only players with >=1 rated match are counted, and a target with
+    // no city OR no rated match is Unranked (cityRank: null) — never a fake number.
+    // (The previous query had NO city filter, so cityRank == globalRank — a bug.)
     const { data: userRow } = await supabase
       .from('users')
       .select('city_id')
       .eq('id', id)
       .maybeSingle();
-    if (userRow?.city_id) {
+    const cityId = userRow?.city_id ?? null;
+    const mp = (p.matches_played ?? 0) as number;
+    if (cityId && mp >= 1) {
+      const rate = p.rating as number;
       const { count: aboveCity } = await supabase
         .from('user_sport_profiles')
-        .select('id', { count: 'exact', head: true })
+        .select('user_id, users!inner(city_id)', { count: 'exact', head: true })
         .eq('sport_id', sportId)
-        .gt('rating', p.rating);
+        .eq('users.city_id', cityId)
+        .gte('matches_played', 1)
+        .neq('user_id', id)
+        .or(
+          `rating.gt.${rate},` +
+          `and(rating.eq.${rate},matches_played.gt.${mp}),` +
+          `and(rating.eq.${rate},matches_played.eq.${mp},user_id.lt.${id})`,
+        );
       cityRank = (aboveCity ?? 0) + 1;
+    } else {
+      cityRank = null;
     }
   } catch {
     // Non-critical — return null ranks if calculation fails

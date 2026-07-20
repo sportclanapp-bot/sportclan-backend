@@ -7,6 +7,7 @@ import {
   runReEngagement,
   runWeeklyDigest,
 } from '../controllers/features.controller';
+import { sweepExpiredInvites } from '../controllers/invites.controller';
 
 // Scheduled-job trigger endpoints. Gated by CRON_SECRET (X-Cron-Secret header),
 // NOT a user JWT — these survive the pre-launch deletion of dev.routes and can
@@ -54,6 +55,17 @@ router.post('/reengagement', async (_req, res) => {
 router.post('/weekly-digest', async (_req, res) => {
   try {
     return res.json(await runWeeklyDigest());
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// SC-332: flip stale (>48h) pending play-invites to 'expired'. Hygiene only —
+// correctness is already enforced by created_at freshness on every read/write, so
+// this endpoint being unfired pre-launch (no CRON_SECRET) changes no behaviour.
+router.post('/expire-invites', async (_req, res) => {
+  try {
+    return res.json(await sweepExpiredInvites());
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

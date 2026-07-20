@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { checkExpiredSubscriptions } from './subscriptions.controller';
+import { inviteFreshCutoffIso } from './invites.controller';
 import { resolveSportId } from '../utils/sportId';
 import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
@@ -336,20 +337,21 @@ export async function getUserById(req: Request, res: Response) {
     isFollowing = !!followRow;
   }
 
-  // SC-331: sports for which the VIEWER already has a PENDING play-invite to this
-  // user. Drives the profile's PER-SPORT invite button ("Invited" on the tabs with
-  // a live invite, "Invite to play" on the rest) — mirrors how isFollowing is
-  // returned. Invites are sport-scoped (uq_invites_pending on sender,receiver,sport
-  // WHERE pending), so a pending cricket invite never blocks a badminton one.
-  let pendingInviteSportIds: string[] = [];
+  // SC-331/SC-332: the VIEWER's PENDING, still-FRESH (<48h) play-invites to this
+  // user. Drives the profile's PER-SPORT invite button — sport_ids for state,
+  // invite ids so the button can WITHDRAW (SC-332 task 1). Invites are sport-scoped
+  // (uq_invites_pending) and a >48h-old pending row is NOT counted (auto-frees the
+  // button before the hygiene sweep even runs).
+  let pendingInvites: { id: string; sport_id: string }[] = [];
   if (callerId && callerId !== id) {
     const { data: pend } = await supabase
       .from('invites')
-      .select('sport_id')
+      .select('id, sport_id')
       .eq('sender_id', callerId)
       .eq('receiver_id', id)
-      .eq('status', 'pending');
-    pendingInviteSportIds = (pend || []).map((r: any) => r.sport_id);
+      .eq('status', 'pending')
+      .gte('created_at', inviteFreshCutoffIso());
+    pendingInvites = (pend || []).map((r: any) => ({ id: r.id, sport_id: r.sport_id }));
   }
 
   // SC-325/SC-328: public account-level total matches for the stats card. An
@@ -375,7 +377,8 @@ export async function getUserById(req: Request, res: Response) {
     followers: followersRes.count ?? 0,
     following: followingRes.count ?? 0,
     isFollowing,
-    pending_invite_sport_ids: pendingInviteSportIds,
+    pending_invite_sport_ids: pendingInvites.map((p) => p.sport_id),
+    pending_invites: pendingInvites,
     gifts: Array.from(giftMap.values()),
     totalGifts: giftsRes.data?.length ?? 0,
   });

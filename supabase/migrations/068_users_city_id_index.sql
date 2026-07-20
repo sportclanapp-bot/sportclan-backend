@@ -1,0 +1,11 @@
+-- SC-329: index users.city_id for the per-sport CITY RANK query.
+--
+-- getSportProfile's city rank joins user_sport_profiles → users and filters
+-- users.city_id = <target's city>. users.city_id had NO index (community_posts /
+-- teams / tournaments each index their city_id, but users never did), so the join
+-- had to seq-scan the ~10k users table to find one city's members on every profile
+-- view. With this index the planner drives from the ~city-sized set (e.g. ~197
+-- Agra players) and joins user_sport_profiles by its PK / (sport_id, rating) index.
+--
+-- Safe: index-only, no data change, IF NOT EXISTS. Bounded build (users is small).
+CREATE INDEX IF NOT EXISTS idx_users_city_id ON users (city_id);

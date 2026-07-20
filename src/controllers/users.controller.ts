@@ -1154,53 +1154,52 @@ export async function getSportProfile(req: Request, res: Response) {
     `rating.gt.${rate},` +
     `and(rating.eq.${rate},matches_played.gt.${mp}),` +
     `and(rating.eq.${rate},matches_played.eq.${mp},user_id.lt.${id})`;
-  try {
-    // Global rank (SC-328) — same >=1-match + tie-break rule as city rank, but
-    // across ALL cities. A target with no rated match is Unranked (globalRank null)
-    // — never a number for a sport they've never played (the old query had no
-    // matches filter, so it printed e.g. #4487 for a 0-match sport).
-    if (mp >= 1) {
-      const { count: aboveGlobal } = await supabase
-        .from('user_sport_profiles')
-        .select('user_id', { count: 'exact', head: true })
-        .eq('sport_id', sportId)
-        .gte('matches_played', 1)
-        .neq('user_id', id)
-        .or(aboveOrder);
-      globalRank = (aboveGlobal ?? 0) + 1;
-    } else {
-      globalRank = null;
-    }
-
-    // City rank (SC-326) — same predicate, restricted to the SAME city
-    // (users!inner city_id). No city OR no rated match → Unranked (cityRank null).
-    const { data: userRow } = await supabase
-      .from('users')
-      .select('city_id')
-      .eq('id', id)
-      .maybeSingle();
-    const cityId = userRow?.city_id ?? null;
-    if (cityId && mp >= 1) {
-      const { count: aboveCity } = await supabase
-        .from('user_sport_profiles')
-        .select('user_id, users!inner(city_id)', { count: 'exact', head: true })
-        .eq('sport_id', sportId)
-        .eq('users.city_id', cityId)
-        .gte('matches_played', 1)
-        .neq('user_id', id)
-        .or(aboveOrder);
-      cityRank = (aboveCity ?? 0) + 1;
-    } else {
-      cityRank = null;
-    }
-  } catch {
-    // Non-critical — return null ranks if calculation fails
-  }
-
-  // Sport-specific stats aggregated from match_events. Best-effort —
-  // if the query fails or no events exist we just omit sportStats.
+  // SC-329: ranks and sport-specific stats are INDEPENDENT → compute them
+  // CONCURRENTLY so the endpoint's serial DB round-trips (was ~6-8 sequential)
+  // overlap. Each branch is best-effort and writes its own result vars.
   let sportStats: Record<string, number> | null = null;
-  try {
+  const ranksTask = (async () => {
+    try {
+      // The global-rank COUNT and the city-id fetch don't depend on each other.
+      const [globalRes, cityRow] = await Promise.all([
+        mp >= 1
+          ? supabase
+              .from('user_sport_profiles')
+              .select('user_id', { count: 'exact', head: true })
+              .eq('sport_id', sportId)
+              .gte('matches_played', 1)
+              .neq('user_id', id)
+              .or(aboveOrder)
+          : Promise.resolve({ count: null as number | null }),
+        supabase.from('users').select('city_id').eq('id', id).maybeSingle(),
+      ]);
+      // Global (SC-328): >=1-match + tie-break across all cities; null for no match.
+      globalRank = mp >= 1 ? (globalRes.count ?? 0) + 1 : null;
+      // City (SC-326): same predicate restricted to the SAME city; the join filters
+      // users.city_id (idx_users_city_id, migration 068). No city / no match → null.
+      const cityId = (cityRow.data as { city_id?: string | null } | null)?.city_id ?? null;
+      if (cityId && mp >= 1) {
+        const { count: aboveCity } = await supabase
+          .from('user_sport_profiles')
+          .select('user_id, users!inner(city_id)', { count: 'exact', head: true })
+          .eq('sport_id', sportId)
+          .eq('users.city_id', cityId)
+          .gte('matches_played', 1)
+          .neq('user_id', id)
+          .or(aboveOrder);
+        cityRank = (aboveCity ?? 0) + 1;
+      } else {
+        cityRank = null;
+      }
+    } catch {
+      // Non-critical — leave ranks null if the calculation fails
+    }
+  })();
+
+  // Sport-specific stats aggregated from match_events. Best-effort — if the query
+  // fails or no events exist we just omit sportStats.
+  const statsTask = (async () => {
+    try {
     const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', sportId).maybeSingle();
     const slug = sportRow?.slug ?? '';
 
@@ -1313,9 +1312,12 @@ export async function getSportProfile(req: Request, res: Response) {
         points_won: pointsWon,
       };
     }
-  } catch {
-    // Non-critical — sportStats stays null
-  }
+    } catch {
+      // Non-critical — sportStats stays null
+    }
+  })();
+
+  await Promise.all([ranksTask, statsTask]);
 
   return res.json({ profile: { ...p, cityRank, globalRank, sportStats } });
 }

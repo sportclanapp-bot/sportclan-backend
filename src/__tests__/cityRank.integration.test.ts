@@ -108,14 +108,44 @@ describe('SC-326 per-sport city rank', () => {
 
     expect(expected).toBeGreaterThan(0); // Aarav is in Agra's cricket leaderboard
     expect(prof.cityRank).toBe(expected); // endpoint == direct query
-    // and it is genuinely city-scoped, not the global rank
-    expect(prof.cityRank).toBeLessThan(prof.globalRank);
+    // City is a SUBSET of Global → cityRank <= globalRank (equal is valid, e.g. the
+    // city's #1 who is also the nation's #1). Was strict <, which could false-fail.
+    expect(prof.cityRank).toBeLessThanOrEqual(prof.globalRank);
   });
 
-  it('cityRank is null for a user with no rated match in the sport (never a fake number)', async () => {
+  it('globalRank equals the target’s position in a direct NATIONAL leaderboard query', async () => {
+    // Fetch the national top by the leaderboard's own order, then re-rank by the
+    // SPEC ordering. A target well inside the fetched set has all spec-higher players
+    // present (they're all higher-rated), so its position == its global rank.
+    const rows: any[] = [];
+    for (let offset = 0; offset < 300; offset += 50) {
+      const { data } = await call('GET', `/leaderboard?sport_id=${cricketId}&scope=global&limit=50&offset=${offset}`, token);
+      const page: any[] = data.leaderboard || [];
+      rows.push(...page);
+      if (!data.has_more || page.length === 0) break;
+    }
+    const ranked = rows
+      .filter((r) => (r.matches_played ?? 0) >= 1)
+      .sort(
+        (a, b) =>
+          Number(b.rating) - Number(a.rating) ||
+          (b.matches_played ?? 0) - (a.matches_played ?? 0) ||
+          (a.user_id < b.user_id ? -1 : a.user_id > b.user_id ? 1 : 0),
+      );
+    // Pick a target ~position 30 — deep enough that boundary tie-breaks can't shift it.
+    const idx = Math.min(29, ranked.length - 1);
+    const target = ranked[idx];
+    const expectedGlobal = idx + 1;
+
+    const prof = (await call('GET', `/users/${target.user_id}/sport-profile/${cricketId}`, token)).data.profile;
+    expect(prof.globalRank).toBe(expectedGlobal); // endpoint == direct national query
+  });
+
+  it('cityRank AND globalRank are null for a user with no rated match (never a fake number)', async () => {
     const zToken = await login('z19empty.qa@sportclan.test', 'SportClanZ19pass');
     const meId = (await call('GET', '/users/me', zToken)).data.user.id;
     const prof = (await call('GET', `/users/${meId}/sport-profile/${cricketId}`, token)).data.profile;
     expect(prof.cityRank).toBeNull();
+    expect(prof.globalRank).toBeNull(); // SC-328: was a fake #4487 for an unplayed sport
   });
 });

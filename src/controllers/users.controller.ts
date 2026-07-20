@@ -183,26 +183,17 @@ export async function getMe(req: Request, res: Response) {
   // Aggregate header stats (SC-46): total matches across all the user's sports
   // + their rank in the most-played sport. Best-effort — never fails getMe, and
   // replaces the hardcoded 0 / — the profile header used to show.
+  // SC-328: account-level total matches across all sports. city_rank removed — it
+  // was a sport-agnostic rank nothing read anymore; per-sport City/Global ranks now
+  // live in getSportProfile.
   let total_matches = 0;
-  let city_rank: number | null = null;
   try {
     const { data: sp } = await supabase
       .from('user_sport_profiles')
-      .select('sport_id, rating, matches_played')
+      .select('matches_played')
       .eq('user_id', userId);
     if (sp && sp.length) {
       total_matches = sp.reduce((s, p: any) => s + (p.matches_played ?? 0), 0);
-      const primary = [...sp].sort(
-        (a: any, b: any) => (b.matches_played ?? 0) - (a.matches_played ?? 0),
-      )[0] as any;
-      if (primary && (primary.matches_played ?? 0) > 0) {
-        const { count } = await supabase
-          .from('user_sport_profiles')
-          .select('id', { count: 'exact', head: true })
-          .eq('sport_id', primary.sport_id)
-          .gt('rating', primary.rating);
-        city_rank = (count ?? 0) + 1;
-      }
     }
   } catch {
     // best-effort
@@ -230,7 +221,6 @@ export async function getMe(req: Request, res: Response) {
       city_name,
       account_types: accountTypes,
       total_matches,
-      city_rank,
       followers_count,
       following_count,
     },
@@ -346,35 +336,23 @@ export async function getUserById(req: Request, res: Response) {
     isFollowing = !!followRow;
   }
 
-  // SC-325: public game-stats aggregates for a stranger's stats card — total
-  // matches played + rank in their most-played sport. Same computation as getMe;
-  // both are PUBLIC-by-nature (an aggregate of user_sport_profiles). This does NOT
-  // re-leak anything SC-246 removed (phone/email/coin_balance/is_admin/prefs stay
-  // out of PUBLIC_USER_FIELDS). Best-effort — never fails the profile.
+  // SC-325/SC-328: public account-level total matches for the stats card. An
+  // aggregate of user_sport_profiles (PUBLIC-by-nature; does NOT re-leak anything
+  // SC-246 removed). city_rank removed — per-sport City/Global ranks now come from
+  // getSportProfile. Best-effort — never fails the profile.
   let total_matches = 0;
-  let city_rank: number | null = null;
   try {
     const { data: sp } = await supabase
       .from('user_sport_profiles')
-      .select('sport_id, rating, matches_played')
+      .select('matches_played')
       .eq('user_id', id);
     if (sp && sp.length) {
       total_matches = sp.reduce((s, p: any) => s + (p.matches_played ?? 0), 0);
-      const primary = [...sp].sort((a: any, b: any) => (b.matches_played ?? 0) - (a.matches_played ?? 0))[0] as any;
-      if (primary && (primary.matches_played ?? 0) > 0) {
-        const { count } = await supabase
-          .from('user_sport_profiles')
-          .select('id', { count: 'exact', head: true })
-          .eq('sport_id', primary.sport_id)
-          .gt('rating', primary.rating);
-        city_rank = (count ?? 0) + 1;
-      }
     }
   } catch {
     // best-effort — a stats hiccup must not fail the profile
   }
   safeUser.total_matches = total_matches;
-  safeUser.city_rank = city_rank;
 
   return res.json({
     user: safeUser,
@@ -1167,30 +1145,42 @@ export async function getSportProfile(req: Request, res: Response) {
   let globalRank: number | null = null;
 
   const p = profile as any;
+  const rate = p.rating as number;
+  const mp = (p.matches_played ?? 0) as number;
+  // The "standing above" predicate, shared by BOTH ranks: rating desc, then
+  // matches_played desc, then a stable user_id tie-break → a deterministic ordinal
+  // rank (not order-of-insertion). Only players with >=1 rated match qualify.
+  const aboveOrder =
+    `rating.gt.${rate},` +
+    `and(rating.eq.${rate},matches_played.gt.${mp}),` +
+    `and(rating.eq.${rate},matches_played.eq.${mp},user_id.lt.${id})`;
   try {
-    // Global rank
-    const { count: aboveGlobal } = await supabase
-      .from('user_sport_profiles')
-      .select('id', { count: 'exact', head: true })
-      .eq('sport_id', sportId)
-      .gt('rating', p.rating);
-    globalRank = (aboveGlobal ?? 0) + 1;
+    // Global rank (SC-328) — same >=1-match + tie-break rule as city rank, but
+    // across ALL cities. A target with no rated match is Unranked (globalRank null)
+    // — never a number for a sport they've never played (the old query had no
+    // matches filter, so it printed e.g. #4487 for a 0-match sport).
+    if (mp >= 1) {
+      const { count: aboveGlobal } = await supabase
+        .from('user_sport_profiles')
+        .select('user_id', { count: 'exact', head: true })
+        .eq('sport_id', sportId)
+        .gte('matches_played', 1)
+        .neq('user_id', id)
+        .or(aboveOrder);
+      globalRank = (aboveGlobal ?? 0) + 1;
+    } else {
+      globalRank = null;
+    }
 
-    // City rank (SC-326) — count ONLY players in the SAME city who stand above the
-    // target in this sport. Standing order: rating desc, then matches_played desc,
-    // then a stable user_id tie-break (so the rank is deterministic, not order-of-
-    // insertion). Only players with >=1 rated match are counted, and a target with
-    // no city OR no rated match is Unranked (cityRank: null) — never a fake number.
-    // (The previous query had NO city filter, so cityRank == globalRank — a bug.)
+    // City rank (SC-326) — same predicate, restricted to the SAME city
+    // (users!inner city_id). No city OR no rated match → Unranked (cityRank null).
     const { data: userRow } = await supabase
       .from('users')
       .select('city_id')
       .eq('id', id)
       .maybeSingle();
     const cityId = userRow?.city_id ?? null;
-    const mp = (p.matches_played ?? 0) as number;
     if (cityId && mp >= 1) {
-      const rate = p.rating as number;
       const { count: aboveCity } = await supabase
         .from('user_sport_profiles')
         .select('user_id, users!inner(city_id)', { count: 'exact', head: true })
@@ -1198,11 +1188,7 @@ export async function getSportProfile(req: Request, res: Response) {
         .eq('users.city_id', cityId)
         .gte('matches_played', 1)
         .neq('user_id', id)
-        .or(
-          `rating.gt.${rate},` +
-          `and(rating.eq.${rate},matches_played.gt.${mp}),` +
-          `and(rating.eq.${rate},matches_played.eq.${mp},user_id.lt.${id})`,
-        );
+        .or(aboveOrder);
       cityRank = (aboveCity ?? 0) + 1;
     } else {
       cityRank = null;

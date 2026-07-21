@@ -1,13 +1,17 @@
 /**
- * SC-332 · Withdraw a sent play-invite — LIVE integration test.
+ * SC-332 · DELETE /invites/:id — LIVE integration test.
  *
- * Proves against the deployed backend that withdrawing a pending invite:
+ * NOTE (SC-339): the withdraw UI was REMOVED from the profile (the invited state is
+ * now an inert confirmation, no withdraw). The DELETE endpoint is KEPT for tests +
+ * cleanup, so this suite still validates it — it just no longer backs a UI feature.
+ *
+ * Proves against the deployed backend that deleting a pending invite:
  *   - removes the pending row (getUser.pending_invite_sport_ids frees the sport, and
- *     pending_invites drops the id → the sender's button returns to "Invite to play");
+ *     pending_invites drops the id);
  *   - clears the invite from the RECEIVER's list (not left dangling);
- *   - is race-safe (a second withdraw of the same id is a clean 4xx, not a 500).
+ *   - is race-safe (a second delete of the same id is a clean 4xx, not a 500).
  *
- * Self-contained: withdrawal IS the cleanup, and afterAll clears any stray pending.
+ * Self-contained: the delete IS the cleanup, and afterAll clears any stray pending.
  *
  * Fixtures: z326agra.qa (sender A) · z19empty.qa (receiver B).
  */

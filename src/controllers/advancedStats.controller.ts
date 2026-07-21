@@ -182,6 +182,29 @@ export async function getAdvancedStats(req: Request, res: Response) {
       for (const u of us ?? []) userName.set(u.id as string, (u.name as string) || (u.username as string) || 'Player');
     }
 
+    // SC-336: per-match detail for the last-10 form dots (result + opponent + date)
+    // so a tapped dot is readable. Opponent = the other team's name (team match) or
+    // the 1v1 opponent's name; null when unidentifiable (casual pickup — SC-155).
+    const opponentFor = (mid: string): string | null => {
+      const m = matchById.get(mid);
+      if (!m) return null;
+      const mySide = mySideByMatch.get(mid);
+      if (m.team_a_id && m.team_b_id && mySide) {
+        return ((mySide === 'A' ? m.team_b_name : m.team_a_name) as string) ?? null;
+      }
+      const ou = oppUserByMatch.get(mid);
+      return ou ? userName.get(ou) ?? null : null;
+    };
+    const last10Detail = history.slice(-10).map((h) => {
+      const mid = (h.match_id as string) ?? '';
+      const m = mid ? matchById.get(mid) : null;
+      return {
+        result: (mid && resultByMatch.get(mid)) || resultFromDelta(Number(h.delta)),
+        opponent: mid ? opponentFor(mid) : null,
+        at: (m?.scheduled_at as string) ?? (h.created_at as string),
+      };
+    });
+
     const h2h = new Map<string, { name: string; w: number; l: number; d: number }>();
     let identifiable = 0;
     for (const m of matches) {
@@ -265,7 +288,7 @@ export async function getAdvancedStats(req: Request, res: Response) {
         peakRating: Math.round(peakRating),
         wins, losses, draws,
         winRate: Math.round((wins / results.length) * 100),
-        last10, last10Wins,
+        last10: last10Detail, last10Wins,
         streak: { type: lastResult, length: streakLen },
         trend, netDelta5: Math.round(netDelta5),
         trajectory,
@@ -312,20 +335,24 @@ export async function getTeamInsights(req: Request, res: Response) {
     // Completed matches this team played (as side A or B).
     const { data: matchRows } = await supabase
       .from('matches')
-      .select('id, winner_team_id, scheduled_at')
+      .select('id, winner_team_id, scheduled_at, team_a_id, team_b_id, team_a_name, team_b_name')
       .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`)
       .eq('status', 'completed')
       .order('scheduled_at', { ascending: false });
     const matches = matchRows ?? [];
 
     let w = 0, l = 0, d = 0;
-    const form: Result[] = [];
     for (const m of matches) {
       const r: Result = m.winner_team_id == null ? 'D' : (m.winner_team_id === teamId ? 'W' : 'L');
       if (r === 'W') w++; else if (r === 'L') l++; else d++;
-      form.push(r);
     }
-    const recentForm = form.slice(0, 10).reverse(); // oldest-first for display
+    // SC-336: recentForm carries per-match detail (result + opponent + date) so each
+    // dot is tappable. Newest 10, reversed to oldest-first for display.
+    const recentForm = matches.slice(0, 10).map((m) => ({
+      result: (m.winner_team_id == null ? 'D' : (m.winner_team_id === teamId ? 'W' : 'L')) as Result,
+      opponent: ((m.team_a_id === teamId ? m.team_b_name : m.team_a_name) as string) ?? null,
+      at: m.scheduled_at as string,
+    })).reverse();
 
     // Top scorers / wicket-takers — cricket only (innings_stats). Attribute to
     // THIS team: innings in this team's matches, by CURRENT team members.

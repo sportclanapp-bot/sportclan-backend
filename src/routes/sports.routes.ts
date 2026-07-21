@@ -14,7 +14,12 @@ router.get('/', async (_req: Request, res: Response) => {
     .select('*')
     .order('display_order', { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ sports: data || [] });
+  // SC-335: return ONLY active sports (the canonical 11). Filtered in JS (not a
+  // .neq query) so it's deploy-order safe — pre-migration the `is_active` column is
+  // absent → `!== false` keeps every sport, so nothing breaks until 070 runs; post-
+  // migration kabaddi/athletics (is_active=false) drop out.
+  const active = (data || []).filter((s: { is_active?: boolean }) => s.is_active !== false);
+  return res.json({ sports: active });
 });
 
 export default router;

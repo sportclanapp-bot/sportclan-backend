@@ -20,6 +20,19 @@ export async function isSportInactive(sportId?: string | null): Promise<boolean>
   return data?.is_active === false;
 }
 
+/**
+ * The ids of all ACTIVE sports — for filtering user-facing lists (match lists,
+ * etc.) so existing rows in a deactivated sport (kabaddi/athletics) never surface.
+ * Undefined-safe pre-migration: `is_active` absent → every sport is treated active,
+ * so behaviour is unchanged until migration 070 runs. Returns null if the read
+ * fails, so callers can skip the filter rather than blank the list.
+ */
+export async function activeSportIds(): Promise<string[] | null> {
+  const { data, error } = await supabase.from('sports').select('id, is_active');
+  if (error || !data) return null;
+  return data.filter((s: { is_active?: boolean }) => s.is_active !== false).map((s: { id: string }) => s.id);
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**

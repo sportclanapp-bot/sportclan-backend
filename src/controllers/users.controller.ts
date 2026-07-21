@@ -4,6 +4,7 @@ import { sanitizeError } from '../utils/response';
 import { checkExpiredSubscriptions } from './subscriptions.controller';
 import { inviteFreshCutoffIso } from './invites.controller';
 import { resolveSportId } from '../utils/sportId';
+import { isSportInactive } from '../utils/sports';
 import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
@@ -998,6 +999,8 @@ export async function getRival(req: Request, res: Response) {
   const rawSportId = req.query.sport_id as string | undefined;
   if (!rawSportId) return res.status(400).json({ error: 'sport_id is required' });
   const sportId = (await resolveSportId(rawSportId)) ?? rawSportId;
+  // SC-335: never surface per-sport data for an out-of-scope sport (no kabaddi/athletics).
+  if (await isSportInactive(sportId)) return res.status(404).json({ error: 'Sport not available' });
 
   // Get the requester's rating + location.
   const { data: myProfile } = await supabase
@@ -1120,6 +1123,8 @@ export async function getRatingHistory(req: Request, res: Response) {
   const rawSportId = req.query.sport_id as string | undefined;
   if (!rawSportId) return res.status(400).json({ error: 'sport_id is required' });
   const sportId = (await resolveSportId(rawSportId)) ?? rawSportId;
+  // SC-335: never surface per-sport data for an out-of-scope sport (no kabaddi/athletics).
+  if (await isSportInactive(sportId)) return res.status(404).json({ error: 'Sport not available' });
 
   const { data, error } = await supabase
     .from('rating_history')
@@ -1158,6 +1163,9 @@ export async function getSportProfile(req: Request, res: Response) {
   }
   // Accept either a slug ('cricket') or a UUID; the app passes slugs.
   const sportId = (await resolveSportId(rawSportId)) ?? rawSportId;
+  // SC-335: never surface a per-sport profile for an out-of-scope sport — no crafted
+  // request can pull a Kabaddi/Athletics tab or stat.
+  if (await isSportInactive(sportId)) return res.status(404).json({ error: 'Sport not available' });
 
   const { data: profile } = await supabase
     .from('user_sport_profiles')

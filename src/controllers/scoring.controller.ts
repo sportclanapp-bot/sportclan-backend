@@ -5,6 +5,7 @@ import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
 import { isTerminalMatchStatus } from '../utils/validation';
 import { canOfficiateMatch } from '../utils/tournamentAuth';
+import { isSportInactive } from '../utils/sports';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
 // every participant in the match. Failures are swallowed — the fan-out must
@@ -63,6 +64,14 @@ export async function createEvent(req: Request, res: Response) {
     const auth = await authorizeScorer(matchId, userId);
     if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
     const match = auth.match;
+
+    // SC-335: an out-of-scope (deactivated) sport can't be scored at all — even a
+    // crafted request against a leftover kabaddi/athletics seed match is rejected,
+    // whatever the match status. Checked before the terminal guard so it's the
+    // authoritative reason.
+    if (await isSportInactive(match.sport_id)) {
+      return res.status(400).json({ error: 'This sport is not available', code: 'SPORT_INACTIVE' });
+    }
 
     // SC-42: a finished match is immutable — no more scoring events.
     if (isTerminalMatchStatus(match.status)) {

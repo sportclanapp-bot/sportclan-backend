@@ -9,7 +9,7 @@ import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
-import { validateSportForCreate } from '../utils/sports';
+import { validateSportForCreate, activeSportIds } from '../utils/sports';
 import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner } from './tournaments.controller';
@@ -138,6 +138,9 @@ export async function listOpenMatches(req: Request, res: Response) {
     if (joinedIds.length > 0) query = query.not('id', 'in', `(${joinedIds.join(',')})`);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
+    // SC-335: don't suggest an open match in an out-of-scope sport.
+    const activeIds = await activeSportIds();
+    if (activeIds) query = query.in('sport_id', activeIds);
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     const matches = data ?? [];
@@ -567,6 +570,11 @@ export async function listMatches(req: Request, res: Response) {
     if (tournament_id) query = query.eq('tournament_id', tournament_id);
     if (team_id) query = query.or(`team_a_id.eq.${team_id},team_b_id.eq.${team_id}`);
     if (mine === '1') query = query.eq('created_by', userId);
+    // SC-335: never list a match in an out-of-scope sport (kabaddi/athletics seed
+    // rows stay in the DB but must not surface). Skipped only if the sports read
+    // fails (activeIds null) so a hiccup doesn't blank the list.
+    const activeIds = await activeSportIds();
+    if (activeIds) query = query.in('sport_id', activeIds);
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     const matches = data || [];

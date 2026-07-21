@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
+import { activeSportIds } from '../utils/sports';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers, matchAudienceIds } from '../utils/notify';
 import { rankTeams, parseScoreNum } from '../utils/standings';
 import { istDay } from '../utils/appTime';
@@ -546,7 +547,9 @@ export async function getNearbyMatches(req: Request, res: Response) {
       .limit(50);
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
-    const all = matches ?? [];
+    // SC-335: drop matches in out-of-scope sports (kabaddi/athletics).
+    const activeIds = await activeSportIds();
+    const all = (matches ?? []).filter((m: { sport_id: string }) => !activeIds || activeIds.includes(m.sport_id));
     const today = all.filter((m) => m.scheduled_at && new Date(m.scheduled_at) <= endOfToday);
     const thisWeek = all.filter((m) => m.scheduled_at && new Date(m.scheduled_at) > endOfToday && new Date(m.scheduled_at) <= endOfWeek);
     const thisMonth = all.filter((m) => m.scheduled_at && new Date(m.scheduled_at) > endOfWeek && new Date(m.scheduled_at) <= endOfMonth);

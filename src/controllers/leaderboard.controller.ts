@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { deletedIdSet } from '../utils/activeUser';
 import { resolveSportId } from '../utils/sportId';
+import { isSportInactive } from '../utils/sports';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { istMonthStartIso } from '../utils/appTime';
@@ -76,6 +77,8 @@ export async function getLeaderboard(req: Request, res: Response) {
     // not a Postgres "invalid uuid" 500 (SC-6).
     const sportId = await resolveSportId(rawSport);
     if (!sportId) return res.status(400).json({ error: 'Unknown sport_id' });
+    // SC-335: no leaderboard for an out-of-scope sport (kabaddi/athletics).
+    if (await isSportInactive(sportId)) return res.status(404).json({ error: 'Sport not available' });
 
     const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 20, maxLimit: 50 });
 

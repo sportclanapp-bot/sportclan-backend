@@ -1638,7 +1638,11 @@ export async function completeMatch(req: Request, res: Response) {
     // recorded even with a clear winner (L-001/L-002). winner_side fixes both.
     try {
       const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
-      const slug = sportRow?.slug ?? '';
+      // SC-343: normalize (Table Tennis is 'table-tennis' in the DB but the
+      // setSports list uses 'tabletennis'). Currently harmless — the set-sports and
+      // generic branches emit identical text — but normalizing keeps it correct if
+      // that copy ever diverges.
+      const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
       const setSports = ['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball'];
       const ss = ((await recomputeSummary(id)) ?? updatedMatch?.score_summary ?? {}) as Record<string, any>;
       const aName = match.team_a_name ?? 'Team A';

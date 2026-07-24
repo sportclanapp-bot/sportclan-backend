@@ -1251,7 +1251,11 @@ export async function getSportProfile(req: Request, res: Response) {
   const statsTask = (async () => {
     try {
     const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', sportId).maybeSingle();
-    const slug = sportRow?.slug ?? '';
+    // SC-343: normalize the slug (hyphen/underscore/whitespace/case) before the
+    // per-sport branch checks — the DB slug is 'table-tennis' but the checks below
+    // (e.g. the 'tabletennis' array) use the compact form. Without this, Table
+    // Tennis fell through and its serve/point sportStats were silently omitted.
+    const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
 
     // Get user's match IDs
     const { data: parts } = await supabase

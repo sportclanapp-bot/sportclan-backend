@@ -17,7 +17,17 @@ import { notifyUsers, notifyUser } from '../utils/notify';
 // contact + wallet + account internals; NEVER serialize this to another viewer.
 // (Still never returns password_hash — that column is simply not listed.)
 const PUBLIC_FIELDS =
-  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, is_admin, notification_preferences, discoverability, message_privacy, tag_privacy, created_at';
+  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, is_admin, notification_preferences, discoverability, message_privacy, tag_privacy, last_active_at, created_at';
+
+// SC-344 · presence. "online" = active within this window; the FE heartbeats more
+// often than this so a continuously-active user stays green, and stops on
+// background so they lapse to offline. Server computes is_online so "now" is
+// single-sourced. Exported for the heartbeat + tests.
+export const ONLINE_WINDOW_MS = 3 * 60 * 1000;
+export function computeIsOnline(lastActiveAt: string | null | undefined): boolean {
+  if (!lastActiveAt) return false;
+  return Date.now() - new Date(lastActiveAt).getTime() < ONLINE_WINDOW_MS;
+}
 
 // SC-246: the ONLY fields safe to serialize to a DIFFERENT viewer (getUserById).
 // Deliberately EXCLUDES phone, email, coin_balance, referral_code, is_admin,
@@ -25,7 +35,7 @@ const PUBLIC_FIELDS =
 // premium_expires_at, trial_used. `dob` is included but nulled below unless
 // show_dob. `is_premium` is a public boolean (the expiry timestamp is not).
 const PUBLIC_USER_FIELDS =
-  'id, name, username, profile_picture_url, bio, link, city_id, gender, account_type, is_premium, is_available, streak_count, dob, show_dob, created_at';
+  'id, name, username, profile_picture_url, bio, link, city_id, gender, account_type, is_premium, is_available, streak_count, last_active_at, dob, show_dob, created_at';
 
 // Fire smart engagement notifications lazily from /users/me. Best-effort,
 // never throws — failures here must not block the main profile response.
@@ -142,6 +152,12 @@ export async function getMe(req: Request, res: Response) {
   const city_name = (data as any).city?.name ?? null;
   delete (data as any).city;
 
+  // SC-344: own profile is served with a live is_online (always true here since
+  // fetching /me IS activity — also refresh last_active_at as a foreground ping so
+  // presence stays warm even between explicit heartbeats). Best-effort.
+  (data as any).is_online = true;
+  void supabase.from('users').update({ last_active_at: new Date().toISOString() }).eq('id', userId);
+
   // Profile-completion bonus — 10 coins, once per user. Idempotent via
   // coin_events unique key. Requires name + photo + city + at least 1 sport.
   try {
@@ -229,6 +245,17 @@ export async function getMe(req: Request, res: Response) {
   });
 }
 
+// SC-344 · POST /users/me/heartbeat — presence ping. The FE calls this on app
+// foreground and on a short interval while active; last_active_at drives is_online.
+export async function heartbeat(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const now = new Date().toISOString();
+  const { error } = await supabase.from('users').update({ last_active_at: now }).eq('id', userId);
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  return res.json({ ok: true, last_active_at: now });
+}
+
 // GET /users/:id — public profile
 export async function getUserById(req: Request, res: Response) {
   const { id } = req.params;
@@ -272,6 +299,9 @@ export async function getUserById(req: Request, res: Response) {
   // SC-200: flatten embedded city → city_name, drop the nested object.
   safeUser.city_name = safeUser.city?.name ?? null;
   delete safeUser.city;
+  // SC-344: real presence — computed from THIS user's last_active_at, never
+  // hardcoded. last_active_at stays in the projection so the FE can show last-seen.
+  safeUser.is_online = computeIsOnline(safeUser.last_active_at);
   if (safeUser.show_dob === false) {
     safeUser.dob = null;
   }

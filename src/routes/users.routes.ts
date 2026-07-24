@@ -22,6 +22,7 @@ import {
   submitReview,
   deleteReview,
   checkIn,
+  heartbeat,
 } from '../controllers/users.controller';
 import { getSeasonRecap } from '../controllers/features.controller';
 import { getUserInsights } from '../controllers/insights.controller';
@@ -35,6 +36,7 @@ router.get('/me', authenticateToken, getMe);
 router.patch('/me', authenticateToken, updateMe);
 router.patch('/me/account-types', authenticateToken, updateAccountTypes);
 router.post('/me/check-in', authenticateToken, checkIn);
+router.post('/me/heartbeat', authenticateToken, heartbeat); // SC-344 presence ping
 router.get('/me/blocked', authenticateToken, getBlockedUsers);
 router.get('/me/profile-completeness', authenticateToken, getProfileCompleteness);
 // SC-275: Advanced Stats (PREMIUM-gated inside the handler). Additive only —

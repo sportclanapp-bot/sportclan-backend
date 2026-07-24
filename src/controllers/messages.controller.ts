@@ -618,9 +618,26 @@ export async function getMessages(req: Request, res: Response) {
 
   const items = data || [];
   const reversed = items.reverse();
+
+  // SC-344: real typing — OTHER participants whose typing_until is still in the
+  // future (set by their /typing pings). Rides the existing 6s message poll, so no
+  // extra request and no websocket. Lapses on its own when they stop / send.
+  const nowIso = new Date().toISOString();
+  const { data: typingRows } = await supabase
+    .from('chat_participants')
+    .select('user_id, user:users!user_id(id, name)')
+    .eq('chat_id', id)
+    .neq('user_id', userId)
+    .gt('typing_until', nowIso);
+  const typing = (typingRows ?? []).map((r: any) => ({
+    user_id: r.user_id,
+    name: r.user?.name ?? 'Someone',
+  }));
+
   return res.json({
     items: reversed,
     messages: reversed,
+    typing,
     nextCursor: items.length === pageSize ? items[0]?.created_at : null,
     hasMore: items.length === pageSize,
   });
@@ -954,6 +971,36 @@ export async function markAsRead(req: Request, res: Response) {
   }
 
   return res.json({ success: true });
+}
+
+// ─── SET TYPING ───────────────────────────────────────────────────────────────
+// SC-344 · POST /messages/chats/:id/typing — the caller is actively typing. Set
+// their typing_until a few seconds ahead; the FE re-pings (throttled) while typing
+// and stops on send/idle, so it lapses on its own. The other party sees it via the
+// `typing` field on their next getMessages poll.
+const TYPING_TTL_MS = 8000; // must exceed the FE's ~3s re-ping AND the 6s poll gap
+export async function setTyping(req: Request, res: Response) {
+  const userId = req.userId!;
+  const { id } = req.params;
+  const { data: participant } = await supabase
+    .from('chat_participants')
+    .select('id')
+    .eq('chat_id', id)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (!participant) return res.status(403).json({ error: 'Not a member of this chat' });
+  // Don't leak a typing signal into a blocked 1:1 thread (mirrors markAsRead).
+  if (await isDmBlocked(id, userId)) {
+    return res.status(403).json({ error: 'You can’t view this conversation.' });
+  }
+  const until = new Date(Date.now() + TYPING_TTL_MS).toISOString();
+  const { error } = await supabase
+    .from('chat_participants')
+    .update({ typing_until: until })
+    .eq('chat_id', id)
+    .eq('user_id', userId);
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  return res.json({ ok: true });
 }
 
 // ─── GET GROUP MEMBERS ──────────────────────────────────────────────────────

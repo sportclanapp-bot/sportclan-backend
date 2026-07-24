@@ -3,7 +3,7 @@ import {
   listChats, getOrCreateDM, createGroup, updateGroup,
   addMember, removeMember, promoteMember, leaveGroup, deleteGroup,
   getMessages, sendMessage, deleteMessage, forwardMessage,
-  markAsRead, getGroupMembers, batchMarkRead, reactToMessage,
+  markAsRead, setTyping, getGroupMembers, batchMarkRead, reactToMessage,
 } from '../controllers/messages.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -30,6 +30,7 @@ router.get('/groups/:id/members', getGroupMembers);
 router.get('/chats/:id/messages', getMessages);
 router.post('/chats/:id/messages', sendMessage);
 router.post('/chats/:id/read', markAsRead);
+router.post('/chats/:id/typing', setTyping); // SC-344 real typing signal
 router.post('/read', batchMarkRead);
 router.delete('/messages/:messageId', deleteMessage);
 router.patch('/messages/:messageId/react', reactToMessage);

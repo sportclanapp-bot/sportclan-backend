@@ -131,6 +131,31 @@ async function attachMyVotes<
   }
 }
 
+// SC-348: attach the VIEWER's liked-state to each post. is_liked is not a column
+// (likes_count is the trigger-maintained cache); without this both the feed AND
+// getPost returned no is_liked, so the FE reset the heart to empty on every refetch
+// while the count (correct) stayed — the heart never persisted and diverged from the
+// count. One batched query over the caller's own post_likes rows (mirrors
+// attachMyVotes). Anonymous viewer → everything false.
+async function attachLikes<T extends { id: string; is_liked?: boolean }>(
+  posts: T[],
+  userId: string | undefined,
+): Promise<void> {
+  if (posts.length === 0) return;
+  if (!userId) {
+    for (const p of posts) p.is_liked = false;
+    return;
+  }
+  const ids = posts.map((p) => p.id);
+  const { data } = await supabase
+    .from('post_likes')
+    .select('post_id')
+    .eq('user_id', userId)
+    .in('post_id', ids);
+  const liked = new Set((data ?? []).map((r: { post_id: string }) => r.post_id));
+  for (const p of posts) p.is_liked = liked.has(p.id);
+}
+
 // ─── LIST POSTS (feed) ──────────────────────────────────────────────────────
 export async function listPosts(req: Request, res: Response) {
   const { sport_id, city_id, post_type, author_id, user_id, cursor, limit = '20', sort } = req.query;
@@ -234,6 +259,9 @@ export async function listPosts(req: Request, res: Response) {
 
   const items = result.data || [];
   await attachMyVotes(items as Array<{ id: string; poll_options?: unknown; my_vote_option_id?: string | null }>, req.userId);
+  // SC-348: real per-viewer liked-state so the heart persists across refetch and
+  // agrees between feed + detail (was: never sent → heart reset to empty on refetch).
+  await attachLikes(items as Array<{ id: string; is_liked?: boolean }>, req.userId);
   return res.json({
     items,
     posts: items,
@@ -320,6 +348,9 @@ export async function getPost(req: Request, res: Response) {
   // getPost sibling of the listPosts fix), so a voted poll opened via detail /
   // deep-link / notification still shows the selected option.
   await attachMyVotes([data as { id: string; poll_options?: unknown; my_vote_option_id?: string | null }], req.userId);
+  // SC-348: attach the viewer's liked-state on the detail read too (feed ↔ detail
+  // now agree; the heart persists after a refetch/deep-link/notification open).
+  await attachLikes([data as { id: string; is_liked?: boolean }], req.userId);
   return res.json({ data, post: data });
 }
 

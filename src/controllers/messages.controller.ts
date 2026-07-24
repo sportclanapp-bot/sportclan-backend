@@ -72,6 +72,31 @@ async function dmSendGate(
   return null;
 }
 
+// ─── SC-341: mark DELIVERY ────────────────────────────────────────────────────
+// "delivered" = the recipient's app has RECEIVED the message (a chat-list/thread
+// poll fetched it) but they may not have opened the thread yet. We stamp it on the
+// recipient's poll — NOT on send — so it is distinct from "read" (which only fires
+// when they open the thread). Bounded to the undelivered delta (messages this user
+// hasn't been added to yet), so steady-state polls do ~zero writes.
+async function markDeliveredForUser(chatIds: string[], userId: string): Promise<void> {
+  if (chatIds.length === 0) return;
+  const { data: pending } = await supabase
+    .from('messages')
+    .select('id, delivered_to')
+    .in('chat_id', chatIds)
+    .neq('sender_id', userId)
+    .not('delivered_to', 'cs', `{${userId}}`)
+    .limit(500);
+  if (!pending || pending.length === 0) return;
+  for (const m of pending) {
+    const delivered = Array.isArray(m.delivered_to) ? m.delivered_to : [];
+    await supabase
+      .from('messages')
+      .update({ delivered_to: [...delivered, userId] })
+      .eq('id', m.id);
+  }
+}
+
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
 export async function listChats(req: Request, res: Response) {
   const userId = req.userId!;
@@ -86,6 +111,10 @@ export async function listChats(req: Request, res: Response) {
 
   const chatIds = (participations || []).map((p) => p.chat_id);
   if (chatIds.length === 0) return res.json({ data: [], chats: [] });
+
+  // SC-341: the recipient's list poll is where "delivered" is stamped — their app
+  // has now received these messages even though they haven't opened the thread.
+  await markDeliveredForUser(chatIds, userId);
 
   const lcp = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   const { data: chats, error } = await supabase
@@ -904,7 +933,7 @@ export async function markAsRead(req: Request, res: Response) {
   // Get unread messages in this chat not sent by me
   const { data: unread } = await supabase
     .from('messages')
-    .select('id, read_by')
+    .select('id, read_by, delivered_to')
     .eq('chat_id', id)
     .neq('sender_id', userId)
     .not('read_by', 'cs', `{${userId}}`);
@@ -912,10 +941,15 @@ export async function markAsRead(req: Request, res: Response) {
   if (unread && unread.length > 0) {
     for (const msg of unread) {
       const readBy = [...(msg.read_by || []), userId];
-      await supabase
-        .from('messages')
-        .update({ read_by: readBy })
-        .eq('id', msg.id);
+      // read_by is written on its own so it can NEVER be coupled to the newer
+      // delivered_to column's existence (a missing column must not break reads).
+      await supabase.from('messages').update({ read_by: readBy }).eq('id', msg.id);
+      // SC-341: reading implies delivered — keep delivered_to monotonic. Best-effort
+      // and independent: a pre-migration backend simply skips it.
+      const deliveredTo = Array.isArray(msg.delivered_to) ? msg.delivered_to : [];
+      if (!deliveredTo.includes(userId)) {
+        await supabase.from('messages').update({ delivered_to: [...deliveredTo, userId] }).eq('id', msg.id);
+      }
     }
   }
 

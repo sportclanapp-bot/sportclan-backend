@@ -98,21 +98,36 @@ function detectProfanity(text: string): string[] {
 // my_vote_option_id inline, but the feed/detail reads (listPosts + getPost — the
 // same sibling pair as SC-193/SC-229) never joined poll_votes, so a voted poll
 // rendered "unvoted" once the vote response was gone. One batched query per page.
-async function attachMyVotes<T extends { id: string; poll_options?: unknown; my_vote_option_id?: string | null }>(
-  posts: T[],
-  userId: string | undefined,
-): Promise<void> {
+async function attachMyVotes<
+  T extends {
+    id: string;
+    poll_options?: unknown;
+    my_vote_option_id?: string | null;
+    my_vote_option_ids?: string[];
+  },
+>(posts: T[], userId: string | undefined): Promise<void> {
   if (!userId || posts.length === 0) return;
   const pollIds = posts.filter((p) => p.poll_options).map((p) => p.id);
   if (pollIds.length === 0) return;
+  // SC-347: a voter can have MULTIPLE rows per poll now (multi-choice). Only the
+  // caller's own rows are fetched (small), grouped into an array per poll.
   const { data: votes } = await supabase
     .from('poll_votes')
     .select('post_id, option_id')
     .eq('user_id', userId)
     .in('post_id', pollIds);
-  const voteMap = new Map((votes ?? []).map((v: { post_id: string; option_id: string }) => [v.post_id, v.option_id]));
+  const voteMap = new Map<string, string[]>();
+  for (const v of (votes ?? []) as Array<{ post_id: string; option_id: string }>) {
+    const arr = voteMap.get(v.post_id) ?? [];
+    arr.push(v.option_id);
+    voteMap.set(v.post_id, arr);
+  }
   for (const p of posts) {
-    if (p.poll_options) p.my_vote_option_id = voteMap.get(p.id) ?? null;
+    if (p.poll_options) {
+      const mine = voteMap.get(p.id) ?? [];
+      p.my_vote_option_ids = mine;
+      p.my_vote_option_id = mine[0] ?? null; // legacy single field
+    }
   }
 }
 
@@ -329,6 +344,7 @@ export async function createPost(req: Request, res: Response) {
     mentions,
     idempotency_key,
     poll_options: rawPollOptions,
+    allow_multiple: rawAllowMultiple, // SC-347: poll single(false) vs multiple(true) choice
     type, // frontend sends 'type' which can be 'poll', 'general', etc.
     scheduled_at, // optional ISO string · Premium-only scheduled publishing
     match_id, // SC-193: optional — links a match_result post to a completed match
@@ -490,6 +506,17 @@ export async function createPost(req: Request, res: Response) {
       return res.status(403).json({ error: 'POST_LIMIT_REACHED' });
     }
     return res.status(500).json({ error: sanitizeError(error) });
+  }
+
+  // SC-347: persist the poll's single-vs-multiple mode chosen at create time. Done
+  // as a follow-up UPDATE (only when true) so the create_post_capped RPC signature
+  // is untouched. allow_multiple defaults false, so single-choice needs no write.
+  {
+    const createdId = (data as { id?: string })?.id;
+    if (createdId && rpcArgs.p_poll_options != null && rawAllowMultiple === true) {
+      await supabase.from('community_posts').update({ allow_multiple: true }).eq('id', createdId);
+      (data as { allow_multiple?: boolean }).allow_multiple = true;
+    }
   }
 
   // Award coins: 2 per post, capped at 5/day via a date-scoped event type.
@@ -1033,16 +1060,22 @@ export async function searchMentions(req: Request, res: Response) {
 export async function votePoll(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
-  const { option_id } = req.body;
-
-  if (!option_id || typeof option_id !== 'string') {
-    return res.status(400).json({ error: 'option_id is required' });
+  // SC-347: accept an ARRAY of picks (multi-choice) OR the legacy single option_id.
+  // The array is the voter's ENTIRE selection — empty clears their vote.
+  const { option_id, option_ids } = req.body as { option_id?: string; option_ids?: string[] };
+  let picks: string[];
+  if (Array.isArray(option_ids)) {
+    picks = option_ids.filter((x) => typeof x === 'string');
+  } else if (typeof option_id === 'string') {
+    picks = [option_id];
+  } else {
+    return res.status(400).json({ error: 'option_id or option_ids is required' });
   }
 
   // 1. Fetch post; verify it's a poll
   const { data: post, error: fetchErr } = await supabase
     .from('community_posts')
-    .select('id, poll_options, post_type, is_closed, author_id')
+    .select('id, poll_options, post_type, is_closed, author_id, allow_multiple')
     .eq('id', id)
     .maybeSingle();
 
@@ -1056,41 +1089,38 @@ export async function votePoll(req: Request, res: Response) {
   // SC-43: a closed poll is final — no more votes.
   if (post.is_closed) return res.status(409).json({ error: 'This poll is closed' });
 
+  const allowMultiple = !!post.allow_multiple;
+  // SC-347: a single-choice poll rejects more than one pick.
+  if (!allowMultiple && picks.length > 1) {
+    return res.status(400).json({ error: 'This poll allows a single choice.', code: 'SINGLE_CHOICE_ONE' });
+  }
+
   const options = post.poll_options as Array<{ id: string; text: string; vote_count: number }>;
-  if (!options.find((o) => o.id === option_id)) {
+  const optionIds = new Set(options.map((o) => o.id));
+  const dedup = Array.from(new Set(picks)); // de-dupe rapid double-taps of the same option
+  if (dedup.some((oid) => !optionIds.has(oid))) {
     return res.status(400).json({ error: 'Invalid option_id' });
   }
 
-  // 2. Get existing vote (if any) to know what to decrement
-  const { data: existing } = await supabase
-    .from('poll_votes')
-    .select('option_id')
-    .eq('post_id', id)
-    .eq('user_id', userId)
-    .maybeSingle();
-
-  const previousOptionId = existing?.option_id ?? null;
-  if (previousOptionId === option_id) {
-    // No change — still return current state
-    return res.json({ post });
-  }
-
-  // 3. SC-61: upsert the vote AND recompute the denormalized
-  // poll_options[].vote_count atomically (apply_poll_vote, migration 041). The
-  // old flow upserted, then in a separate statement read-all-recompute-wrote the
-  // whole JSONB — which lost updates under concurrency, drifting the cached
-  // counts below the true poll_votes count. The RPC locks the post row and
-  // recomputes the counts directly from the authoritative poll_votes in one
-  // transaction, so the denormalized counts always match the tally.
+  // 2. SC-347/SC-61: replace this voter's whole selection AND recompute the
+  // denormalized poll_options[].vote_count + poll_voter_count atomically under a
+  // row lock (apply_poll_vote_set, migration 073). Single vs multi is already
+  // enforced above; the RPC just applies the set the caller sends.
   const { data: updated, error: voteErr } = await supabase
-    .rpc('apply_poll_vote', {
+    .rpc('apply_poll_vote_set', {
       p_post_id: id,
       p_user_id: userId,
-      p_option_id: option_id,
+      p_option_ids: dedup,
     })
     .single();
 
   if (voteErr) return res.status(500).json({ error: sanitizeError(voteErr) });
 
-  return res.json({ post: { ...(updated as object), my_vote_option_id: option_id } });
+  return res.json({
+    post: {
+      ...(updated as object),
+      my_vote_option_ids: dedup,
+      my_vote_option_id: dedup[0] ?? null, // legacy single field
+    },
+  });
 }

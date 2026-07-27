@@ -4,6 +4,7 @@ import {
   addMember, removeMember, promoteMember, leaveGroup, deleteGroup,
   getMessages, sendMessage, deleteMessage, forwardMessage,
   markAsRead, setTyping, getGroupMembers, batchMarkRead, reactToMessage,
+  getUnreadCount,
 } from '../controllers/messages.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -14,6 +15,10 @@ router.use(authenticateToken);
 
 // Chats
 router.get('/chats', listChats);
+// SC-349: total unread across ALL chats (Home header 💬 dot). Declared before the
+// /chats/:id routes — it is a sibling path, but keeping the flat routes together
+// makes the ordering obvious.
+router.get('/unread-count', getUnreadCount);
 router.post('/dm', getOrCreateDM);
 
 // Groups

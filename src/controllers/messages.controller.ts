@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { isBlockedBetween, blockedUserIds } from '../utils/blocks';
+import { isBlockedBetween, blockedUserIds, excludeIds } from '../utils/blocks';
+import { deletedIdSet } from '../utils/activeUser';
 import { LIMITS, firstInvalidUrl, ARRAY_LIMITS, tooManyItems, firstDisallowedImageUrl } from '../utils/validation';
 import { parsePagination, pageMeta } from '../utils/pagination';
 
@@ -170,6 +171,66 @@ export async function listChats(req: Request, res: Response) {
   // true total is the number of chats the user participates in (chatIds), not the
   // ranged page — so has_more is accurate regardless of the page window.
   return res.json({ data: enriched, chats: enriched, ...pageMeta(chatIds.length, lcp) });
+}
+
+// ─── UNREAD MESSAGE COUNT (badge) ───────────────────────────────────────────
+// SC-349 · GET /messages/unread-count — total unread across ALL of my chats, for
+// the Home header 💬 dot (the 🔔 dot has had `unreadCount` from /notifications
+// since day one; the chat icon had no source at all).
+//
+// listChats CANNOT serve this: it is paginated (50/page), so a user whose unread
+// thread sits on page 2 would show no dot. This is one flat scan instead.
+//
+// "Unread" is the same predicate markAsRead clears, plus the exclusions a badge
+// needs so it never nags about something the user can't act on:
+//   • sender_id != me      — my own sends are never unread to me
+//   • is_deleted = false   — a deleted message shows as "message deleted", not new
+//   • read_by !cs {me}     — read_by is uuid[] NOT NULL DEFAULT '{}' (mig 013), so
+//                            the containment filter is never NULL-swallowed
+//   • blocked senders      — bidirectional; a blocked user's message stays in the
+//                            thread but must not raise a badge
+//   • soft-deleted senders — the message stays (anonymised "Deleted User", per
+//                            activeUser.ts) but a dead account can't warrant a ping
+const UNREAD_SCAN_CAP = 500; // the badge is a dot; scanning past this buys nothing
+export async function getUnreadCount(req: Request, res: Response) {
+  const userId = req.userId!;
+
+  const { data: participations, error: pErr } = await supabase
+    .from('chat_participants')
+    .select('chat_id')
+    .eq('user_id', userId);
+  if (pErr) return res.status(500).json({ error: sanitizeError(pErr) });
+
+  const chatIds = (participations || []).map((p) => p.chat_id);
+  if (chatIds.length === 0) return res.json({ unread: 0, chats: 0, capped: false });
+
+  const blocked = await blockedUserIds(userId);
+  let q = supabase
+    .from('messages')
+    .select('id, chat_id, sender_id')
+    .in('chat_id', chatIds)
+    .neq('sender_id', userId)
+    .eq('is_deleted', false)
+    .not('read_by', 'cs', `{${userId}}`)
+    .limit(UNREAD_SCAN_CAP);
+  q = excludeIds(q, 'sender_id', blocked);
+
+  const { data: rows, error } = await q;
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+  const candidates = rows || [];
+  // Soft-deleted senders: one small id-set query (deletedIdSet), not a join, so a
+  // missing/odd users row can never drop a legitimate unread message.
+  const senderIds = [...new Set(candidates.map((m) => m.sender_id as string))];
+  const dead = await deletedIdSet(senderIds);
+  const live = candidates.filter((m) => !dead.has(m.sender_id as string));
+
+  return res.json({
+    unread: live.length,
+    chats: new Set(live.map((m) => m.chat_id as string)).size,
+    // Honest about the scan cap rather than silently reporting exactly 500.
+    capped: candidates.length >= UNREAD_SCAN_CAP,
+  });
 }
 
 // ─── GET OR CREATE DM CHAT ─────────────────────────────────────────────────

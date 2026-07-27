@@ -3,9 +3,50 @@ import { randomUUID } from 'crypto';
 import sharp from 'sharp';
 import { uploadBuffer } from '../utils/r2';
 
-const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
+// SC-351: heic/heif accepted — an iPhone's default camera format. Both the honest
+// mime and the mislabelled one are handled (see sniffing below).
+const ALLOWED_MIME = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+]);
 const MAX_DIMENSION = 1200;
 const JPEG_QUALITY = 80;
+
+// SC-351 · HEIC support.
+//
+// sharp CANNOT decode HEIC: its prebuilt libvips parses the container (metadata
+// reads fine) but has no HEVC decoder — "Support for this compression format has
+// not been built in". So an iPhone photo failed at `sharp()` with an opaque
+// "bad seek" 400. heic-convert carries its own libheif build, so it works
+// regardless of what the deployed libvips was compiled with.
+//
+// We must SNIFF rather than trust `mime`: the app labels every non-.png file
+// image/jpeg (utils/imageUpload.ts), so a real HEIC arrives claiming to be JPEG.
+// Sniffing the bytes catches that case AND a file that lies the other way.
+//
+// ISO-BMFF layout: [4-byte box size][b'ftyp'][4-byte major brand]. AVIF is the
+// same container but sharp DOES decode it, so 'avif'/'avis' deliberately stay off
+// this list and keep taking the native path.
+const HEIC_BRANDS = new Set([
+  'heic', 'heix', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs', 'heif', 'mif1', 'msf1',
+]);
+function isHeicBuffer(buf: Buffer): boolean {
+  if (buf.length < 12) return false;
+  if (buf.toString('ascii', 4, 8) !== 'ftyp') return false;
+  return HEIC_BRANDS.has(buf.toString('ascii', 8, 12).toLowerCase());
+}
+
+/**
+ * Decode HEIC to JPEG bytes so the normal sharp pipeline can take over.
+ * Rotation is preserved: HEIF stores orientation as a container transform and
+ * libheif applies it during decode, so the JPEG that comes out is already
+ * upright — and the pipeline's `.rotate()` then no-ops harmlessly on it.
+ */
+async function heicToJpeg(buf: Buffer): Promise<Buffer> {
+  // Lazy import: only an iPhone upload pays the module-load cost.
+  const { default: convert } = await import('heic-convert');
+  const out = await convert({ buffer: buf, format: 'JPEG', quality: 0.92 });
+  return Buffer.from(out);
+}
 
 // POST /uploads/profile-photo
 // Body: { base64: string, mime: string }
@@ -42,6 +83,18 @@ export async function uploadProfilePhoto(req: Request, res: Response) {
 
   if (buf.length > 10 * 1024 * 1024) {
     return res.status(413).json({ error: 'Image too large (max 10MB)' });
+  }
+
+  // SC-351: HEIC → JPEG before sharp sees it (sharp can't decode HEVC). Keyed on
+  // the BYTES, so an iPhone photo mislabelled image/jpeg by the app is caught too.
+  if (isHeicBuffer(buf)) {
+    try {
+      buf = await heicToJpeg(buf);
+    } catch (err: any) {
+      return res
+        .status(400)
+        .json({ error: 'Could not read this HEIC image: ' + (err?.message ?? 'unknown'), code: 'HEIC_DECODE_FAILED' });
+    }
   }
 
   // Server-side compression: resize to max 1200px on longest side, JPEG quality 80.

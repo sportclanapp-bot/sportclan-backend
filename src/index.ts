@@ -65,7 +65,13 @@ app.use(cors());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 // 12mb cap supports base64-encoded profile photos (Change #4: no client size limit;
 // server compresses). Larger uploads should switch to multipart in a future module.
-app.use(express.json({ limit: '12mb' }));
+// SC-351: 14mb, not 12mb. Uploads arrive base64-encoded, which inflates 4/3 — so a
+// 12mb body cap made the REAL image ceiling ~8.9MB and Express rejected a genuine
+// 9-10MB photo with a raw 413 "Request payload too large" before the upload
+// controller's own 10MB check could return its friendly "Image too large (max
+// 10MB)". 14mb covers base64 of a full 10MB image (13.34MB) so the controller is
+// what actually enforces the limit, with the message the user should see.
+app.use(express.json({ limit: '14mb' }));
 
 // Backstop: scrub internal/DB detail from any 5xx response (SC-44).
 app.use(sanitizeErrorResponses);

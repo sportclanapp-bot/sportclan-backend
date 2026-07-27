@@ -44,9 +44,17 @@ export async function uploadProfilePhoto(req: Request, res: Response) {
     return res.status(413).json({ error: 'Image too large (max 10MB)' });
   }
 
-  // Server-side compression: resize to max 1200px on longest side, JPEG quality 80
+  // Server-side compression: resize to max 1200px on longest side, JPEG quality 80.
+  // SC-350: `.rotate()` (auto-orient) MUST come first. Phone cameras store portrait
+  // shots as landscape pixels + an EXIF orientation tag; sharp does not honour that
+  // tag unless asked, and it strips EXIF on output — so the old pipeline emitted
+  // un-rotated pixels with no orientation hint left and every portrait photo
+  // displayed SIDEWAYS. `.rotate()` with no argument bakes the EXIF rotation into
+  // the pixels, which is exactly what a metadata-less JPEG needs. Applies to every
+  // caller of this endpoint (avatars, post media, chat images, venue photos).
   try {
     buf = await sharp(buf)
+      .rotate()
       .resize(MAX_DIMENSION, MAX_DIMENSION, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: JPEG_QUALITY })
       .toBuffer();

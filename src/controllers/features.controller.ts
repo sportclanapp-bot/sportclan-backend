@@ -685,9 +685,17 @@ async function batchNotify(opts: {
 // ── Job: publish due scheduled posts (idempotent — nulling scheduled_at) ──────
 export async function runPublishScheduledPosts(): Promise<{ published: number }> {
   const now = new Date().toISOString();
+  // SC-350: stamp created_at at PUBLISH time, not compose time. The feed is ordered
+  // (and keyset-paginated) on created_at, so clearing scheduled_at alone published
+  // the post into its composition slot — a post written today for tomorrow 9am went
+  // live already a day deep in the feed, i.e. effectively invisible. Scheduling a
+  // post means it enters the feed when it publishes.
+  // Safe for the monthly cap: the 5/month count is IST-month over created_at, and
+  // scheduling is Premium-only while Premium bypasses the cap entirely — so moving
+  // created_at can't hand anyone a free slot.
   const { data, error } = await supabase
     .from('community_posts')
-    .update({ scheduled_at: null })
+    .update({ scheduled_at: null, created_at: now })
     .lte('scheduled_at', now)
     .not('scheduled_at', 'is', null)
     .select('id');

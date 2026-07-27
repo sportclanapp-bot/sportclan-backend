@@ -550,6 +550,28 @@ export async function createPost(req: Request, res: Response) {
     }
   }
 
+  // SC-350: persist ALL attached images, not just the first. The composer offers
+  // 4 (`IMAGES · n/4`) but `image_url` is a single column, so `media_urls[0]` was
+  // stored and images 2-4 were silently dropped — a 201 with no warning.
+  // `image_url` is still written (first image) so every existing reader keeps
+  // working; `media_urls` carries the full ordered set. Follow-up UPDATE, so the
+  // create_post_capped RPC signature is untouched (same pattern as SC-347 above),
+  // and best-effort: pre-migration-074 the column is missing and the post still
+  // succeeds exactly as it does today.
+  {
+    const createdId = (data as { id?: string })?.id;
+    const all = Array.isArray(media_urls)
+      ? media_urls.filter((u: unknown): u is string => typeof u === 'string' && u !== '')
+      : [];
+    if (createdId && all.length > 1) {
+      const { error: mErr } = await supabase
+        .from('community_posts')
+        .update({ media_urls: all })
+        .eq('id', createdId);
+      if (!mErr) (data as { media_urls?: string[] }).media_urls = all;
+    }
+  }
+
   // Award coins: 2 per post, capped at 5/day via a date-scoped event type.
   try {
     const { awardCoins } = await import('../utils/coins');

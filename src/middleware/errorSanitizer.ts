@@ -42,11 +42,21 @@ export function globalErrorHandler(err: unknown, req: Request, res: Response, _n
   // eslint-disable-next-line no-console
   console.error(`[unhandled ${req.method} ${req.originalUrl}]`, detail);
   if (res.headersSent) return;
-  // SC-109: an oversized request body (express.json 12mb limit) throws a
+  // SC-109: an oversized request body (the express.json limit) throws a
   // PayloadTooLargeError — return a clean 413 instead of a generic 500. The
   // memory ceiling is already bounded by the body-parser limit.
   const e = err as { type?: string; status?: number; statusCode?: number };
   if (e?.type === 'entity.too.large' || e?.status === 413 || e?.statusCode === 413) {
+    // SC-351: on an UPLOAD route say what the user can act on. Raising the body
+    // limit to 14mb lets a full 10MB image reach the controller's own check, but
+    // a body-parser rejection is still possible for anything far over — and
+    // "Request payload too large" tells the user nothing about the actual rule.
+    // There is always some outer bound; this makes the MESSAGE the same one at
+    // every size, so the limit reads as 10MB whether the controller or the
+    // parser did the rejecting.
+    if (req.originalUrl.startsWith('/uploads/')) {
+      return res.status(413).json({ error: 'Image too large (max 10MB)' });
+    }
     return res.status(413).json({ error: 'Request payload too large' });
   }
   res.status(500).json({ error: 'Internal server error' });

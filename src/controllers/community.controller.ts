@@ -262,9 +262,29 @@ export async function listPosts(req: Request, res: Response) {
   // SC-348: real per-viewer liked-state so the heart persists across refetch and
   // agrees between feed + detail (was: never sent → heart reset to empty on refetch).
   await attachLikes(items as Array<{ id: string; is_liked?: boolean }>, req.userId);
+
+  // SC-354: total post count for an author-filtered list. The profile grid showed
+  // `loadedPosts.length` as "My posts · N", so the number GREW as you scrolled
+  // (20 → 40 → …) and read as a wrong post count on first paint. Only computed
+  // for the author-filtered case (the profile grid); the main feed has no use for
+  // a total and shouldn't pay for the count. Same visibility rules as the list
+  // itself: scheduled posts counted ONLY when you're looking at your own grid,
+  // and blocked authors excluded.
+  let total: number | undefined;
+  if (authorFilter) {
+    let cq = supabase
+      .from('community_posts')
+      .select('id', { count: 'exact', head: true })
+      .eq('author_id', authorFilter);
+    if (!viewingOwn) cq = cq.is('scheduled_at', null);
+    const { count } = await cq;
+    total = count ?? undefined;
+  }
+
   return res.json({
     items,
     posts: items,
+    ...(total !== undefined ? { total } : {}),
     nextCursor: items.length === pageSize
       ? (sortMode === 'trending'
           ? items[items.length - 1]?.created_at // trending doesn't keyset-paginate
@@ -563,7 +583,12 @@ export async function createPost(req: Request, res: Response) {
     const all = Array.isArray(media_urls)
       ? media_urls.filter((u: unknown): u is string => typeof u === 'string' && u !== '')
       : [];
-    if (createdId && all.length > 1) {
+    // SC-354: `> 1` was wrong — a SINGLE-image post then left media_urls NULL while
+    // migration 074 had backfilled every pre-existing row to ARRAY[image_url]. So
+    // new single-image posts were the only rows in the table with an image but no
+    // media_urls. Readers that trust media_urls alone (the FE only survives via an
+    // image_url fallback) would miss them. Write it whenever there IS an image.
+    if (createdId && all.length >= 1) {
       const { error: mErr } = await supabase
         .from('community_posts')
         .update({ media_urls: all })

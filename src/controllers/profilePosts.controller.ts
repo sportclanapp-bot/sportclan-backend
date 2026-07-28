@@ -222,6 +222,10 @@ export async function updateProfilePost(req: Request, res: Response) {
     .single();
 
   if (error || !data) return res.status(404).json({ error: 'Post not found or not yours' });
+  // SC-348 guard again: every response that carries a post must carry is_liked,
+  // otherwise a caller that renders straight from the update response paints an
+  // empty heart over a post the viewer has liked.
+  await attachLikes([data as { id: string; is_liked?: boolean }], userId, 'profile_post_likes');
   return res.json({ post: data, data });
 }
 

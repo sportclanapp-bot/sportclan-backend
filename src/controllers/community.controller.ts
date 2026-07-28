@@ -659,7 +659,7 @@ export async function createPost(req: Request, res: Response) {
 export async function updatePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
-  const { content, sport_id, city_id, post_type, link_url } = req.body;
+  const { content, sport_id, city_id, post_type, link_url, media_urls, scheduled_at } = req.body;
 
   if (content) {
     if (content.length > LIMITS.postTextMax) {
@@ -671,6 +671,66 @@ export async function updatePost(req: Request, res: Response) {
     }
   }
 
+  // SC-355: media + schedule are editable now. Both need the CURRENT row first —
+  // rescheduling is only legal while the post is still pending, and we must not
+  // let an edit resurrect a schedule on something already published.
+  let current: { scheduled_at?: string | null } | null = null;
+  if (media_urls !== undefined || scheduled_at !== undefined) {
+    const { data: row } = await supabase
+      .from('community_posts')
+      .select('scheduled_at')
+      .eq('id', id)
+      .eq('author_id', userId)
+      .maybeSingle();
+    if (!row) return res.status(404).json({ error: 'Post not found or not yours' });
+    current = row;
+  }
+
+  // SC-355: images are editable — the only way to fix a post whose image is dead.
+  // Same allowlist as create (SC-146/147): an edit must not be a back door for an
+  // arbitrary external URL.
+  let mediaPatch: Record<string, unknown> = {};
+  if (media_urls !== undefined) {
+    if (!Array.isArray(media_urls)) {
+      return res.status(400).json({ error: 'media_urls must be an array' });
+    }
+    const clean = media_urls.filter((u: unknown): u is string => typeof u === 'string' && u !== '');
+    if (clean.length > 4) return res.status(400).json({ error: 'Maximum 4 images per post' });
+    for (const cand of clean) {
+      if (firstDisallowedImageUrl({ img: cand }, ['img'])) {
+        return res.status(400).json({ error: 'image_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
+      }
+    }
+    // Keep image_url mirroring media_urls[0] (migration 074's contract). Editing
+    // down to ZERO images must clear BOTH — leaving a stale image_url behind is
+    // how a "removed" picture comes back on any reader using the legacy column.
+    mediaPatch = { media_urls: clean.length > 0 ? clean : null, image_url: clean[0] ?? null };
+  }
+
+  // SC-355: reschedule / publish-now.
+  let schedulePatch: Record<string, unknown> = {};
+  if (scheduled_at !== undefined) {
+    const stillPending = !!current?.scheduled_at;
+    if (!stillPending) {
+      // Already live — there is nothing to re-time. The FE hides the control in
+      // this case; this is the server saying so too.
+      return res.status(400).json({
+        error: 'This post has already been published and can’t be rescheduled.',
+        code: 'ALREADY_PUBLISHED',
+      });
+    }
+    if (scheduled_at === null) {
+      schedulePatch = { scheduled_at: null }; // publish now
+    } else {
+      const when = new Date(scheduled_at);
+      if (Number.isNaN(when.getTime())) return res.status(400).json({ error: 'Invalid scheduled_at' });
+      if (when.getTime() <= Date.now()) {
+        return res.status(400).json({ error: 'scheduled_at must be in the future' });
+      }
+      schedulePatch = { scheduled_at: when.toISOString() };
+    }
+  }
+
   const { data, error } = await supabase
     .from('community_posts')
     .update({
@@ -679,6 +739,8 @@ export async function updatePost(req: Request, res: Response) {
       ...(city_id !== undefined && { city_id }),
       ...(post_type !== undefined && { post_type }),
       ...(link_url !== undefined && { link_url }),
+      ...mediaPatch,
+      ...schedulePatch,
       updated_at: new Date().toISOString(),
     })
     .eq('id', id)

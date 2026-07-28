@@ -21,6 +21,7 @@ import matchesRoutes from './routes/matches.routes';
 import scoringRoutes from './routes/scoring.routes';
 import leaderboardRoutes from './routes/leaderboard.routes';
 import communityRoutes from './routes/community.routes';
+import profilePostsRoutes from './routes/profilePosts.routes';
 import messagesRoutes from './routes/messages.routes';
 import searchRoutes from './routes/search.routes';
 import availabilityRoutes from './routes/availability.routes';
@@ -136,6 +137,8 @@ app.use('/matches', matchesRoutes);
 app.use('/scoring', scoringRoutes);
 app.use('/leaderboard', leaderboardRoutes);
 app.use('/community', communityRoutes);
+// SC-356: personal profile-wall posts (separate from community posts).
+app.use('/profile-posts', profilePostsRoutes);
 app.use('/messages', messagesRoutes);
 app.use('/search', searchRoutes);
 app.use('/availability', availabilityRoutes);

@@ -81,7 +81,9 @@ const PROFANITY_WORD_RES = PROFANITY_WORD.map((w) => ({
   re: new RegExp(`\\b${w}\\b`, 'i'),
 }));
 
-function detectProfanity(text: string): string[] {
+// SC-356: exported so profile posts run the SAME filter (and the same word list)
+// rather than growing a second copy that drifts.
+export function detectProfanity(text: string): string[] {
   const lower = text.toLowerCase();
   const hits = new Set<string>();
   for (const w of PROFANITY_SUBSTRING) {
@@ -137,9 +139,15 @@ async function attachMyVotes<
 // while the count (correct) stayed — the heart never persisted and diverged from the
 // count. One batched query over the caller's own post_likes rows (mirrors
 // attachMyVotes). Anonymous viewer → everything false.
-async function attachLikes<T extends { id: string; is_liked?: boolean }>(
+// SC-356: the likes TABLE is a parameter now, so profile posts reuse this exact
+// helper instead of getting a second hand-written read. SC-348 was precisely that
+// bug — the server never returned is_liked, so the heart reset on every refetch —
+// and the cheapest way not to reintroduce it in a new feature is to not write the
+// read twice. Defaults to community posts, so every existing call is unchanged.
+export async function attachLikes<T extends { id: string; is_liked?: boolean }>(
   posts: T[],
   userId: string | undefined,
+  table: 'post_likes' | 'profile_post_likes' = 'post_likes',
 ): Promise<void> {
   if (posts.length === 0) return;
   if (!userId) {
@@ -148,7 +156,7 @@ async function attachLikes<T extends { id: string; is_liked?: boolean }>(
   }
   const ids = posts.map((p) => p.id);
   const { data } = await supabase
-    .from('post_likes')
+    .from(table)
     .select('post_id')
     .eq('user_id', userId)
     .in('post_id', ids);

@@ -428,6 +428,27 @@ const ALLOWED_FIELDS = [
 
 const USERNAME_COOLDOWN_DAYS = 30;
 
+/**
+ * SC-365: usernames nobody may take.
+ *
+ * Found by testing: there was no list at all, so a normal user could become
+ * @admin or @support and message people from what reads like an official
+ * account. That's an impersonation vector, not a naming nicety.
+ *
+ * Matched case-insensitively against the whole username (not a substring — we
+ * don't want to block a legitimate "adminder" or "supporter").
+ */
+const RESERVED_USERNAMES = new Set([
+  'admin', 'admins', 'administrator', 'root', 'superuser', 'sysadmin',
+  'support', 'help', 'helpdesk', 'contact', 'info', 'team', 'staff',
+  'sportclan', 'sportclanapp', 'official', 'verified', 'moderator', 'mod',
+  'security', 'billing', 'payments', 'noreply', 'no-reply', 'system',
+  'api', 'www', 'about', 'settings', 'login', 'signup', 'register', 'me',
+]);
+
+/** RFC-shaped enough to catch real typos without rejecting valid addresses. */
+const EMAIL_RE = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
+
 export async function updateMe(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -460,6 +481,35 @@ export async function updateMe(req: Request, res: Response) {
       return res.status(400).json({ error: 'Please enter a valid date of birth' });
     }
   }
+  // SC-365: the display NAME could be saved empty or as pure whitespace, which
+  // left a profile with no visible name anywhere it's rendered.
+  if ('name' in patch) {
+    if (typeof patch.name !== 'string' || patch.name.trim().length === 0) {
+      return res.status(400).json({ error: 'Name can’t be empty.', code: 'INVALID_NAME' });
+    }
+    patch.name = patch.name.trim();
+  }
+
+  // SC-365: email had NO validation of any kind. 'not-an-email' saved happily,
+  // and a duplicate hit the DB unique index and surfaced as a raw 500. This is
+  // a LOGIN credential — it has to be well-formed and unique, with an error the
+  // user can act on.
+  if ('email' in patch && patch.email !== null && patch.email !== '') {
+    const email = String(patch.email).trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) {
+      return res.status(400).json({ error: 'Enter a valid email address.', code: 'INVALID_EMAIL' });
+    }
+    const { data: emailTaken } = await supabase
+      .from('users').select('id').ilike('email', email).neq('id', userId).maybeSingle();
+    if (emailTaken) {
+      return res.status(409).json({
+        error: 'That email is already used by another account.',
+        code: 'EMAIL_TAKEN',
+      });
+    }
+    patch.email = email;
+  }
+
   // SC-96: validate profile photo + link are well-formed URLs (was arbitrary text).
   // link is a legit EXTERNAL website → protocol-only; profile_picture_url is an
   // IMAGE → allowlist to our storage (SC-147; OAuth avatars on *.googleusercontent.com allowed).
@@ -476,6 +526,12 @@ export async function updateMe(req: Request, res: Response) {
       return res.status(400).json({
         error: 'Username must be 3–30 characters, using only letters, numbers, and underscores.',
         code: 'INVALID_USERNAME',
+      });
+    }
+    if (RESERVED_USERNAMES.has(patch.username.toLowerCase())) {
+      return res.status(400).json({
+        error: 'That username is reserved. Please choose another.',
+        code: 'USERNAME_RESERVED',
       });
     }
     const { data: current } = await supabase

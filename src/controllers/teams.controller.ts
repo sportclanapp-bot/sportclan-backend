@@ -24,7 +24,11 @@ export async function createTeam(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const { sport_id, name, logo_url, city_id } = req.body || {};
+    // SC-358: join_policy was silently DROPPED on create while updateTeam
+    // accepted it — so a team could only ever be born 'open' and then be changed,
+    // leaving a window where an approval-only team was joinable by code. A client
+    // that sends a field the sibling endpoint honours should not have it ignored.
+    const { sport_id, name, logo_url, city_id, join_policy } = req.body || {};
     if (!sport_id || !name) {
       return res.status(400).json({ error: 'sport_id and name are required' });
     }
@@ -47,7 +51,12 @@ export async function createTeam(req: Request, res: Response) {
 
     const { data: team, error } = await supabase
       .from('teams')
-      .insert({ sport_id, name, logo_url: logo_url || null, city_id: city_id || null, created_by: userId, join_code })
+      .insert({
+        sport_id, name, logo_url: logo_url || null, city_id: city_id || null,
+        created_by: userId, join_code,
+        // Same validation as updateTeam; anything else falls back to the column default.
+        ...(join_policy === 'approval' || join_policy === 'open' ? { join_policy } : {}),
+      })
       .select('*')
       .single();
     if (error || !team) return res.status(500).json({ error: sanitizeError(error) || 'Failed to create team' });

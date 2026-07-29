@@ -111,7 +111,14 @@ async function writeExpenseLog(entry: {
  */
 function isLogTableMissing(error: { code?: string; message?: string } | null): boolean {
   if (!error) return false;
-  return error.code === '42P01' || /team_expense_log.*does not exist/i.test(error.message ?? '');
+  // Two shapes, and the second is the one that actually occurs: Postgres says
+  // 42P01 "relation does not exist", but PostgREST answers from its schema
+  // cache first and returns PGRST205 "Could not find the table … in the schema
+  // cache". Matching only 42P01 meant the guard didn't recognise the pre-migration
+  // state and blocked every delete.
+  if (error.code === '42P01' || error.code === 'PGRST205' || error.code === 'PGRST202') return true;
+  const msg = error.message ?? '';
+  return msg.includes('team_expense_log') && /does not exist|schema cache|could not find/i.test(msg);
 }
 
 /**

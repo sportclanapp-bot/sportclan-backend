@@ -25,7 +25,17 @@ function generateJoinCode(): string {
  * deliberately NOT per-sport squad sizes, which would need a whole config surface
  * and still wouldn't stop a 5-a-side team collecting 40 reserves.
  */
-export const TEAM_MAX_MEMBERS = 50;
+export const TEAM_MAX_MEMBERS = Number(process.env.TEAM_MAX_MEMBERS) || 50;
+
+/**
+ * SC-359 · the capacity DECISION, extracted as a pure function so the 49/50/51
+ * boundary is unit-testable without standing up a 50-member team (which would
+ * need 50 real accounts). `joinGate` below is the only caller, so testing this
+ * tests the real rule, not a copy of it.
+ */
+export function isAtCapacity(currentMembers: number, max: number = TEAM_MAX_MEMBERS): boolean {
+  return currentMembers >= max;
+}
 
 /**
  * SC-359 · the join code is a credential — it is the whole gate on an `open`
@@ -90,7 +100,7 @@ async function joinGate(
       },
     };
   }
-  if ((await memberCount(teamId)) >= TEAM_MAX_MEMBERS) {
+  if (isAtCapacity(await memberCount(teamId))) {
     return {
       status: 409,
       body: {
@@ -298,7 +308,7 @@ export async function addTeamMember(req: Request, res: Response) {
     }
     // SC-359: capacity applies to captain-initiated adds too — otherwise the cap
     // is trivially bypassed by the one person most able to bypass it.
-    if ((await memberCount(id)) >= TEAM_MAX_MEMBERS) {
+    if (isAtCapacity(await memberCount(id))) {
       return res.status(409).json({ error: `This team is full (${TEAM_MAX_MEMBERS} members).`, code: 'TEAM_FULL' });
     }
     // SC-359: adding someone back IS the undo for a removal. Clearing the ban
@@ -438,21 +448,26 @@ export async function removeTeamMember(req: Request, res: Response) {
       .eq('user_id', targetUserId);
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
-    // SC-359: this branch is reached ONLY when a manager removed SOMEONE ELSE
-    // (self-removal returns earlier), so a removal is a ban and a voluntary
-    // leave is not — the distinction the whole feature turns on. Also clears any
-    // pending join request, otherwise the removed user's stale request could be
-    // approved straight back in.
-    await supabase
-      .from('team_bans')
-      .upsert({ team_id: id, user_id: targetUserId, banned_by: userId }, { onConflict: 'team_id,user_id' });
-    await supabase
-      .from('team_join_requests')
-      .delete()
-      .eq('team_id', id)
-      .eq('user_id', targetUserId);
+    // SC-359: a ban is written ONLY when a manager removed SOMEONE ELSE. The
+    // earlier self-removal branch covers just the CAPTAIN leaving (heir transfer
+    // / last-member disband) — a plain member leaving voluntarily falls through
+    // to here, so this needs its own explicit self-check. Without it a voluntary
+    // leaver was banned from their own team, which inverts the whole feature.
+    const isSelfLeave = targetUserId === userId;
+    if (!isSelfLeave) {
+      await supabase
+        .from('team_bans')
+        .upsert({ team_id: id, user_id: targetUserId, banned_by: userId }, { onConflict: 'team_id,user_id' });
+      // Drop any pending request too, or the removed user's stale request could
+      // be approved straight back in.
+      await supabase
+        .from('team_join_requests')
+        .delete()
+        .eq('team_id', id)
+        .eq('user_id', targetUserId);
+    }
 
-    return res.json({ removed: true, banned: true });
+    return res.json({ removed: true, banned: !isSelfLeave });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -20,6 +20,88 @@ function generateJoinCode(): string {
 }
 
 // POST /teams — create a team. FREE for all users (Change #6).
+/**
+ * SC-359 · a team's hard member cap. One number for every team and every sport —
+ * deliberately NOT per-sport squad sizes, which would need a whole config surface
+ * and still wouldn't stop a 5-a-side team collecting 40 reserves.
+ */
+export const TEAM_MAX_MEMBERS = 50;
+
+/**
+ * SC-359 · the join code is a credential — it is the whole gate on an `open`
+ * team — but getTeam/listTeams used `select('*')` and handed it to anyone. The
+ * UI presents it as a secret to share, so the payload has to match that.
+ * Stripped SERVER-SIDE (hiding it in the app would still ship it over the wire).
+ * Joining BY code is unaffected: you post a code you were given, you don't read
+ * it back off the team.
+ */
+function stripJoinCode<T extends Record<string, any>>(team: T, isMember: boolean): T {
+  if (isMember) return team;
+  const { join_code: _omit, ...rest } = team;
+  return rest as T;
+}
+
+/** The subset of the given team ids the user actually belongs to. */
+async function myTeamIds(userId: string | undefined, teamIds: string[]): Promise<Set<string>> {
+  if (!userId || teamIds.length === 0) return new Set();
+  const { data } = await supabase
+    .from('team_members')
+    .select('team_id')
+    .eq('user_id', userId)
+    .in('team_id', teamIds);
+  return new Set((data ?? []).map((r: { team_id: string }) => r.team_id));
+}
+
+/** Current member count for a team. */
+async function memberCount(teamId: string): Promise<number> {
+  const { count } = await supabase
+    .from('team_members')
+    .select('id', { count: 'exact', head: true })
+    .eq('team_id', teamId);
+  return count ?? 0;
+}
+
+/** SC-359: true when this user was REMOVED by a manager (not a voluntary leaver). */
+async function isBannedFromTeam(teamId: string, userId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('team_bans')
+    .select('id')
+    .eq('team_id', teamId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  return !!data;
+}
+
+/**
+ * The two gates every join path shares. Returns an error payload or null.
+ * Kept as ONE function so a future join route can't quietly skip one of them —
+ * the SC-358 audit found exactly that class of drift.
+ */
+async function joinGate(
+  teamId: string,
+  userId: string,
+): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  if (await isBannedFromTeam(teamId, userId)) {
+    return {
+      status: 403,
+      body: {
+        error: 'You were removed from this team, so you can’t rejoin. Ask the captain to add you back.',
+        code: 'REMOVED_FROM_TEAM',
+      },
+    };
+  }
+  if ((await memberCount(teamId)) >= TEAM_MAX_MEMBERS) {
+    return {
+      status: 409,
+      body: {
+        error: `This team is full (${TEAM_MAX_MEMBERS} members).`,
+        code: 'TEAM_FULL',
+      },
+    };
+  }
+  return null;
+}
+
 export async function createTeam(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -104,7 +186,12 @@ export async function listTeams(req: Request, res: Response) {
 
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ teams: data || [], ...pageMeta(count, p) });
+    // SC-359: a browse list handed out every team's join code. Strip per row —
+    // the viewer keeps the codes for teams they're actually in.
+    const rows = data || [];
+    const myIds = await myTeamIds(userId, rows.map((t: any) => t.id));
+    const safe = rows.map((t: any) => stripJoinCode(t, myIds.has(t.id)));
+    return res.json({ teams: safe, ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -149,7 +236,16 @@ export async function getTeam(req: Request, res: Response) {
     // header and Insights can't drift. (There is no global TEAM rank — the FE
     // keeps an honest dash for that tile rather than fabricate one.)
     (team as { record?: unknown }).record = await computeTeamRecord(id);
-    return res.json({ team, members: members || [] });
+    // SC-359: capacity is part of the team's public shape so the UI can show
+    // "12/50" and disable Join at the cap instead of letting a user tap into a
+    // guaranteed failure.
+    (team as { member_count?: number }).member_count = (members || []).length;
+    (team as { max_members?: number }).max_members = TEAM_MAX_MEMBERS;
+    (team as { is_full?: boolean }).is_full = (members || []).length >= TEAM_MAX_MEMBERS;
+    const viewerIsMember = !!userId && (members || []).some(
+      (m: any) => (m.user?.id ?? m.user_id) === userId,
+    );
+    return res.json({ team: stripJoinCode(team as any, viewerIsMember), members: members || [] });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -200,6 +296,16 @@ export async function addTeamMember(req: Request, res: Response) {
     if (assignedRole === undefined) {
       return res.status(403).json({ error: 'Only the captain can add a co-captain' });
     }
+    // SC-359: capacity applies to captain-initiated adds too — otherwise the cap
+    // is trivially bypassed by the one person most able to bypass it.
+    if ((await memberCount(id)) >= TEAM_MAX_MEMBERS) {
+      return res.status(409).json({ error: `This team is full (${TEAM_MAX_MEMBERS} members).`, code: 'TEAM_FULL' });
+    }
+    // SC-359: adding someone back IS the undo for a removal. Clearing the ban
+    // here means a mistaken removal is never permanent and needs no separate
+    // "unban" step the captain has to discover.
+    await supabase.from('team_bans').delete().eq('team_id', id).eq('user_id', user_id);
+
     const { data, error } = await supabase
       .from('team_members')
       .insert({ team_id: id, user_id, role: assignedRole, jersey_number: jersey_number ?? null })
@@ -331,7 +437,22 @@ export async function removeTeamMember(req: Request, res: Response) {
       .eq('team_id', id)
       .eq('user_id', targetUserId);
     if (error) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ removed: true });
+
+    // SC-359: this branch is reached ONLY when a manager removed SOMEONE ELSE
+    // (self-removal returns earlier), so a removal is a ban and a voluntary
+    // leave is not — the distinction the whole feature turns on. Also clears any
+    // pending join request, otherwise the removed user's stale request could be
+    // approved straight back in.
+    await supabase
+      .from('team_bans')
+      .upsert({ team_id: id, user_id: targetUserId, banned_by: userId }, { onConflict: 'team_id,user_id' });
+    await supabase
+      .from('team_join_requests')
+      .delete()
+      .eq('team_id', id)
+      .eq('user_id', targetUserId);
+
+    return res.json({ removed: true, banned: true });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -464,6 +585,11 @@ async function createJoinRequest(
     .from('team_members').select('id').eq('team_id', teamId).eq('user_id', userId).maybeSingle();
   if (existing) return { status: 409, body: { error: 'Already a member of this team' } };
 
+  // SC-359: a removed user can't request either, and there's no point queueing a
+  // request for a team that's already full.
+  const gate = await joinGate(teamId, userId);
+  if (gate) return { status: gate.status, body: gate.body };
+
   // Block gate — a user blocked (either direction) with ANY current member can't
   // even request (the team chat is a shared private space). Same as instant-join.
   const blocked = await blockedUserIds(userId);
@@ -551,6 +677,10 @@ export async function joinTeamByCode(req: Request, res: Response) {
       .maybeSingle();
     if (existing) return res.status(400).json({ error: 'Already a member of this team' });
 
+    // SC-359: removed-user + capacity gates, shared by every join path.
+    const gate = await joinGate(team.id, userId);
+    if (gate) return res.status(gate.status).json(gate.body);
+
     // Block gate: the team chat is shared with every member, so a user blocked
     // (either direction) with ANY current member can't join — otherwise a block
     // is bypassed into a private shared space. Reuses blocks.ts.
@@ -581,6 +711,43 @@ export async function joinTeamByCode(req: Request, res: Response) {
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+// GET /teams/:id/bans — SC-359: who was removed. Without this the ban state is
+// invisible: a captain would see someone simply never come back and have no way
+// to tell whether they left or were removed, let alone undo it. Managers only.
+export async function listTeamBans(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const id = String(req.params.id);
+  if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
+  if (!(await isTeamManager(id, userId))) {
+    return res.status(403).json({ error: 'Only the captain or a co-captain can see removed members' });
+  }
+  const { data, error } = await supabase
+    .from('team_bans')
+    .select('user_id, created_at, user:users!user_id(id, name, username, profile_picture_url)')
+    .eq('team_id', id)
+    .order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  return res.json({ bans: data ?? [], data: data ?? [] });
+}
+
+// DELETE /teams/:id/bans/:userId — SC-359: explicit undo. Adding the member back
+// also clears the ban (see addTeamMember); this exists so a captain can lift a
+// removal WITHOUT immediately re-adding the person, letting them choose to
+// rejoin themselves.
+export async function unbanTeamMember(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const id = String(req.params.id);
+  const targetUserId = String(req.params.userId);
+  if (!isUuid(id) || !isUuid(targetUserId)) return res.status(400).json({ error: 'Invalid id' });
+  if (!(await isTeamManager(id, userId))) {
+    return res.status(403).json({ error: 'Only the captain or a co-captain can undo a removal' });
+  }
+  await supabase.from('team_bans').delete().eq('team_id', id).eq('user_id', targetUserId);
+  return res.json({ unbanned: true });
 }
 
 // DELETE /teams/:id — disband a team (captain only).
@@ -700,6 +867,12 @@ export async function decideJoinRequest(req: Request, res: Response) {
     }
 
     if (status === 'approved') {
+      // SC-359: re-check ban + capacity at APPROVAL time, not just at request
+      // time — the team can fill up (or the user be removed again) while a
+      // request sits pending, and approving must not blow past the cap.
+      const gate = await joinGate(id, targetUserId);
+      if (gate) return res.status(gate.status).json(gate.body);
+
       // Re-check the block gate — a block may have landed BETWEEN request and
       // approve (the both-ends gate). Same semantics as instant-join.
       const blocked = await blockedUserIds(targetUserId);

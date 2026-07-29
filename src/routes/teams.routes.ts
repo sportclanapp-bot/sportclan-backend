@@ -5,6 +5,8 @@ import {
   getTeam,
   addTeamMember,
   removeTeamMember,
+  listTeamBans,
+  unbanTeamMember,
   updateMemberRole,
   updateTeam,
   joinTeamByCode,
@@ -28,6 +30,9 @@ router.get('/:id', authenticateToken, getTeam);
 router.get('/:id/insights', authenticateToken, getTeamInsights);
 router.post('/:id/members', authenticateToken, addTeamMember);
 router.delete('/:id/members/:userId', authenticateToken, removeTeamMember);
+// SC-359 · removed-member (ban) visibility + undo. Managers only.
+router.get('/:id/bans', authenticateToken, listTeamBans);
+router.delete('/:id/bans/:userId', authenticateToken, unbanTeamMember);
 router.patch('/:id/members/:userId/role', authenticateToken, updateMemberRole);
 router.patch('/:id', authenticateToken, updateTeam);
 router.delete('/:id', authenticateToken, disbandTeam);

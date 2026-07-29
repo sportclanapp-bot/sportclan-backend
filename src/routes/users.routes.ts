@@ -4,6 +4,7 @@ import {
   getUserById,
   updateMe,
   updateAccountTypes,
+  updateMySports,
   followUser,
   unfollowUser,
   getFollowers,
@@ -34,6 +35,7 @@ const router = Router();
 // Self routes — must be declared before /:id so they don't get captured.
 router.get('/me', authenticateToken, getMe);
 router.patch('/me', authenticateToken, updateMe);
+router.patch('/me/sports', authenticateToken, updateMySports);
 router.patch('/me/account-types', authenticateToken, updateAccountTypes);
 router.post('/me/check-in', authenticateToken, checkIn);
 router.post('/me/heartbeat', authenticateToken, heartbeat); // SC-344 presence ping

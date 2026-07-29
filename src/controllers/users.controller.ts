@@ -5,7 +5,7 @@ import { checkExpiredSubscriptions } from './subscriptions.controller';
 import { inviteFreshCutoffIso } from './invites.controller';
 import { resolveSportId } from '../utils/sportId';
 import { isSportInactive } from '../utils/sports';
-import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
+import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
@@ -233,6 +233,17 @@ export async function getMe(req: Request, res: Response) {
     // best-effort
   }
 
+  // SC-365: the sports you play, so Edit profile can seed its selector. Own
+  // data only — this is getMe.
+  let sport_ids: string[] = [];
+  try {
+    const { data: us } = await supabase
+      .from('user_sports').select('sport_id').eq('user_id', userId);
+    sport_ids = (us ?? []).map((r: { sport_id: string }) => r.sport_id);
+  } catch {
+    // best-effort — never fail the profile over it
+  }
+
   return res.json({
     user: {
       ...data,
@@ -241,6 +252,7 @@ export async function getMe(req: Request, res: Response) {
       total_matches,
       followers_count,
       following_count,
+      sport_ids,
     },
   });
 }
@@ -576,6 +588,59 @@ export async function updateMe(req: Request, res: Response) {
     .single();
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ user: data });
+}
+
+/**
+ * PATCH /users/me/sports — replace the set of sports you play.
+ *
+ * SC-365: `user_sports` was written ONLY at registration, so the sports you
+ * play could never be changed. Worse, the profile-completeness card lists
+ * "sports you play" as missing and taps through to Edit profile — a screen that
+ * had no way to satisfy it. A dead end by construction.
+ *
+ * Replacing the set does NOT touch user_sport_profiles: ELO, matches played and
+ * rating history are earned records of matches that really happened, and
+ * un-ticking a sport is a statement about what you play now, not a request to
+ * erase your history. Re-adding the sport shows the same stats again.
+ */
+export async function updateMySports(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+  const incoming = (req.body || {}).sport_ids;
+  if (!Array.isArray(incoming)) {
+    return res.status(400).json({ error: 'sport_ids must be an array' });
+  }
+  if (tooManyItems(incoming, ARRAY_LIMITS.sportIds)) {
+    return res.status(400).json({ error: `Too many sports (max ${ARRAY_LIMITS.sportIds})` });
+  }
+
+  const ids = Array.from(new Set(incoming.map((x: unknown) => String(x))));
+
+  // Every id must be a real, ACTIVE sport (SC-335: no kabaddi/athletics via a
+  // crafted request).
+  let valid: string[] = [];
+  if (ids.length > 0) {
+    const { data: rows } = await supabase
+      .from('sports').select('id').in('id', ids).eq('is_active', true);
+    valid = (rows ?? []).map((r) => r.id);
+    const unknown = ids.filter((i) => !valid.includes(i));
+    if (unknown.length > 0) {
+      return res.status(400).json({ error: 'One or more sports are not available', code: 'INVALID_SPORT' });
+    }
+  }
+
+  const { error: delErr } = await supabase.from('user_sports').delete().eq('user_id', userId);
+  if (delErr) return res.status(500).json({ error: sanitizeError(delErr) });
+
+  if (valid.length > 0) {
+    const { error: insErr } = await supabase
+      .from('user_sports')
+      .insert(valid.map((sport_id) => ({ user_id: userId, sport_id })));
+    if (insErr) return res.status(500).json({ error: sanitizeError(insErr) });
+  }
+
+  return res.json({ sport_ids: valid });
 }
 
 // PATCH /users/me/account-types — replace the user's account-type set.

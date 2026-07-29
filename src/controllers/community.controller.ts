@@ -562,7 +562,13 @@ export async function createPost(req: Request, res: Response) {
 
   if (error) {
     if ((error as { message?: string }).message?.includes('POST_LIMIT_REACHED')) {
-      return res.status(403).json({ error: 'POST_LIMIT_REACHED' });
+      // SC-357: the raw code used to be the `error` string, and the app renders
+      // `error` verbatim — so a capped free user saw the literal text
+      // "POST_LIMIT_REACHED". Friendly sentence for humans, `code` for callers.
+      return res.status(403).json({
+        error: 'You’ve used all 5 free posts this month. Upgrade to Premium for unlimited posts.',
+        code: 'POST_LIMIT_REACHED',
+      });
     }
     return res.status(500).json({ error: sanitizeError(error) });
   }
@@ -1147,13 +1153,18 @@ export async function getMyPostCount(req: Request, res: Response) {
   // SC-90: IST calendar month (was server-local/UTC) — mirrors create_post_capped.
   const startOfMonth = istMonthStartIso();
 
-  const { count } = await supabase
-    .from('community_posts')
-    .select('id', { count: 'exact', head: true })
-    .eq('author_id', userId)
-    .gte('created_at', startOfMonth);
+  // SC-357: count BOTH post types. SC-356 made the 5/month cap combined inside
+  // create_post_capped, but this display still counted community posts only — so
+  // the composer could promise "2 posts remaining" and the server would then
+  // reject the next one. The number the user reads must be the number enforced.
+  const [{ count: communityCount }, { count: profileCount }] = await Promise.all([
+    supabase.from('community_posts').select('id', { count: 'exact', head: true })
+      .eq('author_id', userId).gte('created_at', startOfMonth),
+    supabase.from('profile_posts').select('id', { count: 'exact', head: true })
+      .eq('author_id', userId).gte('created_at', startOfMonth),
+  ]);
 
-  const used = count ?? 0;
+  const used = (communityCount ?? 0) + (profileCount ?? 0);
   const limit = 5;
   return res.json({ count: used, limit, remaining: Math.max(0, limit - used) });
 }

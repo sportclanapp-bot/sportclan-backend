@@ -16,7 +16,7 @@ import {
   decideJoinRequest,
   withdrawJoinRequest,
 } from '../controllers/teams.controller';
-import { listExpenses, addExpense, deleteExpense, getExpenseSummary } from '../controllers/teamExpenses.controller';
+import { listExpenses, addExpense, updateExpense, deleteExpense, getExpenseSummary } from '../controllers/teamExpenses.controller';
 import { getTeamInsights } from '../controllers/advancedStats.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -43,6 +43,7 @@ router.delete('/:id/join-requests/me', authenticateToken, withdrawJoinRequest);
 router.get('/:id/expenses', authenticateToken, listExpenses);
 router.get('/:id/expenses/summary', authenticateToken, getExpenseSummary);
 router.post('/:id/expenses', authenticateToken, addExpense);
+router.patch('/:id/expenses/:expenseId', authenticateToken, updateExpense);
 router.delete('/:id/expenses/:expenseId', authenticateToken, deleteExpense);
 
 export default router;

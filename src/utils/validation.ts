@@ -22,7 +22,12 @@ export function isValidTournamentFormat(format?: string | null): boolean {
 export const LIMITS = {
   tournamentMinTeams: 2,
   tournamentMaxTeams: 64,
-  expenseMaxAmount: 100_000_000, // 10 crore — generous ceiling, blocks overflow/absurd
+  // SC-360: team_expenses.amount is NUMERIC(10,2) → the largest storable value
+  // is 99999999.99. The old ceiling of 100_000_000 was ABOVE that, so the one
+  // value the guard let through at its own boundary overflowed the column and
+  // 500'd. The ceiling must be the column's limit, not a round number near it.
+  expenseMaxAmount: 99_999_999.99,
+  expenseTitleMax: 120,
   postTextMax: 500, // matches the community_posts / post_comments DB CHECK
   bioMax: 500,
   teamNameMax: 60,

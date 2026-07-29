@@ -16,7 +16,7 @@ import {
   decideJoinRequest,
   withdrawJoinRequest,
 } from '../controllers/teams.controller';
-import { listExpenses, addExpense, updateExpense, deleteExpense, getExpenseSummary } from '../controllers/teamExpenses.controller';
+import { listExpenses, addExpense, updateExpense, deleteExpense, getExpenseSummary, listExpenseLog } from '../controllers/teamExpenses.controller';
 import { getTeamInsights } from '../controllers/advancedStats.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -42,6 +42,9 @@ router.patch('/:id/join-requests/:userId', authenticateToken, decideJoinRequest)
 router.delete('/:id/join-requests/me', authenticateToken, withdrawJoinRequest);
 router.get('/:id/expenses', authenticateToken, listExpenses);
 router.get('/:id/expenses/summary', authenticateToken, getExpenseSummary);
+// SC-361: read-only by design — the audit trail has no write route, and the
+// table is append-only in the database too (migration 077).
+router.get('/:id/expenses/log', authenticateToken, listExpenseLog);
 router.post('/:id/expenses', authenticateToken, addExpense);
 router.patch('/:id/expenses/:expenseId', authenticateToken, updateExpense);
 router.delete('/:id/expenses/:expenseId', authenticateToken, deleteExpense);

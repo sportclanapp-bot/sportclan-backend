@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { LIMITS, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
 import { isTeamManager } from '../utils/teamAuth';
+import { parsePagination } from '../utils/pagination';
 
 // ── Team Expense Manager ────────────────────────────────────────────────────
 //
@@ -60,6 +61,122 @@ function toPaise(amount: unknown): number {
 }
 function toRupees(paise: number): number {
   return Math.round(paise) / 100;
+}
+
+/**
+ * SC-361: append one entry to the expense audit trail.
+ *
+ * Everything the entry needs to stay readable is SNAPSHOTTED here — the actor's
+ * name, the expense's title and amount — because the table deliberately has no
+ * foreign keys and must survive the deletion of the expense, the team, or the
+ * user (see migration 077).
+ *
+ * Returns the insert error, if any, so callers can decide whether losing the
+ * trail should fail the action. For a DELETE it must: that's the case where the
+ * evidence would otherwise disappear silently.
+ */
+async function writeExpenseLog(entry: {
+  teamId: string;
+  expenseId: string;
+  action: 'created' | 'updated' | 'deleted';
+  actorId: string;
+  expenseTitle?: string | null;
+  amount?: number | null;
+  changes?: Record<string, { from: unknown; to: unknown }> | null;
+}): Promise<{ code?: string; message?: string } | null> {
+  const { data: actor } = await supabase
+    .from('users').select('name').eq('id', entry.actorId).maybeSingle();
+
+  const { error } = await supabase.from('team_expense_log').insert({
+    team_id: entry.teamId,
+    expense_id: entry.expenseId,
+    action: entry.action,
+    actor_user_id: entry.actorId,
+    actor_name: actor?.name ?? null,
+    expense_title: entry.expenseTitle ?? null,
+    amount: entry.amount ?? null,
+    changes: entry.changes && Object.keys(entry.changes).length > 0 ? entry.changes : null,
+  });
+  return (error as { code?: string; message?: string } | null) ?? null;
+}
+
+/**
+ * True when the log table simply isn't there yet (migration 077 not applied).
+ *
+ * Deleting an expense refuses to proceed if the trail can't be written — but
+ * that guard must not brick a working feature in the window between deploying
+ * this code and applying the migration. An absent table is a deploy-ordering
+ * fact, not a tampering attempt; a real write failure once the table exists
+ * still blocks the delete.
+ */
+function isLogTableMissing(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return error.code === '42P01' || /team_expense_log.*does not exist/i.test(error.message ?? '');
+}
+
+/**
+ * GET /teams/:id/expenses/log — the trail, newest first.
+ *
+ * Visible to EVERY member, not just managers: a log only the person being
+ * audited can read is not transparency. Same requireLedgerAccess as the ledger
+ * itself, so non-members and banned users get nothing.
+ *
+ * There is deliberately no POST/PATCH/DELETE counterpart — the table is
+ * append-only in the database too (migration 077).
+ */
+export async function listExpenseLog(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const denied = await requireLedgerAccess(id!, userId);
+    if (denied) return res.status(denied.status).json(denied.body);
+
+    const { limit, offset } = parsePagination(req.query as Record<string, unknown>, {
+      defaultLimit: 30,
+      maxLimit: 100,
+    });
+
+    const { data, error } = await supabase
+      .from('team_expense_log')
+      .select('*')
+      .eq('team_id', id)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    const rows = data ?? [];
+    // No FK means no PostgREST embed — look the actors up in one query and fall
+    // back to the snapshotted name for deleted accounts.
+    const actorIds = [...new Set(rows.map((r) => r.actor_user_id).filter(Boolean))];
+    const actors: Record<string, { id: string; name: string; profile_picture_url: string | null }> = {};
+    if (actorIds.length > 0) {
+      const { data: users } = await supabase
+        .from('users').select('id, name, profile_picture_url').in('id', actorIds);
+      for (const u of users ?? []) actors[u.id] = u;
+    }
+
+    // Which expenses still exist — lets the UI mark an entry as referring to a
+    // deleted expense without a second round trip.
+    const expenseIds = [...new Set(rows.map((r) => r.expense_id).filter(Boolean))];
+    const alive = new Set<string>();
+    if (expenseIds.length > 0) {
+      const { data: live } = await supabase
+        .from('team_expenses').select('id').in('id', expenseIds);
+      for (const e of live ?? []) alive.add(e.id);
+    }
+
+    return res.json({
+      entries: rows.map((r) => ({
+        ...r,
+        actor: r.actor_user_id ? actors[r.actor_user_id] ?? null : null,
+        expense_deleted: !alive.has(r.expense_id),
+      })),
+      has_more: rows.length === limit,
+    });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
 }
 
 export async function listExpenses(req: Request, res: Response) {
@@ -178,6 +295,11 @@ export async function addExpense(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    await writeExpenseLog({
+      teamId: id!, expenseId: data.id, action: 'created', actorId: userId,
+      expenseTitle: data.title, amount: data.amount,
+    });
     return res.json({ expense: data });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
@@ -198,8 +320,10 @@ export async function updateExpense(req: Request, res: Response) {
     const denied = await requireLedgerAccess(id!, userId);
     if (denied) return res.status(denied.status).json(denied.body);
 
+    // SC-361: select the WHOLE row — the audit entry records old → new, so the
+    // "before" values have to be captured before the update overwrites them.
     const { data: existing } = await supabase
-      .from('team_expenses').select('id, created_by')
+      .from('team_expenses').select('*')
       .eq('id', expenseId).eq('team_id', id).maybeSingle();
     if (!existing) return res.status(404).json({ error: 'Expense not found' });
 
@@ -237,6 +361,23 @@ export async function updateExpense(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // Record only the fields that actually moved — an edit that retypes the
+    // same amount shouldn't read as a change to it.
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    for (const field of Object.keys(patch)) {
+      const before = (existing as Record<string, unknown>)[field];
+      const after = (data as Record<string, unknown>)[field];
+      if (field === 'amount' ? toPaise(before) !== toPaise(after) : before !== after) {
+        changes[field] = { from: before ?? null, to: after ?? null };
+      }
+    }
+    if (Object.keys(changes).length > 0) {
+      await writeExpenseLog({
+        teamId: id!, expenseId: expenseId!, action: 'updated', actorId: userId,
+        expenseTitle: data.title, amount: data.amount, changes,
+      });
+    }
     return res.json({ expense: data });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
@@ -252,7 +393,7 @@ export async function deleteExpense(req: Request, res: Response) {
     if (denied) return res.status(denied.status).json(denied.body);
 
     const { data: existing } = await supabase
-      .from('team_expenses').select('id, created_by')
+      .from('team_expenses').select('id, created_by, title, amount')
       .eq('id', expenseId).eq('team_id', id).maybeSingle();
     // SC-32: a missing row (wrong team or id) still 404s.
     if (!existing) return res.status(404).json({ error: 'Expense not found' });
@@ -264,6 +405,20 @@ export async function deleteExpense(req: Request, res: Response) {
       return res.status(403).json({
         error: 'Only the person who logged this expense or a team captain can delete it.',
         code: 'NOT_EXPENSE_EDITOR',
+      });
+    }
+
+    // SC-361: write the trail FIRST and refuse the delete if it fails. This is
+    // the one action where losing the log erases the evidence entirely — a
+    // silently unlogged deletion is exactly the hole the log exists to close.
+    const logError = await writeExpenseLog({
+      teamId: id!, expenseId: expenseId!, action: 'deleted', actorId: userId,
+      expenseTitle: existing.title, amount: existing.amount,
+    });
+    if (logError && !isLogTableMissing(logError)) {
+      return res.status(500).json({
+        error: 'Could not record this deletion in the team log, so nothing was deleted.',
+        code: 'LOG_WRITE_FAILED',
       });
     }
 

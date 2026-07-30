@@ -551,6 +551,42 @@ async function attachChessElo(matches: any[]): Promise<void> {
   for (const m of chessMatches) m.elo = bySide[m.id];
 }
 
+/**
+ * SC-366: fill in team_a_name / team_b_name from the registered teams.
+ *
+ * `matches.team_a_name` is a denormalised column that only ever gets written for
+ * FREE-TEXT opponents ("vs Rahul's XI"). A match between two REGISTERED teams
+ * leaves both columns NULL, so every live card fell back to the literal strings
+ * "Team A" and "Team B" — the score was sport-correct but nobody could tell who
+ * was playing. The card needs real names, and the fix belongs here rather than
+ * in the FE: the client shouldn't have to fetch a team per card to caption it.
+ *
+ * Only fills what's missing, so a free-text opponent keeps its own label.
+ */
+async function attachTeamNames(matches: any[]): Promise<void> {
+  if (!matches || matches.length === 0) return;
+  const ids = new Set<string>();
+  for (const m of matches) {
+    if (!m.team_a_name && m.team_a_id) ids.add(m.team_a_id);
+    if (!m.team_b_name && m.team_b_id) ids.add(m.team_b_id);
+  }
+  if (ids.size === 0) return;
+  const { data } = await supabase
+    .from('teams').select('id, name, short_name').in('id', [...ids]);
+  const byId = new Map<string, { name: string | null; short_name: string | null }>();
+  for (const t of data ?? []) byId.set(t.id, { name: t.name, short_name: t.short_name });
+  for (const m of matches) {
+    if (!m.team_a_name && m.team_a_id) {
+      const t = byId.get(m.team_a_id);
+      if (t) m.team_a_name = t.name ?? t.short_name ?? null;
+    }
+    if (!m.team_b_name && m.team_b_id) {
+      const t = byId.get(m.team_b_id);
+      if (t) m.team_b_name = t.name ?? t.short_name ?? null;
+    }
+  }
+}
+
 export async function listMatches(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -579,6 +615,7 @@ export async function listMatches(req: Request, res: Response) {
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     const matches = data || [];
     await attachChessElo(matches); // chess cards show both players' real ELO
+    await attachTeamNames(matches); // SC-366: live cards need real team names
     return res.json({ matches, ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -813,6 +850,7 @@ export async function getMatch(req: Request, res: Response) {
     // Chess: attach both players' real ELO for this sport (ranked 1v1). Null for
     // guests/casual — never faked.
     await attachChessElo([matchWithRating]);
+    await attachTeamNames([matchWithRating]); // SC-366: real team names on detail too
 
     return res.json({ match: matchWithRating, participants: participants || [], events_count: count || 0 });
   } catch (e) {

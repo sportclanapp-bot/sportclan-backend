@@ -120,10 +120,15 @@ export async function weeklyDigest(req: Request, res: Response) {
     .gte('created_at', sinceIso);
 
   // Likes received on own posts. Two-step: find my posts, then count likes.
+  // SC-368: this read `.from('posts').eq('user_id', …)`. There is no `posts`
+  // table — community posts live in `community_posts`, keyed on `author_id` —
+  // so the query errored, the discarded error left myPosts null, and the weekly
+  // digest reported "0 likes received" for everyone, always. Found by sweeping
+  // for tables the code references that no migration creates.
   const { data: myPosts } = await supabase
-    .from('posts')
+    .from('community_posts')
     .select('id')
-    .eq('user_id', userId);
+    .eq('author_id', userId);
   const postIds = (myPosts || []).map((p) => p.id);
   let posts_liked = 0;
   if (postIds.length > 0) {

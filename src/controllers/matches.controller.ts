@@ -571,24 +571,20 @@ async function attachTeamNames(matches: any[]): Promise<void> {
     if (!m.team_b_name && m.team_b_id) ids.add(m.team_b_id);
   }
   if (ids.size === 0) return;
+  // `teams` has no short_name column — selecting one made PostgREST reject the
+  // whole query, so `data` came back null and no name was ever filled. Select
+  // only what exists, and don't swallow the error if this ever breaks again.
   const { data, error } = await supabase
-    .from('teams').select('id, name, short_name').in('id', [...ids]);
-  // TEMPORARY (SC-366 verification): the fix appeared not to work in prod while
-  // the code was provably correct, and Render logs aren't reachable from here.
-  // Remove once the behaviour is confirmed.
-  if (error) console.warn('[SC366] attachTeamNames teams query failed', error.message);
-  console.warn(`[SC366] attachTeamNames ids=${ids.size} rows=${(data ?? []).length}`);
-  const byId = new Map<string, { name: string | null; short_name: string | null }>();
-  for (const t of data ?? []) byId.set(t.id, { name: t.name, short_name: t.short_name });
+    .from('teams').select('id, name').in('id', [...ids]);
+  if (error) {
+    console.warn('[matches] attachTeamNames: teams lookup failed', error.message);
+    return;
+  }
+  const byId = new Map<string, string | null>();
+  for (const t of data ?? []) byId.set(t.id, t.name ?? null);
   for (const m of matches) {
-    if (!m.team_a_name && m.team_a_id) {
-      const t = byId.get(m.team_a_id);
-      if (t) m.team_a_name = t.name ?? t.short_name ?? null;
-    }
-    if (!m.team_b_name && m.team_b_id) {
-      const t = byId.get(m.team_b_id);
-      if (t) m.team_b_name = t.name ?? t.short_name ?? null;
-    }
+    if (!m.team_a_name && m.team_a_id) m.team_a_name = byId.get(m.team_a_id) ?? m.team_a_name;
+    if (!m.team_b_name && m.team_b_id) m.team_b_name = byId.get(m.team_b_id) ?? m.team_b_name;
   }
 }
 

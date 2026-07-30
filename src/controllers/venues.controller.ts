@@ -1,25 +1,37 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { LIMITS, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
+import { parsePagination } from '../utils/pagination';
 
 // GET /venues?city_id=&q=
 // * q present → case-insensitive prefix match on name, ordered by use_count desc
 // * q empty   → top 5 most-used venues for the given city
 export async function searchVenues(req: Request, res: Response) {
   const { city_id, q } = req.query as Record<string, string | undefined>;
-  const limit = 10;
+  // SC-368: this was a hardcoded limit of 10 with no offset, so the venues
+  // directory could only ever show 10 rows out of 200+ and had no way to reach
+  // the rest — the same list-cap class as SC-303..308.
+  const { limit, offset } = parsePagination(req.query as Record<string, unknown>, {
+    defaultLimit: 30,
+    maxLimit: 100,
+  });
   let query = supabase
     .from('venues')
     .select('id, name, city_id, use_count, created_at')
+    // use_count DESC alone is not a total order — ties (every venue with
+    // use_count 1) could shuffle between pages and duplicate/skip rows. id is
+    // the tiebreak (the SC-138 rule).
     .order('use_count', { ascending: false })
-    .limit(limit);
+    .order('id', { ascending: true })
+    .range(offset, offset + limit - 1);
   if (city_id) query = query.eq('city_id', city_id);
   if (q && q.trim().length > 0) {
     query = query.ilike('name', `%${q.trim()}%`);
   }
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ venues: data ?? [] });
+  const rows = data ?? [];
+  return res.json({ venues: rows, has_more: rows.length === limit });
 }
 
 // POST /venues  { name, city_id? }

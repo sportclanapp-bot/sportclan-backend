@@ -15,22 +15,40 @@
 -- adds the index; a follow-up should capture the table definition in git.
 
 -- ── kudos ──────────────────────────────────────────────────────────────────
--- (a) backfill-dedup: keep the OLDEST kudos per (from,to,match) so the unique can
---     build. No-op when there are no dupes (confirmed count = 0).
-WITH d AS (
-  SELECT id,
-         row_number() OVER (
-           PARTITION BY from_user_id, to_user_id, match_id
-           ORDER BY created_at, id
-         ) AS rn
-  FROM kudos
-)
-DELETE FROM kudos WHERE id IN (SELECT id FROM d WHERE rn > 1);
+-- SC-368: this file's own note said the `kudos` table has no CREATE-TABLE
+-- migration. That made a FROM-SCRATCH run fail RIGHT HERE — `DELETE FROM kudos`
+-- against a table nothing had created aborts the whole run, long before it
+-- reaches anything else. On prod it worked only because the table already
+-- existed. Migration 078 now creates it, but 078 runs AFTER this file, so the
+-- body is guarded on the table existing. On prod: unchanged. On a rebuild: this
+-- no-ops and 078 creates the table with its own inline UNIQUE.
+DO $$
+BEGIN
+  IF to_regclass('public.kudos') IS NULL THEN
+    RAISE NOTICE 'kudos not present yet — skipping (migration 078 creates it)';
+    RETURN;
+  END IF;
 
--- (b) the constraint (idempotent). match_id is always set (kudos require a match)
---     so a plain unique index is correct — no partial needed.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_kudos_from_to_match
-  ON kudos (from_user_id, to_user_id, match_id);
+  -- (a) backfill-dedup: keep the OLDEST kudos per (from,to,match) so the unique
+  --     can build. No-op when there are no dupes (confirmed count = 0).
+  WITH d AS (
+    SELECT id,
+           row_number() OVER (
+             PARTITION BY from_user_id, to_user_id, match_id
+             ORDER BY created_at, id
+           ) AS rn
+    FROM kudos
+  )
+  DELETE FROM kudos WHERE id IN (SELECT id FROM d WHERE rn > 1);
+
+  -- (b) the constraint (idempotent). match_id is always set (kudos require a
+  --     match) so a plain unique index is correct — no partial needed.
+  -- SC-368 NOTE: prod ALREADY has two unique indexes on this triple
+  -- (kudos_..._key from the inline UNIQUE, plus uq_kudos_triple). This adds a
+  -- third name. Left in place so prod stays untouched; see Z-60.
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_kudos_from_to_match
+    ON kudos (from_user_id, to_user_id, match_id);
+END $$;
 
 -- ── follows / team_members / user_reviews (defensive no-ops) ─────────────────
 -- Postgres has no ADD CONSTRAINT IF NOT EXISTS, so guard each in a DO block:

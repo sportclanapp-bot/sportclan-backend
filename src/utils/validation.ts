@@ -28,6 +28,10 @@ export const LIMITS = {
   // 500'd. The ceiling must be the column's limit, not a round number near it.
   expenseMaxAmount: 99_999_999.99,
   expenseTitleMax: 120,
+  // SC-367: venue is free text on the match. It had NO cap at all — a 600-char
+  // "venue" saved happily and then had to be rendered on cards built for a
+  // ground name.
+  venueMax: 120,
   postTextMax: 500, // matches the community_posts / post_comments DB CHECK
   bioMax: 500,
   teamNameMax: 60,

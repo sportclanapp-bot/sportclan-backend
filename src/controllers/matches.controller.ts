@@ -5,12 +5,33 @@ import { notifyUser, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { isTournamentOrganiser, canOfficiateMatch } from '../utils/tournamentAuth';
 import { blockedUserIds } from '../utils/blocks';
 import { upsertVenue } from './venues.controller';
+
+/**
+ * SC-367: normalise a free-text venue.
+ *
+ * The API stored whatever arrived: '   ' became a match whose venue is three
+ * spaces (rendering as a stray separator with nothing after it), untrimmed
+ * input kept its padding, and there was no length cap at all. The FE trimmed on
+ * its own form, which only hid this from the app's own happy path.
+ *
+ * Returns the cleaned string, null when there's nothing left, or the sentinel
+ * TOO_LONG so the caller can 400 rather than silently truncate someone's input.
+ */
+const VENUE_TOO_LONG = Symbol('venue-too-long');
+function normaliseVenue(raw: unknown): string | null | typeof VENUE_TOO_LONG {
+  if (raw == null) return null;
+  if (typeof raw !== 'string') return null;
+  const clean = raw.trim();
+  if (clean.length === 0) return null;
+  if (clean.length > LIMITS.venueMax) return VENUE_TOO_LONG;
+  return clean;
+}
 import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate, activeSportIds } from '../utils/sports';
-import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
+import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems, LIMITS } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats } from './scoring.controller';
@@ -38,6 +59,15 @@ export async function createMatch(req: Request, res: Response) {
       is_ranked,
       join_policy,
     } = req.body || {};
+
+    const cleanVenueOrErr = normaliseVenue(venue);
+    if (cleanVenueOrErr === VENUE_TOO_LONG) {
+      return res.status(400).json({
+        error: `Venue must be ${LIMITS.venueMax} characters or fewer.`,
+        code: 'VENUE_TOO_LONG',
+      });
+    }
+    const cleanVenue = cleanVenueOrErr;
     if (!sport_id) return res.status(400).json({ error: 'sport_id is required' });
     // SC-279: per-match join policy. 'open' (default) = instant join_open_match;
     // 'approval' routes joins through match_join_requests (creator approves).
@@ -68,7 +98,7 @@ export async function createMatch(req: Request, res: Response) {
         team_a_name: team_a_name || null,
         team_b_name: team_b_name || null,
         scheduled_at: scheduled_at || null,
-        venue: venue || null,
+        venue: cleanVenue,
         city_id: city_id || null,
         format: format || null,
         overs: overs ?? null,
@@ -100,8 +130,8 @@ export async function createMatch(req: Request, res: Response) {
 
     // Best-effort venue upsert — tracks frequently-used venues for the
     // autocomplete in CreateMatchScreen. Errors are swallowed.
-    if (venue && typeof venue === 'string') {
-      void upsertVenue(venue, city_id ?? null, userId);
+    if (cleanVenue) {
+      void upsertVenue(cleanVenue, city_id ?? null, userId);
     }
 
     return res.json({ match: data });
@@ -908,6 +938,18 @@ export async function updateMatch(req: Request, res: Response) {
     const update: Record<string, any> = {};
     for (const key of allowedKeys) {
       if (req.body && key in req.body) update[key] = req.body[key];
+    }
+    // SC-367: the EDIT path has to normalise the venue the same way create does,
+    // or every rule create enforces is one PATCH away from being bypassed.
+    if ('venue' in update) {
+      const v = normaliseVenue(update.venue);
+      if (v === VENUE_TOO_LONG) {
+        return res.status(400).json({
+          error: `Venue must be ${LIMITS.venueMax} characters or fewer.`,
+          code: 'VENUE_TOO_LONG',
+        });
+      }
+      update.venue = v;
     }
     // SC-85: a finished match's result is frozen. Editing status/winner/score/
     // team identity on a terminal match would let it be resurrected (status->live)

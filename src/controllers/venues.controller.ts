@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { LIMITS, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
 
 // GET /venues?city_id=&q=
 // * q present → case-insensitive prefix match on name, ordered by use_count desc
@@ -29,8 +30,19 @@ export async function createVenue(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { name, city_id } = req.body || {};
-  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name is required' });
-  const row = await upsertVenue(name.trim(), city_id ?? null, userId);
+  // SC-368: the SAME rule the match path uses — this used to be a second,
+  // looser implementation (no length cap, and a whitespace-only name returned
+  // 200 with a null venue, i.e. "success" having created nothing).
+  const clean = normaliseVenue(name);
+  if (clean === VENUE_TOO_LONG) {
+    return res.status(400).json({
+      error: `Venue name must be ${LIMITS.venueMax} characters or fewer.`,
+      code: 'VENUE_TOO_LONG',
+    });
+  }
+  if (!clean) return res.status(400).json({ error: 'name is required' });
+  const row = await upsertVenue(clean, city_id ?? null, userId);
+  if (!row) return res.status(500).json({ error: 'Could not save that venue.' });
   return res.json({ venue: row });
 }
 

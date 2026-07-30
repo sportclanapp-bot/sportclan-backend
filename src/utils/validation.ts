@@ -124,3 +124,24 @@ export function firstTooLong(obj: Record<string, any>, limits: Array<[string, nu
   }
   return null;
 }
+
+// ── Venue (SC-367/SC-368) ───────────────────────────────────────────────────
+/**
+ * The ONE normalisation rule for a free-text venue name, shared by the match
+ * path (matches.venue) and the venue directory (POST /venues).
+ *
+ * SC-368: these were two implementations. The match path trimmed, rejected
+ * empty-after-trim and capped at 120; the directory only trimmed — so it
+ * accepted a 600-character "venue", and a whitespace-only name came back as a
+ * cheerful `200 {"venue": null}` having created nothing. Same input, same
+ * concept, two answers.
+ */
+export const VENUE_TOO_LONG = Symbol('venue-too-long');
+
+export function normaliseVenue(raw: unknown): string | null | typeof VENUE_TOO_LONG {
+  if (typeof raw !== 'string') return null;
+  const clean = raw.trim();
+  if (clean.length === 0) return null;
+  if (clean.length > LIMITS.venueMax) return VENUE_TOO_LONG;
+  return clean;
+}

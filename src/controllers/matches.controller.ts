@@ -17,21 +17,13 @@ import { upsertVenue } from './venues.controller';
  * Returns the cleaned string, null when there's nothing left, or the sentinel
  * TOO_LONG so the caller can 400 rather than silently truncate someone's input.
  */
-const VENUE_TOO_LONG = Symbol('venue-too-long');
-function normaliseVenue(raw: unknown): string | null | typeof VENUE_TOO_LONG {
-  if (raw == null) return null;
-  if (typeof raw !== 'string') return null;
-  const clean = raw.trim();
-  if (clean.length === 0) return null;
-  if (clean.length > LIMITS.venueMax) return VENUE_TOO_LONG;
-  return clean;
-}
+
 import { awardCoins } from '../utils/coins';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate, activeSportIds } from '../utils/sports';
-import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems, LIMITS } from '../utils/validation';
+import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems, LIMITS, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats } from './scoring.controller';

@@ -1597,8 +1597,21 @@ export async function getReviews(req: Request, res: Response) {
       .order('created_at', { ascending: false })
       .limit(50), 'reviewer'), 'reviewer_id', blocked);
     if (error) return res.status(500).json({ error: sanitizeError(error) });
-    const ratings = (data ?? []).map((r: any) => r.rating as number);
-    const avgRating = ratings.length > 0 ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10 : null;
+
+    // SC-370: `count` and `avgRating` used to be computed from `data` — which is
+    // the DISPLAY PAGE (.limit(50)). So a provider with more than 50 reviews
+    // showed "50" forever, and their headline rating was the mean of only the
+    // newest 50 presented as their overall score. Aggregate over EVERY matching
+    // row instead, with the same soft-delete and block exclusions, and keep the
+    // 50 only for rendering.
+    const { data: allRatings } = await excludeIds(excludeDeletedEmbed(supabase
+      .from('user_reviews')
+      .select('rating, reviewer:users!reviewer_id!inner(id)')
+      .eq('reviewed_id', id), 'reviewer'), 'reviewer_id', blocked);
+    const ratings = (allRatings ?? []).map((r: any) => r.rating as number).filter((n) => typeof n === 'number');
+    const avgRating = ratings.length > 0
+      ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10
+      : null;
     return res.json({ reviews: data ?? [], avgRating, count: ratings.length });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

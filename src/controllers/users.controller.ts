@@ -471,6 +471,18 @@ export async function updateMe(req: Request, res: Response) {
   if (Object.keys(patch).length === 0) {
     return res.status(400).json({ error: 'No updatable fields provided' });
   }
+  // SC-383: validate the visibility enums here rather than letting the DB CHECK
+  // constraint reject them. Unvalidated, a bad value surfaced as a 500
+  // "Internal server error" — which reads as a server fault for what is a
+  // caller mistake, and leaks that there is a constraint to probe against.
+  for (const k of ['discoverability', 'message_privacy', 'tag_privacy'] as const) {
+    if (k in patch && !['everyone', 'followers', 'nobody'].includes(String(patch[k]))) {
+      return res.status(400).json({
+        error: `${k} must be one of: everyone, followers, nobody`,
+        code: 'INVALID_VISIBILITY',
+      });
+    }
+  }
   // Length caps (no cap existed before): bio + display name.
   if (typeof patch.bio === 'string' && patch.bio.length > LIMITS.bioMax) {
     return res.status(400).json({ error: `Bio must be ${LIMITS.bioMax} characters or fewer` });

@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { revokeSessionsNow } from '../utils/sessionRevocation';
+import { generateAccessToken } from '../utils/jwt';
 
 // POST /account/delete — FINAL delete: immediate PII scrub + login lockout,
 // hard-purged after a 30-day retention window.
@@ -92,6 +94,10 @@ export async function deleteAccount(req: Request, res: Response) {
   // Revoke all sessions so the user can't keep using the app on other devices
   // during the 30-day grace.
   await supabase.from('refresh_tokens').delete().eq('user_id', userId);
+  // SC-384: and stop the access tokens they already hold. Deleting the refresh
+  // rows alone left a just-deleted account able to keep calling the API for the
+  // remaining 15 minutes of its current token.
+  await revokeSessionsNow(userId);
   // Also remove push tokens — no more notifications. Best-effort: don't fail
   // account deactivation if this cleanup errors. (Supabase builders are
   // PromiseLike with no `.catch()`, so await inside try/catch.)
@@ -282,7 +288,24 @@ export async function revokeAllSessions(req: Request, res: Response) {
   }
   const { error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ success: true, message: 'All other sessions revoked' });
+
+  // SC-384: deleting the refresh tokens only stops those devices RENEWING. The
+  // access token each one already holds stays valid for its full 15-minute life,
+  // so without this the device the user just signed out kept full API access for
+  // a quarter of an hour — exactly the window that matters when the reason for
+  // tapping this is a lost or stolen phone. Stamping sessions_revoked_at makes
+  // every token minted before now fail on its next request.
+  await revokeSessionsNow(userId);
+
+  // That stamp would also kill the caller's own token, so hand this device a
+  // replacement minted after the cutoff. Returning it keeps the promise the UI
+  // makes — other devices out, this one still signed in.
+  const accessToken = generateAccessToken(userId);
+  return res.json({
+    success: true,
+    message: 'All other sessions revoked',
+    accessToken,
+  });
 }
 
 // POST /account/export-data — DPDP Act right-to-portability.

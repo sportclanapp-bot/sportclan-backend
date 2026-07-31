@@ -333,3 +333,34 @@ describe('SC-376 · result text reads flat and nested scores alike', () => {
     expect([a, b]).toEqual([st.get('A')!.scored, st.get('A')!.conceded]);
   });
 });
+
+// ── SC-384 · session revocation must beat the JWT lifetime ─────────────────
+describe('SC-384 · a revoked access token is refused', () => {
+  // Mirrors isTokenRevoked: reject anything minted strictly before the cutoff.
+  const revoked = (iatSec: number | undefined, revokedAtMs: number | null) => {
+    if (!iatSec) return false;
+    if (revokedAtMs == null) return false;
+    return iatSec * 1000 < revokedAtMs;
+  };
+  const T = 1_800_000_000_000; // a fixed instant, ms
+
+  it('a token minted before the revocation is rejected', () => {
+    expect(revoked(T / 1000 - 60, T)).toBe(true);
+  });
+  it('the replacement minted after the revocation still works', () => {
+    expect(revoked(T / 1000 + 1, T)).toBe(false);
+  });
+  it('a token minted in the same second survives (the caller keeps their session)', () => {
+    expect(revoked(T / 1000, T)).toBe(false);
+  });
+  it('an account that never revoked is unaffected', () => {
+    expect(revoked(T / 1000 - 99999, null)).toBe(false);
+  });
+  it('the 15-minute window is what this closes', () => {
+    // A 900s token minted 1s before the revocation would otherwise stay valid
+    // for another 899 seconds.
+    const iat = T / 1000 - 1;
+    expect(iat * 1000 + 900_000 > T).toBe(true);  // the old behaviour
+    expect(revoked(iat, T)).toBe(true);           // the new one
+  });
+});

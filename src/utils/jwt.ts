@@ -19,6 +19,9 @@ const REFRESH_EXPIRES = (process.env.JWT_REFRESH_EXPIRES_IN || '30d') as SignOpt
 
 export interface TokenPayload {
   userId: string;
+  /** Issued-at, seconds since epoch. Signed by jsonwebtoken; SC-384 compares it
+   *  against users.sessions_revoked_at to reject pre-revocation tokens. */
+  iat?: number;
 }
 
 export function generateAccessToken(userId: string): string {

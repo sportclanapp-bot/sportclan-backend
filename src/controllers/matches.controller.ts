@@ -1670,29 +1670,15 @@ export async function completeMatch(req: Request, res: Response) {
         const { error: rhErr } = await supabase.from('rating_history').insert(ratingHistoryRows);
         if (rhErr) console.error('rating_history insert failed:', rhErr.message);
       }
-      // SC-373: record HOW it was decided, so a draw is a fact of its own rather
-      // than the absence of a winner.
-      const baseUpdate: Record<string, any> = { status: 'completed', winner_team_id: winner_team_id || null, updated_at: now };
-      if (submittedSummary) {
-        baseUpdate.score_summary = { ...((match.score_summary as Record<string, any>) ?? {}), ...submittedSummary };
-      }
-      const resultType = walkover ? 'walkover' : (winner_team_id ? 'decisive' : 'draw');
-      let { data: um, error: updateErr } = await supabase
+      // result_type and any submitted score_summary are applied further down, in
+      // the single patch that runs on BOTH this fallback and the finalize_match
+      // path — writing them here would only ever reach the fallback.
+      const { data: um, error: updateErr } = await supabase
         .from('matches')
-        .update({ ...baseUpdate, result_type: resultType })
+        .update({ status: 'completed', winner_team_id: winner_team_id || null, updated_at: now })
         .eq('id', id)
         .select('*')
         .single();
-      if (updateErr && isUnknownColumnError(updateErr, 'result_type')) {
-        // Migration 081 not applied yet. Complete the match anyway — the guard
-        // fix is what unblocks draws; the marker is durability, not gating.
-        ({ data: um, error: updateErr } = await supabase
-          .from('matches')
-          .update(baseUpdate)
-          .eq('id', id)
-          .select('*')
-          .single());
-      }
       if (updateErr) return res.status(500).json({ error: sanitizeError(updateErr) });
       updatedMatch = um;
     } else if (fin.error) {
@@ -1775,6 +1761,18 @@ export async function completeMatch(req: Request, res: Response) {
       const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
       const setSports = ['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball'];
       const ss = ((await recomputeSummary(id)) ?? updatedMatch?.score_summary ?? {}) as Record<string, any>;
+      // SC-376: fold in a score submitted with the result. Merged BEFORE the
+      // result text is derived below, so "won by N runs" reflects the numbers
+      // actually recorded. recomputeSummary returns the stored summary
+      // untouched when there are no scoring events, so a live-scored innings
+      // always wins over anything posted alongside the result.
+      if (submittedSummary) {
+        const { count: scoredEvents } = await supabase
+          .from('match_events')
+          .select('id', { count: 'exact', head: true })
+          .eq('match_id', id);
+        if (!scoredEvents) Object.assign(ss, submittedSummary);
+      }
       const aName = match.team_a_name ?? 'Team A';
       const bName = match.team_b_name ?? 'Team B';
       const aScore = Number(ss?.A?.score ?? ss?.A?.runs ?? 0);
@@ -1826,7 +1824,20 @@ export async function completeMatch(req: Request, res: Response) {
         const wid = winnerSide === 'A' ? match.team_a_id : match.team_b_id;
         if (wid) patch.winner_team_id = wid;
       }
-      await supabase.from('matches').update(patch).eq('id', id);
+      // SC-373: record HOW the match was decided, so a draw is a fact of its own
+      // rather than the absence of a winner. Written HERE because completion
+      // itself goes through the finalize_match RPC, which knows nothing about
+      // this column — putting it on the JS update reached only the pre-migration
+      // fallback, i.e. never in production.
+      const resultType = walkover ? 'walkover' : ((winner_team_id || patch.winner_team_id) ? 'decisive' : 'draw');
+      const { error: rtErr } = await supabase
+        .from('matches')
+        .update({ ...patch, result_type: resultType })
+        .eq('id', id);
+      if (rtErr && isUnknownColumnError(rtErr, 'result_type')) {
+        // Migration 081 not applied yet — still record everything else.
+        await supabase.from('matches').update(patch).eq('id', id);
+      }
     } catch { /* best effort */ }
 
     // A5-004 — derive per-player innings_stats from the attributed event log so

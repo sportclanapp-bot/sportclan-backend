@@ -41,13 +41,26 @@ BEGIN
   )
   DELETE FROM kudos WHERE id IN (SELECT id FROM d WHERE rn > 1);
 
-  -- (b) the constraint (idempotent). match_id is always set (kudos require a
-  --     match) so a plain unique index is correct — no partial needed.
-  -- SC-368 NOTE: prod ALREADY has two unique indexes on this triple
-  -- (kudos_..._key from the inline UNIQUE, plus uq_kudos_triple). This adds a
-  -- third name. Left in place so prod stays untouched; see Z-60.
-  CREATE UNIQUE INDEX IF NOT EXISTS uq_kudos_from_to_match
-    ON kudos (from_user_id, to_user_id, match_id);
+  -- (b) the constraint. SC-369: this used to create uq_kudos_from_to_match
+  --     unconditionally — a THIRD copy of a guarantee kudos already has from its
+  --     inline UNIQUE (and prod's uq_kudos_triple). On a fresh rebuild that
+  --     recreated the very duplicate migration 080 exists to remove. Now it only
+  --     fires if the triple has no unique protection at all, which is the case
+  --     this migration was actually written for.
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'kudos'::regclass
+      AND contype = 'u'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE tablename = 'kudos' AND indexdef LIKE '%UNIQUE%'
+  ) THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_kudos_from_to_match
+      ON kudos (from_user_id, to_user_id, match_id);
+  ELSE
+    RAISE NOTICE 'kudos already has a unique guarantee on the triple — not adding a duplicate';
+  END IF;
 END $$;
 
 -- ── follows / team_members / user_reviews (defensive no-ops) ─────────────────

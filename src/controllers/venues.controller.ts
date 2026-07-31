@@ -68,13 +68,41 @@ export async function upsertVenue(
   try {
     const clean = name.trim();
     if (!clean) return null;
-    // Case-insensitive existence check scoped by city when provided.
-    let existingQuery = supabase
-      .from('venues')
-      .select('id, name, city_id, use_count')
-      .ilike('name', clean);
-    if (cityId) existingQuery = existingQuery.eq('city_id', cityId);
-    const { data: existing } = await existingQuery.limit(1).maybeSingle();
+    // SC-369: this was `.ilike('name', clean)` — a case-insensitive EXACT match
+    // that no index can serve, on the write path of every match creation. The
+    // planner does not rewrite ILIKE into lower(name) = lower($1), so adding a
+    // functional index alone would have changed nothing; the query had to move
+    // to an equality. PostgREST can't put an expression on the left-hand side,
+    // so the equality lives in venue_find_exact() (migration 079), backed by
+    // idx_venues_lower_name.
+    //
+    // Matching semantics are unchanged: case-insensitive, trimmed, and the city
+    // filter applies only when a city is supplied.
+    const { data: found, error: rpcError } = await supabase
+      .rpc('venue_find_exact', { p_name: clean, p_city_id: cityId })
+      .limit(1);
+
+    let existing: any = Array.isArray(found) ? found[0] ?? null : (found ?? null);
+
+    if (rpcError) {
+      // SC-369: migration 079 creates venue_find_exact, and code deploys before
+      // a migration is applied. Rather than let every match creation lose its
+      // venue tracking in that window, fall back to the previous ILIKE query —
+      // same semantics, just unindexed. Remove once 079 is applied everywhere.
+      const missingFn =
+        rpcError.code === '42883' ||
+        rpcError.code === 'PGRST202' ||
+        /venue_find_exact/i.test(rpcError.message ?? '');
+      if (!missingFn) return null;
+
+      let legacy = supabase
+        .from('venues')
+        .select('id, name, city_id, use_count')
+        .ilike('name', clean);
+      if (cityId) legacy = legacy.eq('city_id', cityId);
+      const { data: legacyRow } = await legacy.limit(1).maybeSingle();
+      existing = legacyRow ?? null;
+    }
     if (existing) {
       await supabase
         .from('venues')

@@ -102,10 +102,18 @@ export async function getTournamentStandings(req: Request, res: Response) {
       // record (so its opponents keep the points they earned) but it cannot hold
       // a qualifying position, so it is ranked below the live field rather than
       // sitting mid-table on points it can no longer defend.
-      const live = groupRows.filter((r) => !r.withdrawn).map((r) => r.teamId);
-      const gone = groupRows.filter((r) => r.withdrawn).map((r) => r.teamId);
-      for (const id of rankTeams(live, matches ?? [], tiebreakerRules)) orderIndex.set(id, running++);
-      for (const id of rankTeams(gone, matches ?? [], tiebreakerRules)) orderIndex.set(id, running++);
+      //
+      // Rank the WHOLE group first, then move the withdrawn rows to the bottom.
+      // Ranking a pre-filtered list instead would hide the withdrawn team's
+      // fixtures from computeStats — which only counts a match when both sides
+      // are in the set it was given — so a team that had beaten the leaver would
+      // be ranked as if that win never happened while the table still showed the
+      // points. That is exactly the display-vs-ranking split SC-89 exists to
+      // prevent, and it reordered a live 3-point team below a 0-point one.
+      const withdrawnIds = new Set(groupRows.filter((r) => r.withdrawn).map((r) => r.teamId));
+      const ranked = rankTeams(groupRows.map((r) => r.teamId), matches ?? [], tiebreakerRules);
+      for (const id of ranked.filter((i) => !withdrawnIds.has(i))) orderIndex.set(id, running++);
+      for (const id of ranked.filter((i) => withdrawnIds.has(i))) orderIndex.set(id, running++);
     }
     const standings = rows.sort(
       (a, b) => (orderIndex.get(a.teamId) ?? 0) - (orderIndex.get(b.teamId) ?? 0),

@@ -273,3 +273,37 @@ describe('SC-377 · a withdrawn team', () => {
     expect([st.get('GONE')!.played, st.get('GONE')!.points]).toEqual([0, 0]);
   });
 });
+
+// ── SC-377 · ranking must see the withdrawn team's fixtures ────────────────
+describe('SC-377 · a withdrawn team is ranked last WITHOUT erasing its results', () => {
+  const goals = (a: string, b: string, ga: number, gb: number, w: string | null): GMatch => ({
+    team_a_id: a, team_b_id: b, winner_team_id: w, status: 'completed',
+    score_summary: { team_a_score: ga, team_b_score: gb },
+  });
+  // A beat B 2-0. B then withdrew. C has played nothing.
+  const ms = [goals('A', 'B', 2, 0, 'A')];
+  const all = ['A', 'B', 'C'];
+
+  it('the BROKEN shape — ranking a filtered list — loses A\'s win', () => {
+    const live = rankTeams(['A', 'C'], ms);
+    const filteredStats = computeStats(['A', 'C'], ms);
+    expect(filteredStats.get('A')!.points).toBe(0);   // the win vanished
+    expect(live).toEqual(['A', 'C']);                 // ordered by team_id, not merit
+  });
+
+  it('ranking the whole group keeps A on 3 points and above C', () => {
+    const ranked = rankTeams(all, ms);
+    expect(computeStats(all, ms).get('A')!.points).toBe(3);
+    expect(ranked[0]).toBe('A');
+  });
+
+  it('withdrawn rows move to the bottom while the live order stays on merit', () => {
+    const withdrawn = new Set(['B']);
+    const ranked = rankTeams(all, ms);
+    const final = [
+      ...ranked.filter((i) => !withdrawn.has(i)),
+      ...ranked.filter((i) => withdrawn.has(i)),
+    ];
+    expect(final).toEqual(['A', 'C', 'B']);
+  });
+});

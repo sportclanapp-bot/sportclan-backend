@@ -7,18 +7,6 @@ import { blockedUserIds } from '../utils/blocks';
 import { upsertVenue } from './venues.controller';
 
 /**
- * SC-373: true when a write failed only because a column isn't there yet.
- * Code deploys before migrations are applied, and a completion must not start
- * 500ing in that window just because it tried to record a new marker.
- */
-function isUnknownColumnError(error: { code?: string; message?: string } | null, column: string): boolean {
-  if (!error) return false;
-  if (error.code === '42703' || error.code === 'PGRST204') return true;
-  const msg = error.message ?? '';
-  return msg.includes(column) && /column|schema cache|could not find/i.test(msg);
-}
-
-/**
  * SC-367: normalise a free-text venue.
  *
  * The API stored whatever arrived: '   ' became a match whose venue is three
@@ -1827,17 +1815,10 @@ export async function completeMatch(req: Request, res: Response) {
       // SC-373: record HOW the match was decided, so a draw is a fact of its own
       // rather than the absence of a winner. Written HERE because completion
       // itself goes through the finalize_match RPC, which knows nothing about
-      // this column — putting it on the JS update reached only the pre-migration
-      // fallback, i.e. never in production.
-      const resultType = walkover ? 'walkover' : ((winner_team_id || patch.winner_team_id) ? 'decisive' : 'draw');
-      const { error: rtErr } = await supabase
-        .from('matches')
-        .update({ ...patch, result_type: resultType })
-        .eq('id', id);
-      if (rtErr && isUnknownColumnError(rtErr, 'result_type')) {
-        // Migration 081 not applied yet — still record everything else.
-        await supabase.from('matches').update(patch).eq('id', id);
-      }
+      // this column — putting it on the JS update beside that RPC reached only
+      // the pre-migration fallback, i.e. never in production.
+      patch.result_type = walkover ? 'walkover' : ((winner_team_id || patch.winner_team_id) ? 'decisive' : 'draw');
+      await supabase.from('matches').update(patch).eq('id', id);
     } catch { /* best effort */ }
 
     // A5-004 — derive per-player innings_stats from the attributed event log so

@@ -124,6 +124,13 @@ export async function sendOtp(req: Request, res: Response) {
   const channel: 'voice' | 'whatsapp' =
     rawChannel === 'whatsapp' ? 'whatsapp' : 'voice';
   const p = normalizePhone(phone);
+  // SC-385: reuse the SAME rule register already enforces (SC-72). It was only
+  // applied at registration, so the number could afterwards be replaced with
+  // anything — "notaphone" was accepted live. In production that strands the
+  // account: the OTP for the new value can never be delivered.
+  if (!isValidIndianPhone(p)) {
+    return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE' });
+  }
   const code = generateOtp();
 
   await setOtp(p, code, purpose, OTP_TTL_SECONDS);
@@ -814,6 +821,13 @@ export async function changePhone(req: Request, res: Response) {
   const { newPhone, code } = req.body || {};
   if (!newPhone || !code) return res.status(400).json({ error: 'newPhone and code are required' });
   const p = normalizePhone(newPhone);
+  // SC-385: reuse the SAME rule register already enforces (SC-72). It was only
+  // applied at registration, so the number could afterwards be replaced with
+  // anything — "notaphone" was accepted live. In production that strands the
+  // account: the OTP for the new value can never be delivered.
+  if (!isValidIndianPhone(p)) {
+    return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE' });
+  }
   // Honor the dev-only test bypass uniformly (see isTestOtp). Production runs
   // the real OTP check since isTestOtp() is always false there.
   if (!isTestOtp(code)) {

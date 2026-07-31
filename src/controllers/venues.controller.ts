@@ -81,28 +81,10 @@ export async function upsertVenue(
     const { data: found, error: rpcError } = await supabase
       .rpc('venue_find_exact', { p_name: clean, p_city_id: cityId })
       .limit(1);
-
-    let existing: any = Array.isArray(found) ? found[0] ?? null : (found ?? null);
-
-    if (rpcError) {
-      // SC-369: migration 079 creates venue_find_exact, and code deploys before
-      // a migration is applied. Rather than let every match creation lose its
-      // venue tracking in that window, fall back to the previous ILIKE query —
-      // same semantics, just unindexed. Remove once 079 is applied everywhere.
-      const missingFn =
-        rpcError.code === '42883' ||
-        rpcError.code === 'PGRST202' ||
-        /venue_find_exact/i.test(rpcError.message ?? '');
-      if (!missingFn) return null;
-
-      let legacy = supabase
-        .from('venues')
-        .select('id, name, city_id, use_count')
-        .ilike('name', clean);
-      if (cityId) legacy = legacy.eq('city_id', cityId);
-      const { data: legacyRow } = await legacy.limit(1).maybeSingle();
-      existing = legacyRow ?? null;
-    }
+    // The temporary ILIKE fallback for the pre-migration window is gone (079 is
+    // applied). A failure here is now a real failure, not a missing function.
+    if (rpcError) return null;
+    const existing: any = Array.isArray(found) ? found[0] ?? null : (found ?? null);
     if (existing) {
       await supabase
         .from('venues')

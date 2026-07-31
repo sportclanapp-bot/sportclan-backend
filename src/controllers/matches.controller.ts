@@ -1763,8 +1763,13 @@ export async function completeMatch(req: Request, res: Response) {
       }
       const aName = match.team_a_name ?? 'Team A';
       const bName = match.team_b_name ?? 'Team B';
-      const aScore = Number(ss?.A?.score ?? ss?.A?.runs ?? 0);
-      const bScore = Number(ss?.B?.score ?? ss?.B?.runs ?? 0);
+      // SC-376: read the FLAT keys too, in the same order as the canonical
+      // comparator in utils/standings. The live scorer writes the nested shape,
+      // but a result submitted with the score uses the flat one — reading only
+      // the nested keys rendered every such match as "won 0-0" while the
+      // standings, which do consult the flat keys, showed the real difference.
+      const aScore = Number(ss?.team_a_score ?? ss?.A?.score ?? ss?.A?.runs ?? 0);
+      const bScore = Number(ss?.team_b_score ?? ss?.B?.score ?? ss?.B?.runs ?? 0);
 
       // Authoritative winner by side (works without team ids). Prefer a
       // client-supplied winner_team_id when it maps to a real team.

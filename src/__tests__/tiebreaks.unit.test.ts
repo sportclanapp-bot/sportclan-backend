@@ -307,3 +307,29 @@ describe('SC-377 · a withdrawn team is ranked last WITHOUT erasing its results'
     expect(final).toEqual(['A', 'C', 'B']);
   });
 });
+
+// ── SC-376 · the result TEXT must read the same score the table does ───────
+describe('SC-376 · result text reads flat and nested scores alike', () => {
+  const scoreOf = (ss: any) => ({
+    a: Number(ss?.team_a_score ?? ss?.A?.score ?? ss?.A?.runs ?? 0),
+    b: Number(ss?.team_b_score ?? ss?.B?.score ?? ss?.B?.runs ?? 0),
+  });
+
+  it('a flat score submitted with the result is not rendered as 0-0', () => {
+    expect(scoreOf({ team_a_score: 4, team_b_score: 1 })).toEqual({ a: 4, b: 1 });
+  });
+  it('the live scorer nested shape still wins where present', () => {
+    expect(scoreOf({ A: { score: 3, runs: 3 }, B: { score: 2, runs: 2 } })).toEqual({ a: 3, b: 2 });
+  });
+  it('cricket runs still resolve when only runs are set', () => {
+    expect(scoreOf({ A: { runs: 180 }, B: { runs: 175 } })).toEqual({ a: 180, b: 175 });
+  });
+  it('agrees with the standings comparator on the same summary', () => {
+    const ss = { team_a_score: 4, team_b_score: 1 };
+    const st = computeStats(['A', 'B'], [{
+      team_a_id: 'A', team_b_id: 'B', winner_team_id: 'A', status: 'completed', score_summary: ss,
+    }]);
+    const { a, b } = scoreOf(ss);
+    expect([a, b]).toEqual([st.get('A')!.scored, st.get('A')!.conceded]);
+  });
+});

@@ -55,9 +55,21 @@ export async function isTokenRevoked(userId: string, issuedAtSeconds?: number): 
   return issuedAtSeconds * 1000 < entry.revokedAtMs;
 }
 
-/** Mark every token issued up to now as revoked for this user. */
+/**
+ * Mark every token issued up to now as revoked for this user.
+ *
+ * The cutoff is TRUNCATED TO THE SECOND on purpose. A JWT's `iat` is whole
+ * seconds, so storing millisecond precision meant the replacement token minted
+ * immediately after the stamp compared as OLDER than it — revoked at 12:00:00.750
+ * but issued with iat 12:00:00, i.e. 750ms "before" its own cause. That signed
+ * the revoking device out of itself, which is the one thing this must not do.
+ * Flooring makes both sides second-precision, so a token minted in the same
+ * second survives and anything from an earlier second does not. The residual is
+ * that a token issued up to a second before the revocation also survives — a
+ * sub-second window, against the 900 seconds this exists to close.
+ */
 export async function revokeSessionsNow(userId: string): Promise<string> {
-  const nowIso = new Date().toISOString();
+  const nowIso = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
   await supabase.from('users').update({ sessions_revoked_at: nowIso }).eq('id', userId);
   invalidateRevocationCache(userId);
   return nowIso;

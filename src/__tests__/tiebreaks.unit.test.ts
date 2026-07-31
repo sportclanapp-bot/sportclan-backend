@@ -356,6 +356,22 @@ describe('SC-384 · a revoked access token is refused', () => {
   it('an account that never revoked is unaffected', () => {
     expect(revoked(T / 1000 - 99999, null)).toBe(false);
   });
+  it('a replacement minted in the same second as a sub-second cutoff SURVIVES', () => {
+    // The bug this caught in prod: revoked at 12:00:00.750 but the replacement
+    // token's iat is whole seconds (12:00:00), so it compared as 750ms OLDER
+    // than its own cause and signed the revoking device out of itself.
+    const cutoffMs = T + 750;
+    const replacementIat = Math.floor((T + 800) / 1000);
+    expect(revoked(replacementIat, cutoffMs)).toBe(true);      // unflooed: broken
+    const flooredCutoff = Math.floor(cutoffMs / 1000) * 1000;
+    expect(revoked(replacementIat, flooredCutoff)).toBe(false); // floored: fixed
+  });
+
+  it('flooring still revokes a token from an earlier second', () => {
+    const flooredCutoff = Math.floor((T + 750) / 1000) * 1000;
+    expect(revoked(Math.floor(T / 1000) - 5, flooredCutoff)).toBe(true);
+  });
+
   it('the 15-minute window is what this closes', () => {
     // A 900s token minted 1s before the revocation would otherwise stay valid
     // for another 899 seconds.

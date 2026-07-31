@@ -289,84 +289,127 @@ export async function revokeAllSessions(req: Request, res: Response) {
 // Assembles a JSON bundle of everything we store about the authenticated user
 // that they've actually produced (profile, posts, matches, messages, txns,
 // social graph). Inline, no background job yet — dataset sizes are small.
+/**
+ * GET /account/export — "Download everything we store about you (JSON)".
+ *
+ * SC-383 rewrite. The old version made three promises it did not keep:
+ *   · messages were capped at 100 and every other section was UNPAGED, so a
+ *     busy account silently exported a PostgREST page rather than its data —
+ *     the same "page length passed off as the total" class this app has
+ *     shipped repeatedly;
+ *   · whole categories the app stores were simply absent (teams, tournaments,
+ *     notifications, gifts, badges, blocks, reviews, coin ledger, ...);
+ *   · nothing stopped stored markup from travelling verbatim into a file that
+ *     might later be opened as HTML.
+ *
+ * What it must NEVER contain is equally explicit: no credentials. otp_codes,
+ * refresh_tokens and push_tokens are not read at all, and `sessions` is read by
+ * an explicit column list so `sessions.refresh_token` cannot leak — a select('*')
+ * here would hand every device's refresh token to anyone who got the file.
+ */
+
+/** Read every row of a user-owned slice, paging so nothing is silently capped. */
+async function exportAll(
+  table: string,
+  columns: string,
+  filter: (q: any) => any,
+): Promise<{ rows: any[]; error: unknown }> {
+  const PAGE = 1000;
+  const rows: any[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await filter(
+      supabase.from(table).select(columns),
+    ).range(from, from + PAGE - 1);
+    if (error) return { rows, error };
+    rows.push(...(data ?? []));
+    if (!data || data.length < PAGE) break;
+  }
+  return { rows, error: null };
+}
+
 export async function exportData(req: Request, res: Response) {
   const userId = req.userId!;
 
-  const [
-    profileRes,
-    postsRes,
-    matchesRes,
-    messagesRes,
-    txnsRes,
-    followersRes,
-    followingRes,
-    sportProfilesRes,
-  ] = await Promise.all([
-    supabase
-      .from('users')
-      .select('id, phone, name, username, email, bio, gender, dob, city_id, created_at, is_premium, premium_expires_at, coin_balance')
-      .eq('id', userId)
-      .maybeSingle(),
-    // SC-162: posts live in `community_posts` keyed by `author_id` (there is no
-    // `posts` table / `user_id` column) — the old query silently errored and the
-    // `?? []` below masked it, so every export omitted the user's posts.
-    supabase
-      .from('community_posts')
-      .select('id, content, image_url, created_at')
-      .eq('author_id', userId)
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('match_participants')
-      .select('match_id, team_side, role, match:matches(id, sport_id, scheduled_at, status, winner_team_id)')
-      .eq('user_id', userId),
-    supabase
-      .from('messages')
-      .select('id, chat_id, content, created_at')
-      .eq('sender_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(100),
-    supabase
-      .from('transactions')
-      .select('id, type, amount_inr, coins, description, status, created_at')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('follow_relationships')
-      .select('follower_id, created_at')
-      .eq('following_id', userId),
-    supabase
-      .from('follow_relationships')
-      .select('following_id, created_at')
-      .eq('follower_id', userId),
-    supabase
-      .from('user_sport_profiles')
-      .select('sport_id, rating, matches_played, wins, losses, draws, last_match_at')
-      .eq('user_id', userId),
-  ]);
+  const slices: Array<[string, Promise<{ rows: any[]; error: unknown }>]> = [
+    ['sport_profiles', exportAll('user_sport_profiles', 'sport_id, rating, matches_played, wins, losses, draws, last_match_at', (q) => q.eq('user_id', userId))],
+    ['sports', exportAll('user_sports', '*', (q) => q.eq('user_id', userId))],
+    ['posts', exportAll('community_posts', 'id, content, image_url, created_at', (q) => q.eq('author_id', userId))],
+    ['profile_posts', exportAll('profile_posts', '*', (q) => q.eq('user_id', userId))],
+    ['matches', exportAll('match_participants', 'match_id, team_side, role, match:matches(id, sport_id, scheduled_at, status, winner_team_id)', (q) => q.eq('user_id', userId))],
+    ['messages', exportAll('messages', 'id, chat_id, content, created_at', (q) => q.eq('sender_id', userId))],
+    ['transactions', exportAll('transactions', 'id, type, amount_inr, coins, description, status, created_at', (q) => q.eq('user_id', userId))],
+    ['coin_ledger', exportAll('coin_events', 'id, event_type, coins, created_at', (q) => q.eq('user_id', userId))],
+    ['followers', exportAll('follow_relationships', 'follower_id, created_at', (q) => q.eq('following_id', userId))],
+    ['following', exportAll('follow_relationships', 'following_id, created_at', (q) => q.eq('follower_id', userId))],
+    ['teams', exportAll('team_members', 'team_id, role, joined_at, team:teams(id, name, sport_id)', (q) => q.eq('user_id', userId))],
+    ['notifications', exportAll('notifications', 'id, type, title, body, is_read, created_at', (q) => q.eq('user_id', userId))],
+    ['gifts_sent', exportAll('gift_transactions', '*', (q) => q.eq('sender_id', userId))],
+    ['gifts_received', exportAll('gift_transactions', '*', (q) => q.eq('receiver_id', userId))],
+    ['badges', exportAll('user_badges', '*', (q) => q.eq('user_id', userId))],
+    ['blocked_users', exportAll('user_blocks', '*', (q) => q.eq('blocker_id', userId))],
+    ['reviews_written', exportAll('user_reviews', '*', (q) => q.eq('reviewer_id', userId))],
+    ['feedback', exportAll('feedback', 'id, category, message, rating, created_at', (q) => q.eq('user_id', userId))],
+    ['rating_history', exportAll('rating_history', '*', (q) => q.eq('user_id', userId))],
+    ['subscriptions', exportAll('subscriptions', '*', (q) => q.eq('user_id', userId))],
+    // Explicit columns — NEVER select('*') here, refresh_token lives on this row.
+    ['sessions', exportAll('sessions', 'id, device_name, device_os, location, is_current, last_active, created_at', (q) => q.eq('user_id', userId))],
+  ];
 
-  // SC-162: a broken sub-query (wrong table/column) used to be masked by the
-  // `?? []` fallbacks below and silently drop that section from the export.
-  // Log any sub-query error loudly so future schema drift is visible, not silent.
-  const sections: Record<string, { error: unknown }> = {
-    profile: profileRes, posts: postsRes, matches: matchesRes,
-    messages: messagesRes, transactions: txnsRes, followers: followersRes,
-    following: followingRes, sport_profiles: sportProfilesRes,
-  };
-  for (const [name, r] of Object.entries(sections)) {
-    if (r.error) console.error(`[export-data] sub-query '${name}' failed for ${userId}:`, r.error);
+  // Tournament entries are keyed by TEAM, so they have to be resolved through
+  // the user's teams — filtering them by user id would have quietly produced an
+  // empty section for everyone.
+  const { data: myTeams } = await supabase
+    .from('team_members').select('team_id').eq('user_id', userId);
+  const myTeamIds = (myTeams ?? []).map((t: any) => t.team_id).filter(Boolean);
+  if (myTeamIds.length > 0) {
+    slices.push(['tournament_entries', exportAll(
+      'tournament_entries',
+      'tournament_id, team_id, status, seed, group_label, entered_at',
+      (q) => q.in('team_id', myTeamIds),
+    )]);
   }
 
-  return res.json({
+  const { data: profile, error: profileErr } = await supabase
+    .from('users')
+    .select('id, phone, name, username, email, bio, gender, dob, city_id, created_at, is_premium, premium_expires_at, coin_balance, referral_code, referred_by')
+    .eq('id', userId)
+    .maybeSingle();
+
+  const payload: Record<string, any> = {
     exportedAt: new Date().toISOString(),
-    profile: profileRes.data ?? null,
-    sport_profiles: sportProfilesRes.data ?? [],
-    posts: postsRes.data ?? [],
-    matches: matchesRes.data ?? [],
-    messages_last_100: messagesRes.data ?? [],
-    transactions: txnsRes.data ?? [],
-    followers: followersRes.data ?? [],
-    following: followingRes.data ?? [],
-  });
+    profile: profile ?? null,
+  };
+
+  // SC-162: a broken sub-query used to be masked by a `?? []` and silently drop
+  // a whole section. Report per-section failures IN the file as well as the log,
+  // so a missing section is never mistaken for "we hold nothing here".
+  const failed: string[] = [];
+  if (profileErr) failed.push('profile');
+  for (const [name, p] of slices) {
+    const { rows, error } = await p;
+    if (error) {
+      console.error(`[export-data] section '${name}' failed for ${userId}:`, error);
+      failed.push(name);
+    }
+    payload[name] = rows;
+  }
+  payload.incompleteSections = failed;
+
+  // SC-383: neutralise markup so the file cannot execute wherever it is opened.
+  // res.json() escapes what JSON requires — quotes and backslashes — but not
+  // '<', '>' or '&', so a stored name like "<script>alert(1)</script>" (which
+  // this app does hold; names are not stripped at rest) would survive intact
+  // into a file a user might open in a browser or paste into a page. Encoding
+  // them as \u00XX keeps the JSON byte-for-byte equivalent on parse while
+  // making it inert as markup.
+  const body = JSON.stringify(payload)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="sportclan-export.json"');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  return res.send(body);
 }
 
 // POST /account/feedback  { category, message, rating?, email? }

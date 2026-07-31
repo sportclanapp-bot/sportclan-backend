@@ -7,6 +7,18 @@ import { blockedUserIds } from '../utils/blocks';
 import { upsertVenue } from './venues.controller';
 
 /**
+ * SC-373: true when a write failed only because a column isn't there yet.
+ * Code deploys before migrations are applied, and a completion must not start
+ * 500ing in that window just because it tried to record a new marker.
+ */
+function isUnknownColumnError(error: { code?: string; message?: string } | null, column: string): boolean {
+  if (!error) return false;
+  if (error.code === '42703' || error.code === 'PGRST204') return true;
+  const msg = error.message ?? '';
+  return msg.includes(column) && /column|schema cache|could not find/i.test(msg);
+}
+
+/**
  * SC-367: normalise a free-text venue.
  *
  * The API stored whatever arrived: '   ' became a match whose venue is three
@@ -1379,7 +1391,7 @@ export async function completeMatch(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
-    const { winner_team_id, walkover, walkover_reason } = req.body || {};
+    const { winner_team_id, walkover, walkover_reason, is_draw } = req.body || {};
 
     const { data: match } = await supabase
       .from('matches')
@@ -1400,7 +1412,16 @@ export async function completeMatch(req: Request, res: Response) {
     // SC-42: don't complete a match that was never played — a scheduled match
     // with no scoring events and no explicit result. (The organiser
     // "record result" flow supplies winner_team_id, which stays allowed.)
-    if (match.status === 'scheduled' && !winner_team_id) {
+    //
+    // SC-373: `is_draw` is the OTHER way to say "I am recording a real result".
+    // Using winner_team_id alone as that signal made a genuine draw look
+    // identical to an unplayed fixture, so drawn results couldn't be entered.
+    // The protection is unchanged — a scheduled match with no events and NO
+    // explicit result of either kind is still refused; only the "a draw is a
+    // result" case stops being blocked. The bracket and allows_draw guards
+    // below still run, so is_draw cannot force a draw onto a knockout tie or a
+    // decisive-only sport.
+    if (match.status === 'scheduled' && !winner_team_id && !is_draw) {
       const { count } = await supabase
         .from('match_events')
         .select('id', { count: 'exact', head: true })
@@ -1630,12 +1651,26 @@ export async function completeMatch(req: Request, res: Response) {
         const { error: rhErr } = await supabase.from('rating_history').insert(ratingHistoryRows);
         if (rhErr) console.error('rating_history insert failed:', rhErr.message);
       }
-      const { data: um, error: updateErr } = await supabase
+      // SC-373: record HOW it was decided, so a draw is a fact of its own rather
+      // than the absence of a winner.
+      const baseUpdate = { status: 'completed', winner_team_id: winner_team_id || null, updated_at: now };
+      const resultType = walkover ? 'walkover' : (winner_team_id ? 'decisive' : 'draw');
+      let { data: um, error: updateErr } = await supabase
         .from('matches')
-        .update({ status: 'completed', winner_team_id: winner_team_id || null, updated_at: now })
+        .update({ ...baseUpdate, result_type: resultType })
         .eq('id', id)
         .select('*')
         .single();
+      if (updateErr && isUnknownColumnError(updateErr, 'result_type')) {
+        // Migration 081 not applied yet. Complete the match anyway — the guard
+        // fix is what unblocks draws; the marker is durability, not gating.
+        ({ data: um, error: updateErr } = await supabase
+          .from('matches')
+          .update(baseUpdate)
+          .eq('id', id)
+          .select('*')
+          .single());
+      }
       if (updateErr) return res.status(500).json({ error: sanitizeError(updateErr) });
       updatedMatch = um;
     } else if (fin.error) {

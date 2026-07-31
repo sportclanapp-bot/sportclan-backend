@@ -1393,9 +1393,28 @@ export async function completeMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { winner_team_id, walkover, walkover_reason, is_draw } = req.body || {};
 
+    // SC-376: let the recorder submit the SCORE alongside the result.
+    //
+    // score_summary was previously only ever written by the live scorer, so a
+    // fixture completed the ordinary way — organiser picks the winner — stored
+    // no score at all. That left goal difference at 0 and NRR absent for the
+    // whole tournament, which silently disabled both tiebreaks: teams level on
+    // points fell through the entire ladder to the team_id terminator and were
+    // ordered by UUID. A tiebreak that can never be given data is not a
+    // tiebreak, so the result endpoint accepts the numbers that decide it.
+    //
+    // Merged over anything already there (never clobbering a live-scored
+    // innings wholesale), and only here, at the moment the result is recorded —
+    // once terminal, SC-85 still freezes the score against later edits.
+    const submittedSummary =
+      req.body && typeof req.body.score_summary === 'object' && req.body.score_summary !== null
+        && !Array.isArray(req.body.score_summary)
+        ? (req.body.score_summary as Record<string, any>)
+        : null;
+
     const { data: match } = await supabase
       .from('matches')
-      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id')
+      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1653,7 +1672,10 @@ export async function completeMatch(req: Request, res: Response) {
       }
       // SC-373: record HOW it was decided, so a draw is a fact of its own rather
       // than the absence of a winner.
-      const baseUpdate = { status: 'completed', winner_team_id: winner_team_id || null, updated_at: now };
+      const baseUpdate: Record<string, any> = { status: 'completed', winner_team_id: winner_team_id || null, updated_at: now };
+      if (submittedSummary) {
+        baseUpdate.score_summary = { ...((match.score_summary as Record<string, any>) ?? {}), ...submittedSummary };
+      }
       const resultType = walkover ? 'walkover' : (winner_team_id ? 'decisive' : 'draw');
       let { data: um, error: updateErr } = await supabase
         .from('matches')

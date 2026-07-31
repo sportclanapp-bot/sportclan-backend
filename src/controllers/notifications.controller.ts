@@ -97,12 +97,28 @@ export async function weeklyDigest(req: Request, res: Response) {
   const sinceIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   // Matches played in the last 7 days (via participation).
+  // SC-370: this selected and filtered on match_participants.created_at — a
+  // column that DOES NOT EXIST on that table (migration 004 defines id,
+  // match_id, user_id, team_side, role, jersey_number, batting_order). The
+  // query errored, the discarded error left the result null, and
+  // matches_played was 0 for every user, always — the same shape as the
+  // `posts` bug fixed in SC-368, in this same function.
+  //
+  // The participation row carries no timestamp, so the MATCH's does the dating,
+  // exactly as the activity heatmap already does it.
   const { data: myParticipations } = await supabase
     .from('match_participants')
-    .select('match_id, created_at')
+    .select('match_id, match:matches(status, updated_at, scheduled_at)')
     .eq('user_id', userId)
-    .gte('created_at', sinceIso);
-  const matches_played = myParticipations?.length ?? 0;
+    .limit(500);
+  const sinceMs = new Date(sinceIso).getTime();
+  const matches_played = (myParticipations ?? []).filter((row: any) => {
+    const m = row.match;
+    if (!m || m.status !== 'completed') return false;
+    const ts = m.updated_at ?? m.scheduled_at;
+    if (!ts) return false;
+    return new Date(ts).getTime() >= sinceMs;
+  }).length;
 
   // Rating delta sum from rating_history.
   const { data: deltas } = await supabase

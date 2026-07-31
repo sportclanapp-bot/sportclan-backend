@@ -13,3 +13,41 @@ export function isValidIndianPhone(input: unknown): boolean {
   if (digits.length !== 10) return false;
   return /^[6-9]/.test(digits);
 }
+
+/**
+ * SC-386 · the ONE canonical form: E.164 `+91XXXXXXXXXX`.
+ *
+ * isValidIndianPhone already accepted `+919876543210`, `919876543210`,
+ * `9876543210` and spaced/dashed variants as the same number — but nothing
+ * converted between them, and the duplicate check was a raw string compare. So
+ * one human could hold TWO accounts on one number, one in each form.
+ *
+ * Returns null for anything that isn't a canonicalisable Indian mobile. Callers
+ * must treat null as "leave it alone", never as "store null" — overwriting a
+ * legacy value would lock that account out.
+ */
+export function canonicalisePhone(input: unknown): string | null {
+  if (!input || typeof input !== 'string') return null;
+  let digits = input.replace(/[^\d]/g, '').replace(/^0+/, '');
+  if (digits.length === 12 && digits.startsWith('91')) digits = digits.slice(2);
+  if (digits.length !== 10 || !/^[6-9]/.test(digits)) return null;
+  return `+91${digits}`;
+}
+
+/**
+ * Every stored form that could represent this number, canonical first.
+ *
+ * Used for LOOKUPS (login, OTP, duplicate checks) so the code works whether or
+ * not migration 083 has run yet. Before the migration a legacy row is still
+ * found; after it, the canonical form matches on the first try. Being
+ * permissive on read is deliberate — a lookup that only accepted the canonical
+ * form would lock out every account still stored the old way during the deploy
+ * window.
+ */
+export function phoneVariants(input: unknown): string[] {
+  const raw = typeof input === 'string' ? input.trim().replace(/\s+/g, '') : '';
+  const canon = canonicalisePhone(input);
+  if (!canon) return raw ? [raw] : [];
+  const ten = canon.slice(3);
+  return Array.from(new Set([canon, ten, `91${ten}`, `0${ten}`, raw].filter(Boolean)));
+}

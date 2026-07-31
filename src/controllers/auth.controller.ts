@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import axios from 'axios';
 import { supabase } from '../utils/supabase';
-import { isValidIndianPhone } from '../utils/phone';
+import { isValidIndianPhone, canonicalisePhone, phoneVariants } from '../utils/phone';
 import {
   generateAccessToken,
   generateRefreshToken,
@@ -123,7 +123,7 @@ export async function sendOtp(req: Request, res: Response) {
   if (!phone) return res.status(400).json({ error: 'phone is required' });
   const channel: 'voice' | 'whatsapp' =
     rawChannel === 'whatsapp' ? 'whatsapp' : 'voice';
-  const p = normalizePhone(phone);
+  const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // SC-385: reuse the SAME rule register already enforces (SC-72). It was only
   // applied at registration, so the number could afterwards be replaced with
   // anything — "notaphone" was accepted live. In production that strands the
@@ -175,7 +175,7 @@ async function isDeleted(userId: string): Promise<boolean> {
 export async function verifyOtp(req: Request, res: Response) {
   const { phone, code } = req.body || {};
   if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
-  const p = normalizePhone(phone);
+  const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // Dev-only bypass (see isTestOtp): accept the fixed test code without a real OTP.
   if (isTestOtp(code)) {
     await setOtp(p, 'VERIFIED', 'login', OTP_TTL_SECONDS);
@@ -217,7 +217,7 @@ export async function register(req: Request, res: Response) {
   if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
   if (!name || !username) return res.status(400).json({ error: 'name and username are required' });
 
-  const p = normalizePhone(phone);
+  const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // SC-72: reject a malformed phone up front so no account is created for junk
   // like "12"/letters/too-short/too-long. Mirrors the client-side check.
   if (!isValidIndianPhone(p)) {
@@ -243,8 +243,13 @@ export async function register(req: Request, res: Response) {
   // ("can't log in AND can't re-register"). Release the phone from the dead row
   // first; that row keeps its content + deleted_at and is hard-purged after the
   // 30-day grace.
-  const { data: existingPhone } = await supabase
-    .from('users').select('id, deleted_at').eq('phone', p).maybeSingle();
+  // SC-386: match ANY stored form of this number, not just the exact string.
+  // A raw compare let the same human register twice — once as +919876543210 and
+  // once as 9876543210 — because those are different strings. Checking every
+  // variant also keeps this correct before migration 083 canonicalises the data.
+  const { data: existingRows } = await supabase
+    .from('users').select('id, deleted_at').in('phone', phoneVariants(p));
+  const existingPhone = (existingRows ?? [])[0];
   if (existingPhone) {
     if ((existingPhone as { deleted_at?: string | null }).deleted_at) {
       const { error: freeErr } = await supabase
@@ -401,7 +406,7 @@ export async function register(req: Request, res: Response) {
 export async function otpLogin(req: Request, res: Response) {
   const { phone, code } = req.body || {};
   if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
-  const p = normalizePhone(phone);
+  const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // Dev-only bypass (see isTestOtp): skip OTP validation for the fixed test code.
   // The user must still exist (seeded) — otherwise we fall through to the 404 below.
   if (!isTestOtp(code)) {
@@ -417,7 +422,11 @@ export async function otpLogin(req: Request, res: Response) {
   const { data: user, error } = await supabase
     .from('users')
     .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, is_admin, created_at')
-    .eq('phone', p)
+    // SC-386: look up EVERY form. Deliberately permissive — an account still
+    // stored the legacy way must keep logging in, both in the window before
+    // migration 083 runs and afterwards if a value could not be canonicalised.
+    .in('phone', phoneVariants(p))
+    .limit(1)
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!user) {
@@ -451,7 +460,7 @@ export async function login(req: Request, res: Response) {
   if (email) {
     query = query.ilike('email', email.trim());
   } else {
-    query = query.eq('phone', normalizePhone(phone));
+    query = query.in('phone', phoneVariants(phone)).limit(1);  // SC-386: any stored form
   }
 
   const { data: user } = await query.maybeSingle();
@@ -797,7 +806,7 @@ export async function resetPassword(req: Request, res: Response) {
   if (!phone || !code || !newPassword) {
     return res.status(400).json({ error: 'phone, code, newPassword are required' });
   }
-  const p = normalizePhone(phone);
+  const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // Honor the dev-only test bypass uniformly with verifyOtp/otpLogin/register
   // (see isTestOtp). In production isTestOtp() is always false, so the real
   // OTP check still runs.
@@ -808,7 +817,7 @@ export async function resetPassword(req: Request, res: Response) {
     }
   }
   const password_hash = await bcrypt.hash(newPassword, 10);
-  const { error } = await supabase.from('users').update({ password_hash }).eq('phone', p);
+  const { error } = await supabase.from('users').update({ password_hash }).in('phone', phoneVariants(p));
   if (error) return res.status(500).json({ error: error.message });
   await deleteOtp(p);
   return res.json({ success: true });
@@ -820,7 +829,7 @@ export async function changePhone(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { newPhone, code } = req.body || {};
   if (!newPhone || !code) return res.status(400).json({ error: 'newPhone and code are required' });
-  const p = normalizePhone(newPhone);
+  const p = canonicalisePhone(newPhone) ?? normalizePhone(newPhone);
   // SC-385: reuse the SAME rule register already enforces (SC-72). It was only
   // applied at registration, so the number could afterwards be replaced with
   // anything — "notaphone" was accepted live. In production that strands the
@@ -839,10 +848,16 @@ export async function changePhone(req: Request, res: Response) {
   const { data: existing } = await supabase
     .from('users')
     .select('id')
-    .eq('phone', p)
+    // SC-386: any stored form of the number counts as "already in use".
+    .in('phone', phoneVariants(p))
+    .limit(1)
     .maybeSingle();
   if (existing) return res.status(409).json({ error: 'Phone already in use' });
-  const { error } = await supabase.from('users').update({ phone: p }).eq('id', userId);
+  // Store the canonical form so the table converges on one shape.
+  const { error } = await supabase
+    .from('users')
+    .update({ phone: canonicalisePhone(p) ?? p })
+    .eq('id', userId);
   if (error) return res.status(500).json({ error: error.message });
   await deleteOtp(p);
   return res.json({ success: true });

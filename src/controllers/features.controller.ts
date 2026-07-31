@@ -62,8 +62,16 @@ export async function getTournamentStandings(req: Request, res: Response) {
     for (const m of matches ?? []) {
       const a = table.get(m.team_a_id);
       const b = table.get(m.team_b_id);
-      if (a) a.played++;
-      if (b) b.played++;
+      // SC-373: a fixture only counts once BOTH sides are real, known entrants.
+      // A knockout BYE is stored as a completed match with one empty slot and a
+      // winner (so the bracket can advance), and this loop was counting it as a
+      // played, won match — a 3-team knockout showed the bye team on P1 W1 3pts
+      // before a ball was bowled. Skipping half-populated fixtures also makes
+      // this table agree with computeStats/rankTeams, which has always required
+      // both sides — display and qualification must not diverge (SC-89).
+      if (!a || !b) continue;
+      a.played++;
+      b.played++;
 
       // SC-268: generic score for/against (goals/points/runs) → diff. The single
       // cross-sport comparator score_summary.team_a_score ?? A.score, mirroring

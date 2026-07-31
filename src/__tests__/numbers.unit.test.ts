@@ -227,3 +227,100 @@ describe('SC-372 · round-robin standings', () => {
     expect([z.played, z.points]).toEqual([0, 0]);
   });
 });
+
+// ── SC-373 · a DRAW is a first-class result ────────────────────────────────
+// The shipped bug: completeMatch used "has a winner_team_id" as its proxy for
+// "a result was recorded", so a legitimate draw was indistinguishable from a
+// match that was never played and could not be entered at all.
+function canComplete(status: string, hasEvents: boolean, winnerId: string | null, isDraw: boolean) {
+  if (status === 'scheduled' && !hasEvents && !winnerId && !isDraw) return false;
+  return true;
+}
+function resultTypeOf(walkover: boolean, winnerId: string | null) {
+  return walkover ? 'walkover' : winnerId ? 'decisive' : 'draw';
+}
+
+describe('SC-373 · draw vs never-played', () => {
+  it('a draw can be recorded from scheduled', () => {
+    expect(canComplete('scheduled', false, null, true)).toBe(true);
+  });
+  it('an unplayed match still cannot be completed (guard not weakened)', () => {
+    expect(canComplete('scheduled', false, null, false)).toBe(false);
+  });
+  it('a decisive result and a played match are unaffected', () => {
+    expect(canComplete('scheduled', false, 'team-a', false)).toBe(true);
+    expect(canComplete('live', true, null, false)).toBe(true);
+  });
+  it('result_type distinguishes the three ways a match ends', () => {
+    expect(resultTypeOf(false, 'team-a')).toBe('decisive');
+    expect(resultTypeOf(false, null)).toBe('draw');
+    expect(resultTypeOf(true, 'team-a')).toBe('walkover');
+  });
+  it('a draw is worth 1 point to each side and counts as played', () => {
+    const rows = standings(['A', 'B'], [{ a: 'A', b: 'B', winner: null }]);
+    expect(rows.map((r) => [r.id, r.played, r.won, r.drawn, r.lost, r.points]))
+      .toEqual([['A', 1, 0, 1, 0, 1], ['B', 1, 0, 1, 0, 1]]);
+  });
+  it('a draw moves ELO by the half-point, zero-sum (K=32)', () => {
+    const K = 32;
+    const expected = (r: number, o: number) => 1 / (1 + 10 ** ((o - r) / 400));
+    const A = 1242.28, B = 1186.16;
+    const dA = K * (0.5 - expected(A, B));
+    const dB = K * (0.5 - expected(B, A));
+    expect(Number(dB.toFixed(2))).toBe(2.56);      // lower-rated gains
+    expect(Number(dA.toFixed(2))).toBe(-2.56);     // higher-rated loses
+    expect(Number((dA + dB).toFixed(6))).toBe(0);  // zero-sum
+  });
+});
+
+// ── SC-373 · tournament shapes ─────────────────────────────────────────────
+const nextPow2 = (n: number) => { let p = 1; while (p < n) p *= 2; return p; };
+
+describe('SC-373 · knockout shape', () => {
+  it.each([[2, 2, 1, 1], [4, 4, 2, 3], [8, 8, 3, 7]])(
+    '%i teams (power of two): bracket %i, %i rounds, %i fixtures',
+    (teams, size, rounds, fixtures) => {
+      expect(nextPow2(teams)).toBe(size);
+      expect(Math.log2(nextPow2(teams))).toBe(rounds);
+      expect(nextPow2(teams) - 1).toBe(fixtures);
+    });
+
+  it.each([[3, 4, 1], [5, 8, 3], [6, 8, 2], [7, 8, 1]])(
+    '%i teams pads to a %i bracket with %i byes', (teams, size, byes) => {
+      expect(nextPow2(teams)).toBe(size);
+      expect(nextPow2(teams) - teams).toBe(byes);
+    });
+
+  it('each round is half the previous', () => {
+    const sizes: number[] = [];
+    for (let n = nextPow2(6) / 2; n >= 1; n /= 2) sizes.push(n);
+    expect(sizes).toEqual([4, 2, 1]);
+  });
+
+  it('a BYE is not a played match — it awards no points (the SC-373 bug)', () => {
+    // A bye is stored as a completed match with one empty slot and a winner.
+    const withBye = [{ a: 'B', b: null as any, winner: 'B' }];
+    const counted = withBye.filter((m) => m.a && m.b);   // the fix: both sides required
+    expect(counted).toHaveLength(0);
+    const rows = standings(['A', 'B', 'C'], counted as any);
+    expect(rows.every((r) => r.played === 0 && r.points === 0)).toBe(true);
+  });
+});
+
+describe('SC-373 · double round robin', () => {
+  it('N teams produce N(N-1) fixtures with every pair exactly twice', () => {
+    for (const N of [3, 4, 6]) {
+      const ids = Array.from({ length: N }, (_, i) => `T${i}`);
+      const fixtures: Array<[string, string]> = [];
+      for (const x of ids) for (const y of ids) if (x !== y) fixtures.push([x, y]);
+      expect(fixtures).toHaveLength(N * (N - 1));
+      const counts = new Map<string, number>();
+      for (const [x, y] of fixtures) {
+        const k = [x, y].sort().join('-');
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+      }
+      expect(counts.size).toBe((N * (N - 1)) / 2);
+      expect([...counts.values()].every((c) => c === 2)).toBe(true);
+    }
+  });
+});

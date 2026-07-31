@@ -1105,8 +1105,16 @@ export async function getBracket(req: Request, res: Response) {
     }
     const roundKeys = Array.from(byRound.keys()).sort((a, b) => a - b);
     const count = roundKeys.length;
+    // SC-373: the knockout names are only meaningful for a BRACKET. A round
+    // robin or league puts its whole schedule in round 1, so the count-from-the-
+    // end rule labelled every fixture list "Final" — a 6-fixture double round
+    // robin displayed as a single round called "Final". Those formats have no
+    // final; they have a fixture list.
+    const isBracketFormat = ((tournament as any).format ?? 'knockout').toLowerCase() !== 'round_robin'
+      && ((tournament as any).format ?? 'knockout').toLowerCase() !== 'league';
     const roundName = (r: number, idx: number): string => {
       if (r === 0) return 'Group Stage';
+      if (!isBracketFormat) return count > 1 ? `Matchday ${r}` : 'Fixtures';
       const fromEnd = count - 1 - idx; // 0 = last round = final
       if (fromEnd === 0) return 'Final';
       if (fromEnd === 1) return 'Semi-Finals';

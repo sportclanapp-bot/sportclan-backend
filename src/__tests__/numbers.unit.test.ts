@@ -110,3 +110,65 @@ describe('SC-367 · venue normalisation is one shared rule', () => {
     expect(normaliseVenue(null)).toBeNull();
   });
 });
+
+// ── SC-371 · cricket innings arithmetic ────────────────────────────────────
+// Mirrors recomputeSummary: a wide adds runs but NOT a ball; byes/leg-byes are
+// legal deliveries; a wicket consumes a ball.
+function innings(events: Array<{ t: 'ball'|'extra'|'wicket'; runs?: number; kind?: string }>) {
+  let runs = 0, balls = 0, wickets = 0;
+  for (const e of events) {
+    if (e.t === 'ball') { runs += e.runs ?? 0; balls += 1; }
+    else if (e.t === 'extra') { runs += e.runs ?? 0; if (e.kind === 'B' || e.kind === 'Lb') balls += 1; }
+    else { wickets += 1; balls += 1; }
+  }
+  return { runs, balls, wickets, overs: `${Math.floor(balls / 6)}.${balls % 6}`,
+           runRate: balls > 0 ? Number((runs / (balls / 6)).toFixed(2)) : 0 };
+}
+
+describe('SC-371 · innings totals, overs and run rate', () => {
+  it('matches a hand-computed innings (1,4,0,6,2,1 + wide + bye2 + wicket)', () => {
+    const r = innings([
+      { t: 'ball', runs: 1 }, { t: 'ball', runs: 4 }, { t: 'ball', runs: 0 },
+      { t: 'ball', runs: 6 }, { t: 'ball', runs: 2 }, { t: 'ball', runs: 1 },
+      { t: 'extra', runs: 1, kind: 'Wd' },
+      { t: 'extra', runs: 2, kind: 'B' },
+      { t: 'wicket' },
+    ]);
+    expect(r).toEqual({ runs: 17, balls: 8, wickets: 1, overs: '1.2', runRate: 12.75 });
+  });
+
+  it('a wide never advances the over', () => {
+    const r = innings([{ t: 'extra', runs: 1, kind: 'Wd' }, { t: 'extra', runs: 5, kind: 'Nb' }]);
+    expect(r.balls).toBe(0);
+    expect(r.runs).toBe(6);
+    expect(r.runRate).toBe(0);      // guarded, not Infinity
+  });
+
+  it('overs use cricket notation, not decimals', () => {
+    expect(innings(Array(6).fill({ t: 'ball', runs: 0 })).overs).toBe('1.0');
+    expect(innings(Array(7).fill({ t: 'ball', runs: 0 })).overs).toBe('1.1');
+    expect(innings(Array(12).fill({ t: 'ball', runs: 0 })).overs).toBe('2.0');
+  });
+});
+
+// ── SC-371 · highest score must be the best INNINGS, not the running total ──
+function highestScore(perMatchRuns: number[]) {
+  return perMatchRuns.length ? Math.max(...perMatchRuns) : 0;
+}
+function brokenHighestScore(ballRuns: number[]) {
+  // the shipped bug: tracked the max of the CUMULATIVE total
+  let runs = 0, hs = 0;
+  for (const r of ballRuns) { runs += r; if (runs > hs) hs = runs; }
+  return hs;
+}
+
+describe('SC-371 · BEST is the best innings, not the career total', () => {
+  it('the old cumulative form always equalled total runs', () => {
+    const balls = [4, 4, 6, 2];               // 16 across two matches
+    expect(brokenHighestScore(balls)).toBe(16);   // === total, never a real best
+  });
+  it('per-match max is the real best', () => {
+    expect(highestScore([8, 8])).toBe(8);     // not 16
+    expect(highestScore([])).toBe(0);
+  });
+});

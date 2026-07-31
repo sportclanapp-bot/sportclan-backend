@@ -1465,15 +1465,52 @@ export async function getSportProfile(req: Request, res: Response) {
         };
       } else {
         // Fallback to match_events aggregation
-        const { data: events } = await supabase.from('match_events').select('event_type, payload, created_by').in('match_id', matchIds.slice(0, 100));
-        const myEvts = (events ?? []).filter((e: any) => e.created_by === id);
-        let runs = 0, balls = 0, f4 = 0, s6 = 0, wkts = 0, hs2 = 0;
-        for (const e of myEvts) {
+        const { data: events } = await supabase
+          .from('match_events')
+          .select('match_id, event_type, payload, created_by')
+          .in('match_id', matchIds.slice(0, 100));
+        // SC-371: attribute a ball to the BATSMAN who faced it, not to whoever
+        // entered it. `created_by` is the scorer — usually the umpire or captain
+        // — so a player who never scores a match got 0 runs while the scorer was
+        // credited with everyone's. Fall back to created_by only when the event
+        // carries no batsman_id (older rows).
+        const mine = (events ?? []).filter((e: any) => {
           const pay: any = e.payload ?? {};
-          if (e.event_type === 'ball') { const r = Number(pay.runs ?? 0); runs += r; balls++; if (r === 4) f4++; if (r === 6) s6++; if (runs > hs2) hs2 = runs; }
-          if (e.event_type === 'wicket' || pay.wicket) wkts++;
+          const batter = pay.batsman_id ?? pay.batter_id ?? null;
+          return batter ? batter === id : e.created_by === id;
+        });
+        // SC-371: highest_score used to track the max of the RUNNING CUMULATIVE
+        // total, which is just the final total — so BEST always equalled RUNS,
+        // a number that could never differ. Tally per match and take the best.
+        const perMatch = new Map<string, number>();
+        let runs = 0, balls = 0, f4 = 0, s6 = 0, wkts = 0, dismissals = 0;
+        for (const e of mine) {
+          const pay: any = e.payload ?? {};
+          if (e.event_type === 'ball') {
+            const r = Number(pay.runs ?? 0);
+            runs += r; balls++;
+            if (r === 4) f4++;
+            if (r === 6) s6++;
+            perMatch.set(e.match_id, (perMatch.get(e.match_id) ?? 0) + r);
+          }
+          if (e.event_type === 'wicket' || pay.wicket) { wkts++; dismissals++; }
         }
-        sportStats = { total_runs: runs, total_wickets: wkts, balls_faced: balls, strike_rate: balls > 0 ? Math.round((runs / balls) * 100) : 0, highest_score: hs2, fours: f4, sixes: s6, fifties: 0, hundreds: 0 };
+        const hs2 = perMatch.size > 0 ? Math.max(...perMatch.values()) : 0;
+        sportStats = {
+          total_runs: runs,
+          // Same definition as the primary path: runs per dismissal, and the
+          // raw run total when a batter has never been out. Previously absent
+          // here entirely, so AVG rendered as an em-dash forever.
+          batting_average: dismissals > 0 ? Math.round((runs / dismissals) * 100) / 100 : runs,
+          total_wickets: wkts,
+          balls_faced: balls,
+          strike_rate: balls > 0 ? Math.round((runs / balls) * 10000) / 100 : 0,
+          highest_score: hs2,
+          fours: f4,
+          sixes: s6,
+          fifties: 0,
+          hundreds: 0,
+        };
       }
     } else if (slug === 'football' && matchIds.length > 0) {
       const { data: events } = await supabase.from('match_events').select('event_type, created_by').in('match_id', matchIds.slice(0, 100));

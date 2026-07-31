@@ -856,21 +856,31 @@ export async function listComments(req: Request, res: Response) {
   // SC-81: hide comments authored by blocked-either-direction users (viewer via
   // optionalAuth).
   const lcp = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
+  // SC-371: count: 'exact' so the header can show the REAL total rather than
+  // the length of the page it happens to have loaded. The count honours the
+  // same soft-delete and block filters as the rows, so the number and the list
+  // can never disagree about who is visible.
   let cq = supabase
     .from('post_comments')
     .select(`
       *,
       author:users!author_id!inner(id, name, username, profile_picture_url, is_premium)
-    `)
+    `, { count: 'exact' })
     .eq('post_id', id)
     .is('author.deleted_at', null)
     .order('created_at', { ascending: true })
     .range(lcp.from, lcp.to);
   cq = excludeIds(cq, 'author_id', await blockedUserIds(req.userId));
-  const { data, error } = await cq;
+  const { data, error, count } = await cq;
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
-  return res.json({ data: data || [], comments: data || [] });
+  const total = count ?? (data || []).length;
+  return res.json({
+    data: data || [],
+    comments: data || [],
+    total,
+    has_more: lcp.from + (data?.length ?? 0) < total,
+  });
 }
 
 export async function createComment(req: Request, res: Response) {

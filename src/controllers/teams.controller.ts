@@ -249,9 +249,18 @@ export async function getTeam(req: Request, res: Response) {
     // SC-359: capacity is part of the team's public shape so the UI can show
     // "12/50" and disable Join at the cap instead of letting a user tap into a
     // guaranteed failure.
-    (team as { member_count?: number }).member_count = (members || []).length;
+    // SC-371: member_count was the LENGTH of the loaded members array, which is
+    // only ever right because the 50-member cap happens to sit under PostgREST's
+    // default page size. That is a coincidence, not a count — one raised cap or
+    // one added page and the number silently under-reports. Ask the database.
+    const { count: memberTotal } = await supabase
+      .from('team_members')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', id);
+    const realMemberCount = memberTotal ?? (members || []).length;
+    (team as { member_count?: number }).member_count = realMemberCount;
     (team as { max_members?: number }).max_members = TEAM_MAX_MEMBERS;
-    (team as { is_full?: boolean }).is_full = (members || []).length >= TEAM_MAX_MEMBERS;
+    (team as { is_full?: boolean }).is_full = realMemberCount >= TEAM_MAX_MEMBERS;
     const viewerIsMember = !!userId && (members || []).some(
       (m: any) => (m.user?.id ?? m.user_id) === userId,
     );

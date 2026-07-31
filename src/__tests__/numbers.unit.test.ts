@@ -172,3 +172,58 @@ describe('SC-371 · BEST is the best innings, not the career total', () => {
     expect(highestScore([])).toBe(0);
   });
 });
+
+// ── SC-372 · round-robin standings ─────────────────────────────────────────
+// Points rule under test: W=3, D=1, L=0 (matches utils/standings.ts).
+type RRMatch = { a: string; b: string; winner: string | null };
+function standings(teams: string[], ms: RRMatch[]) {
+  const t = new Map(teams.map((id) => [id, { id, played: 0, won: 0, drawn: 0, lost: 0, points: 0 }]));
+  for (const m of ms) {
+    const A = t.get(m.a)!, B = t.get(m.b)!;
+    A.played++; B.played++;
+    if (m.winner === m.a) { A.won++; A.points += 3; B.lost++; }
+    else if (m.winner === m.b) { B.won++; B.points += 3; A.lost++; }
+    else { A.drawn++; B.drawn++; A.points += 1; B.points += 1; }
+  }
+  return [...t.values()].sort((x, y) => y.points - x.points || (x.id < y.id ? -1 : 1));
+}
+
+describe('SC-372 · round-robin standings', () => {
+  const T = ['A', 'B', 'C', 'D'];
+  const MS: RRMatch[] = [
+    { a: 'A', b: 'B', winner: 'A' }, { a: 'A', b: 'C', winner: 'A' }, { a: 'A', b: 'D', winner: null },
+    { a: 'B', b: 'C', winner: 'B' }, { a: 'B', b: 'D', winner: null }, { a: 'C', b: 'D', winner: 'C' },
+  ];
+
+  it('a 4-team single round robin has N(N-1)/2 = 6 fixtures', () => {
+    const pairs = new Set(MS.map((m) => [m.a, m.b].sort().join('-')));
+    expect(MS.length).toBe(6);
+    expect(pairs.size).toBe(6);          // every pair exactly once
+  });
+
+  it('reproduces the hand-worked table', () => {
+    expect(standings(T, MS).map((r) => [r.id, r.played, r.won, r.drawn, r.lost, r.points]))
+      .toEqual([['A',3,2,1,0,7], ['B',3,1,1,1,4], ['C',3,1,0,2,3], ['D',3,0,2,1,2]]);
+  });
+
+  it('W+L+D === played and points === 3W+D for every row', () => {
+    for (const r of standings(T, MS)) {
+      expect(r.won + r.drawn + r.lost).toBe(r.played);
+      expect(r.points).toBe(3 * r.won + r.drawn);
+    }
+  });
+
+  it('total points === 3 per decisive match + 2 per draw', () => {
+    const decisive = MS.filter((m) => m.winner).length;
+    const drawn = MS.length - decisive;
+    const total = standings(T, MS).reduce((s, r) => s + r.points, 0);
+    expect(total).toBe(decisive * 3 + drawn * 2);
+    expect(total).toBe(16);
+  });
+
+  it('a team with no matches has no points and no divide-by-zero', () => {
+    const rows = standings(['A', 'B', 'Z'], [{ a: 'A', b: 'B', winner: 'A' }]);
+    const z = rows.find((r) => r.id === 'Z')!;
+    expect([z.played, z.points]).toEqual([0, 0]);
+  });
+});

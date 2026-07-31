@@ -1437,20 +1437,9 @@ function nextPow2(n: number): number {
   return p;
 }
 
-// Build round-1 matchups for `n` real teams padded to the next power of two.
-// Every match gets a real team in slot A; the remaining teams fill slot B of
-// the first (n-M) matches; the rest are byes (slot B empty). This guarantees no
-// match is bye-vs-bye. Also used to seed a groups→KO bracket from qualifiers.
-function buildRound1(teams: TeamSlot[]): Array<{ a: TeamSlot | null; b: TeamSlot | null }> {
-  const n = teams.length;
-  const M = nextPow2(n) / 2;
-  const round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }> = [];
-  for (let m = 0; m < M; m++) {
-    const b = teams[M + m] ?? null;
-    round1.push({ a: teams[m] ?? null, b });
-  }
-  return round1;
-}
+// (SC-378) The old index-order buildRound1 lived here. Direct knockout now uses
+// seededRound1 below — the same standard bracket as the groups→KO path — so
+// pairings and byes follow seed order instead of array position.
 
 // Standard single-elimination seed slot order for a bracket of `size` (a power
 // of two). Returns the seed NUMBER (1-indexed, 1 = strongest) that belongs in
@@ -1634,7 +1623,7 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
 
   const { data: matches } = await supabase
     .from('matches')
-    .select('team_a_id, team_b_id, winner_team_id, status, score_summary')
+    .select('team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
     .eq('tournament_id', tournamentId);
   const { data: trow } = await supabase
     .from('tournaments').select('tiebreaker_rules').eq('id', tournamentId).maybeSingle();
@@ -1796,7 +1785,7 @@ async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise
 async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   const { data: groupMatches } = await supabase
     .from('matches')
-    .select('id, status, winner_team_id, team_a_id, team_b_id, score_summary')
+    .select('id, status, winner_team_id, team_a_id, team_b_id, score_summary, overs')
     .eq('tournament_id', tournamentId)
     .eq('round', 0);
   if (!groupMatches || groupMatches.length === 0) return;
@@ -2019,12 +2008,20 @@ export async function generateFixtures(req: Request, res: Response) {
       return res.status(403).json({ error: 'Only the organiser can generate fixtures' });
     }
 
-    // Get approved entries with team info
+    // SC-378: approved entries in a DETERMINISTIC order. There was no ORDER BY
+    // at all, so the row order was whatever Postgres happened to return — the
+    // same tournament could bracket differently on two generations, and byes
+    // fell on arbitrary teams. Order: the organiser's explicit `seed` when set
+    // (1 = strongest), then entry time, then team_id as the terminator so the
+    // sequence is total and repeatable.
     const { data: entries } = await supabase
       .from('tournament_entries')
-      .select('team_id, team:teams!team_id(id, name)')
+      .select('team_id, seed, entered_at, team:teams!team_id(id, name)')
       .eq('tournament_id', id)
-      .eq('status', 'approved');
+      .eq('status', 'approved')
+      .order('seed', { ascending: true, nullsFirst: false })
+      .order('entered_at', { ascending: true })
+      .order('team_id', { ascending: true });
     const teams = (entries ?? []).map((e: any) => ({
       id: e.team_id,
       name: (e.team as any)?.name ?? 'TBD',
@@ -2099,7 +2096,15 @@ export async function generateFixtures(req: Request, res: Response) {
     if (format === 'knockout') {
       // Schedule the whole bracket up front (round-aware: QF slots before SF
       // before the Final), then insert with each row placed in its slot.
-      const round1 = buildRound1(teams);
+      //
+      // SC-378: a DIRECT knockout is now seeded with the same standard bracket
+      // the groups→KO path already used (seededRound1/SC-58): seed 1 opposite
+      // the lowest seed, seeds 1 and 2 in opposite halves, top seeds meeting as
+      // late as possible — and because a slot whose seed number exceeds the
+      // field is a bye, the byes land on the TOP seeds, which is the standard
+      // rule. It used to call buildRound1, which paired teams by raw array
+      // index, so byes fell on whoever happened to sit at positions M..n.
+      const round1 = seededRound1(teams, nextPow2(teams.length));
       const shape = bracketShape(round1);
       const sched = buildSchedule(shape, schedCfg);
       if (!sched.ok) return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' });

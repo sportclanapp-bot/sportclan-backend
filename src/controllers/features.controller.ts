@@ -3,7 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { activeSportIds } from '../utils/sports';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers, matchAudienceIds } from '../utils/notify';
-import { rankTeams, parseScoreNum } from '../utils/standings';
+import { rankTeams, computeStats } from '../utils/standings';
 import { istDay } from '../utils/appTime';
 import { formatTimeIst } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
@@ -23,17 +23,25 @@ export async function getTournamentStandings(req: Request, res: Response) {
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
 
-    // Get all entries with team names
+    // SC-377: which entries belong in a points table.
+    //   · 'pending'  — NOT an entrant yet. Fixtures are generated from approved
+    //     entries only, so a queued team was rendering as a phantom P0 row for a
+    //     tournament it might never be in.
+    //   · 'withdrawn' — kept, because matches it ALREADY PLAYED really happened.
+    //     Dropping it outright silently deleted its opponents' earned points:
+    //     if A beat B and B then withdrew, A's win vanished from A's own row.
+    //     Its unplayed fixtures are walkovers (abandoned) and never score, so a
+    //     withdrawal still awards nothing for matches that won't happen.
     const { data: entries } = await supabase
       .from('tournament_entries')
-      .select('team_id, group_label, team:teams!team_id(id, name)')
+      .select('team_id, group_label, status, team:teams!team_id(id, name)')
       .eq('tournament_id', id)
-      .in('status', ['approved', 'pending']);
+      .in('status', ['approved', 'withdrawn']);
 
     // Get completed matches
     const { data: matches } = await supabase
       .from('matches')
-      .select('id, team_a_id, team_b_id, winner_team_id, score_summary, status')
+      .select('id, team_a_id, team_b_id, winner_team_id, score_summary, status, overs')
       .eq('tournament_id', id)
       .eq('status', 'completed');
 
@@ -41,105 +49,37 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const { data: sport } = await supabase.from('sports').select('slug').eq('id', tournament.sport_id).maybeSingle();
     const isCricket = sport?.slug === 'cricket';
 
-    // Build standings map
+    // SC-376: the table is built by the SHARED computeStats — the same function
+    // rankTeams uses. It used to be a second, hand-rolled tally living only in
+    // this controller, which is how the display and the ranking came to disagree:
+    // the column said NRR while the order was decided by `scored - conceded`.
+    // One source of truth now produces both, so they cannot drift again.
+    const teamIds = (entries ?? []).map((e: any) => e.team_id).filter(Boolean);
+    const stats = computeStats(teamIds, (matches ?? []) as any);
+
     const table = new Map<string, {
-      teamId: string; team: string; groupLabel: string | null;
+      teamId: string; team: string; groupLabel: string | null; withdrawn: boolean;
       played: number; won: number; lost: number; drawn: number; points: number;
       scored: number; conceded: number; diff: number;
-      nrr: number; runsScored: number; oversFaced: number; runsConceded: number; oversBowled: number;
+      nrr: number | null; runsScored: number; oversFaced: number; runsConceded: number; oversBowled: number;
     }>();
-
     for (const e of entries ?? []) {
       const t = e.team as any;
+      const s = stats.get(e.team_id)!;
+      // A withdrawn team that never played is a phantom row — it has no record
+      // to preserve and is no longer in the competition. Drop it. One that did
+      // play stays, flagged, so its results still stand for its opponents.
+      if ((e as any).status === 'withdrawn' && s.played === 0) continue;
       table.set(e.team_id, {
         teamId: e.team_id, team: t?.name ?? 'TBD', groupLabel: e.group_label ?? null,
-        played: 0, won: 0, lost: 0, drawn: 0, points: 0,
-        scored: 0, conceded: 0, diff: 0,
-        nrr: 0, runsScored: 0, oversFaced: 0, runsConceded: 0, oversBowled: 0,
+        withdrawn: (e as any).status === 'withdrawn',
+        played: s.played, won: s.won, lost: s.lost, drawn: s.drawn, points: s.points,
+        scored: s.scored, conceded: s.conceded, diff: s.diff,
+        // NRR is a cricket column; other sports keep the null the FE renders as '—'.
+        nrr: isCricket ? s.nrr : null,
+        runsScored: s.runsScored, oversFaced: s.oversFaced,
+        runsConceded: s.runsConceded, oversBowled: s.oversBowled,
       });
-    }
-
-    for (const m of matches ?? []) {
-      const a = table.get(m.team_a_id);
-      const b = table.get(m.team_b_id);
-      // SC-373: a fixture only counts once BOTH sides are real, known entrants.
-      // A knockout BYE is stored as a completed match with one empty slot and a
-      // winner (so the bracket can advance), and this loop was counting it as a
-      // played, won match — a 3-team knockout showed the bye team on P1 W1 3pts
-      // before a ball was bowled. Skipping half-populated fixtures also makes
-      // this table agree with computeStats/rankTeams, which has always required
-      // both sides — display and qualification must not diverge (SC-89).
-      if (!a || !b) continue;
-      a.played++;
-      b.played++;
-
-      // SC-268: generic score for/against (goals/points/runs) → diff. The single
-      // cross-sport comparator score_summary.team_a_score ?? A.score, mirroring
-      // standings.ts. Surfaces GD (football/hockey) / PD (basketball) in the row.
-      {
-        const ss: any = m.score_summary ?? {};
-        const sa = parseScoreNum(ss.team_a_score ?? ss?.A?.score);
-        const sb = parseScoreNum(ss.team_b_score ?? ss?.B?.score);
-        if (a) { a.scored += sa; a.conceded += sb; }
-        if (b) { b.scored += sb; b.conceded += sa; }
-      }
-
-      if (m.winner_team_id) {
-        const winner = table.get(m.winner_team_id);
-        const loserId = m.winner_team_id === m.team_a_id ? m.team_b_id : m.team_a_id;
-        const loser = table.get(loserId);
-        if (winner) { winner.won++; winner.points += 3; }
-        if (loser) { loser.lost++; }
-      } else {
-        // Draw
-        if (a) { a.drawn++; a.points += 1; }
-        if (b) { b.drawn++; b.points += 1; }
-      }
-
-      // NRR for cricket
-      if (isCricket && m.score_summary) {
-        const ss: any = m.score_summary;
-        const parseScore = (s: string) => {
-          const m2 = String(s).match(/^(\d+)/);
-          return m2 ? parseInt(m2[1], 10) : 0;
-        };
-        const parseOvers = (s: string) => {
-          const o = parseFloat(String(s));
-          return isNaN(o) ? 0 : o;
-        };
-        // SC-256: the live cricket scorer writes the NESTED per-side summary
-        // ({ runs, balls, score, wickets }), NOT the flat team_a_score/overs keys
-        // this used to read — so runsScored + NRR were always 0 for cricket.
-        // Mirror computeStats' fallback for runs, and derive overs from `balls`
-        // (legal deliveries; overs = balls/6) since there's no overs field. The
-        // flat keys still win when present (organiser fixture-editor results).
-        // KNOWN SIMPLIFICATION: a side bowled out should count its FULL allotted
-        // overs for NRR (ICC rule); we use actual balls/6. Deferred refinement.
-        const aScore = ss.team_a_score ?? ss?.A?.score;
-        const bScore = ss.team_b_score ?? ss?.B?.score;
-        const oversOf = (flat: any, side: any) =>
-          flat != null ? parseOvers(flat) : (side?.balls != null ? side.balls / 6 : 20);
-        if (a && aScore != null) {
-          a.runsScored += parseScore(aScore);
-          a.oversFaced += oversOf(ss.team_a_overs, ss?.A);
-          a.runsConceded += parseScore(bScore ?? '0');
-          a.oversBowled += oversOf(ss.team_b_overs, ss?.B);
-        }
-        if (b && bScore != null) {
-          b.runsScored += parseScore(bScore);
-          b.oversFaced += oversOf(ss.team_b_overs, ss?.B);
-          b.runsConceded += parseScore(aScore ?? '0');
-          b.oversBowled += oversOf(ss.team_a_overs, ss?.A);
-        }
-      }
-    }
-
-    // Calculate NRR (cricket) + generic goal/point difference (all sports).
-    for (const row of table.values()) {
-      if (isCricket && row.oversFaced > 0 && row.oversBowled > 0) {
-        row.nrr = parseFloat(((row.runsScored / row.oversFaced) - (row.runsConceded / row.oversBowled)).toFixed(3));
-      }
-      row.diff = row.scored - row.conceded;
     }
 
     // SC-89: rank with the shared tiebreak ladder (points -> head-to-head ->
@@ -157,8 +97,15 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const orderIndex = new Map<string, number>();
     let running = 0;
     for (const g of Array.from(byGroup.keys()).sort()) {
-      const ids = rankTeams(byGroup.get(g)!.map((r) => r.teamId), matches ?? [], tiebreakerRules);
-      for (const id of ids) orderIndex.set(id, running++);
+      const groupRows = byGroup.get(g)!;
+      // SC-377: a withdrawn team is out of the competition — it keeps its played
+      // record (so its opponents keep the points they earned) but it cannot hold
+      // a qualifying position, so it is ranked below the live field rather than
+      // sitting mid-table on points it can no longer defend.
+      const live = groupRows.filter((r) => !r.withdrawn).map((r) => r.teamId);
+      const gone = groupRows.filter((r) => r.withdrawn).map((r) => r.teamId);
+      for (const id of rankTeams(live, matches ?? [], tiebreakerRules)) orderIndex.set(id, running++);
+      for (const id of rankTeams(gone, matches ?? [], tiebreakerRules)) orderIndex.set(id, running++);
     }
     const standings = rows.sort(
       (a, b) => (orderIndex.get(a.teamId) ?? 0) - (orderIndex.get(b.teamId) ?? 0),
@@ -169,6 +116,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
       const qpg = Math.max(1, Number((tournament as any).qualifiers_per_group ?? 2));
       const seen = new Map<string, number>();
       for (const row of standings) {
+        if (row.withdrawn) continue;   // SC-377: a withdrawn team cannot qualify
         const g = row.groupLabel ?? 'default';
         const n = seen.get(g) ?? 0;
         if (n < qpg) (row as any).qualified = true;

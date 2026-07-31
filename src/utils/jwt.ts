@@ -28,6 +28,24 @@ export function generateAccessToken(userId: string): string {
   return jwt.sign({ userId }, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRES });
 }
 
+/**
+ * SC-384: an access token stamped with an explicit issued-at.
+ *
+ * Used only when replacing the caller's token during session revocation. The
+ * revocation cutoff has millisecond precision but `iat` is whole seconds, so a
+ * token minted normally in the same second as the cutoff is ambiguous — it
+ * either wrongly survives (if the cutoff is rounded down) or wrongly dies (if it
+ * isn't). Stamping the replacement with the NEXT whole second removes the
+ * ambiguity in the only direction that is safe: every token from the cutoff
+ * second is revoked, and the replacement provably postdates it.
+ *
+ * `expiresIn` is computed from the supplied iat, so the token's lifetime is
+ * unchanged — it simply starts a fraction of a second later.
+ */
+export function generateAccessTokenAt(userId: string, iatSeconds: number): string {
+  return jwt.sign({ userId, iat: iatSeconds }, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRES });
+}
+
 export function generateRefreshToken(userId: string): string {
   return jwt.sign({ userId }, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRES });
 }

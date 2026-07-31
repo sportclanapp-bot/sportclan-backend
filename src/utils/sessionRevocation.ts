@@ -50,27 +50,33 @@ export async function isTokenRevoked(userId: string, issuedAtSeconds?: number): 
   }
 
   if (entry.revokedAtMs == null) return false;
-  // Strictly-before, so a token minted in the same second as the revocation —
-  // the replacement handed to the device doing the revoking — still works.
+  // Strictly-before against a full-precision cutoff: every token whose issuing
+  // second began before the revocation instant is refused, including one minted
+  // in the same second. The caller's replacement escapes this by being stamped
+  // with the NEXT whole second (generateAccessTokenAt), not by softening the
+  // comparison — softening it is what let same-second sessions survive.
   return issuedAtSeconds * 1000 < entry.revokedAtMs;
 }
 
 /**
  * Mark every token issued up to now as revoked for this user.
  *
- * The cutoff is TRUNCATED TO THE SECOND on purpose. A JWT's `iat` is whole
- * seconds, so storing millisecond precision meant the replacement token minted
- * immediately after the stamp compared as OLDER than it — revoked at 12:00:00.750
- * but issued with iat 12:00:00, i.e. 750ms "before" its own cause. That signed
- * the revoking device out of itself, which is the one thing this must not do.
- * Flooring makes both sides second-precision, so a token minted in the same
- * second survives and anything from an earlier second does not. The residual is
- * that a token issued up to a second before the revocation also survives — a
- * sub-second window, against the 900 seconds this exists to close.
+ * The cutoff keeps FULL millisecond precision. Flooring it to the second (the
+ * first attempt at this) closed the sign-myself-out bug but opened a real one:
+ * any session established in the same second as the revocation survived it,
+ * which a 10-cycle prod run reproduced on the third try. The caller's
+ * replacement token is instead stamped with the NEXT whole second by
+ * revokeAllSessions, so the ambiguity is resolved in the safe direction —
+ * everything from the cutoff second dies, and only the replacement outlives it.
+ *
+ * Returns the cutoff in milliseconds so the caller can derive that stamp.
  */
-export async function revokeSessionsNow(userId: string): Promise<string> {
-  const nowIso = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
-  await supabase.from('users').update({ sessions_revoked_at: nowIso }).eq('id', userId);
+export async function revokeSessionsNow(userId: string): Promise<number> {
+  const nowMs = Date.now();
+  await supabase
+    .from('users')
+    .update({ sessions_revoked_at: new Date(nowMs).toISOString() })
+    .eq('id', userId);
   invalidateRevocationCache(userId);
-  return nowIso;
+  return nowMs;
 }

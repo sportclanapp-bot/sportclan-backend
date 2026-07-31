@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { revokeSessionsNow } from '../utils/sessionRevocation';
-import { generateAccessToken } from '../utils/jwt';
+import { generateAccessTokenAt } from '../utils/jwt';
 
 // POST /account/delete — FINAL delete: immediate PII scrub + login lockout,
 // hard-purged after a 30-day retention window.
@@ -295,12 +295,15 @@ export async function revokeAllSessions(req: Request, res: Response) {
   // a quarter of an hour — exactly the window that matters when the reason for
   // tapping this is a lost or stolen phone. Stamping sessions_revoked_at makes
   // every token minted before now fail on its next request.
-  await revokeSessionsNow(userId);
+  const cutoffMs = await revokeSessionsNow(userId);
 
   // That stamp would also kill the caller's own token, so hand this device a
-  // replacement minted after the cutoff. Returning it keeps the promise the UI
-  // makes — other devices out, this one still signed in.
-  const accessToken = generateAccessToken(userId);
+  // replacement that provably postdates the cutoff. `iat` is whole seconds
+  // while the cutoff has milliseconds, so a normally-minted replacement lands
+  // in the SAME second and is ambiguous; stamping it with the next whole second
+  // means every other token from that second is still revoked. Returning it
+  // keeps the promise the UI makes — other devices out, this one still signed in.
+  const accessToken = generateAccessTokenAt(userId, Math.floor(cutoffMs / 1000) + 1);
   return res.json({
     success: true,
     message: 'All other sessions revoked',

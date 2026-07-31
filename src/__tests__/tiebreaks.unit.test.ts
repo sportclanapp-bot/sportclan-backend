@@ -356,20 +356,22 @@ describe('SC-384 · a revoked access token is refused', () => {
   it('an account that never revoked is unaffected', () => {
     expect(revoked(T / 1000 - 99999, null)).toBe(false);
   });
-  it('a replacement minted in the same second as a sub-second cutoff SURVIVES', () => {
-    // The bug this caught in prod: revoked at 12:00:00.750 but the replacement
-    // token's iat is whole seconds (12:00:00), so it compared as 750ms OLDER
-    // than its own cause and signed the revoking device out of itself.
+  it('a same-second session is REVOKED, not spared', () => {
+    // Flooring the cutoff (the first fix) spared any session established in the
+    // same second as the revocation — reproduced in prod on the 3rd of 10 cycles.
     const cutoffMs = T + 750;
-    const replacementIat = Math.floor((T + 800) / 1000);
-    expect(revoked(replacementIat, cutoffMs)).toBe(true);      // unflooed: broken
-    const flooredCutoff = Math.floor(cutoffMs / 1000) * 1000;
-    expect(revoked(replacementIat, flooredCutoff)).toBe(false); // floored: fixed
+    const victimIat = Math.floor(T / 1000);          // logged in that same second
+    expect(revoked(victimIat, cutoffMs)).toBe(true);           // full precision: revoked
+    const floored = Math.floor(cutoffMs / 1000) * 1000;
+    expect(revoked(victimIat, floored)).toBe(false);           // floored: the bug
   });
 
-  it('flooring still revokes a token from an earlier second', () => {
-    const flooredCutoff = Math.floor((T + 750) / 1000) * 1000;
-    expect(revoked(Math.floor(T / 1000) - 5, flooredCutoff)).toBe(true);
+  it("the caller's replacement is stamped the NEXT second, so it survives", () => {
+    const cutoffMs = T + 750;
+    const replacementIat = Math.floor(cutoffMs / 1000) + 1;    // generateAccessTokenAt
+    expect(revoked(replacementIat, cutoffMs)).toBe(false);
+    // ...and it is strictly newer than any token from the cutoff second.
+    expect(replacementIat).toBeGreaterThan(Math.floor(T / 1000));
   });
 
   it('the 15-minute window is what this closes', () => {

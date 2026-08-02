@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { istDay } from '../utils/appTime';
 import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers, matchAudienceIds } from '../utils/notify';
@@ -1708,7 +1709,11 @@ export async function completeMatch(req: Request, res: Response) {
     // guard already, and is empty for a solo/phantom match → no-op. Best-effort.
     if (!walkover && allPlayerIds.length > 0) {
       try {
-        const todayStr = new Date().toISOString().slice(0, 10);
+        // SC-392: the IST day, not the UTC one. toISOString() slices a UTC
+        // date, so a match completed between 00:00 and 05:30 IST stamped
+        // last_match_date as YESTERDAY — which either breaks a live streak or
+        // lets the same IST day count twice. Same class as the heatmap fix.
+        const todayStr = istDay();
         const { data: currentUsers } = await supabase
           .from('users')
           .select('id, streak_count, last_match_date')

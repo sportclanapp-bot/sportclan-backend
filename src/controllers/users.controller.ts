@@ -1116,7 +1116,11 @@ export async function getActivityHeatmap(req: Request, res: Response) {
     if (!ts) continue;
     const d = new Date(ts);
     if (d < since) continue;
-    const key = d.toISOString().slice(0, 10);
+    // SC-392: bucket by the IST calendar day, not the UTC one. toISOString()
+    // slices a UTC date, so a match at 00:15 IST (18:45Z the day before) landed
+    // on the PREVIOUS day's cell — every 00:00-05:30 IST match was attributed
+    // to yesterday. istDay() is the app's existing IST-day helper.
+    const key = istDay(d);
 
     // Winner detection: my side won the match. SC-285: a TEAMLESS pickup has no
     // winner_team_id (free-text sides) — its winner is score-derived and stored
@@ -1141,7 +1145,9 @@ export async function getActivityHeatmap(req: Request, res: Response) {
   for (let i = 0; i < 84; i++) {
     const d = new Date(since);
     d.setDate(since.getDate() + i);
-    const key = d.toISOString().slice(0, 10);
+    // SC-392: the grid keys must use the SAME IST-day convention as the match
+    // keys above, or the two sides can never line up.
+    const key = istDay(d);
     const cell = byDay.get(key);
     const matches = cell?.matches ?? 0;
     const wins = cell?.wins ?? 0;

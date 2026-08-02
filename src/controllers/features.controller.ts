@@ -4,7 +4,7 @@ import { sanitizeError } from '../utils/response';
 import { activeSportIds } from '../utils/sports';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers, matchAudienceIds } from '../utils/notify';
 import { rankTeams, computeStats } from '../utils/standings';
-import { istDay } from '../utils/appTime';
+import { istDay, istDayStartIso } from '../utils/appTime';
 import { formatTimeIst } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 
@@ -670,8 +670,13 @@ export async function runPublishScheduledPosts(): Promise<{ published: number }>
 // ── Job: smart-match notifications (deduped per user/day) ─────────────────────
 export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
   const threeDaysAgo = new Date(Date.now() - 3 * 86400000).toISOString();
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // SC-392: "today" here must be the IST calendar day, not the server's local
+  // midnight. On a UTC host setHours(0,0,0,0) is 05:30 IST, so open matches
+  // scheduled between 00:00 and 05:30 IST today fell OUTSIDE the window and were
+  // never notified, while tomorrow's early-hours matches were pulled in. The
+  // dedupe key beside this already used istDateStr(), so the IST-awareness was
+  // only half applied. Same class as the heatmap/streak fixes.
+  const today = new Date(istDayStartIso());
   const tomorrow = new Date(today.getTime() + 86400000);
   const sentOn = istDateStr();
 

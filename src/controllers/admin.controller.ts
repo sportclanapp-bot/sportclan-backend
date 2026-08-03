@@ -3,6 +3,8 @@ import { supabase } from '../utils/supabase';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { orIlikeContains } from '../utils/likeSearch'; // SC-237
+import axios from 'axios';
+import { getLastOtpSend } from './auth.controller';
 
 /**
  * Admin controller · stats + moderation + broadcast.
@@ -404,4 +406,42 @@ export async function adminUpdateUser(req: Request, res: Response) {
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed to update user' });
   }
+}
+
+/**
+ * SC-401 · GET /admin/otp-diagnostics
+ *
+ * Answers, from the vendor rather than from a dashboard reading:
+ *   - what the SMS and VOICE balances actually are
+ *   - what 2Factor reported for the last send this instance made
+ *
+ * Exists because the evidence conflicted: the dashboard showed 0.00 voice
+ * credits, an explicit voice send returns 503, and yet a real handset received a
+ * voice call from a request we made as SMS. Guessing at the vendor's behaviour
+ * was not converging, so this asks it directly.
+ */
+export async function otpDiagnostics(_req: Request, res: Response) {
+  const apiKey = process.env.TWOFACTOR_API_KEY;
+  if (!apiKey) {
+    return res.json({ configured: false, note: 'TWOFACTOR_API_KEY is not set on this instance.' });
+  }
+  const ask = async (path: string) => {
+    try {
+      const { data } = await axios.get(`https://2factor.in/API/V1/${apiKey}/${path}`, { timeout: 8000 });
+      return data;
+    } catch (err: any) {
+      return { error: err?.response?.status ?? err?.message ?? 'request failed' };
+    }
+  };
+  const [sms, voice, addon] = await Promise.all([
+    ask('BAL/SMS'),
+    ask('BAL/VOICE'),
+    ask('BAL/ADDON_SERVICES'),
+  ]);
+  return res.json({
+    configured: true,
+    keyFingerprint: `${apiKey.slice(0, 4)}…${apiKey.slice(-4)}`, // confirms WHICH key is live, without exposing it
+    balances: { sms, voice, addon },
+    lastSend: getLastOtpSend(),
+  });
 }

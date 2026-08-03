@@ -85,6 +85,26 @@ function normalizePhone(phone: string): string {
 // On dev with no API key, all channels fall through to console.
 type OtpChannel = 'sms' | 'voice' | 'whatsapp';
 
+/**
+ * SC-401 · what 2Factor reported for the most recent send.
+ *
+ * Dipak received a VOICE CALL from a request this server made as SMS, while an
+ * explicit voice request returns 503. Both cannot be true of our own code, so
+ * the answer is on 2Factor's side — and we were throwing away the only evidence
+ * (their session id) on the success path. This is deliberately in-memory and
+ * single-slot: it is a live diagnostic for an open question, not a log store.
+ */
+let lastSend: {
+  channel: OtpChannel;
+  status: string;
+  details: string | null;
+  at: string;
+} | null = null;
+
+export function getLastOtpSend() {
+  return lastSend;
+}
+
 async function sendOtpViaChannel(
   phone: string,
   code: string,
@@ -125,8 +145,21 @@ async function sendOtpViaChannel(
     if (status && status.toLowerCase() !== 'success') {
       // eslint-disable-next-line no-console
       console.error(`[2Factor.in] ${channel} refused:`, JSON.stringify(data));
+      lastSend = { channel, status: status ?? 'unknown', details: JSON.stringify(data), at: new Date().toISOString() };
       return false;
     }
+    // SC-401: record what 2Factor said on SUCCESS as well. We used to discard it,
+    // which is why "the server sent SMS but the user got a voice call" was
+    // un-diagnosable — the session id in `Details` is the only handle on what the
+    // vendor actually did with the request.
+    // eslint-disable-next-line no-console
+    console.log(`[2Factor.in] ${channel} accepted:`, JSON.stringify(data));
+    lastSend = {
+      channel,
+      status: status ?? 'unknown',
+      details: (data as { Details?: string } | null)?.Details ?? null,
+      at: new Date().toISOString(),
+    };
     return true;
   } catch (err: any) {
     // eslint-disable-next-line no-console

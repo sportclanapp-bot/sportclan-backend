@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
   getStats,
+  otpDiagnostics,
   getReports,
   resolveReport,
   broadcastAnnouncement,
@@ -20,6 +21,7 @@ router.use(authenticateToken);
 router.use(requireAdmin);
 
 router.get('/stats', getStats);
+router.get('/otp-diagnostics', otpDiagnostics);
 router.get('/reports', getReports);
 router.patch('/reports/:id', resolveReport);
 router.post('/broadcast', broadcastAnnouncement);

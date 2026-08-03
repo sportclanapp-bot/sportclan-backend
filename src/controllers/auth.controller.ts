@@ -8,7 +8,7 @@ import {
   generateRefreshToken,
   verifyRefreshToken,
 } from '../utils/jwt';
-import { setOtp, getOtp, deleteOtp } from '../utils/redis';
+import { setOtp, getOtp, deleteOtp } from '../utils/otpStore';
 import { normalizeAccountTypes } from '../constants/accountTypes';
 import { awardCoins } from '../utils/coins';
 
@@ -121,6 +121,12 @@ async function sendSmsOtp(phone: string, code: string): Promise<boolean> {
 export async function sendOtp(req: Request, res: Response) {
   const { phone, purpose = 'login', channel: rawChannel } = req.body || {};
   if (!phone) return res.status(400).json({ error: 'phone is required' });
+  // SC-398: a non-string phone (e.g. {"phone": 12345}) used to reach
+  // normalizePhone -> .trim() -> TypeError -> 500. Same wrong-type class the
+  // param guard closed on ids; here it gets the same 400 the validator gives.
+  if (typeof phone !== 'string') {
+    return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE' });
+  }
   const channel: 'voice' | 'whatsapp' =
     rawChannel === 'whatsapp' ? 'whatsapp' : 'voice';
   const p = canonicalisePhone(phone) ?? normalizePhone(phone);
@@ -133,11 +139,28 @@ export async function sendOtp(req: Request, res: Response) {
   }
   const code = generateOtp();
 
-  await setOtp(p, code, purpose, OTP_TTL_SECONDS);
+  // SC-398: storing the code is the step that used to throw when Upstash was
+  // unconfigured, and sendOtp had no try/catch — so an unset env var turned the
+  // app's primary login path into a bare 500. otpStore now falls back through
+  // Postgres to memory, but the guard stays: if EVERY backend is down the user
+  // gets a clear, retryable message instead of "Internal server error".
+  try {
+    await setOtp(p, code, purpose, OTP_TTL_SECONDS);
+  } catch (err: any) {
+    // eslint-disable-next-line no-console
+    console.error('[send-otp] OTP storage unavailable:', err?.message);
+    return res.status(503).json({
+      error: 'We could not send a code just now. Please try again in a moment.',
+      code: 'OTP_STORE_UNAVAILABLE',
+    });
+  }
 
   const sent = await sendOtpViaChannel(p, code, channel);
   if (!sent) {
-    return res.status(500).json({ error: 'Failed to send OTP. Please try again.' });
+    return res.status(503).json({
+      error: 'We could not send a code to that number. Please try again.',
+      code: 'OTP_SEND_FAILED',
+    });
   }
   return res.json({ success: true, message: 'OTP sent', channel });
 }

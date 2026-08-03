@@ -18,9 +18,23 @@ import { Request, Response, NextFunction } from 'express';
 import { isUuid } from '../utils/uuid';
 
 /** The param names used for ids across the API. */
+/**
+ * SC-403: `sportId` was REMOVED from this list.
+ *
+ * It was a regression I shipped in SC-397. `/users/:id/sport-profile/:sportId`
+ * deliberately accepts a slug — the mobile app passes the raw theme slug
+ * ('cricket', 'tabletennis') and utils/sportId.resolveSportId maps it to the
+ * real UUID server-side. Guarding it as a UUID turned every one of those calls
+ * into 400 INVALID_ID in production, which is what broke the Sport Hub
+ * "your rank" card. The integration suite caught it.
+ *
+ * The lesson for anything added here: a param named `<thing>Id` is not
+ * automatically a UUID. Only add a param once you have checked that EVERY route
+ * binding it rejects non-UUIDs anyway.
+ */
 export const ID_PARAMS = [
   'id', 'userId', 'matchId', 'teamId', 'sessionId', 'memberId',
-  'messageId', 'sportId', 'entryId', 'targetUserId',
+  'messageId', 'entryId', 'targetUserId',
 ] as const;
 
 function validate(req: Request, res: Response, next: NextFunction, value: string) {

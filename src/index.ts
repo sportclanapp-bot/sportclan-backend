@@ -42,6 +42,7 @@ import jobsRoutes from './routes/jobs.routes';
 import { authenticateToken } from './middleware/auth.middleware';
 
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
+import { queryAliases } from './middleware/queryAliases.middleware';
 import { sweepExpiredPremium } from './controllers/subscriptions.controller';
 import { sweepStaleLiveMatches } from './controllers/matches.controller';
 import { purgeExpiredAccountsCore } from './controllers/account.controller';
@@ -75,6 +76,10 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // 10MB)". 14mb covers base64 of a full 10MB image (13.34MB) so the controller is
 // what actually enforces the limit, with the message the user should see.
 app.use(express.json({ limit: '14mb' }));
+// SC-403: make snake_case/camelCase query params interchangeable, so a filter
+// spelled the other way is applied rather than silently dropped (which returned
+// an unfiltered list with a 200).
+app.use(queryAliases);
 
 // Backstop: scrub internal/DB detail from any 5xx response (SC-44).
 app.use(sanitizeErrorResponses);

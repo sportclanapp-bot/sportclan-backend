@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCounts';
 
 // ── Scorer Leaderboard ──────────────────────────────────────────────────────
 
@@ -69,16 +70,30 @@ export async function getUserInsights(req: Request, res: Response) {
       id: string; status: string | null; winner_team_id: string | null;
       team_a_id: string | null; team_b_id: string | null; created_at: string | null;
       score_summary: { winner_side?: 'A' | 'B' } | null;
+      is_ranked?: boolean | null;
     };
     const { data: parts } = await supabase
       .from('match_participants')
-      .select('team_side, match:matches!inner(id, status, winner_team_id, team_a_id, team_b_id, score_summary, created_at)')
+      // SC-413: is_ranked needed to apply the SC-283 rule.
+      .select('team_side, match:matches!inner(id, status, is_ranked, winner_team_id, team_a_id, team_b_id, score_summary, created_at)')
       .eq('user_id', id);
 
+    // SC-413: form/streak are a RECORD, so they obey the same SC-283 rule as
+    // matches_played — a casual match with <2 real participants (solo vs a
+    // free-text phantom) contributes nothing to your record and must not shape
+    // your form either. The activity heatmap deliberately does NOT filter this
+    // way: SC-283 treats activity as participation, not skill.
+    const partRows = (parts ?? []).map((p) => ({
+      side: (p as { team_side: string }).team_side,
+      m: (p as unknown as { match: MatchLite }).match,
+    }));
+    const insightCounts = await countParticipantsByMatch(
+      partRows.map((r) => r.m?.id).filter(Boolean) as string[],
+    );
+
     // Completed matches, newest-first (ISO timestamps sort lexically).
-    const completed = (parts ?? [])
-      .map((p) => ({ side: (p as { team_side: string }).team_side, m: (p as unknown as { match: MatchLite }).match }))
-      .filter((x) => x.m && x.m.status === 'completed')
+    const completed = partRows
+      .filter((x) => countsTowardRecord(x.m, insightCounts.get(x.m?.id) ?? 0))
       .sort((a, b) => (b.m.created_at ?? '').localeCompare(a.m.created_at ?? ''));
 
     // Result per completed match (newest-first). Two winner signals, unified:

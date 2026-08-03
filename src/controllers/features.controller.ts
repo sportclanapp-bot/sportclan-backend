@@ -7,6 +7,7 @@ import { rankTeams, computeStats } from '../utils/standings';
 import { istDay, istDayStartIso } from '../utils/appTime';
 import { formatTimeIst } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
+import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCounts';
 
 // ────────────────────────────────────────────────────────────────────────────
 // TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
@@ -350,7 +351,8 @@ export async function getSeasonRecap(req: Request, res: Response) {
         .select('sport_id, rating, matches_played, wins, losses, draws')
         .eq('user_id', id),
       supabase.from('match_participants')
-        .select('match_id, team_side, match:matches!inner(id, sport_id, status, winner_team_id, team_a_id, team_b_id, score_summary, created_at)')
+        // SC-413: is_ranked is required to apply the SC-283 rule below.
+        .select('match_id, team_side, match:matches!inner(id, sport_id, status, is_ranked, winner_team_id, team_a_id, team_b_id, score_summary, created_at)')
         .eq('user_id', id)
         .gte('match.created_at', since),
       supabase.from('gift_transactions')
@@ -375,10 +377,20 @@ export async function getSeasonRecap(req: Request, res: Response) {
     // (a visible lie). winner_side (set at completion) is authoritative; fall
     // back to winner_team_id → side for team matches that predate it. Missing
     // both (unscored / abandoned-as-completed) counts as a draw, not a phantom win.
+    // SC-413: the recap counted EVERY completed participation, while
+    // matches_played applies the SC-283 anti-farm rule (casual needs >=2 real
+    // participants). That let a solo-vs-phantom match show as "1 match" in the
+    // 90-day panel while the lifetime header — correctly — showed 0. Both now go
+    // through countsTowardRecord, so the two cannot diverge again.
+    const rows = (matchesRes.data ?? []) as any[];
+    const participantCounts = await countParticipantsByMatch(
+      rows.map((r) => r.match?.id).filter(Boolean),
+    );
+
     let wins = 0, losses = 0, draws = 0, totalMatches = 0;
-    for (const row of (matchesRes.data ?? []) as any[]) {
+    for (const row of rows) {
       const m = row.match;
-      if (!m || m.status !== 'completed') continue;
+      if (!countsTowardRecord(m, participantCounts.get(m?.id) ?? 0)) continue;
       totalMatches += 1;
       const ss = (m.score_summary ?? {}) as Record<string, any>;
       let winnerSide: 'A' | 'B' | null = ss.winner_side ?? null;

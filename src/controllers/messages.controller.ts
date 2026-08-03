@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { isBlockedBetween, blockedUserIds, excludeIds } from '../utils/blocks';
@@ -240,6 +241,15 @@ export async function getOrCreateDM(req: Request, res: Response) {
   const other_user_id = req.body?.other_user_id ?? req.body?.user_id;
 
   if (!other_user_id) return res.status(400).json({ error: 'user_id required' });
+  // SC-396: opening a DM with yourself created a real one-participant chat that
+  // then appeared in the chat list. Every other social action already refuses
+  // self-targeting (follow, invite, gift); this one did not.
+  if (other_user_id === userId) {
+    return res.status(400).json({ error: 'You can’t start a chat with yourself.', code: 'SELF_DM' });
+  }
+  if (!isUuid(other_user_id)) {
+    return res.status(400).json({ error: 'user_id must be a valid id', code: 'INVALID_ID' });
+  }
 
   // Find existing DM
   const { data: myChats } = await supabase

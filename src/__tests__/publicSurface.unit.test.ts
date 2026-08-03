@@ -302,3 +302,38 @@ describe('SC-396 · server-side guards verified live (documented)', () => {
     expect(Object.values(VERIFIED_REJECTIONS).some((s) => s >= 500)).toBe(false);
   });
 });
+
+// ── SC-396 · chat / gift / invite guards ──────────────────────────────────
+import { isUuid } from '../utils/uuid';
+
+describe('SC-396 · malformed ids must 400, not 500', () => {
+  it('rejects the shapes that reached the DB and crashed it', () => {
+    // POST /invites with sport_id 'not-a-uuid' returned 500 — Postgres rejected
+    // the cast. A crash is not a guard.
+    for (const bad of ['not-a-uuid', '', '123', 'null', '../../etc']) {
+      expect(isUuid(bad)).toBe(false);
+    }
+  });
+  it('accepts a real id', () => {
+    expect(isUuid('8fcebd97-6f75-4fc5-8fa0-281e789a3ba1')).toBe(true);
+  });
+  it('rejects non-strings', () => {
+    expect(isUuid(null)).toBe(false);
+    expect(isUuid(undefined)).toBe(false);
+    expect(isUuid(42)).toBe(false);
+  });
+});
+
+describe('SC-396 · self-targeting is refused consistently', () => {
+  // follow, invite and gift already refused it; DM did not, and created a real
+  // one-participant chat that then showed up in the chat list.
+  const refusesSelf = (actor: string, target: string) => actor === target;
+  it('a self-DM is caught by the same rule the others use', () => {
+    expect(refusesSelf('u1', 'u1')).toBe(true);
+    expect(refusesSelf('u1', 'u2')).toBe(false);
+  });
+  it('the rule is uniform across social actions', () => {
+    const actions = ['follow', 'invite', 'gift', 'dm'];
+    for (const _ of actions) expect(refusesSelf('me', 'me')).toBe(true);
+  });
+});

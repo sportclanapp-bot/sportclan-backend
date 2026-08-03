@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { notifyUnlessBlocked, notifyUser } from '../utils/notify';
@@ -85,6 +86,11 @@ export async function createInvite(req: Request, res: Response) {
   }
   if (receiver_id === userId) {
     return res.status(400).json({ error: 'Cannot invite yourself' });
+  }
+  // SC-396: a malformed id reached the query and Postgres rejected the cast,
+  // surfacing as a 500. A crash is not a guard — validate the shape first.
+  if (!isUuid(receiver_id) || !isUuid(sport_id)) {
+    return res.status(400).json({ error: 'receiver_id and sport_id must be valid ids', code: 'INVALID_ID' });
   }
 
   // Block check — neither side may be blocking the other.

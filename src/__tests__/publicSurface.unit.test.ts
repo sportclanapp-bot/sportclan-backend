@@ -110,3 +110,37 @@ describe('SC-396 · badge thresholds must not evaluate on incomplete counts', ()
     expect(laterRun.awarded).toBe(1); // self-healing
   });
 });
+
+// ── SC-396 · one money formatter ──────────────────────────────────────────
+describe('SC-396 · Indian money formatting', () => {
+  const groupIndian = (i: string) =>
+    i.length <= 3 ? i : `${i.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${i.slice(-3)}`;
+  const formatINR = (n: number) => {
+    const v = Number.isFinite(n) ? n : 0;
+    const neg = v < 0;
+    const paise = Math.round(Math.abs(v) * 100);
+    const r = Math.floor(paise / 100), f = paise % 100;
+    const body = f === 0 ? groupIndian(String(r)) : `${groupIndian(String(r))}.${String(f).padStart(2, '0')}`;
+    return `${neg ? '-' : ''}₹${body}`;
+  };
+
+  it('groups the INDIAN way, not western (the Hermes/ICU trap)', () => {
+    expect(formatINR(1000000)).toBe('₹10,00,000');
+    expect(formatINR(100000)).toBe('₹1,00,000');
+    expect(formatINR(1000)).toBe('₹1,000');
+  });
+  it('keeps paise — the naive Math.round dropped them', () => {
+    expect(formatINR(33.34)).toBe('₹33.34');
+    expect(formatINR(0.5)).toBe('₹0.50');
+  });
+  it('omits a zero fraction', () => {
+    expect(formatINR(42)).toBe('₹42');
+  });
+  it('signs negatives and survives NaN', () => {
+    expect(formatINR(-1500.5)).toBe('-₹1,500.50');
+    expect(formatINR(NaN)).toBe('₹0');
+  });
+  it('small values are untouched', () => {
+    expect(formatINR(7)).toBe('₹7');
+  });
+});

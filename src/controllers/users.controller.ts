@@ -1088,17 +1088,22 @@ export async function getActivityHeatmap(req: Request, res: Response) {
   if (await targetUserHidden(id, req.userId)) {
     return res.status(404).json({ error: 'User not found' });
   }
-  // 84 days ago in the same timezone as the server.
-  const since = new Date();
-  since.setDate(since.getDate() - 83);
-  since.setHours(0, 0, 0, 0);
+  // SC-415: the grid must be anchored to IST days, because the per-match keys
+  // below are IST days (SC-392). It used to walk server (UTC) midnights, so the
+  // last emitted cell was today's UTC date while a match played after 18:30 UTC
+  // keys to TOMORROW in IST — i.e. every match between 00:00 and 05:30 IST fell
+  // outside the grid and vanished from the heatmap until the UTC day rolled
+  // over. That is a real ~5.5h window every single day.
+  // Query a day wider than the grid so the oldest IST cell can't be clipped.
+  const since = new Date(Date.now() - 84 * 86400000);
   const sinceIso = since.toISOString();
 
   // Fetch this user's match participations joined with the match row so we
   // can tell who won. Cast team_side to 'A' | 'B' for the winner check.
   const { data, error } = await supabase
     .from('match_participants')
-    .select('team_side, match:matches(id, scheduled_at, status, winner_team_id, team_a_id, team_b_id, score_summary, updated_at)')
+    // SC-415: completed_at is the day the match was really played.
+    .select('team_side, match:matches(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, score_summary, updated_at)')
     .eq('user_id', id)
     .limit(500);
 
@@ -1112,7 +1117,10 @@ export async function getActivityHeatmap(req: Request, res: Response) {
     const match: any = row.match;
     if (!match) continue;
     if (match.status !== 'completed') continue;
-    const ts = match.updated_at ?? match.scheduled_at;
+    // SC-415: prefer the real completion stamp (migration 085). updated_at moves
+    // on ANY later edit, so a match's heatmap day used to drift whenever its row
+    // was touched; completed_at is fixed at the moment the match ended.
+    const ts = match.completed_at ?? match.updated_at ?? match.scheduled_at;
     if (!ts) continue;
     const d = new Date(ts);
     if (d < since) continue;
@@ -1142,9 +1150,12 @@ export async function getActivityHeatmap(req: Request, res: Response) {
   // Emit an 84-day dense array, oldest first. `type` is retained (backward-compat)
   // and derived from the counts; `matches`/`wins` are the real per-day values.
   const out: Array<{ date: string; matches: number; wins: number; type: 'none' | 'played' | 'won' }> = [];
+  const nowMs = Date.now();
   for (let i = 0; i < 84; i++) {
-    const d = new Date(since);
-    d.setDate(since.getDate() + i);
+    // SC-415: step back whole days from NOW and take the IST day of each, so the
+    // final cell is always today-in-IST. Anchoring on a UTC midnight made the
+    // grid end on the UTC date and drop the 00:00-05:30 IST window.
+    const d = new Date(nowMs - (83 - i) * 86400000);
     // SC-392: the grid keys must use the SAME IST-day convention as the match
     // keys above, or the two sides can never line up.
     const key = istDay(d);

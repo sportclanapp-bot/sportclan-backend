@@ -1828,6 +1828,15 @@ export async function completeMatch(req: Request, res: Response) {
       // this column — putting it on the JS update beside that RPC reached only
       // the pre-migration fallback, i.e. never in production.
       patch.result_type = walkover ? 'walkover' : ((winner_team_id || patch.winner_team_id) ? 'decisive' : 'draw');
+      // SC-415: stamp when the match was ACTUALLY completed. The activity heatmap
+      // used to bucket by scheduled_at, so a match completed on a different day
+      // from its slot landed on the wrong day — or vanished entirely when the
+      // slot was in the future (proven: match 9069effe, scheduled 04 Aug,
+      // completed 03 Aug, absent from the heatmap while every other surface had
+      // it). Written in THIS patch for the same reason result_type is: completion
+      // goes through the finalize_match RPC, and anything added to the JS update
+      // beside that RPC only ever reaches the pre-migration fallback.
+      patch.completed_at = new Date().toISOString();
       await supabase.from('matches').update(patch).eq('id', id);
     } catch { /* best effort */ }
 

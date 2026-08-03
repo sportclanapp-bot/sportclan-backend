@@ -80,30 +80,45 @@ export async function evaluateBadgesForUser(
     totalWins = (sp || []).reduce((s, p) => s + (p.wins ?? 0), 0);
   }
 
+  // SC-396: these thresholds decide whether a user is AWARDED a badge. Each
+  // query discarded its error and fell back to `?? 0`, so a transient failure
+  // silently read as "you have posted nothing / follow nobody / sent no gifts"
+  // and denied a badge the user had actually earned — the discarded-error →
+  // plausible-zero class, with a user-visible consequence.
+  //
+  // On any failure we abort the whole evaluation and leave badge state
+  // untouched. Awarding on partial data is as wrong as denying on it, and
+  // badges are re-evaluated from five different hooks (SC-316), so skipping a
+  // run is self-healing.
+  let statsFailed = false;
+
   let postCount = 0;
   if (needs('community')) {
-    const { count } = await supabase
+    const { count, error: e1 } = await supabase
       .from('community_posts')
       .select('id', { count: 'exact', head: true })
       .eq('author_id', userId);
+    if (e1) statsFailed = true;
     postCount = count ?? 0;
   }
 
   let followCount = 0;
   if (needs('general', 'social_butterfly')) {
-    const { count } = await supabase
+    const { count, error: e2 } = await supabase
       .from('follow_relationships')
       .select('id', { count: 'exact', head: true })
       .eq('follower_id', userId);
+    if (e2) statsFailed = true;
     followCount = count ?? 0;
   }
 
   let giftCount = 0;
   if (needs('general', 'gift_giver')) {
-    const { count } = await supabase
+    const { count, error: e3 } = await supabase
       .from('gift_transactions')
       .select('id', { count: 'exact', head: true })
       .eq('sender_id', userId);
+    if (e3) statsFailed = true;
     giftCount = count ?? 0;
   }
 
@@ -126,6 +141,10 @@ export async function evaluateBadgesForUser(
   }
 
   const newAwards: Array<{ user_id: string; badge_id: string }> = [];
+  // SC-396: a threshold query failed — evaluate nothing rather than award or
+  // deny on incomplete counts. The next hook re-runs this.
+  if (statsFailed) return { awarded: 0, badges: [] };
+
   for (const badge of pending) {
     let qualifies = false;
     switch (badge.category) {

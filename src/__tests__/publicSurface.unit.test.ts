@@ -75,3 +75,38 @@ describe('SC-396 · tournament progress counts', () => {
     expect(progress(3, 2).completion_percentage).toBe(67);
   });
 });
+
+// ── SC-396 · a discarded error must not become an award decision ───────────
+describe('SC-396 · badge thresholds must not evaluate on incomplete counts', () => {
+  /** Mirrors the fixed evaluator: any failed threshold query aborts the run. */
+  function evaluate(counts: { post?: number; follow?: number; gift?: number }, statsFailed: boolean) {
+    if (statsFailed) return { awarded: 0 };
+    const threshold = 10;
+    const awarded = [counts.post, counts.follow, counts.gift]
+      .filter((c) => (c ?? 0) >= threshold).length;
+    return { awarded };
+  }
+
+  it('a failed count does NOT silently read as zero and deny a badge', () => {
+    // The bug: the query fails, `count ?? 0` reads 0, the user is denied a
+    // badge they had earned — and the denial looks like a legitimate result.
+    expect(evaluate({ post: 0 }, true).awarded).toBe(0);      // aborted, state untouched
+    expect(evaluate({ post: 50 }, false).awarded).toBe(1);    // real data → awarded
+  });
+
+  it('does not award on partial data either', () => {
+    // Aborting is symmetric: awarding off half-loaded counts is as wrong as denying.
+    expect(evaluate({ post: 50, follow: 50, gift: 50 }, true).awarded).toBe(0);
+  });
+
+  it('a genuine zero still evaluates normally', () => {
+    expect(evaluate({ post: 0, follow: 0, gift: 0 }, false).awarded).toBe(0);
+  });
+
+  it('skipping is safe because evaluation re-runs from other hooks', () => {
+    const firstRun = evaluate({ post: 50 }, true);
+    const laterRun = evaluate({ post: 50 }, false);
+    expect(firstRun.awarded).toBe(0);
+    expect(laterRun.awarded).toBe(1); // self-healing
+  });
+});

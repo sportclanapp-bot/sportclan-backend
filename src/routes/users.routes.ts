@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
   getMe,
   getUserById,
@@ -31,6 +32,8 @@ import { getAdvancedStats } from '../controllers/advancedStats.controller';
 import { authenticateToken, optionalAuth } from '../middleware/auth.middleware';
 
 const router = Router();
+// SC-397: 400 on a malformed id instead of letting it reach Postgres and 500.
+guardIdParams(router);
 
 // Self routes — must be declared before /:id so they don't get captured.
 router.get('/me', authenticateToken, getMe);

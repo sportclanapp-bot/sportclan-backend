@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
   listChats, getOrCreateDM, createGroup, updateGroup,
   addMember, removeMember, promoteMember, leaveGroup, deleteGroup,
@@ -9,6 +10,8 @@ import {
 import { authenticateToken } from '../middleware/auth.middleware';
 
 const router = Router();
+// SC-397: 400 on a malformed id instead of letting it reach Postgres and 500.
+guardIdParams(router);
 
 // All message routes require auth
 router.use(authenticateToken);

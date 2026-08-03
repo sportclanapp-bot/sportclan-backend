@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
   getStats,
   getReports,
@@ -11,6 +12,8 @@ import { authenticateToken } from '../middleware/auth.middleware';
 import { requireAdmin } from '../middleware/admin.middleware';
 
 const router = Router();
+// SC-397: 400 on a malformed id instead of letting it reach Postgres and 500.
+guardIdParams(router);
 
 // All admin routes require authentication AND admin gating
 router.use(authenticateToken);

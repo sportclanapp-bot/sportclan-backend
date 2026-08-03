@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { guardIdParams } from '../middleware/uuidParams.middleware';
 import rateLimit from 'express-rate-limit';
 import { authenticateToken } from '../middleware/auth.middleware';
 import {
@@ -8,6 +9,8 @@ import {
 } from '../controllers/account.controller';
 
 const router = Router();
+// SC-397: 400 on a malformed id instead of letting it reach Postgres and 500.
+guardIdParams(router);
 
 // SC-162: /account/export-data assembles a multi-query bundle — cheap to abuse
 // on the free tier. Cap it PER USER (keyed on the authenticated userId, so a

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
   listPosts, getPost, createPost, updatePost, deletePost, closePost,
   likePost, unlikePost, checkLiked, votePoll,
@@ -8,6 +9,8 @@ import {
 import { authenticateToken, optionalAuth } from '../middleware/auth.middleware';
 
 const router = Router();
+// SC-397: 400 on a malformed id instead of letting it reach Postgres and 500.
+guardIdParams(router);
 
 // Posts
 router.get('/posts', authenticateToken, listPosts);

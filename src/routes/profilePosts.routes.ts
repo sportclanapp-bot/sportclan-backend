@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
   createProfilePost,
   listProfilePosts,
@@ -14,6 +15,8 @@ import {
 import { authenticateToken, optionalAuth } from '../middleware/auth.middleware';
 
 const router = Router();
+// SC-397: 400 on a malformed id instead of letting it reach Postgres and 500.
+guardIdParams(router);
 
 // SC-356 · profile posts. Reads use optionalAuth so a wall is viewable while
 // still resolving per-viewer state (is_liked, block filtering) when signed in.

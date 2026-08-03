@@ -9,7 +9,7 @@ import { validateSportForCreate } from '../utils/sports';
 import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { blockedUserIds } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
-import { isTeamManager, getTeamRole } from '../utils/teamAuth';
+import { isTeamManager, isTeamCaptain, getTeamRole } from '../utils/teamAuth';
 import { computeTeamRecord } from '../utils/teamRecord';
 
 function generateJoinCode(): string {
@@ -270,15 +270,10 @@ export async function getTeam(req: Request, res: Response) {
   }
 }
 
-async function isCaptain(teamId: string, userId: string): Promise<boolean> {
-  const { data } = await supabase
-    .from('team_members')
-    .select('role')
-    .eq('team_id', teamId)
-    .eq('user_id', userId)
-    .maybeSingle();
-  return data?.role === 'captain';
-}
+// SC-396: was a byte-for-byte reimplementation of utils/teamAuth.isTeamCaptain.
+// Kept as a thin local alias so the call sites read the same, but there is now
+// one definition of "is this user the captain".
+const isCaptain = (teamId: string, userId: string) => isTeamCaptain(teamId, userId);
 
 // POST /teams/:id/members — captain only
 export async function addTeamMember(req: Request, res: Response) {

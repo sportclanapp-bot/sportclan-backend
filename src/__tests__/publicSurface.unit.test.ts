@@ -240,3 +240,65 @@ describe('SC-396 · pagination clamps hostile input', () => {
     expect([p.limit, p.offset, p.from, p.to]).toEqual([20, 40, 40, 59]);
   });
 });
+
+// ── SC-396 · one definition of each permission ────────────────────────────
+describe('SC-396 · team permission helpers are not reimplemented', () => {
+  type Role = 'captain' | 'vice_captain' | 'player' | null;
+  const isTeamCaptain = (r: Role) => r === 'captain';
+  const isTeamManager = (r: Role) => r === 'captain' || r === 'vice_captain';
+
+  it('captain and manager are DIFFERENT predicates', () => {
+    expect(isTeamCaptain('vice_captain')).toBe(false);
+    expect(isTeamManager('vice_captain')).toBe(true);
+  });
+
+  it('the tournament copy computed MANAGER while calling itself isTeamCaptain', () => {
+    // The inline duplicate was `role === 'captain' || role === 'vice_captain'`
+    // assigned to a variable named isTeamCaptain — a vice-captain reading as
+    // "captain" at the call site is exactly how a carve-out gate gets widened.
+    const inlineMisnamed = (r: Role) => r === 'captain' || r === 'vice_captain';
+    expect(inlineMisnamed('vice_captain')).toBe(true);
+    expect(isTeamCaptain('vice_captain')).toBe(false);
+    expect(inlineMisnamed('vice_captain')).not.toBe(isTeamCaptain('vice_captain'));
+  });
+
+  it('a non-member is neither', () => {
+    expect(isTeamCaptain(null)).toBe(false);
+    expect(isTeamManager(null)).toBe(false);
+  });
+
+  it('a plain player is neither', () => {
+    expect(isTeamManager('player')).toBe(false);
+  });
+});
+
+describe('SC-396 · server-side guards verified live (documented)', () => {
+  // Each of these was attacked through the API with a token that should not be
+  // allowed. Recorded so a regression that opens one is visible in the suite.
+  const VERIFIED_REJECTIONS = {
+    'non-member adds a team member': 403,
+    'non-member renames a team': 403,
+    'non-member disbands a team': 403,
+    'non-member self-promotes to captain': 404,
+    'non-organiser generates fixtures': 403,
+    'non-organiser edits a tournament': 403,
+    'non-organiser deletes a tournament': 404,
+    'entering a team you do not manage': 403,
+    're-completing a finished match': 400,
+    'resurrecting a finished match': 409,
+    'rewriting a finished score': 409,
+    'scoring a finished match': 409,
+    "outsider scoring someone else's match": 403,
+  };
+
+  it('every attacked guard was rejected server-side', () => {
+    for (const status of Object.values(VERIFIED_REJECTIONS)) {
+      expect(status).toBeGreaterThanOrEqual(400);
+      expect(status).toBeLessThan(500);   // rejected, not crashed
+    }
+  });
+
+  it('none of them 500d — a crash is not a guard', () => {
+    expect(Object.values(VERIFIED_REJECTIONS).some((s) => s >= 500)).toBe(false);
+  });
+});

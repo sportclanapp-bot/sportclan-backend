@@ -1,3 +1,4 @@
+import { isTeamManager } from '../utils/teamAuth';
 import { isPremiumActive } from '../utils/premium';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -563,14 +564,11 @@ export async function updateEntry(req: Request, res: Response) {
 
     // Operational: any organiser (creator or co-organiser) may approve/reject/manage entries.
     const isCreator = await isTournamentOrganiser(id, userId);
-    const { data: membership } = await supabase
-      .from('team_members')
-      .select('role')
-      .eq('team_id', entry.team_id)
-      .eq('user_id', userId)
-      .maybeSingle();
+    // SC-396: reimplemented utils/teamAuth.isTeamManager inline — and named the
+    // result `isTeamCaptain` while actually computing MANAGER (captain OR
+    // vice-captain), which is a misreading waiting to happen at the call site.
     // SC-267: a co-captain may also withdraw the team (operational).
-    const isTeamCaptain = membership?.role === 'captain' || membership?.role === 'vice_captain';
+    const isTeamManagerOfEntry = await isTeamManager(entry.team_id, userId);
 
     if (status === 'approved' || status === 'rejected') {
       if (!isCreator) return res.status(403).json({ error: 'Only the tournament organiser can approve/reject' });
@@ -581,7 +579,7 @@ export async function updateEntry(req: Request, res: Response) {
       }
     } else if (status === 'withdrawn') {
       // SC-88: the team captain (self-withdraw) or the organiser may withdraw.
-      if (!isTeamCaptain && !isCreator) {
+      if (!isTeamManagerOfEntry && !isCreator) {
         return res.status(403).json({ error: 'Only the team captain or organiser can withdraw' });
       }
     } else {

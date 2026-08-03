@@ -39,7 +39,6 @@ import referralsRoutes from './routes/referrals.routes';
 import devRoutes from './routes/dev.routes';
 import adminRoutes from './routes/admin.routes';
 import jobsRoutes from './routes/jobs.routes';
-import { recordRouteHit, getRouteHits } from './middleware/routeHits.middleware';
 import { authenticateToken } from './middleware/auth.middleware';
 
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
@@ -76,10 +75,6 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // 10MB)". 14mb covers base64 of a full 10MB image (13.34MB) so the controller is
 // what actually enforces the limit, with the message the user should see.
 app.use(express.json({ limit: '14mb' }));
-// SC-396 (TEMPORARY — remove after the dead-route sweep): record which route
-// PATTERNS actually get hit, so deletion is driven by real traffic instead of
-// static matching. Stores no ids, queries or bodies.
-app.use(recordRouteHit);
 
 // Backstop: scrub internal/DB detail from any 5xx response (SC-44).
 app.use(sanitizeErrorResponses);
@@ -162,12 +157,6 @@ app.use('/venues', venuesRoutes);
 app.use('/referrals', referralsRoutes);
 app.use('/dev', devRoutes);
 app.use('/internal/jobs', jobsRoutes);
-// SC-396 (TEMPORARY) — read the recorded hits. Gated behind a normal login
-// rather than CRON_SECRET, which is unset in prod (SC-217) and fails closed, so
-// a cron-gated diagnostic would be unreadable. Returns route PATTERNS and counts
-// only — no ids, no user data — and patterns are already discoverable from the
-// shipped client bundle.
-app.get('/internal/route-hits', authenticateToken, (_req, res) => res.json({ hits: getRouteHits() }));
 app.use('/admin', adminRoutes);
 
 // Final backstop for uncaught throws (must be last).

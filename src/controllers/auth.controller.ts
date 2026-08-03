@@ -155,14 +155,29 @@ export async function sendOtp(req: Request, res: Response) {
     });
   }
 
-  const sent = await sendOtpViaChannel(p, code, channel);
+  // SC-398: the WhatsApp fallback was DOCUMENTED but never wired. The comment on
+  // sendOtpViaChannel says "WhatsApp is the fallback when voice fails (carrier
+  // block, SIM issue, voice rate limits)" — yet sendOtp only ever sent the one
+  // requested channel, so a voice failure was terminal and the fallback was dead
+  // code. A user on a carrier that blocks robocalls could never log in.
+  let usedChannel = channel;
+  let sent = await sendOtpViaChannel(p, code, channel);
+  if (!sent && channel === 'voice') {
+    // eslint-disable-next-line no-console
+    console.warn('[send-otp] voice failed · falling back to WhatsApp');
+    usedChannel = 'whatsapp';
+    sent = await sendOtpViaChannel(p, code, 'whatsapp');
+  }
   if (!sent) {
     return res.status(503).json({
       error: 'We could not send a code to that number. Please try again.',
       code: 'OTP_SEND_FAILED',
     });
   }
-  return res.json({ success: true, message: 'OTP sent', channel });
+  // Report the channel that actually delivered, not the one asked for — the app
+  // tells the user where to look for the code ("check WhatsApp" vs "answer the
+  // call"), and after a fallback those differ.
+  return res.json({ success: true, message: 'OTP sent', channel: usedChannel });
 }
 
 // Best-effort suspension check used by all login paths. Tolerates the

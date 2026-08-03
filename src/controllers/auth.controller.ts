@@ -75,14 +75,20 @@ function normalizePhone(phone: string): string {
   return phone.trim().replace(/\s+/g, '');
 }
 
-// Send OTP via 2Factor.in — choose between voice call and WhatsApp.
-// Voice is the default (per product spec for India to dodge SMS deliverability).
-// WhatsApp is the fallback when voice fails (carrier block, SIM issue, voice
-// rate limits). On dev with no API key, both fall through to console.
+// Send OTP via 2Factor.in — SMS, voice call, or WhatsApp.
+//
+// SC-399: SMS is the primary channel. It used to be voice ("to dodge SMS
+// deliverability"), but the account's Voice OTP balance was 0.00 while SMS had
+// 2,197 credits — so every voice send failed and phone login was dead. Balance,
+// not deliverability, is what actually decides whether a code arrives.
+//
+// On dev with no API key, all channels fall through to console.
+type OtpChannel = 'sms' | 'voice' | 'whatsapp';
+
 async function sendOtpViaChannel(
   phone: string,
   code: string,
-  channel: 'voice' | 'whatsapp',
+  channel: OtpChannel,
 ): Promise<boolean> {
   const apiKey = process.env.TWOFACTOR_API_KEY;
   if (!apiKey) {
@@ -92,29 +98,46 @@ async function sendOtpViaChannel(
   }
   try {
     const cleanPhone = phone.replace(/^\+91/, '');
+    let url: string;
     if (channel === 'whatsapp') {
       // 2Factor.in WhatsApp template: requires a pre-approved template ID.
       // ENV: TWOFACTOR_WHATSAPP_TEMPLATE_ID (e.g. "SportClanOTP")
       // Falls back to AUTOGEN2 (transactional WhatsApp) if template not set.
       const tpl = process.env.TWOFACTOR_WHATSAPP_TEMPLATE_ID || 'AUTOGEN2';
-      const url = `https://2factor.in/API/V1/${apiKey}/ADDON_SERVICES/SEND/WAPI/${cleanPhone}/${tpl}/${code}`;
-      await axios.get(url, { timeout: 8000 }); // SC-150: fail fast if 2Factor.in hangs
-      return true;
+      url = `https://2factor.in/API/V1/${apiKey}/ADDON_SERVICES/SEND/WAPI/${cleanPhone}/${tpl}/${code}`;
+    } else if (channel === 'voice') {
+      url = `https://2factor.in/API/V1/${apiKey}/VOICE/${cleanPhone}/${code}`;
+    } else {
+      // SMS with OUR generated code (not AUTOGEN — the code is already stored,
+      // so letting 2Factor mint a different one would never verify).
+      // ENV: TWOFACTOR_SMS_TEMPLATE_ID — optional; omitted uses the account default.
+      const tpl = process.env.TWOFACTOR_SMS_TEMPLATE_ID;
+      url = tpl
+        ? `https://2factor.in/API/V1/${apiKey}/SMS/${cleanPhone}/${code}/${tpl}`
+        : `https://2factor.in/API/V1/${apiKey}/SMS/${cleanPhone}/${code}`;
     }
-    // Voice call (default)
-    const url = `https://2factor.in/API/V1/${apiKey}/VOICE/${cleanPhone}/${code}`;
-    await axios.get(url, { timeout: 8000 }); // SC-150: fail fast if 2Factor.in hangs
+    const { data } = await axios.get(url, { timeout: 8000 }); // SC-150: fail fast if 2Factor.in hangs
+    // SC-399: 2Factor answers 200 with {"Status":"Error"} for things like an
+    // exhausted balance or a bad template. The old code returned true on any
+    // non-throw, so a refused send was reported to the user as "OTP sent" and
+    // they waited for a code that was never going to arrive.
+    const status = (data as { Status?: string } | null)?.Status;
+    if (status && status.toLowerCase() !== 'success') {
+      // eslint-disable-next-line no-console
+      console.error(`[2Factor.in] ${channel} refused:`, JSON.stringify(data));
+      return false;
+    }
     return true;
   } catch (err: any) {
     // eslint-disable-next-line no-console
-    console.error(`[2Factor.in] ${channel} send failed:`, err?.message);
+    console.error(`[2Factor.in] ${channel} send failed:`, err?.response?.status, err?.message);
     return false;
   }
 }
 
 // Legacy alias retained so other call sites don't break
 async function sendSmsOtp(phone: string, code: string): Promise<boolean> {
-  return sendOtpViaChannel(phone, code, 'voice');
+  return sendOtpViaChannel(phone, code, 'sms');
 }
 
 // POST /auth/send-otp  { phone, purpose?, channel? }
@@ -127,8 +150,9 @@ export async function sendOtp(req: Request, res: Response) {
   if (typeof phone !== 'string') {
     return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE' });
   }
-  const channel: 'voice' | 'whatsapp' =
-    rawChannel === 'whatsapp' ? 'whatsapp' : 'voice';
+  // SC-399: SMS is the default; voice and WhatsApp remain explicitly requestable.
+  const channel: OtpChannel =
+    rawChannel === 'whatsapp' ? 'whatsapp' : rawChannel === 'voice' ? 'voice' : 'sms';
   const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // SC-385: reuse the SAME rule register already enforces (SC-72). It was only
   // applied at registration, so the number could afterwards be replaced with
@@ -160,11 +184,11 @@ export async function sendOtp(req: Request, res: Response) {
   // block, SIM issue, voice rate limits)" — yet sendOtp only ever sent the one
   // requested channel, so a voice failure was terminal and the fallback was dead
   // code. A user on a carrier that blocks robocalls could never log in.
-  let usedChannel = channel;
+  let usedChannel: OtpChannel = channel;
   let sent = await sendOtpViaChannel(p, code, channel);
-  if (!sent && channel === 'voice') {
+  if (!sent && channel !== 'whatsapp') {
     // eslint-disable-next-line no-console
-    console.warn('[send-otp] voice failed · falling back to WhatsApp');
+    console.warn(`[send-otp] ${channel} failed · falling back to WhatsApp`);
     usedChannel = 'whatsapp';
     sent = await sendOtpViaChannel(p, code, 'whatsapp');
   }

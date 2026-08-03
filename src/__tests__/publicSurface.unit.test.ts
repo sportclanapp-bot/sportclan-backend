@@ -201,3 +201,42 @@ describe('SC-396 · client limits mirror the server', () => {
     expect(FE_MIRROR.bioMax).not.toBe(140);
   });
 });
+
+// ── SC-396 · pagination parsing is one function ───────────────────────────
+import { parsePagination } from '../utils/pagination';
+
+describe('SC-396 · pagination clamps hostile input', () => {
+  it('a NEGATIVE offset is clamped — it reached .range() and 500d in prod', () => {
+    // Verified live: GET /transactions?limit=-5&offset=-10 returned 500 before
+    // this consolidation, because `parseInt('-10') || 0` is -10, not 0.
+    const p = parsePagination({ limit: '-5', offset: '-10' }, { defaultLimit: 50, maxLimit: 100 });
+    expect(p.offset).toBe(0);
+    expect(p.limit).toBe(50);
+    expect(p.from).toBeGreaterThanOrEqual(0);
+    expect(p.to).toBeGreaterThanOrEqual(p.from);
+  });
+
+  it('a negative limit falls back to the default, not through `||`', () => {
+    // The hand-rolled copies did `parseInt(x) || 20` — and -5 is TRUTHY, so a
+    // negative page size survived and produced an inverted range.
+    expect(parsePagination({ limit: '-5' }, { defaultLimit: 20, maxLimit: 50 }).limit).toBe(20);
+  });
+
+  it('an oversized limit is capped', () => {
+    expect(parsePagination({ limit: '99999' }, { defaultLimit: 50, maxLimit: 100 }).limit).toBe(100);
+  });
+
+  it('garbage falls back to the default', () => {
+    expect(parsePagination({ limit: 'abc', offset: 'xyz' }, { defaultLimit: 25 }).limit).toBe(25);
+    expect(parsePagination({ limit: 'abc', offset: 'xyz' }, {}).offset).toBe(0);
+  });
+
+  it('offset overflow is capped defensively', () => {
+    expect(parsePagination({ offset: '999999999999' }, {}).offset).toBe(10_000_000);
+  });
+
+  it('the happy path is untouched', () => {
+    const p = parsePagination({ limit: '20', offset: '40' }, { maxLimit: 100 });
+    expect([p.limit, p.offset, p.from, p.to]).toEqual([20, 40, 40, 59]);
+  });
+});

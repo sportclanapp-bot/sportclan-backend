@@ -15,6 +15,7 @@
  */
 
 import { Request, Response } from 'express';
+import { parsePagination } from '../utils/pagination';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { LIMITS, firstDisallowedImageUrl, firstInvalidUrl } from '../utils/validation';
@@ -109,7 +110,12 @@ export async function listProfilePosts(req: Request, res: Response) {
   const authorId = (req.query.user_id ?? req.query.author_id) as string | undefined;
   if (!authorId) return res.status(400).json({ error: 'user_id is required' });
 
-  const pageSize = Math.min(parseInt((req.query.limit as string) || '20', 10) || 20, 50);
+  // SC-396: shared parser — a negative limit used to survive `|| 20` (it is
+  // truthy) and reach .range() as a negative page size.
+  const { limit: pageSize } = parsePagination(req.query as Record<string, unknown>, {
+    defaultLimit: 20,
+    maxLimit: 50,
+  });
   const cursor = req.query.cursor as string | undefined;
 
   // SC-81/82: a blocked author's wall is not readable (either direction).
@@ -272,8 +278,10 @@ export async function unlikeProfilePost(req: Request, res: Response) {
 // ─── COMMENTS ───────────────────────────────────────────────────────────────
 export async function listProfilePostComments(req: Request, res: Response) {
   const { id } = req.params;
-  const pageSize = Math.min(parseInt((req.query.limit as string) || '50', 10) || 50, 100);
-  const offset = Math.max(parseInt((req.query.offset as string) || '0', 10) || 0, 0);
+  const { limit: pageSize, offset } = parsePagination(req.query as Record<string, unknown>, {
+    defaultLimit: 50,
+    maxLimit: 100,
+  });
 
   const { data, error, count } = await supabase
     .from('profile_post_comments')

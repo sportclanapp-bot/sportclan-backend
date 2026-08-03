@@ -1,12 +1,18 @@
 import { Request, Response } from 'express';
+import { parsePagination } from '../utils/pagination';
 import { supabase } from '../utils/supabase';
 
 // GET /transactions?type=&limit=&offset=
 export async function getTransactions(req: Request, res: Response) {
   const userId = req.userId!;
   const type = req.query.type as string | undefined;
-  const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-  const offset = parseInt(req.query.offset as string) || 0;
+  // SC-396: was hand-rolled. `parseInt('-5') || 0` is -5, so a NEGATIVE offset
+  // passed straight through into .range() — the shared parser clamps it, along
+  // with NaN, zero/negative limits and offset overflow.
+  const { limit, offset } = parsePagination(req.query as Record<string, unknown>, {
+    defaultLimit: 50,
+    maxLimit: 100,
+  });
 
   let query = supabase
     .from('transactions')

@@ -6,6 +6,7 @@ import { notifyUsers } from '../utils/notify';
 import { isTerminalMatchStatus } from '../utils/validation';
 import { canOfficiateMatch } from '../utils/tournamentAuth';
 import { isSportInactive } from '../utils/sports';
+import { isKnownEventType } from '../utils/scoringEvents';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
 // every participant in the match. Failures are swallowed — the fan-out must
@@ -60,6 +61,16 @@ export async function createEvent(req: Request, res: Response) {
     const matchId = String(req.params.matchId);
     const { event_type, period, clock_seconds, payload, idempotency_key } = req.body || {};
     if (!event_type) return res.status(400).json({ error: 'event_type is required' });
+    // SC-408: an event nobody can read must not be accepted. Unknown types used
+    // to persist with a 201 and then leak into the partnership view (which sums
+    // payload.runs broadly) while the innings aggregator ignored them — two
+    // numbers on one screen disagreeing, from the same ledger.
+    if (!isKnownEventType(event_type)) {
+      return res.status(400).json({
+        error: `Unknown event_type "${String(event_type)}".`,
+        code: 'UNKNOWN_EVENT_TYPE',
+      });
+    }
 
     const auth = await authorizeScorer(matchId, userId);
     if (!auth.ok) return res.status(auth.status).json({ error: auth.error });

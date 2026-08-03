@@ -144,3 +144,60 @@ describe('SC-396 · Indian money formatting', () => {
     expect(formatINR(7)).toBe('₹7');
   });
 });
+
+// ── SC-396 · shared helpers: one version each ─────────────────────────────
+import { LIMITS, ARRAY_LIMITS } from '../utils/validation';
+
+describe('SC-396 · sport-slug normalisation is one rule', () => {
+  const normSportSlug = (s: string) => s.toLowerCase().replace(/[-_\s]/g, '');
+  // The six hand-rolled copies were `/[-_]/g` — no \s.
+  const oldLocal = (s: string) => s.toLowerCase().replace(/[-_]/g, '');
+
+  it('a slug with a SPACE normalised differently in the copies (the latent bug)', () => {
+    expect(normSportSlug('Table Tennis')).toBe('tabletennis');
+    expect(oldLocal('Table Tennis')).toBe('table tennis'); // would never match
+    expect(normSportSlug('Table Tennis')).not.toBe(oldLocal('Table Tennis'));
+  });
+
+  it('every spelling of the same sport collapses to one value', () => {
+    const forms = ['table-tennis', 'table_tennis', 'Table Tennis', 'TABLETENNIS'];
+    expect(new Set(forms.map(normSportSlug)).size).toBe(1);
+  });
+
+  it('simple slugs are unaffected', () => {
+    expect(normSportSlug('cricket')).toBe('cricket');
+  });
+});
+
+describe('SC-396 · client limits mirror the server', () => {
+  // The FE mirror must not drift from the BE source of truth.
+  const FE_MIRROR = {
+    tournamentMinTeams: 2, tournamentMaxTeams: 64, expenseMaxAmount: 99_999_999.99,
+    expenseTitleMax: 120, venueMax: 120, postTextMax: 500, bioMax: 500,
+    teamNameMax: 60, tournamentNameMax: 120, descriptionMax: 2000,
+    groupNameMax: 60, urlMax: 2048,
+  };
+  // Array caps are a SEPARATE object on the server — the mirror keeps that split.
+  const FE_ARRAY_MIRROR = {
+    mentions: 20, participants: 50, forwardChats: 20,
+    batchIds: 500, splitAmong: 50, sportIds: 30,
+  };
+
+  it('every mirrored key matches the server value', () => {
+    for (const [k, v] of Object.entries(FE_MIRROR)) {
+      expect((LIMITS as Record<string, number>)[k]).toBe(v);
+    }
+  });
+
+  it('array caps mirror ARRAY_LIMITS, not LIMITS', () => {
+    for (const [k, v] of Object.entries(FE_ARRAY_MIRROR)) {
+      expect((ARRAY_LIMITS as Record<string, number>)[k]).toBe(v);
+    }
+  });
+
+  it('bio was the drifted one — client said 140, server allows 500', () => {
+    expect(LIMITS.bioMax).toBe(500);
+    expect(FE_MIRROR.bioMax).toBe(LIMITS.bioMax);
+    expect(FE_MIRROR.bioMax).not.toBe(140);
+  });
+});

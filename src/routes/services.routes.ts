@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { VALID_ACCOUNT_TYPES } from '../constants/accountTypes';
 import { parsePagination, pageMeta } from '../utils/pagination';
+import { authenticateToken } from '../middleware/auth.middleware';
 
 const router = Router();
 
@@ -23,7 +24,13 @@ const SERVICE_TYPES = new Set(VALID_ACCOUNT_TYPES.filter((t) => t !== 'player'))
 // providers were silently truncated and a newly-added one could never appear.
 // Now the premium filter is pushed into the query via an inner join (so `count`
 // is the true premium-only total) with a deterministic order + range.
-router.get('/', async (req: Request, res: Response) => {
+// SC-393: this was the ONLY list endpoint in the app that answered without a
+// token — /tournaments, /venues, /messages/chats and /community/posts all 401.
+// The payload was public-profile fields only, so nothing leaked, but the
+// inconsistency meant one of the two behaviours was unintentional. Dipak's call:
+// consistency wins. Safe to gate — every caller (ServicesHub / ServiceList /
+// VenuesList) lives inside MainStack, which only mounts when authenticated.
+router.get('/', authenticateToken, async (req: Request, res: Response) => {
   const type = ((req.query.type as string) || '').trim().toLowerCase();
   if (!SERVICE_TYPES.has(type as never)) {
     return res.status(400).json({

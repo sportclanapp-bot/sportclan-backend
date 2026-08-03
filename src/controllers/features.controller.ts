@@ -294,21 +294,27 @@ export async function getTournamentAnalytics(req: Request, res: Response) {
     if (!t) return res.status(404).json({ error: 'Tournament not found' });
     if (!(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only the organiser can view analytics' });
 
-    const [entriesRes, matchesRes] = await Promise.all([
+    // SC-396: these were derived from `.length` of an UNBOUNDED select, so for a
+    // tournament with more fixtures than PostgREST's implicit row cap the counts
+    // were a page length and completion_percentage was computed off it. Counted
+    // server-side instead — the same class as SC-370/SC-296.
+    const [entriesRes, totalRes, completedRes, pendingRes] = await Promise.all([
       supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id),
-      supabase.from('matches').select('id, status').eq('tournament_id', id),
+      supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id),
+      supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id).eq('status', 'completed'),
+      supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id).in('status', ['scheduled', 'live']),
     ]);
 
-    const matches = matchesRes.data ?? [];
-    const completed = matches.filter((m) => m.status === 'completed').length;
-    const pending = matches.filter((m) => m.status === 'scheduled' || m.status === 'live').length;
-    const total = matches.length || 1;
+    const completed = completedRes.count ?? 0;
+    const totalMatches = totalRes.count ?? 0;
 
     return res.json({
       registrations_count: entriesRes.count ?? 0,
       matches_completed: completed,
-      matches_pending: pending,
-      completion_percentage: Math.round((completed / total) * 100),
+      matches_pending: pendingRes.count ?? 0,
+      // Guard the divisor, and report 0% (not 100%) for a tournament with no
+      // fixtures — `|| 1` previously made 0/1 read as 0% by luck, not intent.
+      completion_percentage: totalMatches > 0 ? Math.round((completed / totalMatches) * 100) : 0,
     });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

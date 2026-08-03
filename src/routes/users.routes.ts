@@ -52,13 +52,13 @@ router.get('/discover', authenticateToken, discoverPlayers);
 router.get('/:id', optionalAuth, getUserById);
 router.get('/:id/followers', optionalAuth, getFollowers);
 router.get('/:id/following', optionalAuth, getFollowing);
-router.get('/:id/sport-profile/:sportId', getSportProfile);
+router.get('/:id/sport-profile/:sportId', authenticateToken, getSportProfile);
 router.patch('/:id/sport-profile/:sportId', authenticateToken, updateSportProfile);
-router.get('/:id/activity-heatmap', getActivityHeatmap);
+router.get('/:id/activity-heatmap', authenticateToken, getActivityHeatmap);
 router.get('/:id/rating-history', authenticateToken, getRatingHistory);
 router.get('/:id/rival', authenticateToken, getRival);
-router.get('/:id/season-recap', getSeasonRecap);
-router.get('/:id/insights', getUserInsights);
+router.get('/:id/season-recap', authenticateToken, getSeasonRecap);
+router.get('/:id/insights', authenticateToken, getUserInsights);
 
 router.get('/:id/reviews', optionalAuth, getReviews);
 router.post('/:id/reviews', authenticateToken, submitReview);

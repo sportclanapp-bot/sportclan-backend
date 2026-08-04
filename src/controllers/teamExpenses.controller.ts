@@ -5,6 +5,7 @@ import { LIMITS, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
 import { isTeamManager } from '../utils/teamAuth';
 import { parsePagination } from '../utils/pagination';
 import { summariseLedger, splitExpense } from '../utils/expenseSplit';
+import { isUuid } from '../utils/uuid';
 
 // ── Team Expense Manager ────────────────────────────────────────────────────
 //
@@ -76,6 +77,14 @@ function toRupees(paise: number): number {
  * trail should fail the action. For a DELETE it must: that's the case where the
  * evidence would otherwise disappear silently.
  */
+/** SC-418: set equality for split_among — order carries no meaning. */
+export function sameMemberSet(a: string[] | null | undefined, b: string[] | null | undefined): boolean {
+  const A = new Set(a ?? []), B = new Set(b ?? []);
+  if (A.size !== B.size) return false;
+  for (const x of A) if (!B.has(x)) return false;
+  return true;
+}
+
 async function writeExpenseLog(entry: {
   teamId: string;
   expenseId: string;
@@ -312,6 +321,10 @@ export async function addExpense(req: Request, res: Response) {
     await writeExpenseLog({
       teamId: id!, expenseId: data.id, action: 'created', actorId: userId,
       expenseTitle: data.title, amount: data.amount,
+      // SC-418: the captured split is now a meaningful fact about the expense
+      // (SC-417 froze it), so the trail must say what it was frozen to. Without
+      // this the log could show an amount but never what it was divided between.
+      changes: { split_among: { from: null, to: (data as { split_among?: string[] }).split_among ?? [] } },
     });
     return res.json({ expense: data });
   } catch {
@@ -363,6 +376,36 @@ export async function updateExpense(req: Request, res: Response) {
       if (!payerMember) return res.status(400).json({ error: 'paid_by must be a member of this team' });
       patch.paid_by = body.paid_by;
     }
+    // SC-418: allow an explicit split correction. SC-417 froze the split so the
+    // roster can't move it — but an editor correcting the record must still be
+    // able to say "these are the people it was actually split between".
+    if (body.split_among !== undefined) {
+      const raw = body.split_among;
+      if (!Array.isArray(raw)) {
+        return res.status(400).json({ error: 'split_among must be an array of member ids.' });
+      }
+      const next = Array.from(new Set(raw.map((x: unknown) => String(x))));
+      if (next.some((x) => !isUuid(x))) {
+        return res.status(400).json({ error: 'split_among must contain member ids.' });
+      }
+      // Each entry must be a CURRENT member, or already in this expense's split.
+      // The second clause matters: a frozen split legitimately names people who
+      // have since left, and correcting an expense must not force them out of it.
+      const { data: roster } = await supabase
+        .from('team_members').select('user_id').eq('team_id', id);
+      const allowed = new Set<string>([
+        ...((roster ?? []).map((m: { user_id: string }) => m.user_id)),
+        ...(((existing as { split_among?: string[] }).split_among) ?? []),
+      ]);
+      const stranger = next.find((x) => !allowed.has(x));
+      if (stranger) {
+        return res.status(400).json({
+          error: 'split_among may only contain team members or people already in this split.',
+        });
+      }
+      patch.split_among = next;
+    }
+
     if (Object.keys(patch).length === 0) {
       return res.status(400).json({ error: 'Nothing to update.' });
     }
@@ -381,7 +424,14 @@ export async function updateExpense(req: Request, res: Response) {
     for (const field of Object.keys(patch)) {
       const before = (existing as Record<string, unknown>)[field];
       const after = (data as Record<string, unknown>)[field];
-      if (field === 'amount' ? toPaise(before) !== toPaise(after) : before !== after) {
+      // SC-418: split_among is a UUID[]. `before !== after` is a REFERENCE
+      // compare on arrays, so without this every edit would log a phantom split
+      // change. Order is not meaningful — it's a set.
+      const moved =
+        field === 'amount' ? toPaise(before) !== toPaise(after)
+        : field === 'split_among' ? !sameMemberSet(before as string[] | null, after as string[] | null)
+        : before !== after;
+      if (moved) {
         changes[field] = { from: before ?? null, to: after ?? null };
       }
     }

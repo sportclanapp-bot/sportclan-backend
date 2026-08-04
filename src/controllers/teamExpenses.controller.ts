@@ -4,6 +4,7 @@ import { sanitizeError } from '../utils/response';
 import { LIMITS, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
 import { isTeamManager } from '../utils/teamAuth';
 import { parsePagination } from '../utils/pagination';
+import { summariseLedger, splitExpense } from '../utils/expenseSplit';
 
 // ── Team Expense Manager ────────────────────────────────────────────────────
 //
@@ -293,7 +294,12 @@ export async function addExpense(req: Request, res: Response) {
         amount: cleanAmount,
         category: category || 'other',
         paid_by: payer,
-        split_among: split_among ?? [],
+        // SC-417: CAPTURE the split set now. This is what freezes history — the
+        // summary reads this array, never the live roster, so a later join or
+        // removal cannot change what this expense was split between.
+        split_among: (Array.isArray(split_among) && split_among.length > 0)
+          ? split_among
+          : await currentRoster(id!),
         notes: notes || null,
         match_id: match_id || null,
         tournament_id: tournament_id || null,
@@ -439,6 +445,18 @@ export async function deleteExpense(req: Request, res: Response) {
   }
 }
 
+/**
+ * SC-417 · the team's roster right now, used ONLY at expense-creation time to
+ * capture the split set. Never called when reading an existing expense.
+ */
+async function currentRoster(teamId: string): Promise<string[]> {
+  const { data } = await supabase
+    .from('team_members')
+    .select('user_id')
+    .eq('team_id', teamId);
+  return (data ?? []).map((m: { user_id: string }) => m.user_id).filter(Boolean);
+}
+
 export async function getExpenseSummary(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -449,36 +467,28 @@ export async function getExpenseSummary(req: Request, res: Response) {
 
     const { data: expenses } = await supabase
       .from('team_expenses')
-      .select('amount')
+      .select('amount, split_among')
       .eq('team_id', id);
 
-    // Integer paise throughout — see toPaise.
-    const totalPaise = (expenses ?? []).reduce((s, e) => s + toPaise(e.amount), 0);
-
-    // Even-split denominator = the team's actual member count, not the union of
-    // members who happen to appear in existing expense splits — the old code
-    // returned "1 member" for a fully-rostered team with no/narrow expenses (A9-001).
-    const { count: teamMemberCount } = await supabase
-      .from('team_members')
-      .select('id', { count: 'exact', head: true })
-      .eq('team_id', id);
-    const memberCount = Math.max(1, teamMemberCount ?? 0);
-
-    // SC-360: the old `Math.ceil(total / memberCount)` over-collected — ₹100
-    // across 3 showed ₹34 each, and 34×3 = ₹102, so the split didn't add back
-    // up to the total it was splitting. Now: each member owes the floor share in
-    // paise, and the indivisible remainder is reported separately instead of
-    // being silently spread. perMember * memberCount + remainder === total,
-    // exactly, always.
-    const perMemberPaise = Math.floor(totalPaise / memberCount);
-    const remainderPaise = totalPaise - perMemberPaise * memberCount;
+    // SC-417: every figure derives from each expense's CAPTURED split_among, not
+    // from the live member count. Removing a member no longer rewrites what an
+    // already-recorded expense was split between.
+    const rows = (expenses ?? []).map((e: { amount: unknown; split_among: string[] | null }) => ({
+      amountPaise: toPaise(e.amount),
+      participants: Array.isArray(e.split_among) ? e.split_among : [],
+    }));
+    const sum = summariseLedger(rows);
 
     return res.json({
-      total: toRupees(totalPaise),
-      memberCount,
-      perMember: toRupees(perMemberPaise),
-      remainder: toRupees(remainderPaise),
-      splitExact: remainderPaise === 0,
+      total: toRupees(sum.totalPaise),
+      memberCount: sum.memberCount,
+      perMember: toRupees(sum.perMemberPaise),
+      remainder: toRupees(sum.remainderPaise),
+      splitExact: sum.splitExact,
+      // SC-417: false when expenses were recorded under different rosters — no
+      // single perMember/memberCount pair can describe a mixed ledger, so the UI
+      // must fall back to per-expense figures rather than imply one split.
+      uniformSplit: sum.uniformSplit,
     });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

@@ -110,8 +110,31 @@ app.get('/', (_req: Request, res: Response) => {
   res.json({ ok: true, service: 'sportclan-backend' });
 });
 
+/**
+ * SC-427 · /health says WHICH build is answering.
+ *
+ * Confirming a deploy used to mean probing for a route that only exists in the
+ * new code — SC-424 was verified by watching `POST /matches/:id/void` go 404 →
+ * 401. That works, but it needs a new route every time and tells you nothing when
+ * a release adds none. Render injects RENDER_GIT_COMMIT into the running service,
+ * so the build can simply say who it is.
+ *
+ * Short SHA rather than the full one: seven characters identify the commit for
+ * anyone who has the repo and reveal nothing more to anyone who does not.
+ * `startedAt` distinguishes "redeployed" from "same build, still up" when the SHA
+ * has not moved. Both are null off-Render (local, tests), never undefined, so the
+ * shape is stable for callers.
+ */
+const BOOT_ISO = new Date().toISOString();
+const GIT_COMMIT = process.env.RENDER_GIT_COMMIT ?? null;
+
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok' });
+  res.json({
+    status: 'ok',
+    commit: GIT_COMMIT ? GIT_COMMIT.slice(0, 7) : null,
+    branch: process.env.RENDER_GIT_BRANCH ?? null,
+    startedAt: BOOT_ISO,
+  });
 });
 
 // Stricter limit on /auth/send-otp must be mounted BEFORE the general /auth limiter

@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas } from '../utils/matchVoid';
+import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease, isStale, STALE_AFTER_MS } from '../utils/scoringLease';
+import { deviceIdOf } from '../utils/deviceHeader';
 import { getMatchLiveStatus } from '../utils/liveStatus';
 import { istDay } from '../utils/appTime';
 import { supabase } from '../utils/supabase';
@@ -336,6 +338,15 @@ export async function setMatchTossHandler(req: Request, res: Response) {
   if (!match) return res.status(404).json({ error: 'Match not found' });
   if (!(await canOfficiateMatch(match, userId))) {
     return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can record the toss' : 'Only the creator or umpire can record the toss' });
+  }
+  // SC-430: one scorer per match — the toss is a scoring write like any other.
+  // 409 with LEASE_LOST so the outbox halts the queue and asks the human rather
+  // than dropping or silently merging anything.
+  {
+    const verdict = await checkLease(id, userId, deviceIdOf(req));
+    if (!verdict.ok) {
+      return res.status(409).json({ error: 'Someone else took over scoring this match.', code: 'LEASE_LOST' });
+    }
   }
   // SC-42: a finished match is immutable — no toss changes.
   if (isTerminalMatchStatus(match.status)) {
@@ -846,6 +857,11 @@ export async function getMatch(req: Request, res: Response) {
 
     const matchWithRating: any = { ...match };
     if (liveStatus) matchWithRating.live_status = liveStatus;
+    // SC-430: who is scoring, so the pad can say "X is scoring on another phone"
+    // rather than handing a second device a usable scoring surface.
+    try {
+      matchWithRating.scoring_lease = await leaseWithHolder(await getLease(id));
+    } catch { /* the match payload matters more than the lease hint */ }
     if (ratings && ratings.length > 0) {
       const sum = ratings.reduce((acc, r: any) => acc + (r.match_quality ?? 0), 0);
       matchWithRating.avg_rating = Math.round((sum / ratings.length) * 10) / 10;
@@ -1421,6 +1437,15 @@ export async function completeMatch(req: Request, res: Response) {
     // the match state via a 400.
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can complete' : 'Only the creator or umpire can complete' });
+    }
+    // SC-430: one scorer per match — ending the match is a scoring write like any other.
+    // 409 with LEASE_LOST so the outbox halts the queue and asks the human rather
+    // than dropping or silently merging anything.
+    {
+      const verdict = await checkLease(id, userId, deviceIdOf(req));
+      if (!verdict.ok) {
+        return res.status(409).json({ error: 'Someone else took over scoring this match.', code: 'LEASE_LOST' });
+      }
     }
     if (match.status === 'completed') {
       // SC-421: the scoring outbox delivers this AT LEAST ONCE, and a completion
@@ -2070,6 +2095,150 @@ export async function unvoidMatch(req: Request, res: Response) {
     return res.json({ success: true, match: updated, restored_players: deltas.length });
   } catch (e) {
     console.error('unvoidMatch error:', e instanceof Error ? e.message : e);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ─── SC-430 · SCORING LEASE ────────────────────────────────────────────────
+//
+// Claim / heartbeat / release / take over. See utils/scoringLease for why a
+// stale lease is takeable but never auto-released.
+
+/** Shape returned to clients, with the holder's name so the UI can say WHO. */
+async function leaseWithHolder(lease: Awaited<ReturnType<typeof getLease>>) {
+  if (!lease) return null;
+  const { data: u } = await supabase
+    .from('users').select('id, name, username').eq('id', lease.user_id).maybeSingle();
+  return {
+    ...lease,
+    holder: (u as { id: string; name?: string; username?: string } | null) ?? null,
+    stale: isStale(lease),
+    stale_after_ms: STALE_AFTER_MS,
+    server_time: new Date().toISOString(),
+  };
+}
+
+export async function claimScoringLease(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const deviceId = deviceIdOf(req);
+    if (!deviceId) return res.status(400).json({ error: 'A device id is required to claim scoring.' });
+    const { data: match } = await supabase
+      .from('matches').select('id, created_by, umpire_id, tournament_id, status').eq('id', id).maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (!(await canOfficiateMatch(match, userId))) {
+      return res.status(403).json({ error: 'Only the scorer, umpire or organiser can score this match.' });
+    }
+    const out = await claimLease(id, userId, deviceId);
+    if (!out.taken) {
+      // Somebody else holds it. Not an error the caller can fix by retrying, so
+      // it answers 409 with everything the UI needs to offer a takeover.
+      return res.status(409).json({
+        error: 'Someone else is scoring this match.',
+        code: 'LEASE_HELD',
+        lease: await leaseWithHolder(out.heldBy ?? null),
+      });
+    }
+    return res.json({ lease: await leaseWithHolder(out.lease) });
+  } catch (e) {
+    console.error('claimScoringLease error:', e instanceof Error ? e.message : e);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function heartbeatScoringLease(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const deviceId = deviceIdOf(req);
+    if (!deviceId) return res.status(400).json({ error: 'A device id is required.' });
+    const out = await heartbeatLease(id, userId, deviceId);
+    if (!out.ok) {
+      // A heartbeat NEVER reinstates a lease you no longer hold — being told
+      // early is the whole point, so the pad can stop pretending.
+      return res.status(409).json({
+        error: 'Someone else took over scoring this match.',
+        code: 'LEASE_LOST',
+        lease: await leaseWithHolder(await getLease(id)),
+      });
+    }
+    return res.json({ lease: await leaseWithHolder(out.lease) });
+  } catch (e) {
+    console.error('heartbeatScoringLease error:', e instanceof Error ? e.message : e);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function releaseScoringLease(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const deviceId = deviceIdOf(req);
+    if (!deviceId) return res.status(400).json({ error: 'A device id is required.' });
+    // Idempotent: releasing a lease you no longer hold is a no-op success, so a
+    // screen unmounting twice never produces a spurious error.
+    const released = await releaseLease(id, userId, deviceId);
+    return res.json({ success: true, released });
+  } catch (e) {
+    console.error('releaseScoringLease error:', e instanceof Error ? e.message : e);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function takeOverScoringLease(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const deviceId = deviceIdOf(req);
+    if (!deviceId) return res.status(400).json({ error: 'A device id is required.' });
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    // Displacing a scorer mid-match is exactly the kind of act that has to be
+    // explainable afterwards, so the reason is required and recorded.
+    if (reason.length < 3) {
+      return res.status(400).json({ error: 'Say why you are taking over.', code: 'REASON_REQUIRED' });
+    }
+    const { data: match } = await supabase
+      .from('matches').select('id, created_by, umpire_id, tournament_id, status').eq('id', id).maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (!(await canOfficiateMatch(match, userId))) {
+      return res.status(403).json({ error: 'Only the scorer, umpire or organiser can take over.' });
+    }
+    const out = await takeOverLease(id, userId, deviceId, reason);
+    if (!out.ok) {
+      return res.status(409).json({
+        error: 'That phone is still scoring. Ask them to hand over, or wait.',
+        code: 'LEASE_ACTIVE',
+        lease: await leaseWithHolder(out.lease),
+      });
+    }
+    return res.json({ lease: await leaseWithHolder(out.lease) });
+  } catch (e) {
+    console.error('takeOverScoringLease error:', e instanceof Error ? e.message : e);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/** The holder hands over voluntarily: release, so the next phone claims cleanly
+ *  without a takeover record — nobody was displaced. */
+export async function handOverScoringLease(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const deviceId = deviceIdOf(req);
+    if (!deviceId) return res.status(400).json({ error: 'A device id is required.' });
+    const released = await releaseLease(id, userId, deviceId);
+    if (!released) {
+      return res.status(409).json({ error: 'You are not the one scoring this match.', code: 'LEASE_LOST' });
+    }
+    return res.json({ success: true });
+  } catch (e) {
+    console.error('handOverScoringLease error:', e instanceof Error ? e.message : e);
     return res.status(500).json({ error: 'Internal server error' });
   }
 }

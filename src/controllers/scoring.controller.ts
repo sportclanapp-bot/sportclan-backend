@@ -1,4 +1,6 @@
 import { Request, Response } from 'express';
+import { checkLease } from '../utils/scoringLease';
+import { deviceIdOf } from '../utils/deviceHeader';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
@@ -40,7 +42,7 @@ async function fanoutScoreUpdate(
   }
 }
 
-async function authorizeScorer(matchId: string, userId: string) {
+async function authorizeScorer(matchId: string, userId: string, deviceId?: string | null) {
   const { data: match } = await supabase
     .from('matches')
     .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked, tournament_id')
@@ -49,6 +51,21 @@ async function authorizeScorer(matchId: string, userId: string) {
   if (!match) return { ok: false as const, status: 404, error: 'Match not found' };
   if (!(await canOfficiateMatch(match, userId))) {
     return { ok: false as const, status: 403, error: match.tournament_id ? 'Only a tournament organiser or the umpire can score' : 'Only the umpire or creator can score' };
+  }
+  // SC-430: one scorer per match. Authorised is not the same as holding the pad —
+  // two officiants scoring the same game do not corrupt anything, they simply BOTH
+  // count, which is the quieter and worse failure. 409 so the client's outbox
+  // treats it as an ordinary rejection: the queue halts, keeps every point, and
+  // asks the human. See utils/scoringLease.
+  const verdict = await checkLease(matchId, userId, deviceId);
+  if (!verdict.ok) {
+    return {
+      ok: false as const,
+      status: 409,
+      error: 'Someone else took over scoring this match.',
+      code: 'LEASE_LOST',
+      lease: verdict.lease,
+    };
   }
   return { ok: true as const, match };
 }
@@ -72,8 +89,8 @@ export async function createEvent(req: Request, res: Response) {
       });
     }
 
-    const auth = await authorizeScorer(matchId, userId);
-    if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+    const auth = await authorizeScorer(matchId, userId, deviceIdOf(req));
+    if (!auth.ok) return res.status(auth.status).json({ error: auth.error, ...(auth.code ? { code: auth.code } : {}) });
     const match = auth.match;
 
     // SC-335: an out-of-scope (deactivated) sport can't be scored at all — even a
@@ -786,8 +803,8 @@ export async function undoEvent(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const matchId = String(req.params.matchId);
-    const auth = await authorizeScorer(matchId, userId);
-    if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+    const auth = await authorizeScorer(matchId, userId, deviceIdOf(req));
+    if (!auth.ok) return res.status(auth.status).json({ error: auth.error, ...(auth.code ? { code: auth.code } : {}) });
     // SC-42: no edits to a finished match.
     if (isTerminalMatchStatus(auth.match.status)) {
       return res.status(409).json({ error: 'This match is finished and can no longer be edited' });

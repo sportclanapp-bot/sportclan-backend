@@ -11,6 +11,11 @@ import {
   abandonMatch,
   voidMatch,
   unvoidMatch,
+  claimScoringLease,
+  heartbeatScoringLease,
+  releaseScoringLease,
+  takeOverScoringLease,
+  handOverScoringLease,
   followMatch,
   unfollowMatch,
   getMatchChat,
@@ -53,6 +58,14 @@ router.post('/:id/abandon', authenticateToken, abandonMatch);
 // SC-424: void keeps the match and its events and stops it counting anywhere.
 router.post('/:id/void', authenticateToken, voidMatch);
 router.post('/:id/unvoid', authenticateToken, unvoidMatch);
+// SC-430 · one scorer per match. Claim on opening the pad, heartbeat while it is
+// open, release on leaving. A STALE lease is takeable — with a reason — but never
+// auto-released, so an offline scorer's queue survives. See utils/scoringLease.
+router.post('/:id/scoring-lease', authenticateToken, claimScoringLease);
+router.post('/:id/scoring-lease/heartbeat', authenticateToken, heartbeatScoringLease);
+router.post('/:id/scoring-lease/release', authenticateToken, releaseScoringLease);
+router.post('/:id/scoring-lease/handover', authenticateToken, handOverScoringLease);
+router.post('/:id/scoring-lease/takeover', authenticateToken, takeOverScoringLease);
 router.post('/:id/follow', authenticateToken, followMatch);
 router.delete('/:id/follow', authenticateToken, unfollowMatch);
 router.get('/:id/chat', authenticateToken, getMatchChat);

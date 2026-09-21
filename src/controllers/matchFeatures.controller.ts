@@ -5,6 +5,8 @@ import { calculateDLSTarget } from '../utils/dls';
 import { aggregatePlayers, isGuestId, recomputeSummary, type CricketPlayerLine } from './scoring.controller';
 import { isTerminalMatchStatus } from '../utils/validation';
 import { canOfficiateMatch } from '../utils/tournamentAuth';
+import { checkLease } from '../utils/scoringLease';
+import { deviceIdOf } from '../utils/deviceHeader';
 
 /**
  * Shared gate for match-mutating feature endpoints (DLS, event edit/delete,
@@ -15,7 +17,8 @@ import { canOfficiateMatch } from '../utils/tournamentAuth';
 async function loadScorableMatch(
   id: string,
   userId: string,
-): Promise<{ error?: { status: number; msg: string } }> {
+  deviceId?: string | null,
+): Promise<{ error?: { status: number; msg: string; code?: string } }> {
   const { data: match } = await supabase
     .from('matches')
     .select('created_by, umpire_id, tournament_id, status')
@@ -32,6 +35,17 @@ async function loadScorableMatch(
   // winner post-completion → no ELO double-apply. Keep exactly as-is.
   if (isTerminalMatchStatus(match.status)) {
     return { error: { status: 409, msg: 'This match is finished and can no longer be modified' } };
+  }
+  // SC-430: one scorer per match. Being ALLOWED to score is not the same as being
+  // the one currently scoring — a second phone editing or deleting an event while
+  // somebody else holds the pad is exactly the conflicting write the lease exists
+  // to stop. Displacing them is possible, but it goes through takeover, which
+  // records who and why.
+  if (deviceId !== undefined) {
+    const verdict = await checkLease(id, userId, deviceId);
+    if (!verdict.ok) {
+      return { error: { status: 409, msg: 'Someone else is scoring this match.', code: 'LEASE_LOST' } };
+    }
   }
   return {};
 }
@@ -278,8 +292,8 @@ export async function applyDLS(req: Request, res: Response) {
     if (team1_score == null || total_overs == null || team2_overs_remaining == null || team2_wickets == null) {
       return res.status(400).json({ error: 'team1_score, total_overs, team2_overs_remaining, team2_wickets required' });
     }
-    const gate = await loadScorableMatch(id, userId);
-    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg });
+    const gate = await loadScorableMatch(id, userId, deviceIdOf(req));
+    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg, ...(gate.error.code ? { code: gate.error.code } : {}) });
 
     const result = calculateDLSTarget(
       Number(team1_score),
@@ -320,8 +334,8 @@ export async function editMatchEvent(req: Request, res: Response) {
     if (!event_id || !changes) return res.status(400).json({ error: 'event_id and changes required' });
 
     // Verify scorer/umpire/creator + reject finished matches (SC-42)
-    const gate = await loadScorableMatch(id, userId);
-    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg });
+    const gate = await loadScorableMatch(id, userId, deviceIdOf(req));
+    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg, ...(gate.error.code ? { code: gate.error.code } : {}) });
 
     // Get current event
     const { data: event } = await supabase
@@ -362,8 +376,8 @@ export async function deleteMatchEvent(req: Request, res: Response) {
     const { id, eventId } = req.params;
 
     // Verify scorer/umpire/creator + reject finished matches (SC-42)
-    const gate = await loadScorableMatch(id, userId);
-    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg });
+    const gate = await loadScorableMatch(id, userId, deviceIdOf(req));
+    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg, ...(gate.error.code ? { code: gate.error.code } : {}) });
 
     // Get event for audit
     const { data: event } = await supabase
@@ -418,8 +432,8 @@ export async function upsertInningsStats(req: Request, res: Response) {
     if (!Array.isArray(stats) || stats.length === 0) {
       return res.status(400).json({ error: 'stats array required' });
     }
-    const gate = await loadScorableMatch(id, userId);
-    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg });
+    const gate = await loadScorableMatch(id, userId, deviceIdOf(req));
+    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg, ...(gate.error.code ? { code: gate.error.code } : {}) });
 
     const rows = stats.map((s: any) => ({
       match_id: id,

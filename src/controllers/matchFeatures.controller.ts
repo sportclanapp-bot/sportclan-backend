@@ -372,7 +372,19 @@ export async function deleteMatchEvent(req: Request, res: Response) {
       .eq('id', eventId)
       .eq('match_id', id)
       .maybeSingle();
-    if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (!event) {
+      // SC-421: a queued undo is delivered AT LEAST ONCE — a timeout can hide a
+      // delete that actually succeeded, and the retry then finds nothing. The
+      // caller's desired end state ("this event is not on this match") already
+      // holds, so answering 404 would turn a successful replay into a hard
+      // rejection that halts the scorer's whole queue. Opt-in via ?idempotent=1
+      // so the SC-317 editor — a human acting on an event they can see listed,
+      // who genuinely wants to know it vanished — keeps its 404.
+      if (String(req.query.idempotent) === '1') {
+        return res.json({ success: true, already_deleted: true });
+      }
+      return res.status(404).json({ error: 'Event not found' });
+    }
 
     // Audit log
     await supabase.from('match_event_audit').insert({

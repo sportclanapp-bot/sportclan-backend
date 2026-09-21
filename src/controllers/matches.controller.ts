@@ -1380,7 +1380,7 @@ export async function completeMatch(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
-    const { winner_team_id, walkover, walkover_reason, is_draw } = req.body || {};
+    const { winner_team_id, walkover, walkover_reason, is_draw, idempotent } = req.body || {};
 
     // SC-376: let the recorder submit the SCORE alongside the result.
     //
@@ -1412,7 +1412,19 @@ export async function completeMatch(req: Request, res: Response) {
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can complete' : 'Only the creator or umpire can complete' });
     }
-    if (match.status === 'completed') return res.status(400).json({ error: 'Match already completed' });
+    if (match.status === 'completed') {
+      // SC-421: the scoring outbox delivers this AT LEAST ONCE, and a completion
+      // that timed out after the server had already finalised the match would
+      // come back as a 400 — a hard rejection that halts the scorer's queue over
+      // work that DID succeed. When the caller marks the request replay-safe,
+      // answer with the completed match instead: the end state it asked for
+      // already holds. Callers that don't opt in keep the old 400, so the manual
+      // "Complete match" button still tells a human they were too late.
+      if (idempotent) {
+        return res.json({ match, already_completed: true });
+      }
+      return res.status(400).json({ error: 'Match already completed' });
+    }
     // SC-42: an abandoned/cancelled match is already terminal — can't complete it.
     if (isTerminalMatchStatus(match.status)) {
       return res.status(409).json({ error: 'This match is already finished' });

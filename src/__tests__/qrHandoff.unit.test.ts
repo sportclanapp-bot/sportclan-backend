@@ -31,8 +31,8 @@ const payload = (over: Partial<HandoffPayload> = {}): HandoffPayload => ({
   n: 'nonce-1',
   t: Date.now(),
   o: [
-    { k: 'ck-1', s: 1, t: 'event', e: { event_type: 'ball', payload: { team_side: 'A', runs: 4 } } },
-    { k: 'ck-2', s: 2, t: 'event', e: { event_type: 'ball', payload: { team_side: 'A', runs: 1 } } },
+    { k: '11111111-1111-4111-8111-111111111111', s: 1, t: 'event', e: { event_type: 'ball', payload: { team_side: 'A', runs: 4 } } },
+    { k: '22222222-2222-4222-8222-222222222222', s: 2, t: 'event', e: { event_type: 'ball', payload: { team_side: 'A', runs: 1 } } },
   ],
   ...over,
 });
@@ -72,7 +72,7 @@ describe('SC-432 · signature', () => {
     const p = payload();
     const sig = s.sign(p);
     const extended = payload();
-    extended.o.push({ k: 'ck-3', s: 3, t: 'event', e: { event_type: 'ball', payload: { team_side: 'A', runs: 6 } } });
+    extended.o.push({ k: '33333333-3333-4333-8333-333333333333', s: 3, t: 'event', e: { event_type: 'ball', payload: { team_side: 'A', runs: 6 } } });
     expect(verifySignature(extended, sig, s.publicKey)).toBe(false);
   });
 
@@ -120,6 +120,10 @@ describe('SC-432 · shape gate before any crypto', () => {
 
   it('rejects an op with no idempotency key, which is what makes replay safe', () => {
     expect(looksWellFormed({ p: payload({ o: [{ k: '', s: 1, t: 'event', e: { event_type: 'ball' } }] }), sig: 'x' })).toBe(false);
+    // And a key that is not a UUID, which `match_events.client_key` cannot store:
+    // the row would be written WITHOUT a key and that op would silently lose its
+    // idempotency — the double-count this whole feature exists to prevent.
+    expect(looksWellFormed({ p: payload({ o: [{ k: 'ck-1', s: 1, t: 'event', e: { event_type: 'ball' } }] }), sig: 'x' })).toBe(false);
   });
 });
 

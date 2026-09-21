@@ -116,6 +116,16 @@ export interface VerifyResult {
 
 /** Shape check before any crypto: never hand attacker-controlled junk to a parser
  *  that assumes structure. */
+/**
+ * `match_events.client_key` is a `uuid` column, and a key that is not one is not
+ * stored — the insert falls back to a keyless row and that op silently loses its
+ * idempotency. Every op the app produces uses `crypto.randomUUID()`, so this only
+ * bites a crafted payload; but carrying ops that CANNOT dedupe is precisely the
+ * double-count this feature exists to prevent, so they are refused at the door
+ * rather than applied and hoped over. Found while verifying on prod.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function looksWellFormed(env: unknown): env is HandoffEnvelope {
   const e = env as HandoffEnvelope | null;
   if (!e || typeof e !== 'object' || typeof e.sig !== 'string' || !e.p) return false;
@@ -125,7 +135,7 @@ export function looksWellFormed(env: unknown): env is HandoffEnvelope {
   if (typeof p.t !== 'number' || !Number.isFinite(p.t)) return false;
   if (!Array.isArray(p.o) || p.o.length === 0 || p.o.length > 500) return false;
   return p.o.every(
-    (o) => o && typeof o.k === 'string' && o.k.length > 0 && typeof o.s === 'number'
+    (o) => o && typeof o.k === 'string' && UUID_RE.test(o.k) && typeof o.s === 'number'
       && o.t === 'event' && o.e && typeof o.e.event_type === 'string',
   );
 }

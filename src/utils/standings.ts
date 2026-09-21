@@ -237,13 +237,13 @@ export function rankTeams(teamIds: string[], matches: GMatch[], tiebreakerRules?
     if (level >= order.length) {
       return ids.slice().sort((x, y) => (x < y ? -1 : x > y ? 1 : 0)); // team_id terminator
     }
-    const keys = keyMapFor(order[level], ids);
+    const keys = keyMapFor(order[level]!, ids); // guarded by the length check above
     const sorted = ids.slice().sort((x, y) => keys.get(y)! - keys.get(x)!);
     // cluster consecutive equal keys
     const clusters: string[][] = [];
     for (const id of sorted) {
       const last = clusters[clusters.length - 1];
-      if (last && keys.get(last[0])! === keys.get(id)!) last.push(id);
+      if (last && keys.get(last[0]!)! === keys.get(id)!) last.push(id); // a cluster is never empty
       else clusters.push([id]);
     }
     if (clusters.length === 1) return rec(ids, level + 1); // no separation → next criterion

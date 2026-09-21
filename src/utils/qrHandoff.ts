@@ -147,25 +147,52 @@ export async function verifyHandoff(env: unknown, now = Date.now()): Promise<Ver
     return { ok: false, reason: 'EXPIRED', detail: 'This code is dated in the future.' };
   }
 
-  const { data: keyRow } = await supabase
+  /**
+   * Every key this device has ever registered, newest first — not just the live
+   * one.
+   *
+   * Taking only the newest row was wrong in the exact case the revoked rows exist
+   * for. A phone reinstalls, registers a fresh pair, and a code it signed an hour
+   * earlier then fails to match the new key and comes back as "altered or not
+   * signed by that phone" — accusing a scorer of tampering when all they did was
+   * reinstall. Found live, on prod, with a real rotation.
+   *
+   * Ten is plenty: it is a per-device key history, and a phone that has rotated
+   * ten times has a problem no error message can help with.
+   */
+  const { data: keyRows } = await supabase
     .from('device_signing_keys')
-    .select('public_key, revoked_at')
+    .select('public_key, revoked_at, revoked_reason')
     .eq('user_id', p.u)
     .eq('device_id', p.d)
     .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!keyRow) return { ok: false, reason: 'UNKNOWN_DEVICE', detail: 'That phone has never registered a signing key.' };
-  if ((keyRow as { revoked_at?: string | null }).revoked_at) {
-    return { ok: false, reason: 'DEVICE_REVOKED', detail: 'That phone’s signing key was revoked.' };
+    .limit(10);
+  if (!keyRows?.length) {
+    return { ok: false, reason: 'UNKNOWN_DEVICE', detail: 'That phone has never registered a signing key.' };
   }
 
-  if (!verifySignature(p, sig, (keyRow as { public_key: string }).public_key)) {
-    return { ok: false, reason: 'BAD_SIGNATURE', detail: 'This code was altered or was not signed by that phone.' };
+  type KeyRow = { public_key: string; revoked_at?: string | null; revoked_reason?: string | null };
+  const rows = keyRows as KeyRow[];
+  const live = rows.find((r) => !r.revoked_at);
+  if (live && verifySignature(p, sig, live.public_key)) return { ok: true, payload: p };
+
+  // Only claim "revoked" when the signature genuinely verifies against a revoked
+  // key. Saying it on any failure would turn this into an oracle and would be a
+  // guess dressed up as a fact.
+  const revoked = rows.find((r) => r.revoked_at && verifySignature(p, sig, r.public_key));
+  if (revoked) {
+    return {
+      ok: false,
+      reason: 'DEVICE_REVOKED',
+      detail: revoked.revoked_reason === 'rotated'
+        ? 'That phone has signed in again since this code was made, so the code is out of date. Ask for a new one.'
+        : 'That phone’s signing key was revoked.',
+    };
   }
 
-  return { ok: true, payload: p };
+  return { ok: false, reason: 'BAD_SIGNATURE', detail: 'This code was altered or was not signed by that phone.' };
 }
+
 
 /**
  * Whether a VERIFIED handoff may actually be applied, and if not, what to tell

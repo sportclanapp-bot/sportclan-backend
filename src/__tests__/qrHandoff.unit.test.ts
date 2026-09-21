@@ -259,3 +259,72 @@ describe('SC-432 · applying a verified handoff', () => {
     expect(r).toEqual({ status: 418, code: 'ODD', error: 'Teapot' });
   });
 });
+
+/**
+ * SC-432 · which key a handoff is checked against.
+ *
+ * Revoked rows are kept so an old QR is refused WITH A REASON rather than
+ * silently matching nothing. Looking only at the newest row threw that away: a
+ * phone that reinstalled got "altered or not signed by that phone" — a tampering
+ * accusation for a reinstall. Found on prod during the live verification, with a
+ * real rotation.
+ *
+ * The key history is the thing under test, so these drive the selection rule
+ * directly rather than through Supabase.
+ */
+type KeyRow = { public_key: string; revoked_at?: string | null; revoked_reason?: string | null };
+
+/** Mirrors verifyHandoff's key selection exactly. */
+function chooseKeyVerdict(rows: KeyRow[], verifies: (key: string) => boolean):
+  'ok' | 'UNKNOWN_DEVICE' | 'DEVICE_REVOKED' | 'BAD_SIGNATURE' {
+  if (!rows.length) return 'UNKNOWN_DEVICE';
+  const live = rows.find((r) => !r.revoked_at);
+  if (live && verifies(live.public_key)) return 'ok';
+  const revoked = rows.find((r) => r.revoked_at && verifies(r.public_key));
+  if (revoked) return 'DEVICE_REVOKED';
+  return 'BAD_SIGNATURE';
+}
+
+describe('SC-432 · choosing the key to verify against', () => {
+  const OLD = 'key-old';
+  const NEW = 'key-new';
+  const rotated: KeyRow[] = [
+    { public_key: NEW, revoked_at: null },
+    { public_key: OLD, revoked_at: '2026-09-21T00:00:00.000Z', revoked_reason: 'rotated' },
+  ];
+
+  it('a code signed by the live key is accepted', () => {
+    expect(chooseKeyVerdict(rotated, (k) => k === NEW)).toBe('ok');
+  });
+
+  it('a code signed by the PREVIOUS key is "revoked", not "altered"', () => {
+    // The bug: this used to read as BAD_SIGNATURE, telling a scorer who simply
+    // reinstalled that their code had been tampered with.
+    expect(chooseKeyVerdict(rotated, (k) => k === OLD)).toBe('DEVICE_REVOKED');
+  });
+
+  it('a code signed by neither is still a bad signature', () => {
+    expect(chooseKeyVerdict(rotated, () => false)).toBe('BAD_SIGNATURE');
+  });
+
+  it('"revoked" is claimed only when a revoked key actually verifies', () => {
+    // Otherwise this becomes an oracle, and a guess dressed as a fact.
+    const revokedOnly: KeyRow[] = [{ public_key: OLD, revoked_at: '2026-09-21T00:00:00.000Z' }];
+    expect(chooseKeyVerdict(revokedOnly, () => false)).toBe('BAD_SIGNATURE');
+    expect(chooseKeyVerdict(revokedOnly, (k) => k === OLD)).toBe('DEVICE_REVOKED');
+  });
+
+  it('a device with no key at all is unknown, not refused for its signature', () => {
+    expect(chooseKeyVerdict([], () => true)).toBe('UNKNOWN_DEVICE');
+  });
+
+  it('a sign-out (revoked, no replacement) refuses the code it signed', () => {
+    const signedOut: KeyRow[] = [{ public_key: OLD, revoked_at: '2026-09-21T00:00:00.000Z', revoked_reason: 'signed out' }];
+    expect(chooseKeyVerdict(signedOut, (k) => k === OLD)).toBe('DEVICE_REVOKED');
+  });
+
+  it('the live key is preferred even when an older one would also verify', () => {
+    // A phone that re-registered the SAME key must not be reported as revoked.
+    expect(chooseKeyVerdict(rotated, () => true)).toBe('ok');
+  });
+});

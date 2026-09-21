@@ -29,178 +29,34 @@
  *      points quietly failing to appear.
  */
 
-import { supabase } from './supabase';
+import { makeLease, isStale, STALE_AFTER_MS, type LeaseRow, type LeaseVerdict } from './leaseCore';
 
-/** No heartbeat for this long ⇒ the lease may be TAKEN OVER. It is not released,
- *  and the holder can still drain against it until somebody actually takes it. */
-export const STALE_AFTER_MS = 5 * 60 * 1000;
+/**
+ * SC-433: the rules themselves now live in `leaseCore`, because the offline
+ * tournament hub needs the same ones one level up and two copies would have
+ * drifted on who may record a tournament's results. Everything this module
+ * exported still exports, with the same signatures — this is a re-point, not a
+ * change of behaviour.
+ */
+export { isStale, STALE_AFTER_MS };
 
-export interface ScoringLease {
+export interface ScoringLease extends LeaseRow {
   match_id: string;
-  user_id: string;
-  device_id: string;
-  claimed_at: string;
-  heartbeat_at: string;
-  taken_over_from?: string | null;
-  taken_over_at?: string | null;
-  takeover_reason?: string | null;
 }
 
-export const isStale = (lease: Pick<ScoringLease, 'heartbeat_at'>, now = Date.now()): boolean =>
-  now - new Date(lease.heartbeat_at).getTime() >= STALE_AFTER_MS;
+const lease = makeLease<ScoringLease>('match_scoring_leases', 'match_id');
 
-export async function getLease(matchId: string): Promise<ScoringLease | null> {
-  const { data } = await supabase
-    .from('match_scoring_leases')
-    .select('*')
-    .eq('match_id', matchId)
-    .maybeSingle();
-  return (data as ScoringLease | null) ?? null;
-}
+export type { LeaseVerdict };
 
-export type LeaseVerdict =
-  | { ok: true; lease: ScoringLease | null }
-  | { ok: false; code: 'LEASE_LOST'; lease: ScoringLease };
-
-/**
- * May this (user, device) write to this match?
- *
- * Deliberately permissive in one direction: **no lease at all means yes**. Leases
- * are claimed by the scoring screen, and refusing every write until one exists
- * would break every path that predates this — a tournament organiser correcting
- * an event, a replayed queue from before the feature shipped — for no safety gain.
- * The lease exists to stop a SECOND scorer, not to gate the first.
- *
- * `deviceId` is optional so a caller that genuinely has no device context (an
- * organiser editing from the match page) is judged on identity alone rather than
- * being locked out by a field it never had.
- */
-export async function checkLease(
-  matchId: string,
-  userId: string,
-  deviceId?: string | null,
-): Promise<LeaseVerdict> {
-  const lease = await getLease(matchId);
-  if (!lease) return { ok: true, lease: null };
-  if (lease.user_id !== userId) return { ok: false, code: 'LEASE_LOST', lease };
-  // Same person, different handset. This IS the case the lease exists for: a
-  // scorer who opened the pad on a second phone would otherwise double-score
-  // their own match and nothing would say so.
-  if (deviceId && lease.device_id !== deviceId) return { ok: false, code: 'LEASE_LOST', lease };
-  return { ok: true, lease };
-}
-
-/**
- * Claim, or refresh a claim you already hold.
- *
- * Returns `taken: false` when somebody else holds a lease that is NOT yet stale —
- * claiming is never a takeover. Taking a stale lease still goes through
- * `takeOverLease`, so every displacement has a reason attached.
- */
-export async function claimLease(
-  matchId: string,
-  userId: string,
-  deviceId: string,
-): Promise<{ taken: boolean; lease: ScoringLease | null; heldBy?: ScoringLease }> {
-  const existing = await getLease(matchId);
-  const nowIso = new Date().toISOString();
-
-  if (existing && (existing.user_id !== userId || existing.device_id !== deviceId)) {
-    return { taken: false, lease: null, heldBy: existing };
-  }
-
-  const { data, error } = await supabase
-    .from('match_scoring_leases')
-    .upsert(
-      {
-        match_id: matchId,
-        user_id: userId,
-        device_id: deviceId,
-        claimed_at: existing ? existing.claimed_at : nowIso,
-        heartbeat_at: nowIso,
-      },
-      { onConflict: 'match_id' },
-    )
-    .select('*')
-    .single();
-  if (error) throw error;
-  return { taken: true, lease: data as ScoringLease };
-}
-
-/** Keep a held lease warm. A heartbeat NEVER takes a lease — if you no longer
- *  hold it, you are told so rather than quietly reinstated. */
-export async function heartbeatLease(
-  matchId: string,
-  userId: string,
-  deviceId: string,
-): Promise<{ ok: boolean; lease: ScoringLease | null }> {
-  const { data } = await supabase
-    .from('match_scoring_leases')
-    .update({ heartbeat_at: new Date().toISOString() })
-    .eq('match_id', matchId)
-    .eq('user_id', userId)
-    .eq('device_id', deviceId)
-    .select('*')
-    .maybeSingle();
-  return { ok: !!data, lease: (data as ScoringLease | null) ?? null };
-}
-
-/** Hand the lease back voluntarily — the holder leaving the scoring screen. Only
- *  the holder may release, so a stray call cannot free someone else's lease. */
-export async function releaseLease(
-  matchId: string,
-  userId: string,
-  deviceId: string,
-): Promise<boolean> {
-  const { data } = await supabase
-    .from('match_scoring_leases')
-    .delete()
-    .eq('match_id', matchId)
-    .eq('user_id', userId)
-    .eq('device_id', deviceId)
-    .select('match_id');
-  return (data ?? []).length > 0;
-}
-
-/**
- * Take a lease from someone else.
- *
- * Allowed when the current lease is STALE, or when the holder hands over
- * voluntarily (`force`, used by the holder's own "hand over" flow). A reason is
- * required and recorded with who and when, because displacing a scorer mid-match
- * is exactly the kind of act that needs to be explainable afterwards.
- */
-export async function takeOverLease(
-  matchId: string,
-  userId: string,
-  deviceId: string,
-  reason: string,
-  opts: { force?: boolean } = {},
-): Promise<{ ok: true; lease: ScoringLease } | { ok: false; code: 'LEASE_ACTIVE'; lease: ScoringLease }> {
-  const existing = await getLease(matchId);
-  const nowIso = new Date().toISOString();
-
-  if (existing && !opts.force && !isStale(existing)) {
-    return { ok: false, code: 'LEASE_ACTIVE', lease: existing };
-  }
-
-  const { data, error } = await supabase
-    .from('match_scoring_leases')
-    .upsert(
-      {
-        match_id: matchId,
-        user_id: userId,
-        device_id: deviceId,
-        claimed_at: nowIso,
-        heartbeat_at: nowIso,
-        taken_over_from: existing?.user_id ?? null,
-        taken_over_at: existing ? nowIso : null,
-        takeover_reason: existing ? reason : null,
-      },
-      { onConflict: 'match_id' },
-    )
-    .select('*')
-    .single();
-  if (error) throw error;
-  return { ok: true, lease: data as ScoringLease };
-}
+export const getLease = (matchId: string) => lease.get(matchId);
+export const checkLease = (matchId: string, userId: string, deviceId?: string | null) =>
+  lease.check(matchId, userId, deviceId);
+export const claimLease = (matchId: string, userId: string, deviceId: string) =>
+  lease.claim(matchId, userId, deviceId);
+export const heartbeatLease = (matchId: string, userId: string, deviceId: string) =>
+  lease.heartbeat(matchId, userId, deviceId);
+export const releaseLease = (matchId: string, userId: string, deviceId: string) =>
+  lease.release(matchId, userId, deviceId);
+export const takeOverLease = (
+  matchId: string, userId: string, deviceId: string, reason: string, opts: { force?: boolean } = {},
+) => lease.takeOver(matchId, userId, deviceId, reason, opts);

@@ -27,6 +27,10 @@ import {
   getTournamentOfficials,
 } from '../controllers/features.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
+import {
+  getOfflinePack, claimHub, heartbeatHub, releaseHub, takeOverHub,
+  listDiscrepancies, resolveDiscrepancy,
+} from '../controllers/tournamentHub.controller';
 
 const router = Router();
 // SC-397: 400 on a malformed id instead of letting it reach Postgres and 500.
@@ -54,5 +58,16 @@ router.post('/:id/reassign-organiser', authenticateToken, reassignTournamentOrga
 router.post('/:id/entries/direct', authenticateToken, directAddTeam);
 router.post('/:id/entries', authenticateToken, createEntry);
 router.patch('/:id/entries/:entryId', authenticateToken, updateEntry);
+
+// SC-433 · the offline tournament hub. The pack is everything the organiser's
+// phone needs for a day with no signal; the lease keeps it to one phone; the
+// discrepancies are the arguments the server refused to settle on its own.
+router.get('/:id/offline-pack', authenticateToken, getOfflinePack);
+router.post('/:id/hub-lease', authenticateToken, claimHub);
+router.post('/:id/hub-lease/heartbeat', authenticateToken, heartbeatHub);
+router.post('/:id/hub-lease/release', authenticateToken, releaseHub);
+router.post('/:id/hub-lease/takeover', authenticateToken, takeOverHub);
+router.get('/:id/discrepancies', authenticateToken, listDiscrepancies);
+router.post('/:id/discrepancies/:discrepancyId/resolve', authenticateToken, resolveDiscrepancy);
 
 export default router;

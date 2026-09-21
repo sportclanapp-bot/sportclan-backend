@@ -1088,7 +1088,10 @@ export async function getBracket(req: Request, res: Response) {
       .from('matches')
       // SC-428: voided_at travels so a voided fixture renders as Voided in the
       // fixtures list and the bracket, rather than as live or completed.
-      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label, venue, ground_label, voided_at')
+      // SC-433: next_match_id / next_slot say where each winner goes. The offline
+      // hub needs them to show the next round locally — without them it would
+      // have to guess a bracket shape the server would then disagree with.
+      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label, venue, ground_label, voided_at, next_match_id, next_slot')
       .eq('tournament_id', id)
       .order('round', { ascending: true })
       .order('match_no', { ascending: true })

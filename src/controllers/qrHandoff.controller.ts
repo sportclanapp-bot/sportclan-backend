@@ -4,7 +4,13 @@
 import type { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { deviceIdOf } from '../utils/deviceHeader';
-import { verifyHandoff, handoffRefusal } from '../utils/qrHandoff';
+import {
+  verifyHandoff, handoffRefusal, isEventOp, isResultOp,
+  type HandoffResultOp,
+} from '../utils/qrHandoff';
+import { checkAndRecordDiscrepancy, recordUnsentPlayForFinalMatch } from '../utils/discrepancy';
+import { invokeController } from '../utils/invokeController';
+import { completeMatch } from './matches.controller';
 import { authorizeScorer, recordEventIdempotent, recomputeSummary } from './scoring.controller';
 import { isTerminalMatchStatus } from '../utils/validation';
 import { isSportInactive } from '../utils/sports';
@@ -96,6 +102,17 @@ export async function uploadHandoff(req: Request, res: Response) {
       isTerminal: isTerminalMatchStatus,
     });
     if (refusal) {
+      // SC-433: a finished match refusing a scorer's unsent play is correct — a
+      // completed match is immutable — but refusing QUIETLY would leave a
+      // recorded result with play behind it and nobody the wiser. Record the
+      // argument for the organiser; change nothing.
+      if (refusal.code === 'MATCH_FINISHED' && p.o.some(isEventOp)) {
+        await recordUnsentPlayForFinalMatch(id!, p.o.filter(isEventOp).length);
+        return res.status(refusal.status).json({
+          error: 'This match is already final, so these actions were not applied. The organiser has been told there is unsent play for it.',
+          code: 'MATCH_FINISHED_WITH_UNSENT_PLAY',
+        });
+      }
       return res.status(refusal.status).json({ error: refusal.error, code: refusal.code });
     }
 
@@ -119,7 +136,14 @@ export async function uploadHandoff(req: Request, res: Response) {
     const ops = [...p.o].sort((a, b) => a.s - b.s);
     let applied = 0;
     let alreadyHad = 0;
-    for (const op of ops) {
+    // SC-433: a result op is applied AFTER every event op in the same payload,
+    // whatever its seq says. Completing a match first would freeze it and the
+    // events behind it would be refused — the result is the end of the story by
+    // definition, so it goes last.
+    const eventOps = ops.filter(isEventOp);
+    const resultOps = ops.filter(isResultOp);
+
+    for (const op of eventOps) {
       const rec = await recordEventIdempotent({
         matchId: id,
         createdBy: p.u,
@@ -135,7 +159,27 @@ export async function uploadHandoff(req: Request, res: Response) {
       if (rec.wasNew) applied += 1; else alreadyHad += 1;
     }
 
+    // Recompute BEFORE any result op, so the comparison below is against the
+    // play including whatever this very payload just delivered.
     try { await recomputeSummary(id); } catch { /* the events are in; the summary self-heals */ }
+
+    /**
+     * SC-433 · the result op.
+     *
+     * Applied through `completeMatch`'s own engine rather than a second copy of
+     * it, so the server's bracket advance, record deltas and champion logic run
+     * exactly as they do when an organiser taps the button. The op carries a
+     * winner and a score; it carries nothing that could reshape a draw.
+     */
+    let resultOutcome: ResultOutcome | undefined;
+    for (const op of resultOps) {
+      resultOutcome = await applyResultOp(id!, p.u, p.d, op);
+      if (resultOutcome.status === 'uploaded') applied += 1; else alreadyHad += 1;
+      // A disagreement stops the payload here. The rest of this code's promise is
+      // that nothing is silently overwritten, and carrying on to write a
+      // `qr_handoffs` row would mark the whole thing done.
+      if (resultOutcome.status === 'disagrees') break;
+    }
 
     await supabase.from('qr_handoffs').insert({
       nonce: p.n, match_id: id, scorer_id: p.u, device_id: p.d,
@@ -146,9 +190,109 @@ export async function uploadHandoff(req: Request, res: Response) {
       .update({ last_used_at: new Date().toISOString() })
       .eq('user_id', p.u).eq('device_id', p.d).is('revoked_at', null);
 
-    return res.json({ status: 'uploaded', applied, already_had: alreadyHad, total: ops.length });
+    if (resultOutcome?.status === 'disagrees') {
+      return res.status(409).json({
+        status: 'result_disputed',
+        code: 'RESULT_DISPUTED',
+        error: resultOutcome.message,
+        applied,
+        already_had: alreadyHad,
+        total: ops.length,
+        recorded_side: resultOutcome.recordedSide,
+        derived_side: resultOutcome.derivedSide,
+      });
+    }
+
+    return res.json({
+      status: 'uploaded',
+      applied,
+      already_had: alreadyHad,
+      total: ops.length,
+      ...(resultOutcome?.status === 'already' ? { result: 'already_recorded' } : {}),
+      ...(resultOutcome?.status === 'uploaded' ? { result: 'recorded' } : {}),
+    });
   } catch (e) {
     console.error('uploadHandoff error:', e instanceof Error ? e.message : e);
     return res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+
+interface ResultOutcome {
+  status: 'uploaded' | 'already' | 'disagrees';
+  message?: string;
+  recordedSide?: string | null;
+  derivedSide?: string | null;
+}
+
+/**
+ * SC-433 · apply one signed result op.
+ *
+ * Two things make this safe, and both are deliberate.
+ *
+ * It goes through `completeMatch` itself — see utils/invokeController for why a
+ * second copy of that engine was not acceptable — authored as the SCORER, whose
+ * authority was already checked against this match. So the bracket advance, the
+ * record deltas and the champion logic all run exactly as they do when an
+ * organiser taps the button, and the server stays the only thing that touches a
+ * draw.
+ *
+ * And afterwards it asks whether the result agrees with the play. A hub can
+ * carry "A won 21-19" while the scorer's own phone is still holding the
+ * ball-by-ball; the two can arrive in either order and can disagree. When they
+ * do, nothing is overwritten in either direction — the argument is recorded and
+ * an organiser decides.
+ */
+async function applyResultOp(
+  matchId: string,
+  scorerId: string,
+  deviceId: string,
+  op: HandoffResultOp,
+): Promise<ResultOutcome> {
+  const { data: before } = await supabase
+    .from('matches').select('status, winner_team_id').eq('id', matchId).maybeSingle();
+  const wasTerminal = isTerminalMatchStatus((before as { status?: string } | null)?.status);
+  const priorWinner = (before as { winner_team_id?: string | null } | null)?.winner_team_id ?? null;
+
+  // Already final with a DIFFERENT winner: this is the disagreement the brief
+  // calls out, and `idempotent: true` would answer 200 and swallow it. Caught
+  // here, before the completion runs, so nothing is touched at all.
+  if (wasTerminal && priorWinner !== op.r.w) {
+    await checkAndRecordDiscrepancy(matchId, 'result_op');
+    return {
+      status: 'disagrees',
+      message: 'This match already has a different result on the server. Nothing was changed — an organiser needs to decide.',
+      recordedSide: null,
+      derivedSide: null,
+    };
+  }
+
+  if (!wasTerminal) {
+    const done = await invokeController<{ error?: string }>(completeMatch, {
+      userId: scorerId,
+      params: { id: matchId },
+      headers: { 'x-device-id': deviceId },
+      body: {
+        winner_team_id: op.r.w,
+        is_draw: op.r.w === null,
+        idempotent: true,
+        ...(op.r.summary ? { score_summary: op.r.summary } : {}),
+      },
+    });
+    if (done.status >= 400) {
+      return { status: 'disagrees', message: done.body?.error ?? 'The server would not accept this result.' };
+    }
+  }
+
+  // Now ask the other question: does the play agree with what was just recorded?
+  const verdict = await checkAndRecordDiscrepancy(matchId, 'result_op');
+  if (verdict.disagrees) {
+    return {
+      status: 'disagrees',
+      message: 'This result does not match the ball-by-ball on the server. Nothing was overwritten — an organiser needs to decide.',
+      recordedSide: verdict.recordedSide,
+      derivedSide: verdict.derivedSide,
+    };
+  }
+  return { status: wasTerminal ? 'already' : 'uploaded' };
 }

@@ -35,7 +35,7 @@ const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
  *  standing licence. */
 export const HANDOFF_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-export interface HandoffOp {
+export interface HandoffEventOp {
   /** The outbox's own clientKey — the idempotency key the scorer's phone will
    *  re-send under, which is exactly why this must survive the trip unchanged. */
   k: string;
@@ -44,6 +44,28 @@ export interface HandoffOp {
   t: 'event';
   e: { event_type: string; period?: string | null; clock_seconds?: number | null; payload?: Record<string, unknown> };
 }
+
+/**
+ * SC-433 · a scorer's RESULT, for the offline tournament hub.
+ *
+ * Deliberately the narrowest thing that can advance a tournament day: who won,
+ * and what the score was. No status, no round, no next_match_id, no bracket
+ * fields of any kind. A signed QR must never be able to reshape a draw — the
+ * server's own advance engine stays the only thing that touches it, and it runs
+ * off the completion exactly as it does when an organiser taps the button.
+ *
+ * `r.w` is the winning TEAM id, or null for a draw. A free-text side has no team
+ * id, so a guest fixture cannot express a result this way; it hands over its
+ * events instead, which is the honest limit rather than a fabricated id.
+ */
+export interface HandoffResultOp {
+  k: string;
+  s: number;
+  t: 'result';
+  r: { w: string | null; summary?: Record<string, unknown> | null };
+}
+
+export type HandoffOp = HandoffEventOp | HandoffResultOp;
 
 export interface HandoffPayload {
   v: 1;
@@ -126,6 +148,31 @@ export interface VerifyResult {
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+export function isEventOp(o: HandoffOp): o is HandoffEventOp {
+  return o.t === 'event' && !!(o as HandoffEventOp).e && typeof (o as HandoffEventOp).e.event_type === 'string';
+}
+
+/**
+ * A result op, checked as narrowly as it is defined.
+ *
+ * Extra keys are REFUSED rather than ignored. An ignored field is a field
+ * somebody will one day assume is being honoured, and the whole reason this op
+ * is narrow is that a signed QR must not grow the power to reshape a draw.
+ */
+export function isResultOp(o: HandoffOp): o is HandoffResultOp {
+  if (o.t !== 'result') return false;
+  const r = (o as HandoffResultOp).r;
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return false;
+  if (!(r.w === null || (typeof r.w === 'string' && UUID_RE.test(r.w)))) return false;
+  if (r.summary !== undefined && r.summary !== null
+    && (typeof r.summary !== 'object' || Array.isArray(r.summary))) return false;
+  const allowed = new Set(['w', 'summary']);
+  if (Object.keys(r).some((k) => !allowed.has(k))) return false;
+  // And nothing may ride along on the op itself either.
+  const opAllowed = new Set(['k', 's', 't', 'r']);
+  return !Object.keys(o).some((k) => !opAllowed.has(k));
+}
+
 export function looksWellFormed(env: unknown): env is HandoffEnvelope {
   const e = env as HandoffEnvelope | null;
   if (!e || typeof e !== 'object' || typeof e.sig !== 'string' || !e.p) return false;
@@ -136,7 +183,7 @@ export function looksWellFormed(env: unknown): env is HandoffEnvelope {
   if (!Array.isArray(p.o) || p.o.length === 0 || p.o.length > 500) return false;
   return p.o.every(
     (o) => o && typeof o.k === 'string' && UUID_RE.test(o.k) && typeof o.s === 'number'
-      && o.t === 'event' && o.e && typeof o.e.event_type === 'string',
+      && (isEventOp(o) || isResultOp(o)),
   );
 }
 

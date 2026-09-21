@@ -63,7 +63,7 @@ describe('SC-432 · signature', () => {
     const p = payload();
     const sig = s.sign(p);
     const tampered = payload();
-    (tampered.o[0]!.e.payload as { runs: number }).runs = 6; // 4 became 6
+    (tampered.o[0]! as unknown as { e: { payload: { runs: number } } }).e.payload.runs = 6; // 4 became 6
     expect(verifySignature(tampered, sig, s.publicKey)).toBe(false);
   });
 
@@ -163,7 +163,7 @@ describe('SC-432 \u00b7 app-signed, server-verified', () => {
 
   it('and the same vector with one run changed does not', () => {
     const tampered = JSON.parse(JSON.stringify(PAYLOAD)) as HandoffPayload;
-    (tampered.o[0]!.e.payload as { runs: number }).runs = 6;
+    (tampered.o[0]! as unknown as { e: { payload: { runs: number } } }).e.payload.runs = 6;
     expect(verifySignature(tampered, SIGNATURE, PUBLIC_KEY)).toBe(false);
   });
 });
@@ -330,5 +330,84 @@ describe('SC-432 · choosing the key to verify against', () => {
   it('the live key is preferred even when an older one would also verify', () => {
     // A phone that re-registered the SAME key must not be reported as revoked.
     expect(chooseKeyVerdict(rotated, () => true)).toBe('ok');
+  });
+});
+
+/**
+ * SC-433 · the result op.
+ *
+ * The narrowest thing that can advance a tournament day: who won, and what the
+ * score was. The reason it is this narrow is that a signed QR must never be able
+ * to reshape a draw — no status, no round, no next_match_id — so the server's own
+ * advance engine stays the only thing that touches it.
+ *
+ * Which makes "extra keys are refused, not ignored" a security property rather
+ * than fussiness: an ignored field is one somebody will later assume is honoured.
+ */
+import { isEventOp, isResultOp } from '../utils/qrHandoff';
+
+const KEY = '44444444-4444-4444-8444-444444444444';
+const TEAM = '55555555-5555-4555-8555-555555555555';
+const resultOp = (over: Record<string, unknown> = {}) =>
+  ({ k: KEY, s: 1, t: 'result', r: { w: TEAM }, ...over }) as never;
+
+describe('SC-433 · result ops', () => {
+  it('accepts a winner and a score, which is the whole vocabulary', () => {
+    expect(isResultOp(resultOp())).toBe(true);
+    expect(isResultOp(resultOp({ r: { w: TEAM, summary: { A: { score: 21 }, B: { score: 19 } } } }))).toBe(true);
+  });
+
+  it('accepts a draw', () => {
+    expect(isResultOp(resultOp({ r: { w: null } }))).toBe(true);
+  });
+
+  it('refuses a winner that is not a team id', () => {
+    expect(isResultOp(resultOp({ r: { w: 'A' } }))).toBe(false);
+    expect(isResultOp(resultOp({ r: { w: 'the-home-side' } }))).toBe(false);
+  });
+
+  it('REFUSES bracket fields rather than ignoring them', () => {
+    // Each of these would let a QR reshape a draw. Ignoring them would be worse
+    // than refusing: an ignored field is one somebody later assumes is honoured.
+    expect(isResultOp(resultOp({ r: { w: TEAM, next_match_id: TEAM } }))).toBe(false);
+    expect(isResultOp(resultOp({ r: { w: TEAM, next_slot: 'A' } }))).toBe(false);
+    expect(isResultOp(resultOp({ r: { w: TEAM, round: 2 } }))).toBe(false);
+  });
+
+  it('refuses a status transition', () => {
+    expect(isResultOp(resultOp({ r: { w: TEAM, status: 'completed' } }))).toBe(false);
+    expect(isResultOp(resultOp({ r: { w: TEAM }, status: 'cancelled' }))).toBe(false);
+  });
+
+  it('refuses anything riding along on the op itself', () => {
+    expect(isResultOp(resultOp({ voided_at: null }))).toBe(false);
+    expect(isResultOp(resultOp({ e: { event_type: 'ball' } }))).toBe(false);
+  });
+
+  it('refuses a malformed summary', () => {
+    expect(isResultOp(resultOp({ r: { w: TEAM, summary: [1, 2] } }))).toBe(false);
+    expect(isResultOp(resultOp({ r: { w: TEAM, summary: 'A won' } }))).toBe(false);
+  });
+
+  it('a result op is not an event op and vice versa', () => {
+    expect(isEventOp(resultOp())).toBe(false);
+    const ev = { k: KEY, s: 1, t: 'event', e: { event_type: 'ball' } } as never;
+    expect(isResultOp(ev)).toBe(false);
+    expect(isEventOp(ev)).toBe(true);
+  });
+
+  it('a payload may carry both kinds — the ordinary hub case', () => {
+    const { looksWellFormed } = require('../utils/qrHandoff');
+    const env = {
+      sig: 'x',
+      p: {
+        v: 1, m: TEAM, d: 'dev', u: TEAM, n: 'nonce', t: Date.now(),
+        o: [
+          { k: KEY, s: 1, t: 'event', e: { event_type: 'ball' } },
+          { k: '66666666-6666-4666-8666-666666666666', s: 2, t: 'result', r: { w: TEAM } },
+        ],
+      },
+    };
+    expect(looksWellFormed(env)).toBe(true);
   });
 });

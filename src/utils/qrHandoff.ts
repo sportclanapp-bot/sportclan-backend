@@ -166,3 +166,67 @@ export async function verifyHandoff(env: unknown, now = Date.now()): Promise<Ver
 
   return { ok: true, payload: p };
 }
+
+/**
+ * Whether a VERIFIED handoff may actually be applied, and if not, what to tell
+ * the person holding the phone.
+ *
+ * Kept out of the controller for two reasons. It is the security precedence — a
+ * mismatched match id must outrank a moved lease, which must outrank a finished
+ * match — and precedence written inline is precedence nobody can test. And the
+ * reader is the COURIER, a stranger who has done nothing wrong, so the wording is
+ * about the code rather than about them.
+ *
+ * The signature has already been checked by the time this runs. This decides only
+ * what the world looks like now.
+ */
+export interface HandoffGuardInput {
+  /** The match id in the URL, which the payload must agree with. */
+  routeMatchId: string;
+  payloadMatchId: string;
+  /** Verdict from the SAME authorisation the direct scoring path uses, asked
+   *  about the signer. `null` means it passed. */
+  authFailure: { status: number; error: string; code?: string } | null;
+  match: { status?: string | null; voided_at?: string | null } | null;
+  sportInactive: boolean;
+  isTerminal: (status?: string | null) => boolean;
+}
+
+export interface HandoffRefusal { status: number; code: string; error: string }
+
+export function handoffRefusal(input: HandoffGuardInput): HandoffRefusal | null {
+  // First, because a code valid for match A being POSTed at match B is the one
+  // failure here that is an attack rather than an accident.
+  if (input.payloadMatchId !== input.routeMatchId) {
+    return { status: 400, code: 'MATCH_MISMATCH', error: 'This code is for a different match.' };
+  }
+  if (!input.match) {
+    return { status: 404, code: 'MATCH_NOT_FOUND', error: 'Match not found.' };
+  }
+  if (input.authFailure) {
+    const { status } = input.authFailure;
+    if (status === 409) {
+      return {
+        status: 409, code: 'LEASE_MOVED',
+        error: 'Someone else took over scoring this match, so this code can no longer be applied.',
+      };
+    }
+    if (status === 403) {
+      return { status: 403, code: 'NOT_A_SCORER', error: 'That phone is not a scorer for this match.' };
+    }
+    return { status, code: input.authFailure.code ?? 'NOT_ALLOWED', error: input.authFailure.error };
+  }
+  if (input.isTerminal(input.match.status)) {
+    return { status: 409, code: 'MATCH_FINISHED', error: 'This match is finished and can no longer be scored.' };
+  }
+  if (input.sportInactive) {
+    return { status: 400, code: 'SPORT_INACTIVE', error: 'This sport is not available.' };
+  }
+  // Deliberately STRICTER than the direct scoring path: a voided match is one
+  // somebody has already ruled does not count, so adding to it by proxy — with
+  // its scorer out of signal and unable to see it happen — is worth refusing.
+  if (input.match.voided_at) {
+    return { status: 409, code: 'MATCH_VOIDED', error: 'This match was voided, so it can no longer be scored.' };
+  }
+  return null;
+}

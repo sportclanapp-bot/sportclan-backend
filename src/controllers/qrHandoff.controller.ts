@@ -4,10 +4,10 @@
 import type { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { deviceIdOf } from '../utils/deviceHeader';
-import { canOfficiateMatch } from '../utils/tournamentAuth';
-import { checkLease } from '../utils/scoringLease';
-import { verifyHandoff } from '../utils/qrHandoff';
-import { recordEventIdempotent, recomputeSummary } from './scoring.controller';
+import { verifyHandoff, handoffRefusal } from '../utils/qrHandoff';
+import { authorizeScorer, recordEventIdempotent, recomputeSummary } from './scoring.controller';
+import { isTerminalMatchStatus } from '../utils/validation';
+import { isSportInactive } from '../utils/sports';
 
 /**
  * POST /devices/signing-key — register (or rotate) this phone's public key.
@@ -74,32 +74,29 @@ export async function uploadHandoff(req: Request, res: Response) {
     }
     const p = verdict.payload;
 
-    // The QR must be for the match it is being uploaded against — otherwise a
-    // valid code for match A could be replayed onto match B.
-    if (p.m !== id) {
-      return res.status(400).json({ error: 'This code is for a different match.', code: 'MATCH_MISMATCH' });
-    }
-
-    const { data: match } = await supabase
-      .from('matches')
-      .select('id, created_by, umpire_id, tournament_id, status, voided_at')
-      .eq('id', id).maybeSingle();
-    if (!match) return res.status(404).json({ error: 'Match not found', code: 'MATCH_NOT_FOUND' });
-
-    // The SIGNER must have been entitled to score it. The uploader's own rights
-    // are irrelevant — they are carrying, not scoring.
-    if (!(await canOfficiateMatch(match, p.u))) {
-      return res.status(403).json({ error: 'That phone is not a scorer for this match.', code: 'NOT_A_SCORER' });
-    }
-    // And the lease must not have moved on. If another phone took over, these ops
-    // are exactly the ones a human already decided the fate of; silently applying
-    // them behind their back is the double-count this whole area exists to stop.
-    const lease = await checkLease(id, p.u, p.d);
-    if (!lease.ok) {
-      return res.status(409).json({
-        error: 'Someone else took over scoring this match, so this code can no longer be applied.',
-        code: 'LEASE_MOVED',
-      });
+    // Everything below the signature is decided in one place, so the precedence
+    // of refusals is testable rather than a reading of this function top to bottom.
+    // A code aimed at a different match is answered without touching the
+    // database at all — `handoffRefusal` ranks that first either way, and there is
+    // nothing to look up on a match this payload was never about.
+    const wrongMatch = p.m !== id;
+    const { data: match } = wrongMatch
+      ? { data: null }
+      : await supabase
+        .from('matches')
+        .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at')
+        .eq('id', id!).maybeSingle();
+    const auth = match ? await authorizeScorer(id!, p.u, p.d) : null;
+    const refusal = handoffRefusal({
+      routeMatchId: id!,
+      payloadMatchId: p.m,
+      authFailure: auth && !auth.ok ? { status: auth.status, error: auth.error, code: auth.code } : null,
+      match: match as { status?: string | null; voided_at?: string | null } | null,
+      sportInactive: match ? await isSportInactive((match as { sport_id: string }).sport_id) : false,
+      isTerminal: isTerminalMatchStatus,
+    });
+    if (refusal) {
+      return res.status(refusal.status).json({ error: refusal.error, code: refusal.code });
     }
 
     // Replay ledger: the ops themselves are idempotent, so a replay is already a

@@ -42,10 +42,18 @@ async function fanoutScoreUpdate(
   }
 }
 
-async function authorizeScorer(matchId: string, userId: string, deviceId?: string | null) {
+/**
+ * The one gate for "may this person score this match from this device, right now".
+ *
+ * Exported for SC-432: the QR handoff has to ask the same question about the
+ * SIGNER that this asks about the caller. A second, parallel copy of these checks
+ * is exactly how a courier path quietly becomes more permissive than the direct
+ * one.
+ */
+export async function authorizeScorer(matchId: string, userId: string, deviceId?: string | null) {
   const { data: match } = await supabase
     .from('matches')
-    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked, tournament_id')
+    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return { ok: false as const, status: 404, error: 'Match not found' };

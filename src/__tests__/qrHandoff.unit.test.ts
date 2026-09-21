@@ -163,3 +163,99 @@ describe('SC-432 \u00b7 app-signed, server-verified', () => {
     expect(verifySignature(tampered, SIGNATURE, PUBLIC_KEY)).toBe(false);
   });
 });
+
+/**
+ * SC-432 · what a verified code is still not allowed to do.
+ *
+ * A valid signature proves who made the code and that nobody altered it. It says
+ * nothing about whether the world still permits applying it, and every case below
+ * is one where it does not. The ORDER matters as much as the answers: a code
+ * aimed at the wrong match must be called out as that and never treated as a
+ * permission problem on the match it was pointed at.
+ */
+import { handoffRefusal } from '../utils/qrHandoff';
+
+const isTerminal = (s?: string | null) => s === 'completed' || s === 'abandoned' || s === 'cancelled';
+
+const guard = (over: Partial<Parameters<typeof handoffRefusal>[0]> = {}) =>
+  handoffRefusal({
+    routeMatchId: 'match-1',
+    payloadMatchId: 'match-1',
+    authFailure: null,
+    match: { status: 'live', voided_at: null },
+    sportInactive: false,
+    isTerminal,
+    ...over,
+  });
+
+describe('SC-432 · applying a verified handoff', () => {
+  it('a live match the signer may score is allowed', () => {
+    expect(guard()).toBeNull();
+  });
+
+  it('a code for another match is refused as exactly that', () => {
+    // The attack: take a genuine, correctly signed code and POST it at a
+    // different match. Nothing about the signature would catch this.
+    expect(guard({ payloadMatchId: 'match-2' })?.code).toBe('MATCH_MISMATCH');
+  });
+
+  it('the mismatch outranks every other refusal', () => {
+    const r = guard({
+      payloadMatchId: 'match-2',
+      match: null,
+      authFailure: { status: 403, error: 'no' },
+      sportInactive: true,
+    });
+    expect(r?.code).toBe('MATCH_MISMATCH');
+  });
+
+  it('a missing match is a 404, not a permission refusal', () => {
+    expect(guard({ match: null })).toEqual(
+      expect.objectContaining({ status: 404, code: 'MATCH_NOT_FOUND' }),
+    );
+  });
+
+  it('a signer who was never a scorer is refused, whatever the uploader may do', () => {
+    const r = guard({ authFailure: { status: 403, error: 'Only the umpire or creator can score' } });
+    expect(r).toEqual(expect.objectContaining({ status: 403, code: 'NOT_A_SCORER' }));
+    // Worded about the phone, not about the courier reading it, who has done
+    // nothing wrong.
+    expect(r?.error).toMatch(/that phone/i);
+  });
+
+  it('a lease that moved on refuses the code — this is the double-count case', () => {
+    // Another phone took over, so a human has already decided what happens to
+    // this match. Applying these ops behind their back is the exact failure the
+    // lease exists to prevent.
+    const r = guard({ authFailure: { status: 409, error: 'Someone else took over scoring this match.' } });
+    expect(r).toEqual(expect.objectContaining({ status: 409, code: 'LEASE_MOVED' }));
+  });
+
+  it('a moved lease outranks a finished or voided match', () => {
+    const r = guard({
+      authFailure: { status: 409, error: 'taken' },
+      match: { status: 'completed', voided_at: '2026-09-21T00:00:00.000Z' },
+    });
+    expect(r?.code).toBe('LEASE_MOVED');
+  });
+
+  it('a finished match can no longer be scored, by hand or by QR', () => {
+    expect(guard({ match: { status: 'completed', voided_at: null } })?.code).toBe('MATCH_FINISHED');
+  });
+
+  it('an out-of-scope sport is refused here too', () => {
+    expect(guard({ sportInactive: true })?.code).toBe('SPORT_INACTIVE');
+  });
+
+  it('a voided match is refused — stricter than the direct path, on purpose', () => {
+    const r = guard({ match: { status: 'live', voided_at: '2026-09-21T00:00:00.000Z' } });
+    expect(r).toEqual(expect.objectContaining({ status: 409, code: 'MATCH_VOIDED' }));
+  });
+
+  it('an unexpected authorisation failure is passed through, not flattened', () => {
+    // Swallowing an unknown status into a friendly message is how a real refusal
+    // becomes invisible. Whatever the gate said, the courier hears.
+    const r = guard({ authFailure: { status: 418, error: 'Teapot', code: 'ODD' } });
+    expect(r).toEqual({ status: 418, code: 'ODD', error: 'Teapot' });
+  });
+});

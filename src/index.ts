@@ -40,6 +40,8 @@ import devRoutes from './routes/dev.routes';
 import adminRoutes from './routes/admin.routes';
 import jobsRoutes from './routes/jobs.routes';
 import { authenticateToken } from './middleware/auth.middleware';
+import { rateLimitKey, verifiedUserId } from './middleware/rateLimitKey';
+import { rateLimitBypassed } from './middleware/rateLimitBypass';
 
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
 import { queryAliases } from './middleware/queryAliases.middleware';
@@ -84,17 +86,58 @@ app.use(queryAliases);
 // Backstop: scrub internal/DB detail from any 5xx response (SC-44).
 app.use(sanitizeErrorResponses);
 
+/**
+ * SC-431 · budgets that survive a real venue.
+ *
+ * The old limiter was a flat 200 requests per 15 minutes keyed on IP. At a ground
+ * — one Wi-Fi, or a carrier putting thousands of subscribers behind one address
+ * via CGNAT — that is a shared budget, so a handful of spectators watching a live
+ * match locked everyone else out. The limit meant to stop one abuser silenced a
+ * whole venue instead.
+ *
+ * Authenticated traffic is now keyed and budgeted PER USER, so one heavy viewer
+ * can only ever exhaust their own allowance. Unauthenticated traffic keeps the
+ * per-IP budget, because there is no identity to key on and that is precisely
+ * where abuse protection belongs.
+ *
+ * The number is raised deliberately and modestly, alongside the client-side fix
+ * that cut a live viewer from ~1200 requests per 15 minutes to well under 200:
+ * PER_USER_MAX is headroom for a long session, not permission to be chatty.
+ */
+const PER_USER_MAX = 600;
+const PER_IP_MAX = 200;
+/** Abuse ceiling for AUTHENTICATED traffic from one address, so per-user keying
+ *  cannot be farmed by minting many accounts behind one IP. Generous enough that
+ *  a full team on one Wi-Fi never reaches it. */
+const PER_IP_AUTHED_CEILING = 4000;
+
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: (req) => (verifiedUserId(req) ? PER_USER_MAX : PER_IP_MAX),
+  keyGenerator: rateLimitKey,
+  skip: rateLimitBypassed,
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+const ipCeilingLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: PER_IP_AUTHED_CEILING,
+  keyGenerator: (req) => `ipc:${req.ip ?? 'unknown'}`,
+  skip: (req) => rateLimitBypassed(req) || !verifiedUserId(req),
+  standardHeaders: false,
+  legacyHeaders: false,
+});
+
 app.use(globalLimiter);
+app.use(ipCeilingLimiter);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
+  // Stays per-IP on purpose: there is no verified identity on a login attempt,
+  // and this is the limiter that actually stops credential stuffing.
+  skip: rateLimitBypassed,
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -102,6 +145,7 @@ const authLimiter = rateLimit({
 const sendOtpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
+  skip: rateLimitBypassed,
   standardHeaders: true,
   legacyHeaders: false,
 });

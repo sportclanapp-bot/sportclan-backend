@@ -70,9 +70,12 @@ describe('SC-344 presence + typing', () => {
     const selfView = await call('GET', `/messages/chats/${chatId}/messages`, aTok);
     expect(selfView.data.typing.some((x: any) => x.user_id === aId)).toBe(false);
 
-    // Stop pinging; after the ~8s server TTL the signal lapses.
-    await sleep(9000);
-    const after = await call('GET', `/messages/chats/${chatId}/messages`, bTok);
-    expect(after.data.typing.some((x: any) => x.user_id === aId)).toBe(false); // cleared on idle
+    // SC-431: the "and then it lapses" half used to sleep NINE REAL SECONDS here,
+    // waiting out the server's ~8s TTL inside a 20s budget. Four HTTP round-trips
+    // plus that sleep overran it whenever the suite ran under load, so the test
+    // was flaky for reasons that had nothing to do with the feature. Expiry is a
+    // pure comparison and now lives in typingTtl.unit.test.ts, where "nine seconds
+    // later" is free and deterministic. What genuinely needs a server — that a
+    // ping is visible to the OTHER party and not to yourself — is asserted above.
   }, 20000);
 });

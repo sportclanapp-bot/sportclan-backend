@@ -696,14 +696,18 @@ export async function getMessages(req: Request, res: Response) {
   const nowIso = new Date().toISOString();
   const { data: typingRows } = await supabase
     .from('chat_participants')
-    .select('user_id, user:users!user_id(id, name)')
+    .select('user_id, typing_until, user:users!user_id(id, name)')
     .eq('chat_id', id)
     .neq('user_id', userId)
     .gt('typing_until', nowIso);
-  const typing = (typingRows ?? []).map((r: any) => ({
-    user_id: r.user_id,
-    name: r.user?.name ?? 'Someone',
-  }));
+  const typing = (typingRows ?? [])
+    // SC-431: re-checked against THIS process's clock. The .gt() above uses the
+    // database's; when the two drift, a lapsed "typing…" would otherwise linger.
+    .filter((r: any) => isTypingActive(r.typing_until))
+    .map((r: any) => ({
+      user_id: r.user_id,
+      name: r.user?.name ?? 'Someone',
+    }));
 
   return res.json({
     items: reversed,
@@ -1049,7 +1053,27 @@ export async function markAsRead(req: Request, res: Response) {
 // their typing_until a few seconds ahead; the FE re-pings (throttled) while typing
 // and stops on send/idle, so it lapses on its own. The other party sees it via the
 // `typing` field on their next getMessages poll.
-const TYPING_TTL_MS = 8000; // must exceed the FE's ~3s re-ping AND the 6s poll gap
+export const TYPING_TTL_MS = 8000; // must exceed the FE's ~3s re-ping AND the 6s poll gap
+
+/**
+ * SC-431 · is this participant still counted as typing?
+ *
+ * Extracted because the EXPIRY half of this behaviour used to be verified only by
+ * an integration test that slept nine real seconds waiting for a real TTL against
+ * a real server — which is inherently timing-sensitive and duly went flaky the
+ * moment the suite ran under load. Expiry is a pure comparison; it belongs in a
+ * unit test with a clock you control, not in a networked test with a stopwatch.
+ *
+ * Applied in JS as well as in the query's `.gt()` filter. The database filter is
+ * the efficient one; this one is the honest one, because app and database clocks
+ * can disagree and a stale "typing…" is exactly the kind of small lie this
+ * codebase keeps having to hunt down.
+ */
+export function isTypingActive(typingUntil: string | null | undefined, now = Date.now()): boolean {
+  if (!typingUntil) return false;
+  const until = Date.parse(typingUntil);
+  return !Number.isNaN(until) && until > now;
+}
 export async function setTyping(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;

@@ -99,3 +99,39 @@ export function checkResultAgainstPlay(args: {
 
   return { disagrees: recordedSide !== derivedSide, recordedSide, derivedSide };
 }
+
+
+/**
+ * SC-433 · would recording THIS result contradict the play already on the server?
+ *
+ * Asked BEFORE the match is completed, which is the difference that matters. The
+ * other check in this file looks at a match that already has a result; this one
+ * looks at a result about to be written over events that are already here.
+ *
+ * Completing first and flagging afterwards would leave the match recording an
+ * outcome its own ball-by-ball contradicts, with the argument raised after the
+ * fact. "Never silently overwritten" has to mean the write does not happen.
+ *
+ * Status is deliberately NOT consulted. A result op is the thing that ends a
+ * match, so waiting for it to be final would mean never checking at all.
+ */
+export function resultWouldContradictPlay(args: {
+  teamAId?: string | null;
+  teamBId?: string | null;
+  claimedWinnerTeamId: string | null;
+  currentSummary: unknown;
+  eventCount: number;
+}): DiscrepancyVerdict {
+  const recordedSide = sideOfTeam(
+    { team_a_id: args.teamAId, team_b_id: args.teamBId },
+    args.claimedWinnerTeamId,
+  );
+  const derivedSide = sideFromSummary(args.currentSummary);
+
+  if (args.eventCount === 0) return { disagrees: false, recordedSide, derivedSide, skipped: 'no_events' };
+  if (derivedSide === null) return { disagrees: false, recordedSide, derivedSide, skipped: 'no_events' };
+  // A free-text side cannot be named by team id, so there is nothing to compare.
+  if (recordedSide === null) return { disagrees: false, recordedSide, derivedSide, skipped: 'free_text' };
+
+  return { disagrees: recordedSide !== derivedSide, recordedSide, derivedSide };
+}

@@ -130,3 +130,67 @@ describe('SC-433 · raising the argument', () => {
     expect(v.disagrees).toBe(true);
   });
 });
+
+/**
+ * SC-433 · the check that happens BEFORE the result is written.
+ *
+ * The difference from the block above is the whole point. That one looks at a
+ * match that already has a result; this one looks at a result about to be written
+ * over events that are already here. Completing first and flagging afterwards
+ * would leave the match recording an outcome its own ball-by-ball contradicts —
+ * "never silently overwritten" has to mean the write does not happen.
+ */
+import { resultWouldContradictPlay } from '../utils/resultCheck';
+
+describe('SC-433 · refusing a result that contradicts the play', () => {
+  const base = { teamAId: A, teamBId: B, eventCount: 30 };
+
+  it('a result agreeing with the events is written', () => {
+    expect(resultWouldContradictPlay({
+      ...base, claimedWinnerTeamId: A, currentSummary: { A: { score: 21 }, B: { score: 15 } },
+    }).disagrees).toBe(false);
+  });
+
+  it('a result contradicting the events is refused', () => {
+    const v = resultWouldContradictPlay({
+      ...base, claimedWinnerTeamId: A, currentSummary: { A: { score: 15 }, B: { score: 21 } },
+    });
+    expect(v).toEqual(expect.objectContaining({ disagrees: true, recordedSide: 'A', derivedSide: 'B' }));
+  });
+
+  it('STATUS is not consulted — a result op is the thing that ends a match', () => {
+    // Waiting for the match to be final before checking would mean never
+    // checking at all: it is this very op that makes it final.
+    const v = resultWouldContradictPlay({
+      ...base, claimedWinnerTeamId: B, currentSummary: { A: { score: 21 }, B: { score: 9 } },
+    });
+    expect(v.disagrees).toBe(true);
+  });
+
+  it('a match with no events has nothing to contradict', () => {
+    // The ordinary case for a zero-signal ground: the result arrives first and
+    // the ball-by-ball is still on the scorer's phone.
+    expect(resultWouldContradictPlay({
+      ...base, eventCount: 0, claimedWinnerTeamId: A, currentSummary: null,
+    })).toEqual(expect.objectContaining({ disagrees: false, skipped: 'no_events' }));
+  });
+
+  it('events with no usable score are silence, not an accusation', () => {
+    expect(resultWouldContradictPlay({
+      ...base, claimedWinnerTeamId: A, currentSummary: { A: {}, B: {} },
+    }).disagrees).toBe(false);
+  });
+
+  it('a claimed DRAW against a decisive scoreline is refused', () => {
+    expect(resultWouldContradictPlay({
+      ...base, claimedWinnerTeamId: null, currentSummary: { A: { score: 21 }, B: { score: 15 } },
+    }).disagrees).toBe(true);
+  });
+
+  it('a free-text fixture is skipped rather than called wrong', () => {
+    expect(resultWouldContradictPlay({
+      ...base, teamAId: null, teamBId: null, claimedWinnerTeamId: A,
+      currentSummary: { A: { score: 15 }, B: { score: 21 } },
+    })).toEqual(expect.objectContaining({ disagrees: false, skipped: 'free_text' }));
+  });
+});

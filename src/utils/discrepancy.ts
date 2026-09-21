@@ -7,7 +7,7 @@
  */
 import { supabase } from './supabase';
 import { isTerminalMatchStatus } from './validation';
-import { checkResultAgainstPlay, sideFromSummary, sideOfTeam, type Side } from './resultCheck';
+import { checkResultAgainstPlay, resultWouldContradictPlay, sideFromSummary, sideOfTeam, type Side } from './resultCheck';
 
 export type DetectedBy = 'result_op' | 'events' | 'complete';
 
@@ -155,4 +155,65 @@ export async function recordUnsentPlayForFinalMatch(
     derived_summary: { unsent_actions: opCount },
     detected_by: 'events',
   });
+}
+
+
+/**
+ * SC-433 · check a result BEFORE it is written, and record the argument if it
+ * contradicts the play already here.
+ *
+ * The write is refused rather than made-and-flagged, because a match recording an
+ * outcome its own ball-by-ball contradicts is precisely the silent overwrite this
+ * whole area exists to prevent.
+ */
+export async function checkResultBeforeRecording(
+  matchId: string,
+  claimedWinnerTeamId: string | null,
+): Promise<{ disagrees: boolean; recordedSide: Side | null; derivedSide: Side | null }> {
+  const { data: match } = await supabase
+    .from('matches')
+    .select('id, tournament_id, team_a_id, team_b_id, winner_team_id, score_summary')
+    .eq('id', matchId).maybeSingle();
+  if (!match) return { disagrees: false, recordedSide: null, derivedSide: null };
+  const m = match as {
+    tournament_id: string | null; team_a_id: string | null; team_b_id: string | null;
+    score_summary: unknown;
+  };
+
+  const { count } = await supabase
+    .from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', matchId);
+
+  const verdict = resultWouldContradictPlay({
+    teamAId: m.team_a_id,
+    teamBId: m.team_b_id,
+    claimedWinnerTeamId,
+    currentSummary: m.score_summary,
+    eventCount: count ?? 0,
+  });
+  if (!verdict.disagrees) {
+    return { disagrees: false, recordedSide: verdict.recordedSide, derivedSide: verdict.derivedSide };
+  }
+
+  const { data: open } = await supabase
+    .from('result_discrepancies').select('id')
+    .eq('match_id', matchId).is('resolved_at', null).maybeSingle();
+  const row = {
+    match_id: matchId,
+    tournament_id: m.tournament_id,
+    // The winner the CODE claimed — not the match's, which is still unset.
+    recorded_winner_team_id: claimedWinnerTeamId,
+    recorded_side: verdict.recordedSide,
+    derived_winner_side: verdict.derivedSide,
+    recorded_summary: null,
+    derived_summary: m.score_summary ?? null,
+    detected_by: 'result_op' as const,
+  };
+  if (open) {
+    await supabase.from('result_discrepancies')
+      .update({ ...row, detected_at: new Date().toISOString() })
+      .eq('id', (open as { id: string }).id);
+  } else {
+    await supabase.from('result_discrepancies').insert(row);
+  }
+  return { disagrees: true, recordedSide: verdict.recordedSide, derivedSide: verdict.derivedSide };
 }

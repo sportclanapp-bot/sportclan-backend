@@ -8,7 +8,7 @@ import {
   verifyHandoff, handoffRefusal, isEventOp, isResultOp,
   type HandoffResultOp,
 } from '../utils/qrHandoff';
-import { checkAndRecordDiscrepancy, recordUnsentPlayForFinalMatch } from '../utils/discrepancy';
+import { checkAndRecordDiscrepancy, checkResultBeforeRecording, recordUnsentPlayForFinalMatch } from '../utils/discrepancy';
 import { invokeController } from '../utils/invokeController';
 import { completeMatch } from './matches.controller';
 import { authorizeScorer, recordEventIdempotent, recomputeSummary } from './scoring.controller';
@@ -268,6 +268,24 @@ async function applyResultOp(
   }
 
   if (!wasTerminal) {
+    /**
+     * Before writing anything: would this result contradict the ball-by-ball
+     * already on the server?
+     *
+     * Completing first and flagging afterwards would leave the match recording an
+     * outcome its own events contradict, with the argument raised after the fact.
+     * "Never silently overwritten" has to mean the write does not happen.
+     */
+    const pre = await checkResultBeforeRecording(matchId, op.r.w);
+    if (pre.disagrees) {
+      return {
+        status: 'disagrees',
+        message: 'This result does not match the ball-by-ball already on the server. Nothing was recorded — an organiser needs to decide.',
+        recordedSide: pre.recordedSide,
+        derivedSide: pre.derivedSide,
+      };
+    }
+
     const done = await invokeController<{ error?: string }>(completeMatch, {
       userId: scorerId,
       params: { id: matchId },

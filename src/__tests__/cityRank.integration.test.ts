@@ -33,6 +33,9 @@ function call(
         method,
         headers: {
           'Content-Type': 'application/json',
+          // SC-431: skips ONLY the rate limiters, and only when the server has
+          // RATE_LIMIT_BYPASS_TOKEN set. Unset in production, where it does not exist.
+          ...(process.env.SC_RATE_LIMIT_BYPASS ? { 'x-ratelimit-bypass': process.env.SC_RATE_LIMIT_BYPASS } : {}),
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
           ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
         },

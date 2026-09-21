@@ -21,7 +21,7 @@ function call(method: string, path: string, token?: string, body?: unknown): Pro
     const payload = body !== undefined ? JSON.stringify(body) : undefined;
     const u = new URL(BASE + path);
     const req = https.request(
-      { hostname: u.hostname, path: u.pathname + u.search, method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}) } },
+      { hostname: u.hostname, path: u.pathname + u.search, method, headers: { 'Content-Type': 'application/json', ...(process.env.SC_RATE_LIMIT_BYPASS ? { 'x-ratelimit-bypass': process.env.SC_RATE_LIMIT_BYPASS } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}) } },
       (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => { try { resolve({ status: res.statusCode || 0, data: JSON.parse(b || '{}') }); } catch { resolve({ status: res.statusCode || 0, data: {} }); } }); },
     );
     req.on('error', () => resolve({ status: 0, data: {} }));

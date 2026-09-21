@@ -30,7 +30,7 @@ async function login(email: string, password: string): Promise<string> {
     const body = JSON.stringify({ email, password });
     const res = await new Promise<{ status: number; data: any }>((resolve) => {
       const req = https.request(
-        { hostname: u.hostname, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+        { hostname: u.hostname, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', ...(process.env.SC_RATE_LIMIT_BYPASS ? { 'x-ratelimit-bypass': process.env.SC_RATE_LIMIT_BYPASS } : {}), 'Content-Length': Buffer.byteLength(body) } },
         (r) => { let b = ''; r.on('data', (c) => (b += c)); r.on('end', () => { try { resolve({ status: r.statusCode || 0, data: JSON.parse(b || '{}') }); } catch { resolve({ status: r.statusCode || 0, data: {} }); } }); },
       );
       req.on('error', () => resolve({ status: 0, data: {} }));

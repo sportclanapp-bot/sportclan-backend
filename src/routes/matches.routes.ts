@@ -28,6 +28,7 @@ import {
   getCommentary,
 } from '../controllers/matches.controller';
 import { getNearbyMatches } from '../controllers/features.controller';
+import { uploadHandoff } from '../controllers/qrHandoff.controller';
 import {
   requestToJoinMatch,
   listMatchJoinRequests,
@@ -66,6 +67,9 @@ router.post('/:id/scoring-lease/heartbeat', authenticateToken, heartbeatScoringL
 router.post('/:id/scoring-lease/release', authenticateToken, releaseScoringLease);
 router.post('/:id/scoring-lease/handover', authenticateToken, handOverScoringLease);
 router.post('/:id/scoring-lease/takeover', authenticateToken, takeOverScoringLease);
+// SC-432 · a signed QR handoff, uploaded by whoever has signal. The caller is a
+// courier: authority comes from the signature, never from them.
+router.post('/:id/handoff', authenticateToken, uploadHandoff);
 router.post('/:id/follow', authenticateToken, followMatch);
 router.delete('/:id/follow', authenticateToken, unfollowMatch);
 router.get('/:id/chat', authenticateToken, getMatchChat);

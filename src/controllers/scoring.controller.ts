@@ -70,6 +70,67 @@ async function authorizeScorer(matchId: string, userId: string, deviceId?: strin
   return { ok: true as const, match };
 }
 
+
+/**
+ * SC-432 · the ONE idempotent way an event reaches the log.
+ *
+ * Extracted from createEvent so the QR handoff applies a scorer's queued ops
+ * through exactly the same path rather than a parallel one that could drift. That
+ * matters more than tidiness here: the handoff writes events with the SCORER as
+ * `createdBy`, not the scanner, and `record_match_event` dedupes on
+ * (created_by, client_key). Write them as the scanner and the scorer's own phone
+ * would later re-send the same balls under a different author and DOUBLE-COUNT
+ * every one of them.
+ *
+ * The fallback ladder is unchanged: 8-arg RPC (with p_client_key) → 7-arg → direct
+ * insert, so this stays safe to deploy ahead of any migration.
+ */
+export async function recordEventIdempotent(args: {
+  matchId: string;
+  createdBy: string;
+  eventType: string;
+  period?: string | null;
+  clockSeconds?: number | null;
+  payload?: Record<string, unknown>;
+  clientKey?: string | null;
+}): Promise<{ event: any; error: any; wasNew: boolean }> {
+  const baseArgs = {
+    p_match_id: args.matchId,
+    p_created_by: args.createdBy,
+    p_event_type: args.eventType,
+    p_period: args.period ?? null,
+    p_clock_seconds: args.clockSeconds ?? null,
+    p_payload: args.payload || {},
+  };
+  let rpc = await supabase.rpc('record_match_event', {
+    ...baseArgs,
+    p_client_key: normalizeClientKey(args.clientKey),
+  });
+  if (rpc.error && rpc.error.code === 'PGRST202') {
+    rpc = await supabase.rpc('record_match_event', baseArgs);
+  }
+  if (rpc.error && rpc.error.code === 'PGRST202') {
+    const ins = await supabase
+      .from('match_events')
+      .insert({
+        match_id: args.matchId,
+        event_type: args.eventType,
+        period: args.period ?? null,
+        clock_seconds: args.clockSeconds ?? null,
+        payload: args.payload || {},
+        created_by: args.createdBy,
+      })
+      .select('*')
+      .single();
+    return { event: ins.data, error: ins.error, wasNew: true };
+  }
+  const d = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+  if (d && typeof d === 'object' && 'was_new' in d) {
+    return { event: (d as any).event, error: rpc.error, wasNew: (d as any).was_new };
+  }
+  return { event: d, error: rpc.error, wasNew: true };
+}
+
 // POST /scoring/:matchId/event
 export async function createEvent(req: Request, res: Response) {
   const userId = req.userId;
@@ -165,55 +226,16 @@ export async function createEvent(req: Request, res: Response) {
     // / retry) → exactly one event, so recomputeSummary can't inflate the score.
     // Falls back to the direct insert until migration 049 (the RPC) is applied,
     // so deploying this ahead of the migration is safe (pre-fix behaviour).
-    let event: any = null;
-    let error: any = null;
-    let wasNew = true; // SC-133: only fan out for a genuinely NEW event (056 reports it)
-    const baseArgs = {
-      p_match_id: matchId,
-      p_created_by: userId,
-      p_event_type: event_type,
-      p_period: period ?? null,
-      p_clock_seconds: clock_seconds ?? null,
-      p_payload: payload || {},
-    };
-    // SC-129: pass the per-tap idempotency key so a slow (>3s) retry maps to the
-    // existing event. Fallback ladder keeps the 3s dedup active with no regression
-    // window: 8-arg (with p_client_key) → PGRST202 → 7-arg (the 049 function still
-    // runs its 3s dedup pre-055) → PGRST202 → last-resort direct insert.
-    // SC-179: coerce a non-UUID key to null so a malformed key can't 500 scoring.
-    let rpc = await supabase.rpc('record_match_event', { ...baseArgs, p_client_key: normalizeClientKey(idempotency_key) });
-    if (rpc.error && rpc.error.code === 'PGRST202') {
-      rpc = await supabase.rpc('record_match_event', baseArgs);
-    }
-    if (rpc.error && rpc.error.code === 'PGRST202') {
-      // Neither RPC signature present — last-resort direct insert (no dedup, no client_key column).
-      const ins = await supabase
-        .from('match_events')
-        .insert({
-          match_id: matchId,
-          event_type,
-          period: period ?? null,
-          clock_seconds: clock_seconds ?? null,
-          payload: payload || {},
-          created_by: userId,
-        })
-        .select('*')
-        .single();
-      event = ins.data;
-      error = ins.error;
-    } else {
-      // SC-133: 056 returns { event, was_new }; 055 (+ the 7-arg fallback) returns a
-      // raw match_events row → treat a row as was_new=true (today's behaviour).
-      const d = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
-      if (d && typeof d === 'object' && 'was_new' in d) {
-        event = (d as any).event;
-        wasNew = (d as any).was_new;
-      } else {
-        event = d;
-        wasNew = true;
-      }
-      error = rpc.error;
-    }
+    const rec = await recordEventIdempotent({
+      matchId,
+      createdBy: userId,
+      eventType: event_type,
+      period: period ?? null,
+      clockSeconds: clock_seconds ?? null,
+      payload: payload || {},
+      clientKey: idempotency_key,
+    });
+    const { event, error, wasNew } = rec;
     if (error || !event) return res.status(500).json({ error: sanitizeError(error) });
 
     // Recompute the canonical score_summary from the full event log for ALL

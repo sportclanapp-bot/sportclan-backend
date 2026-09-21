@@ -30,12 +30,17 @@ import { getSeasonRecap } from '../controllers/features.controller';
 import { getUserInsights } from '../controllers/insights.controller';
 import { getAdvancedStats } from '../controllers/advancedStats.controller';
 import { authenticateToken, optionalAuth } from '../middleware/auth.middleware';
+import { registerSigningKey } from '../controllers/qrHandoff.controller';
 
 const router = Router();
 // SC-397: 400 on a malformed id instead of letting it reach Postgres and 500.
 guardIdParams(router);
 
 // Self routes — must be declared before /:id so they don't get captured.
+// SC-432 · register this phone's PUBLIC signing key while it still has signal,
+// so its offline QR handoffs can be verified later.
+router.post('/me/signing-key', authenticateToken, registerSigningKey);
+
 router.get('/me', authenticateToken, getMe);
 router.patch('/me', authenticateToken, updateMe);
 router.patch('/me/sports', authenticateToken, updateMySports);

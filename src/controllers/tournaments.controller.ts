@@ -1086,7 +1086,9 @@ export async function getBracket(req: Request, res: Response) {
 
     const { data: matches, error } = await supabase
       .from('matches')
-      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label, venue, ground_label')
+      // SC-428: voided_at travels so a voided fixture renders as Voided in the
+      // fixtures list and the bracket, rather than as live or completed.
+      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label, venue, ground_label, voided_at')
       .eq('tournament_id', id)
       .order('round', { ascending: true })
       .order('match_no', { ascending: true })

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas } from '../utils/matchVoid';
+import { getMatchLiveStatus } from '../utils/liveStatus';
 import { istDay } from '../utils/appTime';
 import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
@@ -836,7 +837,15 @@ export async function getMatch(req: Request, res: Response) {
       .from('match_ratings')
       .select('match_quality')
       .eq('match_id', id);
+    // SC-428: what a VIEWER needs to judge whether a frozen scoreboard is a quiet
+    // match or a scorer who has lost signal. Best-effort — never blocks the match.
+    let liveStatus: Awaited<ReturnType<typeof getMatchLiveStatus>> | null = null;
+    try {
+      liveStatus = await getMatchLiveStatus(match as { id: string; status?: string | null; created_by?: string | null; umpire_id?: string | null });
+    } catch { /* the match payload matters more than the freshness hint */ }
+
     const matchWithRating: any = { ...match };
+    if (liveStatus) matchWithRating.live_status = liveStatus;
     if (ratings && ratings.length > 0) {
       const sum = ratings.reduce((acc, r: any) => acc + (r.match_quality ?? 0), 0);
       matchWithRating.avg_rating = Math.round((sum / ratings.length) * 10) / 10;

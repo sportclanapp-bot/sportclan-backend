@@ -171,7 +171,10 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
       .from('matches')
       .select('id, team_a_id, team_b_id, winner_team_id')
       .eq('tournament_id', id)
-      .eq('status', 'completed');
+      .eq('status', 'completed')
+      // SC-428: missed by the SC-424 sweep — a voided fixture was still counting
+      // towards a team's tournament win tally.
+      .is('voided_at', null);
 
     // Count wins per team
     const winCount = new Map<string, number>();
@@ -302,9 +305,10 @@ export async function getTournamentAnalytics(req: Request, res: Response) {
     // server-side instead — the same class as SC-370/SC-296.
     const [entriesRes, totalRes, completedRes, pendingRes] = await Promise.all([
       supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id),
-      supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id),
-      supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id).eq('status', 'completed'),
-      supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id).in('status', ['scheduled', 'live']),
+      // SC-428: a voided fixture is not a fixture for progress purposes either.
+      supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id).is('voided_at', null),
+      supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id).eq('status', 'completed').is('voided_at', null),
+      supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id).in('status', ['scheduled', 'live']).is('voided_at', null),
     ]);
 
     const completed = completedRes.count ?? 0;

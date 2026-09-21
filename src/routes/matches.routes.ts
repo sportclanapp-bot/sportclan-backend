@@ -9,6 +9,8 @@ import {
   selfAssignUmpire,
   cancelMatch,
   abandonMatch,
+  voidMatch,
+  unvoidMatch,
   followMatch,
   unfollowMatch,
   getMatchChat,
@@ -48,6 +50,9 @@ router.patch('/:id', authenticateToken, updateMatch);
 router.delete('/:id', authenticateToken, cancelMatch);
 router.post('/:id/cancel', authenticateToken, cancelMatch); // alias for frontend compatibility
 router.post('/:id/abandon', authenticateToken, abandonMatch);
+// SC-424: void keeps the match and its events and stops it counting anywhere.
+router.post('/:id/void', authenticateToken, voidMatch);
+router.post('/:id/unvoid', authenticateToken, unvoidMatch);
 router.post('/:id/follow', authenticateToken, followMatch);
 router.delete('/:id/follow', authenticateToken, unfollowMatch);
 router.get('/:id/chat', authenticateToken, getMatchChat);

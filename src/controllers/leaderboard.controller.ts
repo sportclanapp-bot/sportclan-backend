@@ -103,8 +103,12 @@ export async function getLeaderboard(req: Request, res: Response) {
       const startOfMonth = istMonthStartIso(now);
       const { data: deltas, error: dErr } = await supabase
         .from('rating_history')
-        .select('user_id, delta, new_rating')
+        // SC-424: rating_history rows are kept when a match is voided (voiding is
+        // not a delete, and unvoid has to be able to put the rating back), so the
+        // exclusion has to happen on read — here, via the match row.
+        .select('user_id, delta, new_rating, match:matches!inner(id, voided_at)')
         .eq('sport_id', sportId)
+        .is('match.voided_at', null)
         .gte('created_at', startOfMonth);
       if (dErr) return res.status(500).json({ error: dErr.message });
 

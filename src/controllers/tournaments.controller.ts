@@ -1622,7 +1622,8 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
   const { data: matches } = await supabase
     .from('matches')
     .select('team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
-    .eq('tournament_id', tournamentId);
+    .eq('tournament_id', tournamentId)
+    .is('voided_at', null); // SC-424: a voided fixture is not a played fixture
   const { data: trow } = await supabase
     .from('tournaments').select('tiebreaker_rules').eq('id', tournamentId).maybeSingle();
   const tiebreakerRules = ((trow as any)?.tiebreaker_rules ?? []) as any[];
@@ -1785,7 +1786,9 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
     .from('matches')
     .select('id, status, winner_team_id, team_a_id, team_b_id, score_summary, overs')
     .eq('tournament_id', tournamentId)
-    .eq('round', 0);
+    .eq('round', 0)
+    // SC-424: a voided group fixture neither blocks seeding nor seeds a team.
+    .is('voided_at', null);
   if (!groupMatches || groupMatches.length === 0) return;
   if (groupMatches.some((g) => g.status !== 'completed')) return;
 

@@ -10,7 +10,8 @@ export async function getScorerLeaderboard(req: Request, res: Response) {
     const { data: matches } = await supabase
       .from('matches')
       .select('created_by')
-      .eq('status', 'completed');
+      .eq('status', 'completed')
+      .is('voided_at', null); // SC-424
 
     const countMap = new Map<string, number>();
     for (const m of matches ?? []) {
@@ -71,11 +72,13 @@ export async function getUserInsights(req: Request, res: Response) {
       team_a_id: string | null; team_b_id: string | null; created_at: string | null;
       score_summary: { winner_side?: 'A' | 'B' } | null;
       is_ranked?: boolean | null;
+      voided_at?: string | null; // SC-424
     };
     const { data: parts } = await supabase
       .from('match_participants')
       // SC-413: is_ranked needed to apply the SC-283 rule.
-      .select('team_side, match:matches!inner(id, status, is_ranked, winner_team_id, team_a_id, team_b_id, score_summary, created_at)')
+      // SC-424: voided_at is selected so countsTowardRecord can exclude it.
+      .select('team_side, match:matches!inner(id, status, is_ranked, winner_team_id, team_a_id, team_b_id, score_summary, created_at, voided_at)')
       .eq('user_id', id);
 
     // SC-413: form/streak are a RECORD, so they obey the same SC-283 rule as

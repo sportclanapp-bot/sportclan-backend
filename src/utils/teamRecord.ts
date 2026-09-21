@@ -20,7 +20,9 @@ export async function computeTeamRecord(teamId: string): Promise<TeamRecord> {
     .from('matches')
     .select('winner_team_id')
     .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`)
-    .eq('status', 'completed');
+    .eq('status', 'completed')
+    // SC-424: a voided match counts nowhere — not in a team's record either.
+    .is('voided_at', null);
   let wins = 0;
   let losses = 0;
   let draws = 0;

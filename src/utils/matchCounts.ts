@@ -25,11 +25,14 @@ import { supabase } from './supabase';
 export interface CountableMatch {
   is_ranked?: boolean | null;
   status?: string | null;
+  /** SC-424: set when the match has been voided. A voided match counts nowhere. */
+  voided_at?: string | null;
 }
 
 /**
  * SC-283, stated once.
  *
+ * - A VOIDED match never counts (SC-424), whatever else is true.
  * - Ranked matches always count: they are team-based and rated, so there is no
  *   phantom-opponent hole to farm.
  * - Casual matches count only with **≥2 real participants**. `match_participants`
@@ -43,6 +46,11 @@ export function countsTowardRecord(
   participantCount: number,
 ): boolean {
   if (!match) return false;
+  // SC-424: a voided match counts nowhere, whatever its status. Checked FIRST so
+  // every caller of this shared rule inherits the exclusion for free — callers
+  // that build their own query still have to select `voided_at` for it to bite,
+  // which is why the SC-424 sweep added it to each one.
+  if (match.voided_at != null) return false;
   if (match.status !== 'completed') return false;
   if (match.is_ranked) return true;
   return participantCount >= 2;

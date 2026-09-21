@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { recordDeltas, applyRecordDeltas } from '../utils/matchVoid';
 import { istDay } from '../utils/appTime';
 import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
@@ -1948,6 +1949,118 @@ export async function completeMatch(req: Request, res: Response) {
       })),
     });
   } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ─── SC-424 · VOID / UNVOID ────────────────────────────────────────────────
+//
+// A match that should never have counted — a test fixture, a mis-scored game, a
+// fixture played under protest — used to leave only bad options: leave it in
+// everyone's record, or delete rows on prod. Voiding is the third: the match and
+// every event stay exactly where they are, a flag says it does not count, every
+// rollup honours the flag, the match page says so out loud, and it is reversible.
+//
+// See utils/matchVoid.ts for the rule and the reversal arithmetic.
+
+/** Creator / umpire / tournament organiser, or an admin. */
+async function canVoidMatch(match: { created_by?: string | null; umpire_id?: string | null; tournament_id?: string | null }, userId: string): Promise<boolean> {
+  if (await canOfficiateMatch(match as never, userId)) return true;
+  const whitelist = (process.env.ADMIN_USER_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (whitelist.includes(userId)) return true;
+  const { data } = await supabase.from('users').select('is_admin').eq('id', userId).maybeSingle();
+  return (data as { is_admin?: boolean } | null)?.is_admin === true;
+}
+
+export async function voidMatch(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    // A void without a reason is just a disappearance. The reason is shown on the
+    // match page to everyone whose record it changed, so it is required.
+    if (reason.length < 3) {
+      return res.status(400).json({ error: 'A reason is required to void a match.', code: 'REASON_REQUIRED' });
+    }
+    if (reason.length > 500) {
+      return res.status(400).json({ error: 'Reason must be 500 characters or fewer.' });
+    }
+
+    const { data: match } = await supabase
+      .from('matches')
+      .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (!(await canVoidMatch(match, userId))) {
+      return res.status(403).json({ error: 'Only an organiser, the umpire or an admin can void a match.' });
+    }
+    // Idempotent: voiding an already-voided match is a no-op success, so a retry
+    // can never double-subtract somebody's record.
+    if (match.voided_at) {
+      return res.json({ success: true, already_voided: true, match });
+    }
+
+    // Walk back what completion materialised BEFORE setting the flag, so the
+    // numbers are computed against the match as it still stands.
+    const deltas = await recordDeltas(id);
+    if (deltas.length > 0) await applyRecordDeltas(match.sport_id, deltas, -1);
+
+    const { data: updated, error } = await supabase
+      .from('matches')
+      .update({
+        voided_at: new Date().toISOString(),
+        voided_by: userId,
+        void_reason: reason,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    return res.json({ success: true, match: updated, reversed_players: deltas.length });
+  } catch (e) {
+    console.error('voidMatch error:', e instanceof Error ? e.message : e);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function unvoidMatch(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data: match } = await supabase
+      .from('matches')
+      .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (!(await canVoidMatch(match, userId))) {
+      return res.status(403).json({ error: 'Only an organiser, the umpire or an admin can restore a match.' });
+    }
+    if (!match.voided_at) {
+      return res.json({ success: true, already_active: true, match });
+    }
+
+    // Clear the flag FIRST so the same calculation that voided it sees a live
+    // match again, then re-apply with the opposite sign.
+    const { data: updated, error } = await supabase
+      .from('matches')
+      .update({ voided_at: null, voided_by: null, void_reason: null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    const deltas = await recordDeltas(id);
+    if (deltas.length > 0) await applyRecordDeltas(match.sport_id, deltas, 1);
+
+    return res.json({ success: true, match: updated, restored_players: deltas.length });
+  } catch (e) {
+    console.error('unvoidMatch error:', e instanceof Error ? e.message : e);
     return res.status(500).json({ error: 'Internal server error' });
   }
 }

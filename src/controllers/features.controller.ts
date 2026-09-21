@@ -44,7 +44,8 @@ export async function getTournamentStandings(req: Request, res: Response) {
       .from('matches')
       .select('id, team_a_id, team_b_id, winner_team_id, score_summary, status, overs')
       .eq('tournament_id', id)
-      .eq('status', 'completed');
+      .eq('status', 'completed')
+      .is('voided_at', null); // SC-424: a voided fixture is not a played fixture
 
     // Check if cricket for NRR
     const { data: sport } = await supabase.from('sports').select('slug').eq('id', tournament.sport_id).maybeSingle();
@@ -352,7 +353,8 @@ export async function getSeasonRecap(req: Request, res: Response) {
         .eq('user_id', id),
       supabase.from('match_participants')
         // SC-413: is_ranked is required to apply the SC-283 rule below.
-        .select('match_id, team_side, match:matches!inner(id, sport_id, status, is_ranked, winner_team_id, team_a_id, team_b_id, score_summary, created_at)')
+        // SC-424: voided_at is selected so countsTowardRecord can exclude it.
+        .select('match_id, team_side, match:matches!inner(id, sport_id, status, is_ranked, winner_team_id, team_a_id, team_b_id, score_summary, created_at, voided_at)')
         .eq('user_id', id)
         .gte('match.created_at', since),
       supabase.from('gift_transactions')

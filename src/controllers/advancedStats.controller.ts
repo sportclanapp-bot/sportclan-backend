@@ -73,9 +73,12 @@ export async function getAdvancedStats(req: Request, res: Response) {
     // ── Universe: this user's ranked matches for the sport (rating_history) ──
     const { data: rh } = await supabase
       .from('rating_history')
-      .select('match_id, old_rating, new_rating, delta, created_at')
+      // SC-424: voided matches drop out of the ranked universe this whole screen
+      // is built from (form guide, rating trajectory, opponent splits).
+      .select('match_id, old_rating, new_rating, delta, created_at, match:matches!inner(id, voided_at)')
       .eq('user_id', targetId)
       .eq('sport_id', sportId)
+      .is('match.voided_at', null)
       .order('created_at', { ascending: true });
     const history = rh ?? [];
 
@@ -109,7 +112,8 @@ export async function getAdvancedStats(req: Request, res: Response) {
     const { data: matchRows } = await supabase
       .from('matches')
       .select('id, team_a_id, team_b_id, team_a_name, team_b_name, winner_team_id, scheduled_at, format, city_id')
-      .in('id', idFilter);
+      .in('id', idFilter)
+      .is('voided_at', null); // SC-424
     const matches = matchRows ?? [];
     const matchById = new Map<string, (typeof matches)[number]>();
     for (const m of matches) matchById.set(m.id as string, m);
@@ -338,6 +342,7 @@ export async function getTeamInsights(req: Request, res: Response) {
       .select('id, winner_team_id, scheduled_at, team_a_id, team_b_id, team_a_name, team_b_name')
       .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`)
       .eq('status', 'completed')
+      .is('voided_at', null) // SC-424
       .order('scheduled_at', { ascending: false });
     const matches = matchRows ?? [];
 

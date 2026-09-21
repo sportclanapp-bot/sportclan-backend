@@ -1103,7 +1103,7 @@ export async function getActivityHeatmap(req: Request, res: Response) {
   const { data, error } = await supabase
     .from('match_participants')
     // SC-415: completed_at is the day the match was really played.
-    .select('team_side, match:matches(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, score_summary, updated_at)')
+    .select('team_side, match:matches(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, score_summary, updated_at, voided_at)')
     .eq('user_id', id)
     .limit(500);
 
@@ -1117,6 +1117,7 @@ export async function getActivityHeatmap(req: Request, res: Response) {
     const match: any = row.match;
     if (!match) continue;
     if (match.status !== 'completed') continue;
+    if (match.voided_at) continue; // SC-424: a voided match counts nowhere
     // SC-415: prefer the real completion stamp (migration 085). updated_at moves
     // on ANY later edit, so a match's heatmap day used to drift whenever its row
     // was touched; completed_at is fixed at the moment the match ended.
@@ -1437,19 +1438,31 @@ export async function getSportProfile(req: Request, res: Response) {
     // Tennis fell through and its serve/point sportStats were silently omitted.
     const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
 
-    // Get user's match IDs
+    // Get user's match IDs.
+    // SC-424: through an !inner join on matches so a VOIDED match drops out here,
+    // once, for every per-sport branch below. Before this the per-sport career
+    // figures (cricket runs/wickets, football goals, basketball points, rally
+    // points) were aggregated over EVERY match the user had ever been a
+    // participant in, with no exclusion of any kind — so a voided match, and
+    // indeed a still-live one, contributed to a lifetime stat.
     const { data: parts } = await supabase
       .from('match_participants')
-      .select('match_id')
-      .eq('user_id', id);
+      .select('match_id, match:matches!inner(id, voided_at)')
+      .eq('user_id', id)
+      .is('match.voided_at', null);
     const matchIds = (parts ?? []).map((mp: any) => mp.match_id);
 
     if (slug === 'cricket') {
       // Use innings_stats table for accurate per-innings aggregates
-      const { data: innings } = await supabase
+      // SC-424: scoped to this user's NON-VOIDED matches. It used to select every
+      // innings_stats row for the user with no match filter whatsoever, so a
+      // voided match's innings still moved their batting average, strike rate,
+      // highest score, 50s/100s and bowling economy — permanently.
+      const { data: innings } = matchIds.length === 0 ? { data: [] } : await supabase
         .from('innings_stats')
         .select('runs, balls_faced, fours, sixes, is_out, bowling_overs, bowling_runs, bowling_wickets, catches, runouts')
-        .eq('user_id', id);
+        .eq('user_id', id)
+        .in('match_id', matchIds.slice(0, 500));
 
       if (innings && innings.length > 0) {
         const totalRuns = innings.reduce((s, i) => s + (i.runs ?? 0), 0);

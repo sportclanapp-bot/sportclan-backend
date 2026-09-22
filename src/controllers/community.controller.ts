@@ -1165,9 +1165,21 @@ export async function getMyPostCount(req: Request, res: Response) {
       .eq('author_id', userId).gte('created_at', startOfMonth),
   ]);
 
+  /**
+   * SC-434 · there is no limit any more, so it does not report one.
+   *
+   * This answered `{ count, limit: 5, remaining }` — and kept answering it after
+   * migration 090 removed the cap, so a caller asking "how many posts do I have
+   * left" was told `remaining: 0` while the server happily accepted the ninth.
+   * Found on prod during the live verification.
+   *
+   * `limit` and `remaining` are kept as keys, explicitly null, rather than
+   * dropped: an older app build still reads them, and a MISSING key would read as
+   * `undefined` and could render "undefined posts remaining". Null is the honest
+   * answer to "what is the limit" and renders as nothing.
+   */
   const used = (communityCount ?? 0) + (profileCount ?? 0);
-  const limit = 5;
-  return res.json({ count: used, limit, remaining: Math.max(0, limit - used) });
+  return res.json({ count: used, limit: null, remaining: null });
 }
 
 // ─── CHECK IF USER LIKED ────────────────────────────────────────────────────

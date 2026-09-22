@@ -68,8 +68,9 @@ async function searchPlayers(res: Response, q: string, sportId: string | undefin
     .or(orIlikeContains(['username', 'name'], q));
   if (sportId) base = base.eq('sports.sport_id', sportId);
   const { data, error } = await excludeIds(excludeDeleted(base), 'id', blocked) // SC-77 deleted + SC-82 blocked
-    // Premium users appear first — delivers the "Boosted ranking" promise
-    .order('is_premium', { ascending: false })
+    // SC-434: a "Premium first" order used to sit here, selling boosted ranking.
+    // Search results are now ordered by name alone — what somebody paid is not a
+    // reason to find them sooner.
     .order('name', { ascending: true })
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging (no overlap/gaps)
     .range(p.from, p.to);
@@ -149,15 +150,14 @@ async function searchTournaments(res: Response, q: string, sportId: string | und
 }
 
 async function searchUmpires(res: Response, q: string, sportId: string | undefined, p: Pagination, callerId?: string) {
-  // Only premium umpires shown
+  // SC-434: every umpire, not only the ones who had paid.
   const blocked = await blockedUserIds(callerId); // SC-82
   const { data, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
     .from('users')
     .select(`
-      id, name, username, profile_picture_url, is_premium,
+      id, name, username, profile_picture_url,
       city:cities!city_id(id, name)
     `)
-    .eq('is_premium', true)
     .or(orIlikeContains(['username', 'name'], q))
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
     .range(p.from, p.to)), 'id', blocked);
@@ -165,7 +165,7 @@ async function searchUmpires(res: Response, q: string, sportId: string | undefin
   if (error) return res.status(500).json({ error: error.message });
 
   // has_more from the RAW page (the account-type post-filter may shrink it, but
-  // more raw premium rows can still remain to scan on the next page).
+  // more raw rows can still remain to scan on the next page).
   const hasMore = (data || []).length === p.limit;
   // Filter to only umpire/referee account types
   const userIds = (data || []).map((u) => u.id);
@@ -216,10 +216,9 @@ async function searchBusinesses(res: Response, q: string, p: Pagination, callerI
   const { data: users, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
     .from('users')
     .select(`
-      id, name, username, profile_picture_url, is_premium,
+      id, name, username, profile_picture_url,
       city:cities!city_id(id, name)
     `)
-    .eq('is_premium', true)
     .or(orIlikeContains(['username', 'name'], q))
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
     .range(p.from, p.to)), 'id', blocked);
@@ -254,7 +253,6 @@ async function searchByAccountType(res: Response, q: string, accountType: string
     .from('users')
     .select('id, name, username, profile_picture_url, bio, is_premium, city:cities!city_id(id, name)')
     .or(orIlikeContains(['username', 'name'], q))
-    .order('is_premium', { ascending: false })
     .order('name', { ascending: true })
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
     .range(p.from, p.to)), 'id', blocked);

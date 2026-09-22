@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { checkExpiredSubscriptions } from './subscriptions.controller';
 import { inviteFreshCutoffIso } from './invites.controller';
 import { resolveSportId } from '../utils/sportId';
 import { isSportInactive } from '../utils/sports';
@@ -134,7 +133,10 @@ async function runSmartNotifications(userId: string): Promise<void> {
 export async function getMe(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-  await checkExpiredSubscriptions(userId);
+  // SC-434: a lazy premium-expiry check ran here on every /users/me — it flipped
+  // is_premium off and could fire an "expiring soon" notification. Both are gone
+  // with the tiers, so no user is told anything when the old complimentary dates
+  // pass.
   // Fire-and-forget — the profile response shouldn't wait on this.
   void runSmartNotifications(userId);
   const { data, error } = await supabase
@@ -171,7 +173,7 @@ export async function getMe(req: Request, res: Response) {
         .eq('user_id', userId);
       if ((sportCount ?? 0) > 0) {
         const { awardCoins } = await import('../utils/coins');
-        void awardCoins(userId, 'complete_profile', 10);
+        void awardCoins(userId, 'complete_profile', 10, 'Completed your profile');
       }
     }
   } catch {
@@ -1050,10 +1052,11 @@ export async function discoverPlayers(req: Request, res: Response) {
     })
     .filter(Boolean) as any[];
 
-  // Premium users appear first (ComparisonScreen: "Higher priority"),
-  // then available players, then sort by rating similarity.
+  // SC-434: Premium used to sort first here, which was the "Higher priority"
+  // line on the old plans page. Suggestions are now ordered by who is actually
+  // available and whose rating is closest — both of which are about the match
+  // being a good one.
   players.sort((a, b) => {
-    if (a.is_premium !== b.is_premium) return a.is_premium ? -1 : 1;
     if (a.is_available !== b.is_available) return a.is_available ? -1 : 1;
     // Closest rating to the requesting user ranks higher
     const diffA = Math.abs((a.rating ?? 1200) - myRating);
@@ -1840,7 +1843,7 @@ export async function checkIn(req: Request, res: Response) {
   try {
     const today = istDay();
     const { awardCoins } = await import('../utils/coins');
-    const { awarded, newBalance } = await awardCoins(userId, `daily_checkin_${today}`, CHECKIN_COINS);
+    const { awarded, newBalance } = await awardCoins(userId, `daily_checkin_${today}`, CHECKIN_COINS, 'Daily check-in');
 
     const { data: u } = await supabase
       .from('users')

@@ -13,6 +13,16 @@ export async function awardCoins(
   userId: string,
   eventType: string,
   coins: number,
+  /**
+   * SC-434 · what the USER reads in their coin history.
+   *
+   * `eventType` is an idempotency key — `daily_checkin_2026-09-22`,
+   * `kudos_7f3a…` — and it was being written straight into the transaction
+   * description, so the history read like a log file. The key still does the
+   * deduping; this is the sentence beside it. Omitted falls back to the key, so
+   * no existing caller changes behaviour by being left alone.
+   */
+  description?: string,
 ): Promise<AwardResult> {
   // Does the event already exist?
   const { data: existing } = await supabase
@@ -66,7 +76,7 @@ export async function awardCoins(
     user_id: userId,
     type: 'coins_earned',
     coins,
-    description: eventType,
+    description: description ?? eventType,
     status: 'completed',
   });
   return { awarded: true, newBalance };

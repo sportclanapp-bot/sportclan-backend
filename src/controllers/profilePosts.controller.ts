@@ -19,7 +19,6 @@ import { parsePagination } from '../utils/pagination';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { LIMITS, firstDisallowedImageUrl, firstInvalidUrl } from '../utils/validation';
-import { isPremiumActive } from '../utils/premium';
 import { blockedUserIds } from '../utils/blocks';
 import { normalizeClientKey } from '../utils/idempotency';
 import { attachLikes, detectProfanity } from './community.controller';
@@ -68,13 +67,6 @@ export async function createProfilePost(req: Request, res: Response) {
   const invalid = validateBody(content, media_urls, link_url);
   if (invalid) return res.status(invalid.status).json(invalid.body);
 
-  const { data: user } = await supabase
-    .from('users')
-    .select('is_premium, premium_expires_at')
-    .eq('id', userId)
-    .single();
-  const isPremium = isPremiumActive(user);
-
   const urls = Array.isArray(media_urls)
     ? media_urls.filter((u: unknown): u is string => typeof u === 'string' && u !== '')
     : [];
@@ -84,7 +76,11 @@ export async function createProfilePost(req: Request, res: Response) {
   const { data, error } = await supabase
     .rpc('create_profile_post_capped', {
       p_author_id: userId,
-      p_is_premium: isPremium,
+      // SC-434: kept in the call, always true. Migration 090 removes the cap from
+    // the function body; passing true means the cap is off even on a server that
+    // deploys before the migration is applied, so the order of the two cannot
+    // leave anybody capped.
+    p_is_premium: true,
       p_content: (typeof content === 'string' ? content : '').trim(),
       p_media_urls: urls.length > 0 ? urls : null,
       p_link_url: link_url || null,

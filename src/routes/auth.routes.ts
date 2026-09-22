@@ -12,7 +12,6 @@ import {
   resetPassword,
   changePhone,
   checkUsername,
-  validateCoupon,
 } from '../controllers/auth.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -32,6 +31,7 @@ router.post('/change-phone', authenticateToken, changePhone);
 
 // Helpers used during registration
 router.get('/username/check', checkUsername);
-router.get('/coupon/validate', validateCoupon);
+// SC-434: 'GET /coupon/validate' was here. Coupons are gone with the rest of the
+// paid machinery; coupon_codes stays on prod, read-only.
 
 export default router;

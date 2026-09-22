@@ -1,12 +1,24 @@
-// SC-144: single source of truth for "is this user premium RIGHT NOW". Gating on
-// the raw `is_premium` flag left a stale-premium window: the flag is only flipped
-// to false by the hourly sweep / the /users/me lazy check, so an expired user kept
-// premium features for up to ~1h. This evaluates expiry LIVE (mirrors the
-// create-tournament check exactly). The sweep + lazy check remain as flag cleanup.
+/**
+ * SC-434 · there are no tiers any more. Every feature is free for everyone.
+ *
+ * This used to answer "is this user premium RIGHT NOW", and eight gates across
+ * the product asked it before letting someone host a tournament, see their own
+ * stats, post an image or send a gift.
+ *
+ * It is kept — rather than deleted along with its callers — for one round, and
+ * returns true for everybody. That ordering is deliberate: flipping one function
+ * opens all eight gates in a single reviewable change that can be reverted by
+ * one line, and the call sites are then removed knowing the behaviour already
+ * shipped. Deleting the function first would have meant eight simultaneous
+ * behaviour changes and no way back without a revert of the whole thing.
+ *
+ * The `users.is_premium` and `premium_expires_at` columns stay on prod, untouched
+ * and unread. 2,501 rows carry a complimentary expiry of 1 Oct 2026; nothing
+ * consults it now, so nobody loses anything or hears about it when that date
+ * passes.
+ */
 export function isPremiumActive(
-  user: { is_premium?: boolean | null; premium_expires_at?: string | null } | null | undefined,
+  _user?: { is_premium?: boolean | null; premium_expires_at?: string | null } | null,
 ): boolean {
-  if (!user?.is_premium) return false;
-  if (!user.premium_expires_at) return true; // null expiry = lifetime / legacy grant
-  return new Date(user.premium_expires_at).getTime() > Date.now();
+  return true;
 }

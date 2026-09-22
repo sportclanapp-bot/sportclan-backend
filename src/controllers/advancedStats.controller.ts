@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
-import { isPremiumActive } from '../utils/premium';
 import { resolveSportId } from '../utils/sportId';
 import { getTeamRole } from '../utils/teamAuth';
 import { isBlockedBetween } from '../utils/blocks';
@@ -44,13 +43,7 @@ export async function getAdvancedStats(req: Request, res: Response) {
   const viewerId = req.userId;
   if (!viewerId) return res.status(401).json({ error: 'Unauthorized' });
 
-  // The ONLY new fence — gates on the VIEWER's premium, never the target's, so a
-  // stranger's free stats card / badges / recap stay free (SC-275 additive rule).
-  const { data: me } = await supabase
-    .from('users').select('is_premium, premium_expires_at').eq('id', viewerId).maybeSingle();
-  if (!isPremiumActive(me)) {
-    return res.status(403).json({ error: 'Premium required for advanced stats', code: 'PREMIUM_REQUIRED' });
-  }
+  // SC-434: this was the only fence on advanced stats. No tiers any more.
 
   const targetId = (req.params.id as string | undefined) ?? viewerId;
   // SC-106: don't surface a soft-deleted or blocked-either-way target's stats.
@@ -322,12 +315,8 @@ export async function getTeamInsights(req: Request, res: Response) {
   const teamId = req.params.id;
   if (!teamId || !UUID_RE.test(teamId)) return res.status(400).json({ error: 'Invalid team id' });
 
-  const { data: me } = await supabase
-    .from('users').select('is_premium, premium_expires_at').eq('id', userId).maybeSingle();
-  if (!isPremiumActive(me)) {
-    return res.status(403).json({ error: 'Premium required for team insights', code: 'PREMIUM_REQUIRED' });
-  }
-  // "Your team's" analytics — members only.
+  // SC-434: Premium no longer gates this. Still members-only — that is about
+  // whose team it is, not what anyone paid.
   const role = await getTeamRole(teamId, userId);
   if (!role) return res.status(403).json({ error: 'Only team members can view team insights', code: 'NOT_A_MEMBER' });
 

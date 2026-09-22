@@ -1747,7 +1747,7 @@ export async function completeMatch(req: Request, res: Response) {
       if (winner_team_id) {
         const winnerSide = winner_team_id === match.team_a_id ? 'A' : 'B';
         const winnerIds = (participants ?? []).filter((p) => p.team_side === winnerSide).map((p) => p.user_id);
-        for (const uid of winnerIds) void awardCoins(uid, `win_match_${id}`, 5);
+        for (const uid of winnerIds) void awardCoins(uid, `win_match_${id}`, 5, 'Won a match');
       }
     }
 

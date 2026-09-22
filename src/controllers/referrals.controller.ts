@@ -68,8 +68,8 @@ export async function applyReferral(req: Request, res: Response) {
   }
 
   // Coin awards — awardCoins is idempotent via coin_events unique key.
-  const mine = await awardCoins(userId, `referral_applied_${referrer.id}`, REFERRAL_COINS);
-  const theirs = await awardCoins(referrer.id, `referral_reward_${userId}`, REFERRAL_COINS);
+  const mine = await awardCoins(userId, `referral_applied_${referrer.id}`, REFERRAL_COINS, 'Used an invite code');
+  const theirs = await awardCoins(referrer.id, `referral_reward_${userId}`, REFERRAL_COINS, 'A friend joined with your code');
 
   return res.json({
     success: true,

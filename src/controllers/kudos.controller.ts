@@ -82,29 +82,27 @@ export async function sendKudos(req: Request, res: Response) {
   }
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
-  // Award coins on the recipient's user row.
+  /**
+   * SC-434 · award the coins through the LEDGER, like every other coin change.
+   *
+   * This used to read coin_balance, add 2, and write it back — a read-modify-write
+   * with no ledger row in coin_events, which had two consequences. Two kudos
+   * landing at once could each read the same balance and one credit would
+   * disappear (the A4-006 drift that `increment_coins` exists to prevent). And
+   * coin_events did not add up to the balance, so the coin history could not be
+   * reconciled against it.
+   *
+   * `awardCoins` fixes both: the (user, event_type) unique key makes it idempotent
+   * per kudos, the increment is atomic in Postgres, and it writes the transactions
+   * row itself. The key is the kudos id, so a retry of the same kudos credits once
+   * while a second kudos from a different teammate credits again — which is the
+   * existing rule, now enforced by the database rather than by luck.
+   */
   try {
-    const { data: usr } = await supabase
-      .from('users')
-      .select('coin_balance')
-      .eq('id', toUserId)
-      .maybeSingle();
-    if (usr) {
-      await supabase
-        .from('users')
-        .update({ coin_balance: (usr.coin_balance ?? 0) + KUDOS_COINS })
-        .eq('id', toUserId);
-    }
-    await supabase.from('transactions').insert({
-      user_id: toUserId,
-      type: 'kudos',
-      coins: KUDOS_COINS,
-      description: 'Received kudos',
-      reference_id: inserted.id,
-      status: 'completed',
-    });
+    const { awardCoins } = await import('../utils/coins');
+    await awardCoins(toUserId, `kudos_${inserted.id}`, KUDOS_COINS, 'Received kudos');
   } catch {
-    // best-effort
+    // best-effort — the kudos itself is already recorded
   }
 
   // Push + in-app notification.

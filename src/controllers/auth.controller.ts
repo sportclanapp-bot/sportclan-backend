@@ -12,36 +12,24 @@ import { setOtp, getOtp, deleteOtp } from '../utils/otpStore';
 import { normalizeAccountTypes } from '../constants/accountTypes';
 import { awardCoins } from '../utils/coins';
 
-// Purchases kill-switch (mirrors subscriptions.controller). Register-time coupon
-// redemption grants premium + coins for ₹0, so it stays OFF until a real gateway
-// is wired (A4-003). Premium is complimentary via the early-bird grant meanwhile.
-const PAYMENTS_ENABLED = process.env.PAYMENTS_ENABLED === 'true';
-
-
 const OTP_TTL_SECONDS = 300; // 5 minutes
 
-// ─── Early-bird launch perk ──────────────────────────────────────────────────
-// Every NEW signup (any path: phone, email, Google) is granted Premium for
-// 3 calendar months + 50 coins, using the real premium machinery
-// (is_premium=true + premium_expires_at). This replaces the retired EARLYBIRDS
-// coupon. Premium is set in the user INSERT (so it only applies to brand-new
-// rows — existing users logging in are untouched). The 50 coins are awarded
-// via awardCoins('early_bird_grant') which is idempotent (unique coin_events
-// key) and logs a transaction — so it can never double-grant.
-const EARLY_BIRD_PREMIUM_MONTHS = 3;
+// ─── Welcome coins ───────────────────────────────────────────────────────────
+// Every NEW signup (phone, email or Google) gets 50 coins, on top of the 10 for
+// first_registration — 60 in total.
+//
+// SC-434: this grant used to ALSO set is_premium + a 3-month expiry, because
+// there were tiers and new users were given the paid one for free. There are no
+// tiers now, so the premium half is gone and the coins are just coins. The event
+// key stays `early_bird_grant` deliberately: it is the idempotency key on
+// coin_events, and renaming it would hand a second 50 to every existing user the
+// next time anything called this.
 const EARLY_BIRD_COINS = 50;
 
-/** premium_expires_at = `from` + 3 calendar months, as an ISO string. */
-function earlyBirdExpiry(from: Date = new Date()): string {
-  const d = new Date(from);
-  d.setMonth(d.getMonth() + EARLY_BIRD_PREMIUM_MONTHS);
-  return d.toISOString();
-}
-
-/** Award the 50-coin early-bird grant to a freshly-created user. Best-effort. */
+/** Award the 50 welcome coins to a freshly-created user. Best-effort. */
 async function grantEarlyBirdCoins(userId: string): Promise<void> {
   try {
-    await awardCoins(userId, 'early_bird_grant', EARLY_BIRD_COINS);
+    await awardCoins(userId, 'early_bird_grant', EARLY_BIRD_COINS, 'Welcome bonus');
   } catch {
     // non-critical — premium is already set on the row
   }
@@ -417,8 +405,6 @@ export async function register(req: Request, res: Response) {
       bio: bio || null,
       city_id: city_id || null,
       account_type: primaryAccountType,
-      is_premium: true,
-      premium_expires_at: earlyBirdExpiry(),
       coin_balance: 0,
       referral_code: referralCode,
     })
@@ -438,44 +424,20 @@ export async function register(req: Request, res: Response) {
     await supabase.from('user_sports').insert(rows);
   }
 
-  // Apply coupon if present and valid. Gated by the purchases kill-switch
-  // (A4-003) — while payments are off the coupon is silently ignored rather
-  // than self-granting premium for free. Registration itself still succeeds.
-  if (coupon_code && PAYMENTS_ENABLED) {
-    const { data: coupon } = await supabase
-      .from('coupon_codes')
-      .select('id, premium_months, coins, max_uses, uses_count, expires_at, active')
-      .ilike('code', coupon_code)
-      .maybeSingle();
-    if (coupon && coupon.active &&
-        (!coupon.expires_at || new Date(coupon.expires_at) > new Date()) &&
-        (coupon.max_uses == null || coupon.uses_count < coupon.max_uses)) {
-      const updates: Record<string, unknown> = {};
-      if (coupon.coins) updates.coin_balance = coupon.coins;
-      if (coupon.premium_months) {
-        updates.is_premium = true;
-        // Calendar months, consistent with earlyBirdExpiry (A4-011).
-        const exp = new Date();
-        exp.setMonth(exp.getMonth() + coupon.premium_months);
-        updates.premium_expires_at = exp.toISOString();
-      }
-      if (Object.keys(updates).length > 0) {
-        await supabase.from('users').update(updates).eq('id', user.id);
-      }
-      await supabase.from('coupon_usages').insert({ coupon_id: coupon.id, user_id: user.id });
-      await supabase.from('coupon_codes').update({ uses_count: coupon.uses_count + 1 }).eq('id', coupon.id);
-    }
-  }
+  // SC-434: a coupon block stood here. It could grant premium months and OVERWRITE
+  // coin_balance outright — the one place in the app that set a balance rather
+  // than adding to it. Coupons are gone with the rest of the paid machinery; the
+  // coupon_codes and coupon_usages tables stay on prod, read-only.
 
   // Welcome bonus — 10 coins on first registration. Idempotent via
   // the (user_id, event_type) unique key on coin_events.
   try {
-    await awardCoins(user.id, 'first_registration', 10);
+    await awardCoins(user.id, 'first_registration', 10, 'Welcome to SportClan');
   } catch {
     // non-critical
   }
 
-  // Early-bird launch perk: 50 coins (premium was set on the insert above).
+  // Welcome coins: 50, on top of the 10 above.
   await grantEarlyBirdCoins(user.id);
 
   await deleteOtp(p);
@@ -483,13 +445,13 @@ export async function register(req: Request, res: Response) {
   // is still 0 — re-read it so the signup response reflects the real total (A4-009).
   {
     const { data: fb } = await supabase
-      .from('users').select('coin_balance, is_premium, premium_expires_at').eq('id', user.id).maybeSingle();
+      .from('users').select('coin_balance').eq('id', user.id).maybeSingle();
     if (fb) Object.assign(user, fb);
   }
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
   await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
-  return res.json({ user, accessToken, refreshToken, isNewUser: true, earlyBird: true });
+  return res.json({ user, accessToken, refreshToken, isNewUser: true });
 }
 
 // POST /auth/otp/login  { phone, code }
@@ -645,8 +607,6 @@ export async function registerEmail(req: Request, res: Response) {
       bio: bio || null,
       city_id: city_id || null,
       account_type: primaryAccountType,
-      is_premium: true,
-      premium_expires_at: earlyBirdExpiry(),
       coin_balance: 0,
       referral_code: referralCode,
     })
@@ -669,7 +629,7 @@ export async function registerEmail(req: Request, res: Response) {
   // Welcome bonus — 10 coins on first registration (parity with phone signup;
   // previously missing on email/Google, see A4-008). Idempotent via coin_events.
   try {
-    await awardCoins(user.id, 'first_registration', 10);
+    await awardCoins(user.id, 'first_registration', 10, 'Welcome to SportClan');
   } catch {
     // non-critical
   }
@@ -680,13 +640,13 @@ export async function registerEmail(req: Request, res: Response) {
   // Re-read post-grant balance so the response isn't a stale coin_balance:0 (A4-009).
   {
     const { data: fb } = await supabase
-      .from('users').select('coin_balance, is_premium, premium_expires_at').eq('id', user.id).maybeSingle();
+      .from('users').select('coin_balance').eq('id', user.id).maybeSingle();
     if (fb) Object.assign(user, fb);
   }
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
   await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
-  return res.json({ user, accessToken, refreshToken, isNewUser: true, earlyBird: true });
+  return res.json({ user, accessToken, refreshToken, isNewUser: true });
 }
 
 // POST /auth/refresh  { refreshToken }
@@ -737,45 +697,7 @@ export async function checkUsername(req: Request, res: Response) {
   return res.json({ available: !data });
 }
 
-// GET /auth/coupon/validate?code=
-// Returns { valid: boolean, description?: string }. Best-effort lookup —
-// the actual coupon application happens in the register controller.
-// Codes that were intentionally RETIRED because their perk is now delivered
-// automatically at signup (the early-bird auto-grant: 3 months premium + 50
-// coins). The coupon_codes row is inactive/absent on purpose — DO NOT reactivate
-// it (that would double-dip the auto-grant). We only give the UI an honest,
-// specific message instead of a bare valid:false that reads as "invalid coupon".
-// This grants NOTHING — it is a message only.
-const RETIRED_COUPONS: Record<string, string> = {
-  EARLYBIRDS: 'EarlyBirds is already applied automatically when you sign up — no code needed.',
-};
-
-export async function validateCoupon(req: Request, res: Response) {
-  const code = ((req.query.code as string) || '').trim();
-  if (!code) return res.status(400).json({ error: 'code is required' });
-  const retiredMessage = RETIRED_COUPONS[code.toUpperCase()];
-  const { data: coupon } = await supabase
-    .from('coupon_codes')
-    .select('description, expires_at, active, max_uses, uses_count')
-    .ilike('code', code)
-    .maybeSingle();
-  if (!coupon || !coupon.active) {
-    // A known-retired code (e.g. EARLYBIRDS) → honest "already included" state
-    // rather than the generic invalid one, so the UI can reassure the user
-    // instead of showing an error. Still valid:false → grants nothing.
-    if (retiredMessage) {
-      return res.json({ valid: false, reason: 'already_included', message: retiredMessage });
-    }
-    return res.json({ valid: false });
-  }
-  if (coupon.expires_at && new Date(coupon.expires_at) < new Date()) {
-    return res.json({ valid: false });
-  }
-  if (coupon.max_uses != null && coupon.uses_count >= coupon.max_uses) {
-    return res.json({ valid: false });
-  }
-  return res.json({ valid: true, description: coupon.description ?? undefined });
-}
+// SC-434: validateCoupon lived here. Removed with coupons; the table stays.
 
 // POST /auth/google  { idToken }
 // Verifies the Google ID token, extracts email/name/picture, and either
@@ -849,8 +771,6 @@ export async function googleAuth(req: Request, res: Response) {
           google_id: payload.sub ?? null,
           profile_picture_url: payload.picture ?? null,
           account_type: 'player',
-          is_premium: true,
-          premium_expires_at: earlyBirdExpiry(),
           coin_balance: 0,
         })
         .select('id, phone, name, username, email, google_id, is_premium, premium_expires_at, coin_balance, referral_code, created_at')
@@ -860,7 +780,7 @@ export async function googleAuth(req: Request, res: Response) {
       // phone and email paths (Google previously got only the 50-coin early-bird
       // grant = 50 instead of 60, A4-008). Idempotent via coin_events.
       try {
-        await awardCoins(newUser.id, 'first_registration', 10);
+        await awardCoins(newUser.id, 'first_registration', 10, 'Welcome to SportClan');
       } catch {
         // non-critical
       }
@@ -888,7 +808,7 @@ export async function googleAuth(req: Request, res: Response) {
         .from('users').select('coin_balance, is_premium, premium_expires_at').eq('id', user.id as string).maybeSingle();
       if (fb) Object.assign(user, fb);
     }
-    return res.json({ accessToken, refreshToken, user, isNewUser: !existing, earlyBird: !existing });
+    return res.json({ accessToken, refreshToken, user, isNewUser: !existing });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Google auth failed';
     return res.status(500).json({ error: msg });

@@ -1,4 +1,3 @@
-import { isPremiumActive } from '../utils/premium';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
@@ -79,12 +78,13 @@ export async function sendGift(req: Request, res: Response) {
   // Check sender's premium status
   const { data: sender } = await supabase
     .from('users')
-    .select('coin_balance, is_premium, premium_expires_at, name, username')
+    .select('coin_balance, name, username')
     .eq('id', senderId)
     .single();
 
   if (!sender) return res.status(404).json({ error: 'Sender not found' });
-  if (!isPremiumActive(sender)) return res.status(403).json({ error: 'Premium required to send gifts' }); // SC-144: live expiry
+  // SC-434: sending a gift needed Premium. It now needs only coins, which is the
+  // point of coins.
   if (sender.coin_balance < gift.cost) {
     return res.status(400).json({
       error: 'Insufficient coins',

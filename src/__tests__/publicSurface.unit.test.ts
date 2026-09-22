@@ -23,9 +23,12 @@ const MUST_STAY_PUBLIC = [
   'POST /auth/register-email', 'POST /auth/login', 'POST /auth/otp/login',
   'POST /auth/refresh', 'POST /auth/logout', 'POST /auth/google',
   'POST /auth/reset-password', 'GET /auth/username/check',
-  'GET /auth/coupon/validate', 'GET /app/version', 'GET /cities',
+  'GET /app/version', 'GET /cities',
   'GET /cities/search', 'GET /sports', 'GET /gifts/catalogue',
-  'GET /subscriptions/plans', 'POST /webhooks/razorpay',
+  // SC-434: 'GET /auth/coupon/validate', 'GET /subscriptions/plans' and
+  // 'POST /webhooks/razorpay' were here. All three are gone with payments — an
+  // endpoint that does not exist cannot be "accidentally gated", and leaving
+  // them would have this test guarding routes nobody can call.
 ];
 
 describe('SC-396 · public surface', () => {

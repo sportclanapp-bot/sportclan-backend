@@ -25,11 +25,9 @@ import profilePostsRoutes from './routes/profilePosts.routes';
 import messagesRoutes from './routes/messages.routes';
 import searchRoutes from './routes/search.routes';
 import availabilityRoutes from './routes/availability.routes';
-import subscriptionsRoutes from './routes/subscriptions.routes';
 import giftsRoutes from './routes/gifts.routes';
 import transactionsRoutes from './routes/transactions.routes';
 import accountRoutes from './routes/account.routes';
-import webhooksRoutes from './routes/webhooks.routes';
 import badgesRoutes from './routes/badges.routes';
 import challengesRoutes from './routes/challenges.routes';
 import seasonsRoutes from './routes/seasons.routes';
@@ -45,7 +43,6 @@ import { rateLimitBypassed } from './middleware/rateLimitBypass';
 
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
 import { queryAliases } from './middleware/queryAliases.middleware';
-import { sweepExpiredPremium } from './controllers/subscriptions.controller';
 import { sweepStaleLiveMatches } from './controllers/matches.controller';
 import { purgeExpiredAccountsCore } from './controllers/account.controller';
 import {
@@ -216,11 +213,9 @@ app.use('/profile-posts', profilePostsRoutes);
 app.use('/messages', messagesRoutes);
 app.use('/search', searchRoutes);
 app.use('/availability', availabilityRoutes);
-app.use('/subscriptions', subscriptionsRoutes);
 app.use('/gifts', cacheFor(3600), giftsRoutes);         // 1h
 app.use('/transactions', transactionsRoutes);
 app.use('/account', accountRoutes);
-app.use('/webhooks', webhooksRoutes);
 app.use('/badges', badgesRoutes);
 app.use('/challenges', challengesRoutes);
 app.use('/seasons', seasonsRoutes);
@@ -238,59 +233,12 @@ const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`[sportclan-backend] listening on :${PORT}`);
-  // Payment webhook HMAC verification silently 500s every hit without this —
-  // surface it loudly at boot so it's impossible to ship without noticing.
-  if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      '[sportclan-backend] \u26A0\uFE0F  RAZORPAY_WEBHOOK_SECRET is not set. ' +
-      'Razorpay webhook signature verification will fail. ' +
-      'Add it to the hosting provider env (Render/Railway) before launch.',
-    );
-  }
 
-  // Premium expiry sweep — flips lapsed users to free tier in bulk so expiry
-  // doesn't depend on the user opening the app (lazy check in /users/me still
-  // runs too). Hourly; once on boot. Idempotent, so multiple instances are safe.
-  const runSweep = async () => {
-    try {
-      const { users, subs } = await sweepExpiredPremium();
-      if (users > 0 || subs > 0) {
-        // eslint-disable-next-line no-console
-        console.log(`[premium-sweep] expired ${users} user(s), ${subs} subscription(s)`);
-      }
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn('[premium-sweep] failed', e instanceof Error ? e.message : e);
-    }
-    // SC-16 · auto-abandon matches stuck 'live' with no scoring activity.
-    try {
-      const { abandoned } = await sweepStaleLiveMatches();
-      if (abandoned > 0) {
-        // eslint-disable-next-line no-console
-        console.log(`[stale-live-sweep] abandoned ${abandoned} stale live match(es)`);
-      }
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn('[stale-live-sweep] failed', e instanceof Error ? e.message : e);
-    }
-    // SC-217 · hard-purge accounts soft-deleted >30 days ago. Runs in-process so
-    // the 30-day retention promise is kept WITHOUT depending on CRON_SECRET / an
-    // external cron (the /account/purge-expired endpoint is kept too). Idempotent;
-    // only touches already-anonymized tombstones (deleted_at older than 30d).
-    try {
-      const { purged } = await purgeExpiredAccountsCore();
-      if (purged > 0) {
-        // eslint-disable-next-line no-console
-        console.log(`[account-purge] hard-deleted ${purged} expired account(s)`);
-      }
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn('[account-purge] failed', e instanceof Error ? e.message : e);
-    }
-  };
-  void runSweep();
-  setInterval(runSweep, 60 * 60 * 1000).unref();
+  // SC-434: an hourly premium-expiry sweep ran here, flipping lapsed users to the
+  // free tier and firing "your Premium expires in 3 days" reminders. There are no
+  // tiers and nothing expires, so it is gone — which is also what guarantees that
+  // the 2,501 complimentary rows dated 1 Oct 2026 pass without a single user being
+  // told anything or losing anything.
 
   // ── Scheduled feature jobs (in-process, independent of dev.routes which is
   //    deleted pre-launch). All jobs are idempotent / deduped via

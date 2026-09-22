@@ -37,6 +37,9 @@ export async function getStats(_req: Request, res: Response) {
     // Run all counts in parallel; tolerate individual failures.
     const [users, premium, posts, matches, tournaments, reports] = await Promise.all([
       safeCount(supabase.from('users').select('id', { count: 'exact', head: true })),
+      // SC-434: a HISTORICAL count. No subscription has been created since tiers
+      // were removed, and none can be — the rows are kept, read-only, and this
+      // number will never move again.
       safeCount(
         supabase
           .from('subscriptions')

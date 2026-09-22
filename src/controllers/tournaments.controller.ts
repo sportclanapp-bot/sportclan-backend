@@ -1,5 +1,4 @@
 import { isTeamManager } from '../utils/teamAuth';
-import { isPremiumActive } from '../utils/premium';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
@@ -28,18 +27,8 @@ export async function createTournament(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const { data: user } = await supabase
-      .from('users')
-      .select('is_premium, premium_expires_at')
-      .eq('id', userId)
-      .maybeSingle();
-    const premiumActive = isPremiumActive(user); // SC-144: shared live-expiry helper
-    if (!premiumActive) {
-      return res.status(403).json({
-        error: 'Premium subscription required to create tournaments',
-        code: 'PREMIUM_REQUIRED',
-      });
-    }
+    // SC-434: hosting a tournament used to need Premium. There are no tiers any
+    // more — anyone signed in can run one.
 
     const {
       sport_id,

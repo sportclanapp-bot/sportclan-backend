@@ -1,4 +1,3 @@
-import { isPremiumActive } from '../utils/premium';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
@@ -462,26 +461,14 @@ export async function createPost(req: Request, res: Response) {
   // SC-144: ONE read of premium state, evaluated LIVE (is_premium + expiry) — drives
   // image posts, scheduling AND the free-tier post cap. Was two `.select('is_premium')`
   // reads gating on the stale flag (an expired-but-unflipped user kept these ~1h).
-  const { data: user } = await supabase
-    .from('users')
-    .select('is_premium, premium_expires_at')
-    .eq('id', userId)
-    .single();
-  const isPremium = isPremiumActive(user);
-
-  // Premium-only image posts.
-  if (bodyImage && !isPremium) {
-    return res.status(403).json({ error: 'IMAGE_POSTS_PREMIUM' });
-  }
+  // SC-434: image posts and scheduling were Premium-only, and free accounts were
+  // capped at 5 posts a month. All three are gone — see migration 090 for the cap.
 
   // Scheduled publishing · Premium-only, must be a future timestamp.
   // The publishScheduledPosts job clears scheduled_at once the time passes,
   // at which point the post becomes visible in the normal feed query.
   let scheduledAtIso: string | null = null;
   if (scheduled_at) {
-    if (!isPremium) {
-      return res.status(403).json({ error: 'SCHEDULING_PREMIUM' });
-    }
     const when = new Date(scheduled_at);
     if (Number.isNaN(when.getTime())) {
       return res.status(400).json({ error: 'Invalid scheduled_at' });
@@ -534,7 +521,11 @@ export async function createPost(req: Request, res: Response) {
   // backstop when no key) INSIDE the RPC — a retry never burns a monthly-cap slot.
   const rpcArgs: Record<string, any> = {
     p_author_id: userId,
-    p_is_premium: isPremium,
+    // SC-434: kept in the call, always true. Migration 090 removes the cap from
+    // the function body; passing true means the cap is off even on a server that
+    // deploys before the migration is applied, so the order of the two cannot
+    // leave anybody capped.
+    p_is_premium: true,
     p_content: bodyContent.trim(),
     p_image_url: bodyImage || null,
     p_link_url: link_url || null,
@@ -623,7 +614,7 @@ export async function createPost(req: Request, res: Response) {
       .gte('created_at', istDayStartIso());
     const todayN = postsToday ?? 1;
     if (todayN <= 5) {
-      void awardCoins(userId, `community_post_${today}_${todayN}`, 2);
+      void awardCoins(userId, `community_post_${today}_${todayN}`, 2, 'Community post');
     }
   } catch {
     // best-effort

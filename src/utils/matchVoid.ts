@@ -54,6 +54,40 @@ export function notVoided<T extends { is: (c: string, v: null) => T }>(
   return query.is(column, null);
 }
 
+/**
+ * SC-441 (M2) · the statuses a voided match must never be LISTED under.
+ *
+ * SC-424 swept the rollups but not `listMatches`, on the reasoning that a single
+ * match page shows the void banner rather than hiding the match. That reasoning
+ * does not carry to a LIST: the Sport Hub's "1 LIVE" counter and Home's
+ * "FEATURED · LIVE" were both counting and promoting voided matches, with a
+ * VOIDED pill on the very same card. A voided match is not live and is not
+ * upcoming — whatever its `status` column still says.
+ *
+ * It must nevertheless stay READABLE from history (decision D2): team match
+ * history, a player's own match list and past results all keep showing it, which
+ * is why this is a list of PRE-COMPLETION statuses rather than a blanket filter.
+ * Ask for 'completed' or 'abandoned', or ask for a specific team's or your own
+ * matches, and the voided match is still there with its banner.
+ */
+export const HIDE_VOIDED_FOR_STATUSES = ['scheduled', 'upcoming', 'live'] as const;
+
+/**
+ * Should a match list exclude voided rows?
+ *
+ * `true` only for a discovery-shaped read: a pre-completion status, and not a
+ * history read scoped to one team or to yourself.
+ */
+export function shouldHideVoided(opts: {
+  status?: string | null;
+  teamScoped?: boolean;
+  mine?: boolean;
+}): boolean {
+  if (opts.teamScoped || opts.mine) return false;
+  if (!opts.status) return true; // an unscoped list is discovery
+  return (HIDE_VOIDED_FOR_STATUSES as readonly string[]).includes(opts.status);
+}
+
 // ─── Walking back what completion already applied ──────────────────────────
 
 interface ProfileDelta {

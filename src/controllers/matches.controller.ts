@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { recordDeltas, applyRecordDeltas } from '../utils/matchVoid';
+import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
 import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease, isStale, STALE_AFTER_MS } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { getMatchLiveStatus } from '../utils/liveStatus';
@@ -643,6 +643,17 @@ export async function listMatches(req: Request, res: Response) {
     if (tournament_id) query = query.eq('tournament_id', tournament_id);
     if (team_id) query = query.or(`team_a_id.eq.${team_id},team_b_id.eq.${team_id}`);
     if (mine === '1') query = query.eq('created_by', userId);
+    // SC-441 (M2): a voided match is not live and not upcoming, whatever its
+    // `status` column still says. SC-424 swept the rollups but not this endpoint,
+    // so the Sport Hub's "1 LIVE" counter and Home's "FEATURED · LIVE" were both
+    // counting and promoting voided matches — with a VOIDED pill on the same card.
+    //
+    // Deliberately NOT a blanket filter: decision D2 keeps a voided match readable
+    // from team history, your own match list and past results. shouldHideVoided
+    // states that distinction once.
+    if (shouldHideVoided({ status, teamScoped: !!team_id, mine: mine === '1' })) {
+      query = notVoided(query);
+    }
     // SC-335: never list a match in an out-of-scope sport (kabaddi/athletics seed
     // rows stay in the DB but must not surface). Skipped only if the sports read
     // fails (activeIds null) so a hiccup doesn't blank the list.

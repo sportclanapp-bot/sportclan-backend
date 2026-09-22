@@ -13,7 +13,7 @@
  * corrupt the records it is meant to correct.
  */
 import { countsTowardRecord } from '../utils/matchCounts';
-import { isVoided } from '../utils/matchVoid';
+import { isVoided, shouldHideVoided, HIDE_VOIDED_FOR_STATUSES } from '../utils/matchVoid';
 
 const completed = (over: Record<string, unknown> = {}) =>
   ({ status: 'completed', is_ranked: false, ...over });
@@ -106,5 +106,49 @@ describe('SC-424 · walking back what completion materialised', () => {
     const low = { rating: 105, matches_played: 3, wins: 0, losses: 3, draws: 0 };
     const delta = { rating: 20, matches_played: 1, wins: 1, losses: 0, draws: 0 };
     expect(applyLocal(low, delta, -1).rating).toBe(100);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// SC-441 (M2) · a voided match must not be LISTED as live or upcoming, but must
+// stay readable from history.
+//
+// SC-424 swept the rollups and stopped there, on the reasoning that a single
+// match page shows the void banner rather than hiding the match. That reasoning
+// does not carry to a list: the Sport Hub read "1 LIVE" and Home promoted
+// "FEATURED · LIVE" for matches that were voided, VOIDED pill and all.
+describe('SC-441 · shouldHideVoided', () => {
+  test('hides voided rows from every pre-completion status', () => {
+    for (const status of ['scheduled', 'upcoming', 'live']) {
+      expect(shouldHideVoided({ status })).toBe(true);
+    }
+  });
+
+  test('an unscoped list is discovery, so it hides them too', () => {
+    expect(shouldHideVoided({})).toBe(true);
+    expect(shouldHideVoided({ status: null })).toBe(true);
+  });
+
+  test('history KEEPS them — decision D2', () => {
+    // Past results.
+    expect(shouldHideVoided({ status: 'completed' })).toBe(false);
+    expect(shouldHideVoided({ status: 'abandoned' })).toBe(false);
+    // A team's match history, even for a live-shaped status.
+    expect(shouldHideVoided({ status: 'live', teamScoped: true })).toBe(false);
+    // Your own match list.
+    expect(shouldHideVoided({ status: 'live', mine: true })).toBe(false);
+  });
+
+  test('the scoping override beats the status', () => {
+    // This is the pairing that makes the rule non-trivial: the same status
+    // hides in discovery and shows in history.
+    expect(shouldHideVoided({ status: 'scheduled' })).toBe(true);
+    expect(shouldHideVoided({ status: 'scheduled', teamScoped: true })).toBe(false);
+  });
+
+  test('the hidden-status list is exactly the pre-completion ones', () => {
+    // Pinned so adding a new status forces a decision rather than defaulting to
+    // "visible", which is how this bug happened in the first place.
+    expect([...HIDE_VOIDED_FOR_STATUSES].sort()).toEqual(['live', 'scheduled', 'upcoming']);
   });
 });

@@ -158,6 +158,10 @@ export async function listOpenMatches(req: Request, res: Response) {
       .select('*')
       .eq('is_open', true)
       .in('status', ['scheduled', 'upcoming'])
+      // SC-441 (M3): never suggest a match whose start time has already passed.
+      // There was NO date predicate here at all, so a fixture from two months ago
+      // was still being recommended to brand-new users as something to join.
+      .gte('scheduled_at', discoveryCutoffIso())
       .neq('created_by', userId) // not your own
       .gt('players_needed', 0) // not full (also drops null)
       .order('scheduled_at', { ascending: true })
@@ -195,7 +199,12 @@ export async function listOpenMatches(req: Request, res: Response) {
     //                            is penalised −25.
     // Everything is additive onto 0, ties break by soonest scheduled_at then id
     // (fully deterministic).
-    if (matches.length > 1) {
+    // SC-441 (M3): this block used to be guarded by `if (matches.length > 1)`,
+    // which made the staleness penalty below DEAD CODE in exactly the case that
+    // needed it most — when a city/sport has one open match, it is served as the
+    // top suggestion however old it is, and the −25 never runs. Ranking a single
+    // match is a no-op anyway, so the guard bought nothing and hid a bug.
+    {
       const [meRes, sportsRes, myRatingsRes] = await Promise.all([
         supabase.from('users').select('city_id').eq('id', userId).maybeSingle(),
         supabase.from('user_sports').select('sport_id').eq('user_id', userId),
@@ -653,6 +662,14 @@ export async function listMatches(req: Request, res: Response) {
     // states that distinction once.
     if (shouldHideVoided({ status, teamScoped: !!team_id, mine: mine === '1' })) {
       query = notVoided(query);
+      // SC-441 (M3): the same reads that must not show a voided match must not
+      // show a match whose start time has long passed. Decision D2 gives a 6h
+      // grace so a late start is never hidden mid-game, and keeps the match fully
+      // readable from history — which is why this rides the same scoping rule
+      // rather than being a blanket filter.
+      if (!status || status === 'scheduled' || status === 'upcoming') {
+        query = query.gte('scheduled_at', discoveryCutoffIso());
+      }
     }
     // SC-335: never list a match in an out-of-scope sport (kabaddi/athletics seed
     // rows stay in the DB but must not surface). Skipped only if the sports read
@@ -683,6 +700,28 @@ export async function listMatches(req: Request, res: Response) {
 // match's live gap, so this won't kill an in-progress game.
 const STALE_LIVE_HOURS = 6;
 
+/**
+ * SC-441 (M3) · how long after its start time a match stops being discoverable.
+ *
+ * Decision D2. Six hours is deliberately generous: a match that starts late, or
+ * runs long before anyone scores, must never vanish from the hub mid-game. It
+ * only has to be shorter than the window in which a stale fixture starts
+ * polluting "Suggested for you".
+ */
+export const DISCOVERY_GRACE_HOURS = 6;
+
+/**
+ * How long a `scheduled` match that was NEVER started survives before it is
+ * marked abandoned. Decision D2: 48h. Nothing is deleted — the match, its
+ * events and its page all remain, and the page says "Abandoned, not played".
+ */
+export const UNPLAYED_ABANDON_HOURS = 48;
+
+/** The `scheduled_at` floor for a discovery-shaped read. */
+export function discoveryCutoffIso(now: number = Date.now()): string {
+  return new Date(now - DISCOVERY_GRACE_HOURS * 3600_000).toISOString();
+}
+
 export async function sweepStaleLiveMatches(): Promise<{ abandoned: number }> {
   const cutoff = new Date(Date.now() - STALE_LIVE_HOURS * 3600_000).toISOString();
   const { data: stale, error } = await supabase
@@ -690,6 +729,36 @@ export async function sweepStaleLiveMatches(): Promise<{ abandoned: number }> {
     .select('id')
     .eq('status', 'live')
     .lt('updated_at', cutoff);
+  if (error || !stale || stale.length === 0) return { abandoned: 0 };
+  await supabase
+    .from('matches')
+    .update({ status: 'abandoned', updated_at: new Date().toISOString() })
+    .in('id', stale.map((m) => m.id));
+  return { abandoned: stale.length };
+}
+
+/**
+ * SC-441 (M3) · mark long-past matches that were NEVER started as abandoned.
+ *
+ * The sibling of sweepStaleLiveMatches: that one catches a match somebody began
+ * scoring and walked away from; this one catches a match nobody ever turned up
+ * for. Before this, nothing anywhere moved a past-dated `scheduled` match — the
+ * app listed fixtures months old as UPCOMING and kept them joinable forever.
+ *
+ * Only `scheduled`/`upcoming` are touched: a match that reached `live` is the
+ * other sweeper's business, and `completed`/`cancelled` are already terminal.
+ * Safe by construction for the same reason as its sibling — ratings are applied
+ * on completion only, so an abandoned match never scored any and needs no
+ * reversal. Idempotent and bulk, so firing it repeatedly or from several
+ * instances is fine. NOTHING IS DELETED (decision D2).
+ */
+export async function sweepUnplayedScheduledMatches(): Promise<{ abandoned: number }> {
+  const cutoff = new Date(Date.now() - UNPLAYED_ABANDON_HOURS * 3600_000).toISOString();
+  const { data: stale, error } = await supabase
+    .from('matches')
+    .select('id')
+    .in('status', ['scheduled', 'upcoming'])
+    .lt('scheduled_at', cutoff);
   if (error || !stale || stale.length === 0) return { abandoned: 0 };
   await supabase
     .from('matches')

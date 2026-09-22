@@ -8,6 +8,10 @@ import {
   runWeeklyDigest,
 } from '../controllers/features.controller';
 import { sweepExpiredInvites } from '../controllers/invites.controller';
+import {
+  sweepStaleLiveMatches,
+  sweepUnplayedScheduledMatches,
+} from '../controllers/matches.controller';
 
 // Scheduled-job trigger endpoints. Gated by CRON_SECRET (X-Cron-Secret header),
 // NOT a user JWT — these survive the pre-launch deletion of dev.routes and can
@@ -69,6 +73,16 @@ router.post('/expire-invites', async (_req, res) => {
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+
+// SC-441 (M3): fire the two match sweepers on demand. Both also run hourly in
+// process (see index.ts). Idempotent and bulk, so firing them by hand — or from
+// an external scheduler alongside the in-process one — is safe.
+router.post('/sweep-matches', async (_req, res) => {
+  const live = await sweepStaleLiveMatches();
+  const unplayed = await sweepUnplayedScheduledMatches();
+  res.json({ staleLiveAbandoned: live.abandoned, unplayedAbandoned: unplayed.abandoned });
 });
 
 export default router;

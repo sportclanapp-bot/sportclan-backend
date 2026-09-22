@@ -43,7 +43,7 @@ import { rateLimitBypassed } from './middleware/rateLimitBypass';
 
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
 import { queryAliases } from './middleware/queryAliases.middleware';
-import { sweepStaleLiveMatches } from './controllers/matches.controller';
+import { sweepStaleLiveMatches, sweepUnplayedScheduledMatches } from './controllers/matches.controller';
 import { purgeExpiredAccountsCore } from './controllers/account.controller';
 import {
   runPublishScheduledPosts,
@@ -269,6 +269,31 @@ app.listen(PORT, () => {
   };
   void runReminders();
   setInterval(runReminders, 5 * 60 * 1000).unref();
+
+  // SC-441 (M3) · the two match sweepers, hourly.
+  //
+  // sweepStaleLiveMatches has existed since SC-16 and was IMPORTED HERE BUT
+  // NEVER CALLED — the zombie-live cleanup it describes has therefore never run
+  // in production. sweepUnplayedScheduledMatches is its new sibling for matches
+  // nobody ever started. Both are idempotent and bulk, so an overlapping tick or
+  // a second instance is harmless, and both are wired to the EXISTING in-process
+  // scheduler: decision D2 forbids a new Render service.
+  const runMatchSweeps = async () => {
+    try {
+      const { abandoned } = await sweepStaleLiveMatches();
+      if (abandoned) console.log(`[sweep-stale-live] abandoned ${abandoned}`); // eslint-disable-line no-console
+    } catch (e) {
+      console.warn('[sweep-stale-live] failed', e instanceof Error ? e.message : e); // eslint-disable-line no-console
+    }
+    try {
+      const { abandoned } = await sweepUnplayedScheduledMatches();
+      if (abandoned) console.log(`[sweep-unplayed] abandoned ${abandoned}`); // eslint-disable-line no-console
+    } catch (e) {
+      console.warn('[sweep-unplayed] failed', e instanceof Error ? e.message : e); // eslint-disable-line no-console
+    }
+  };
+  void runMatchSweeps();
+  setInterval(runMatchSweeps, 60 * 60 * 1000).unref();
 
   // Daily notification jobs at ~09:00 IST; weekly digest additionally on Monday.
   // The hourly tick acts only when the IST hour is 9; the per-user/day dedupe

@@ -182,6 +182,32 @@ export async function sendOtp(req: Request, res: Response) {
   if (!isValidIndianPhone(p)) {
     return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE' });
   }
+  // SC-441 (P2) · refuse a deleted account BEFORE sending anything.
+  //
+  // The deleted check existed only on the verify paths, so requesting a code for
+  // a deleted number succeeded, the screen said "Code sent by SMS", an SMS was
+  // actually paid for, and only after the user typed the code were they told the
+  // account was gone. Every retry billed again.
+  //
+  // Decision P2 accepts the trade: answering before sending is a small account
+  // enumeration signal, but the same fact is already disclosed a step later at
+  // verify, and the alternative is charging for messages nobody can ever use.
+  // Failing open on a query error is deliberate — a database hiccup must not
+  // block login for everyone.
+  try {
+    const { data: deletedRows } = await supabase
+      .from('users')
+      .select('deleted_at')
+      .in('phone', phoneVariants(p))
+      .not('deleted_at', 'is', null)
+      .limit(1);
+    if (deletedRows && deletedRows.length > 0) {
+      return res.status(403).json({ error: 'This account has been deleted.', code: 'ACCOUNT_DELETED' });
+    }
+  } catch {
+    // fall through and send — see above
+  }
+
   const code = generateOtp();
 
   // SC-398: storing the code is the step that used to throw when Upstash was

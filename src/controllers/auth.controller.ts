@@ -63,7 +63,7 @@ function normalizePhone(phone: string): string {
   return phone.trim().replace(/\s+/g, '');
 }
 
-// Send OTP via 2Factor.in — SMS, voice call, or WhatsApp.
+// Send OTP via 2Factor.in — SMS or voice call.
 //
 // SC-399: SMS is the primary channel. It used to be voice ("to dodge SMS
 // deliverability"), but the account's Voice OTP balance was 0.00 while SMS had
@@ -71,7 +71,12 @@ function normalizePhone(phone: string): string {
 // not deliverability, is what actually decides whether a code arrives.
 //
 // On dev with no API key, all channels fall through to console.
-type OtpChannel = 'sms' | 'voice' | 'whatsapp';
+// SC-441 (P1) · WhatsApp removed entirely, decision D1. It was billed per
+// message and we are not paying for it. Both routes are gone: the user-facing
+// "Send via WhatsApp" button in the app, and the automatic server-side fallback
+// that silently retried over WhatsApp whenever SMS or voice failed — the second
+// one cost money without anyone ever asking for it.
+type OtpChannel = 'sms' | 'voice';
 
 /**
  * SC-401 · what 2Factor reported for the most recent send.
@@ -107,13 +112,7 @@ async function sendOtpViaChannel(
   try {
     const cleanPhone = phone.replace(/^\+91/, '');
     let url: string;
-    if (channel === 'whatsapp') {
-      // 2Factor.in WhatsApp template: requires a pre-approved template ID.
-      // ENV: TWOFACTOR_WHATSAPP_TEMPLATE_ID (e.g. "SportClanOTP")
-      // Falls back to AUTOGEN2 (transactional WhatsApp) if template not set.
-      const tpl = process.env.TWOFACTOR_WHATSAPP_TEMPLATE_ID || 'AUTOGEN2';
-      url = `https://2factor.in/API/V1/${apiKey}/ADDON_SERVICES/SEND/WAPI/${cleanPhone}/${tpl}/${code}`;
-    } else if (channel === 'voice') {
+    if (channel === 'voice') {
       url = `https://2factor.in/API/V1/${apiKey}/VOICE/${cleanPhone}/${code}`;
     } else {
       // SMS with OUR generated code (not AUTOGEN — the code is already stored,
@@ -171,9 +170,10 @@ export async function sendOtp(req: Request, res: Response) {
   if (typeof phone !== 'string') {
     return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE' });
   }
-  // SC-399: SMS is the default; voice and WhatsApp remain explicitly requestable.
-  const channel: OtpChannel =
-    rawChannel === 'whatsapp' ? 'whatsapp' : rawChannel === 'voice' ? 'voice' : 'sms';
+  // SC-399: SMS is the default; voice remains explicitly requestable.
+  // SC-441 (P1): 'whatsapp' is no longer accepted — an old build still asking for
+  // it gets SMS rather than an error, so upgrading is not forced.
+  const channel: OtpChannel = rawChannel === 'voice' ? 'voice' : 'sms';
   const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // SC-385: reuse the SAME rule register already enforces (SC-72). It was only
   // applied at registration, so the number could afterwards be replaced with
@@ -226,28 +226,23 @@ export async function sendOtp(req: Request, res: Response) {
     });
   }
 
-  // SC-398: the WhatsApp fallback was DOCUMENTED but never wired. The comment on
-  // sendOtpViaChannel says "WhatsApp is the fallback when voice fails (carrier
-  // block, SIM issue, voice rate limits)" — yet sendOtp only ever sent the one
-  // requested channel, so a voice failure was terminal and the fallback was dead
-  // code. A user on a carrier that blocks robocalls could never log in.
-  let usedChannel: OtpChannel = channel;
-  let sent = await sendOtpViaChannel(p, code, channel);
-  if (!sent && channel !== 'whatsapp') {
-    // eslint-disable-next-line no-console
-    console.warn(`[send-otp] ${channel} failed · falling back to WhatsApp`);
-    usedChannel = 'whatsapp';
-    sent = await sendOtpViaChannel(p, code, 'whatsapp');
-  }
+  // SC-398 wired an automatic WhatsApp fallback here when the requested channel
+  // failed. SC-441 (P1, decision D1) removes it: it billed per message and it
+  // fired without the user ever choosing it, so the cost was invisible.
+  //
+  // A failed send is now terminal and SAID SO — the 503 below carries a message
+  // the app shows, and Resend stays available so the user can try again. That is
+  // the honest trade for not paying for a channel we do not want.
+  const usedChannel: OtpChannel = channel;
+  const sent = await sendOtpViaChannel(p, code, channel);
   if (!sent) {
     return res.status(503).json({
       error: 'We could not send a code to that number. Please try again.',
       code: 'OTP_SEND_FAILED',
     });
   }
-  // Report the channel that actually delivered, not the one asked for — the app
-  // tells the user where to look for the code ("check WhatsApp" vs "answer the
-  // call"), and after a fallback those differ.
+  // Report the channel used, so the app can say where to look for the code
+  // ("answer the call" vs "check your messages").
   return res.json({ success: true, message: 'OTP sent', channel: usedChannel });
 }
 

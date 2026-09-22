@@ -517,9 +517,8 @@ export async function createPost(req: Request, res: Response) {
   // p_client_key (or a 2s backstop when no key) INSIDE the RPC, so a double-tap
   // is one post.
   //
-  // SC-435: the cap itself is gone (migration 090) and `p_is_premium` is dropped
-  // from the signature by migration 091. See the fallback below for why that is
-  // safe to deploy before the migration lands.
+  // SC-434/435: the 5-a-month cap is gone (migration 090) and `p_is_premium` is
+  // off the signature (091).
   const rpcArgs: Record<string, any> = {
     p_author_id: userId,
     p_content: bodyContent.trim(),
@@ -537,38 +536,16 @@ export async function createPost(req: Request, res: Response) {
   // SC-193: only attach p_match_id when there IS a link — so ordinary posts keep
   // resolving to the pre-057 RPC signature until migration 057 is applied.
   if (validatedMatchId) rpcArgs.p_match_id = validatedMatchId;
-  /**
-   * SC-435 · the signature ladder that makes dropping `p_is_premium` safe.
-   *
-   * Migration 091 replaces create_post_capped with a version that has no
-   * `p_is_premium`. A function's SIGNATURE is its identity in Postgres, so
-   * whichever of {deploy, migration} lands second would break the other — call
-   * the new shape before the migration and PostgREST answers PGRST202 "function
-   * not found"; leave the old shape in the code after it and the same happens.
-   *
-   * So the code asks for the NEW shape first and falls back to the old one on
-   * PGRST202. Between the push and the migration the fallback carries every
-   * post; after it, the first call succeeds and the fallback never runs. Exactly
-   * the ladder SC-432's recordEventIdempotent uses, and for the same reason.
-   *
-   * The fallback can be deleted once 091 is applied everywhere.
-   */
-  const legacyArgs = { ...rpcArgs, p_is_premium: true };
+  // SC-435: a PGRST202 ladder sat here while migration 091 was in flight — it
+  // asked for the post-091 signature and retried with the `p_is_premium` one if
+  // the migration had not landed yet. 091 is applied, the old signature no
+  // longer exists, and a retry could only fail, so the ladder is gone.
+  //
   // SC-179: a non-UUID key would raise 22P02 (invalid uuid) → 500. Coerce a
   // malformed key to null so the post still succeeds (dedup just skipped).
-  const clientKey = normalizeClientKey(idempotency_key);
-  let { data, error } = await supabase
-    .rpc('create_post_capped', { ...rpcArgs, p_client_key: clientKey })
+  const { data, error } = await supabase
+    .rpc('create_post_capped', { ...rpcArgs, p_client_key: normalizeClientKey(idempotency_key) })
     .single();
-  if (error && (error as { code?: string }).code === 'PGRST202') {
-    ({ data, error } = await supabase
-      .rpc('create_post_capped', { ...legacyArgs, p_client_key: clientKey })
-      .single());
-  }
-  if (error && (error as { code?: string }).code === 'PGRST202') {
-    // mig 053 not applied — the oldest signature has no p_client_key either.
-    ({ data, error } = await supabase.rpc('create_post_capped', legacyArgs).single());
-  }
 
   if (error) {
     return res.status(500).json({ error: sanitizeError(error) });

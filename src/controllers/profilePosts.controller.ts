@@ -74,23 +74,17 @@ export async function createProfilePost(req: Request, res: Response) {
   // The dedup + insert happen inside one advisory-locked transaction, so
   // concurrent creates can't each pass a stale check (the SC-60 rule).
   //
-  // SC-435: same signature ladder as createPost — migration 091 drops
-  // `p_is_premium`, and a function's signature is its identity, so the code asks
-  // for the new shape and falls back to the old on PGRST202. That is what makes
-  // the deploy safe in either order. See community.controller for the full note.
-  const rpcArgs = {
-    p_author_id: userId,
-    p_content: (typeof content === 'string' ? content : '').trim(),
-    p_media_urls: urls.length > 0 ? urls : null,
-    p_link_url: link_url || null,
-    p_client_key: normalizeClientKey(idempotency_key),
-  };
-  let { data, error } = await supabase.rpc('create_profile_post_capped', rpcArgs).single();
-  if (error && (error as { code?: string }).code === 'PGRST202') {
-    ({ data, error } = await supabase
-      .rpc('create_profile_post_capped', { ...rpcArgs, p_is_premium: true })
-      .single());
-  }
+  // SC-435: a PGRST202 fallback to the `p_is_premium` signature sat here while
+  // migration 091 was in flight. 091 is applied and that signature is gone.
+  const { data, error } = await supabase
+    .rpc('create_profile_post_capped', {
+      p_author_id: userId,
+      p_content: (typeof content === 'string' ? content : '').trim(),
+      p_media_urls: urls.length > 0 ? urls : null,
+      p_link_url: link_url || null,
+      p_client_key: normalizeClientKey(idempotency_key),
+    })
+    .single();
 
   if (error) {
     return res.status(500).json({ error: sanitizeError(error) });

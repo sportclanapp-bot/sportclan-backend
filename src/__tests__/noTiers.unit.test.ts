@@ -45,7 +45,7 @@ const hits = (re: RegExp) =>
 
 describe('SC-435 · nothing reads the dropped columns', () => {
   test('no query selects or writes is_premium', () => {
-    expect(hits(/\bis_premium\b/).filter((h) => !h.includes('p_is_premium'))).toEqual([]);
+    expect(hits(/\bis_premium\b/)).toEqual([]);
   });
 
   test('no query selects or writes premium_expires_at', () => {
@@ -73,20 +73,24 @@ describe('SC-435 · nothing reads the dropped columns', () => {
   });
 });
 
-describe('SC-435 · the p_is_premium fallback is deliberate, and bounded', () => {
-  test('it appears ONLY as a legacy fallback, never as the first call', () => {
-    // Migration 091 drops the parameter. Until it is applied everywhere, the
-    // controllers ask for the new signature first and retry with the old one on
-    // PGRST202. Any OTHER use would mean something still depends on the column.
-    const uses = hits(/p_is_premium/);
-    expect(uses).toHaveLength(2);
-    expect(uses.every((u) => /community\.controller|profilePosts\.controller/.test(u))).toBe(true);
+describe('SC-435 · p_is_premium is gone from the code as well as the database', () => {
+  test('nothing passes p_is_premium to anything', () => {
+    // While 091 was in flight the two post controllers carried a PGRST202 ladder
+    // that retried with the old signature. 091 is applied, that signature no
+    // longer exists, and a retry could only fail — so the ladder is gone and the
+    // parameter appears nowhere.
+    expect(hits(/p_is_premium/)).toEqual([]);
   });
 
-  test('both call sites retry on PGRST202 rather than assuming a shape', () => {
-    for (const f of ['controllers/community.controller.ts', 'controllers/profilePosts.controller.ts']) {
-      const src = fs.readFileSync(path.join(SRC, f), 'utf8');
-      expect(src).toMatch(/PGRST202/);
+  test('both post RPCs are called with exactly one shape', () => {
+    // A second .rpc() call for the same function would mean a fallback grew back
+    // for a signature that cannot exist.
+    for (const [f, fn] of [
+      ['controllers/community.controller.ts', 'create_post_capped'],
+      ['controllers/profilePosts.controller.ts', 'create_profile_post_capped'],
+    ] as const) {
+      const src = codeLines(path.join(SRC, f)).map((l) => l.line).join('\n');
+      expect(src.split(`rpc('${fn}'`).length - 1).toBe(1);
     }
   });
 });

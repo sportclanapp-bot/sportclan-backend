@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
+import { deriveResultText } from '../utils/matchResult';
 import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease, isStale, STALE_AFTER_MS } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { getMatchLiveStatus } from '../utils/liveStatus';
@@ -1879,7 +1880,8 @@ export async function completeMatch(req: Request, res: Response) {
       // generic branches emit identical text — but normalizing keeps it correct if
       // that copy ever diverges.
       const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
-      const setSports = ['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball'];
+      // SC-441 (M1): the local setSports list moved into utils/matchResult with
+      // the rest of the derivation, so there is one list rather than two.
       const ss = ((await recomputeSummary(id)) ?? updatedMatch?.score_summary ?? {}) as Record<string, any>;
       // SC-376: fold in a score submitted with the result. Merged BEFORE the
       // result text is derived below, so "won by N runs" reflects the numbers
@@ -1903,31 +1905,33 @@ export async function completeMatch(req: Request, res: Response) {
       const aScore = Number(ss?.team_a_score ?? ss?.A?.score ?? ss?.A?.runs ?? 0);
       const bScore = Number(ss?.team_b_score ?? ss?.B?.score ?? ss?.B?.runs ?? 0);
 
-      // Authoritative winner by side (works without team ids). Prefer a
-      // client-supplied winner_team_id when it maps to a real team.
-      let winnerSide: 'A' | 'B' | null = aScore > bScore ? 'A' : bScore > aScore ? 'B' : null;
-      if (winner_team_id) {
-        if (winner_team_id === match.team_a_id) winnerSide = 'A';
-        else if (winner_team_id === match.team_b_id) winnerSide = 'B';
-      }
-
-      let resultText = '';
-      if (winnerSide) {
-        const winnerName = winnerSide === 'A' ? aName : bName;
-        const hi = Math.max(aScore, bScore);
-        const lo = Math.min(aScore, bScore);
-        if (slug === 'cricket') {
-          resultText = `${winnerName} won by ${hi - lo} run${hi - lo === 1 ? '' : 's'}`;
-        } else if (slug === 'chess') {
-          resultText = `${winnerName} won`;
-        } else if (setSports.includes(slug)) {
-          resultText = `${winnerName} won ${hi}-${lo}`; // score = sets won
-        } else {
-          resultText = `${winnerName} won ${hi}-${lo}`; // goals / points / boards
-        }
-      } else {
-        resultText = slug === 'chess' ? 'Match Draw' : `Match Draw ${aScore}-${bScore}`;
-      }
+      // SC-441 (M1): derived in ONE place now. This block used to build the
+      // sentence inline with NO wickets branch — for cricket it was always
+      // `won by ${hi - lo} runs`, which is the margin for DEFENDING a total, not
+      // for chasing one. The app's result screen had the correct toss-aware
+      // logic and the server had the authority; deriveResultText is the good
+      // logic moved to the authority, so every surface can read one persisted
+      // sentence instead of inventing its own.
+      //
+      // The explicit winner is passed in rather than applied first, so it can no
+      // longer force a winner onto level scores — that is what produced
+      // "WINNER T70450 · won by 0 runs" on a 0/0 vs 0/0 match.
+      const explicitWinner: 'A' | 'B' | null =
+        winner_team_id && winner_team_id === match.team_a_id ? 'A'
+        : winner_team_id && winner_team_id === match.team_b_id ? 'B'
+        : null;
+      const { text: resultText, winnerSide } = deriveResultText({
+        sport: slug,
+        teamAName: aName,
+        teamBName: bName,
+        aScore,
+        bScore,
+        aWickets: Number(ss?.A?.wickets ?? 0),
+        bWickets: Number(ss?.B?.wickets ?? 0),
+        tossWinnerSide: (ss?.toss_winner_side as 'A' | 'B' | undefined) ?? null,
+        tossChoice: (match as { toss_choice?: string | null }).toss_choice ?? null,
+        explicitWinner,
+      });
 
       ss.result = resultText;
       ss.winner_side = winnerSide;

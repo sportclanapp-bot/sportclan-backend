@@ -23,7 +23,7 @@ import { blockedUserIds } from '../utils/blocks';
 import { normalizeClientKey } from '../utils/idempotency';
 import { attachLikes, detectProfanity } from './community.controller';
 
-const AUTHOR_SELECT = 'author:users!author_id!inner(id, name, username, profile_picture_url, is_premium)';
+const AUTHOR_SELECT = 'author:users!author_id!inner(id, name, username, profile_picture_url)';
 const MAX_MEDIA = 4;
 
 /** Shared validation for create + update. Returns an error response or null. */
@@ -71,30 +71,28 @@ export async function createProfilePost(req: Request, res: Response) {
     ? media_urls.filter((u: unknown): u is string => typeof u === 'string' && u !== '')
     : [];
 
-  // The cap + dedup + insert happen inside one advisory-locked transaction, so
-  // concurrent creates can't each pass a stale count (the SC-60 rule).
-  const { data, error } = await supabase
-    .rpc('create_profile_post_capped', {
-      p_author_id: userId,
-      // SC-434: kept in the call, always true. Migration 090 removes the cap from
-    // the function body; passing true means the cap is off even on a server that
-    // deploys before the migration is applied, so the order of the two cannot
-    // leave anybody capped.
-    p_is_premium: true,
-      p_content: (typeof content === 'string' ? content : '').trim(),
-      p_media_urls: urls.length > 0 ? urls : null,
-      p_link_url: link_url || null,
-      p_client_key: normalizeClientKey(idempotency_key),
-    })
-    .single();
+  // The dedup + insert happen inside one advisory-locked transaction, so
+  // concurrent creates can't each pass a stale check (the SC-60 rule).
+  //
+  // SC-435: same signature ladder as createPost — migration 091 drops
+  // `p_is_premium`, and a function's signature is its identity, so the code asks
+  // for the new shape and falls back to the old on PGRST202. That is what makes
+  // the deploy safe in either order. See community.controller for the full note.
+  const rpcArgs = {
+    p_author_id: userId,
+    p_content: (typeof content === 'string' ? content : '').trim(),
+    p_media_urls: urls.length > 0 ? urls : null,
+    p_link_url: link_url || null,
+    p_client_key: normalizeClientKey(idempotency_key),
+  };
+  let { data, error } = await supabase.rpc('create_profile_post_capped', rpcArgs).single();
+  if (error && (error as { code?: string }).code === 'PGRST202') {
+    ({ data, error } = await supabase
+      .rpc('create_profile_post_capped', { ...rpcArgs, p_is_premium: true })
+      .single());
+  }
 
   if (error) {
-    if ((error as { message?: string }).message?.includes('POST_LIMIT_REACHED')) {
-      return res.status(403).json({
-        error: 'You’ve used all 5 free posts this month. Upgrade to Premium for unlimited posts.',
-        code: 'POST_LIMIT_REACHED',
-      });
-    }
     return res.status(500).json({ error: sanitizeError(error) });
   }
   return res.status(201).json({ post: data, data });

@@ -56,7 +56,7 @@ async function searchPlayers(res: Response, q: string, sportId: string | undefin
   // caps at 1000 rows and overflows the URL). The `!inner` join drops users who
   // don't have the sport; the .eq restricts the join to that sport.
   const sel = `
-      id, name, username, profile_picture_url, is_premium, discoverability,
+      id, name, username, profile_picture_url, discoverability,
       city:cities!city_id(id, name),
       sports:user_sports${sportId ? '!inner' : ''}(sport_id, sport:sports(id, name, emoji))
     `;
@@ -251,7 +251,7 @@ async function searchByAccountType(res: Response, q: string, accountType: string
   const blocked = await blockedUserIds(callerId); // SC-82
   const { data: users, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
     .from('users')
-    .select('id, name, username, profile_picture_url, bio, is_premium, city:cities!city_id(id, name)')
+    .select('id, name, username, profile_picture_url, bio, city:cities!city_id(id, name)')
     .or(orIlikeContains(['username', 'name'], q))
     .order('name', { ascending: true })
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging

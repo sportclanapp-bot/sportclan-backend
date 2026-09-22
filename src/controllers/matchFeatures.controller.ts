@@ -216,7 +216,7 @@ export async function getMatchMVP(req: Request, res: Response) {
     if (match?.mvp_user_id) {
       const { data: user } = await supabase
         .from('users')
-        .select('id, name, username, profile_picture_url, is_premium')
+        .select('id, name, username, profile_picture_url')
         .eq('id', match.mvp_user_id)
         .maybeSingle();
       if (user) return res.json({ mvp: { ...user, guest: false } });
@@ -226,7 +226,7 @@ export async function getMatchMVP(req: Request, res: Response) {
     const gm = (match?.score_summary as { mvp?: { id?: string; name?: string; guest?: boolean } } | null)?.mvp;
     if (gm?.guest && gm.name) {
       return res.json({
-        mvp: { id: gm.id, name: gm.name, username: null, profile_picture_url: null, is_premium: false, guest: true },
+        mvp: { id: gm.id, name: gm.name, username: null, profile_picture_url: null, guest: true },
       });
     }
     return res.json({ mvp: null });

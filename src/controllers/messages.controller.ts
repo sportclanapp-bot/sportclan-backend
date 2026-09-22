@@ -135,7 +135,7 @@ export async function listChats(req: Request, res: Response) {
         .from('chat_participants')
         .select(`
           user_id, role,
-          user:users!user_id(id, name, username, profile_picture_url, is_premium)
+          user:users!user_id(id, name, username, profile_picture_url)
         `)
         .eq('chat_id', chat.id);
 
@@ -1106,7 +1106,7 @@ export async function getGroupMembers(req: Request, res: Response) {
     .from('chat_participants')
     .select(`
       user_id, role, joined_at,
-      user:users!user_id(id, name, username, profile_picture_url, is_premium)
+      user:users!user_id(id, name, username, profile_picture_url)
     `)
     .eq('chat_id', id);
 

@@ -194,7 +194,7 @@ export async function listPosts(req: Request, res: Response) {
     .from('community_posts')
     .select(`
       *,
-      author:users!author_id!inner(id, name, username, profile_picture_url, is_premium),
+      author:users!author_id!inner(id, name, username, profile_picture_url),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name),
       match:${matchJoin}(id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
@@ -351,7 +351,7 @@ export async function getPost(req: Request, res: Response) {
     .from('community_posts')
     .select(`
       *,
-      author:users!author_id!inner(id, name, username, profile_picture_url, is_premium),
+      author:users!author_id!inner(id, name, username, profile_picture_url),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name),
       match:matches!match_id(id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
@@ -458,8 +458,8 @@ export async function createPost(req: Request, res: Response) {
     }));
   }
 
-  // SC-144: ONE read of premium state, evaluated LIVE (is_premium + expiry) — drives
-  // image posts, scheduling AND the free-tier post cap. Was two `.select('is_premium')`
+  // SC-434/435: a live premium read stood here, driving image posts, scheduling
+  // and the free-tier post cap. All three are gone and so are the columns.
   // reads gating on the stale flag (an expired-but-unflipped user kept these ~1h).
   // SC-434: image posts and scheduling were Premium-only, and free accounts were
   // capped at 5 posts a month. All three are gone — see migration 090 for the cap.
@@ -512,20 +512,16 @@ export async function createPost(req: Request, res: Response) {
     validatedMatchId = m.id;
   }
 
-  // SC-60: the 5-posts/month free-tier cap is enforced atomically inside
-  // create_post_capped (migration 040) — a per-user pg_advisory_xact_lock makes
-  // the count + insert one critical section, so concurrent creates can't all
-  // pass a stale check-then-act and bypass the cap. Premium users bypass the cap
-  // (p_is_premium). On the cap the RPC raises POST_LIMIT_REACHED -> same 403 shape.
-  // SC-130: create_post_capped (mig 053) dedups a retry via p_client_key (or a 2s
-  // backstop when no key) INSIDE the RPC — a retry never burns a monthly-cap slot.
+  // create_post_capped holds a per-user pg_advisory_xact_lock so the dedup and
+  // the insert are one critical section — SC-130: a retry is deduped via
+  // p_client_key (or a 2s backstop when no key) INSIDE the RPC, so a double-tap
+  // is one post.
+  //
+  // SC-435: the cap itself is gone (migration 090) and `p_is_premium` is dropped
+  // from the signature by migration 091. See the fallback below for why that is
+  // safe to deploy before the migration lands.
   const rpcArgs: Record<string, any> = {
     p_author_id: userId,
-    // SC-434: kept in the call, always true. Migration 090 removes the cap from
-    // the function body; passing true means the cap is off even on a server that
-    // deploys before the migration is applied, so the order of the two cannot
-    // leave anybody capped.
-    p_is_premium: true,
     p_content: bodyContent.trim(),
     p_image_url: bodyImage || null,
     p_link_url: link_url || null,
@@ -541,26 +537,40 @@ export async function createPost(req: Request, res: Response) {
   // SC-193: only attach p_match_id when there IS a link — so ordinary posts keep
   // resolving to the pre-057 RPC signature until migration 057 is applied.
   if (validatedMatchId) rpcArgs.p_match_id = validatedMatchId;
+  /**
+   * SC-435 · the signature ladder that makes dropping `p_is_premium` safe.
+   *
+   * Migration 091 replaces create_post_capped with a version that has no
+   * `p_is_premium`. A function's SIGNATURE is its identity in Postgres, so
+   * whichever of {deploy, migration} lands second would break the other — call
+   * the new shape before the migration and PostgREST answers PGRST202 "function
+   * not found"; leave the old shape in the code after it and the same happens.
+   *
+   * So the code asks for the NEW shape first and falls back to the old one on
+   * PGRST202. Between the push and the migration the fallback carries every
+   * post; after it, the first call succeeds and the fallback never runs. Exactly
+   * the ladder SC-432's recordEventIdempotent uses, and for the same reason.
+   *
+   * The fallback can be deleted once 091 is applied everywhere.
+   */
+  const legacyArgs = { ...rpcArgs, p_is_premium: true };
+  // SC-179: a non-UUID key would raise 22P02 (invalid uuid) → 500. Coerce a
+  // malformed key to null so the post still succeeds (dedup just skipped).
+  const clientKey = normalizeClientKey(idempotency_key);
   let { data, error } = await supabase
-    // SC-179: a non-UUID key would raise 22P02 (invalid uuid) → 500. Coerce a
-    // malformed key to null so the post still succeeds (dedup just skipped).
-    .rpc('create_post_capped', { ...rpcArgs, p_client_key: normalizeClientKey(idempotency_key) })
+    .rpc('create_post_capped', { ...rpcArgs, p_client_key: clientKey })
     .single();
   if (error && (error as { code?: string }).code === 'PGRST202') {
-    // mig 053 not applied yet — the old signature has no p_client_key; retry without it.
-    ({ data, error } = await supabase.rpc('create_post_capped', rpcArgs).single());
+    ({ data, error } = await supabase
+      .rpc('create_post_capped', { ...legacyArgs, p_client_key: clientKey })
+      .single());
+  }
+  if (error && (error as { code?: string }).code === 'PGRST202') {
+    // mig 053 not applied — the oldest signature has no p_client_key either.
+    ({ data, error } = await supabase.rpc('create_post_capped', legacyArgs).single());
   }
 
   if (error) {
-    if ((error as { message?: string }).message?.includes('POST_LIMIT_REACHED')) {
-      // SC-357: the raw code used to be the `error` string, and the app renders
-      // `error` verbatim — so a capped free user saw the literal text
-      // "POST_LIMIT_REACHED". Friendly sentence for humans, `code` for callers.
-      return res.status(403).json({
-        error: 'You’ve used all 5 free posts this month. Upgrade to Premium for unlimited posts.',
-        code: 'POST_LIMIT_REACHED',
-      });
-    }
     return res.status(500).json({ error: sanitizeError(error) });
   }
 
@@ -855,7 +865,7 @@ export async function listComments(req: Request, res: Response) {
     .from('post_comments')
     .select(`
       *,
-      author:users!author_id!inner(id, name, username, profile_picture_url, is_premium)
+      author:users!author_id!inner(id, name, username, profile_picture_url)
     `, { count: 'exact' })
     .eq('post_id', id)
     .is('author.deleted_at', null)
@@ -911,7 +921,7 @@ export async function createComment(req: Request, res: Response) {
   // (post_id, author_id, content). Falls back if the client_key column isn't there yet.
   const commentSelect = `
       *,
-      author:users!author_id(id, name, username, profile_picture_url, is_premium)
+      author:users!author_id(id, name, username, profile_picture_url)
     `;
   const basePayload: Record<string, any> = {
     post_id: id,
@@ -1213,7 +1223,7 @@ export async function searchMentions(req: Request, res: Response) {
   const blocked = await blockedUserIds(req.userId);
   const { data, error } = await excludeIds(excludeDeleted(supabase
     .from('users')
-    .select('id, name, username, profile_picture_url, is_premium')
+    .select('id, name, username, profile_picture_url')
     .or(`username.ilike.%${safe}%,name.ilike.%${safe}%`)), 'id', blocked)
     .limit(10);
 

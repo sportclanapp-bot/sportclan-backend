@@ -35,17 +35,8 @@ export async function getStats(_req: Request, res: Response) {
     const oneWeekAgoIso = new Date(Date.now() - 7 * 86400000).toISOString();
 
     // Run all counts in parallel; tolerate individual failures.
-    const [users, premium, posts, matches, tournaments, reports] = await Promise.all([
+    const [users, posts, matches, tournaments, reports] = await Promise.all([
       safeCount(supabase.from('users').select('id', { count: 'exact', head: true })),
-      // SC-434: a HISTORICAL count. No subscription has been created since tiers
-      // were removed, and none can be — the rows are kept, read-only, and this
-      // number will never move again.
-      safeCount(
-        supabase
-          .from('subscriptions')
-          .select('id', { count: 'exact', head: true })
-          .eq('status', 'active'),
-      ),
       safeCount(
         supabase
           .from('community_posts')
@@ -74,7 +65,11 @@ export async function getStats(_req: Request, res: Response) {
 
     return res.json({
       user_count: users,
-      premium_count: premium,
+      // SC-435: `premium_count` was an active-subscriptions count. The table is
+      // dropped by migration 091 and there are no tiers to count. Kept as an
+      // explicit null so an older admin build renders its em-dash rather than
+      // "undefined".
+      premium_count: null,
       posts_this_week: posts,
       matches_this_week: matches,
       active_tournaments: tournaments,
@@ -306,7 +301,7 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
 
 // Columns surfaced to the admin user-management list/detail.
 const ADMIN_USER_FIELDS =
-  'id, name, username, phone, email, is_premium, premium_expires_at, is_admin, suspended_at, coin_balance, created_at';
+  'id, name, username, phone, email, is_admin, suspended_at, coin_balance, created_at';
 
 // GET /admin/users?q=&limit=
 // Search users by name / username / phone (substring). No query → most recent.
@@ -329,19 +324,22 @@ export async function adminListUsers(req: Request, res: Response) {
 }
 
 // PATCH /admin/users/:id
-// Body (any subset): { suspended?: boolean, is_premium?: boolean, is_admin?: boolean }
+// Body (any subset): { suspended?: boolean, is_admin?: boolean }
 //   suspended  → sets/clears suspended_at (enforced at login)
-//   is_premium → toggles premium + sets/clears a 1-year premium_expires_at
 //   is_admin   → toggles admin access
+//
+// SC-435: an `is_premium` toggle lived here, granting or revoking premium and
+// juggling a 1-year expiry without clobbering a longer one (ADM-003). There are
+// no tiers and the columns are dropped by migration 091, so it is gone. The
+// last-admin guard (ADM-002) below is untouched.
 export async function adminUpdateUser(req: Request, res: Response) {
   const { id } = req.params;
-  const { suspended, is_premium, is_admin } = req.body || {};
+  const { suspended, is_admin } = req.body || {};
 
-  // Fetch the target up front — needed to avoid clobbering a longer premium
-  // expiry (ADM-003) and to enforce the last-admin guard (ADM-002).
+  // Fetch the target up front — needed to enforce the last-admin guard (ADM-002).
   const { data: existing } = await supabase
     .from('users')
-    .select('id, premium_expires_at, is_admin')
+    .select('id, is_admin')
     .eq('id', id)
     .maybeSingle();
   if (!existing) return res.status(404).json({ error: 'User not found' });
@@ -350,24 +348,11 @@ export async function adminUpdateUser(req: Request, res: Response) {
   if (typeof suspended === 'boolean') {
     patch.suspended_at = suspended ? new Date().toISOString() : null;
   }
-  if (typeof is_premium === 'boolean') {
-    patch.is_premium = is_premium;
-    if (is_premium) {
-      // Grant/extend premium, but NEVER shorten an existing longer expiry. The
-      // old code reset premium_expires_at to now+1y unconditionally, so
-      // re-granting to an already-premium user clobbered a longer grant (ADM-003).
-      const oneYear = Date.now() + 365 * 86400000;
-      const current = existing.premium_expires_at ? new Date(existing.premium_expires_at).getTime() : 0;
-      patch.premium_expires_at = new Date(Math.max(oneYear, current)).toISOString();
-    } else {
-      patch.premium_expires_at = null;
-    }
-  }
   if (typeof is_admin === 'boolean') {
     patch.is_admin = is_admin;
   }
   if (Object.keys(patch).length === 0) {
-    return res.status(400).json({ error: 'Provide at least one of: suspended, is_premium, is_admin' });
+    return res.status(400).json({ error: 'Provide at least one of: suspended, is_admin' });
   }
   // Guard: an admin must not strip their own admin or suspend themselves and
   // lock the dashboard out from under their feet (ADM-002).

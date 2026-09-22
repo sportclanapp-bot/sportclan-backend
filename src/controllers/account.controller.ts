@@ -79,7 +79,6 @@ export async function deleteAccount(req: Request, res: Response) {
   const shortId = userId.slice(0, 8);
   const { error } = await supabase.from('users').update({
     deleted_at: new Date().toISOString(),
-    is_premium: false,
     name: 'Deleted User',
     username: `deleted_${shortId}`,
     email: null,
@@ -376,7 +375,9 @@ export async function exportData(req: Request, res: Response) {
     ['reviews_written', exportAll('user_reviews', '*', (q) => q.eq('reviewer_id', userId))],
     ['feedback', exportAll('feedback', 'id, category, message, rating, created_at', (q) => q.eq('user_id', userId))],
     ['rating_history', exportAll('rating_history', '*', (q) => q.eq('user_id', userId))],
-    ['subscriptions', exportAll('subscriptions', '*', (q) => q.eq('user_id', userId))],
+    // SC-435: a 'subscriptions' export lived here. The table is dropped by
+    // migration 091; exporting it would 500 the whole GDPR download. Coins and
+    // gifts still export — they are the parts of the ledger that survive.
     // Explicit columns — NEVER select('*') here, refresh_token lives on this row.
     ['sessions', exportAll('sessions', 'id, device_name, device_os, location, is_current, last_active, created_at', (q) => q.eq('user_id', userId))],
   ];
@@ -397,7 +398,7 @@ export async function exportData(req: Request, res: Response) {
 
   const { data: profile, error: profileErr } = await supabase
     .from('users')
-    .select('id, phone, name, username, email, bio, gender, dob, city_id, created_at, is_premium, premium_expires_at, coin_balance, referral_code, referred_by')
+    .select('id, phone, name, username, email, bio, gender, dob, city_id, created_at, coin_balance, referral_code, referred_by')
     .eq('id', userId)
     .maybeSingle();
 

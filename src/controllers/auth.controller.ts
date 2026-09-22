@@ -408,7 +408,7 @@ export async function register(req: Request, res: Response) {
       coin_balance: 0,
       referral_code: referralCode,
     })
-    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, referral_code, created_at')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, referral_code, created_at')
     .single();
   if (error || !user) {
     return res.status(500).json({ error: error?.message || 'Failed to create user' });
@@ -478,7 +478,7 @@ export async function otpLogin(req: Request, res: Response) {
 
   const { data: user, error } = await supabase
     .from('users')
-    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, is_admin, created_at')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, is_admin, created_at')
     // SC-386: look up EVERY form. Deliberately permissive — an account still
     // stored the legacy way must keep logging in, both in the window before
     // migration 083 runs and afterwards if a value could not be canonicalised.
@@ -512,7 +512,7 @@ export async function login(req: Request, res: Response) {
 
   let query = supabase
     .from('users')
-    .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, is_admin, created_at');
+    .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, coin_balance, is_admin, created_at');
 
   if (email) {
     query = query.ilike('email', email.trim());
@@ -610,7 +610,7 @@ export async function registerEmail(req: Request, res: Response) {
       coin_balance: 0,
       referral_code: referralCode,
     })
-    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, is_premium, premium_expires_at, coin_balance, referral_code, created_at')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, referral_code, created_at')
     .single();
   if (error || !user) {
     return res.status(500).json({ error: error?.message || 'Failed to create user' });
@@ -747,7 +747,7 @@ export async function googleAuth(req: Request, res: Response) {
     // Check if user exists by google_id or email
     const { data: existing } = await supabase
       .from('users')
-      .select('id, phone, name, username, email, google_id, is_premium, coin_balance, referral_code, created_at')
+      .select('id, phone, name, username, email, google_id, coin_balance, referral_code, created_at')
       .or(`google_id.eq.${payload.sub},email.eq.${payload.email}`)
       .maybeSingle();
 
@@ -773,7 +773,7 @@ export async function googleAuth(req: Request, res: Response) {
           account_type: 'player',
           coin_balance: 0,
         })
-        .select('id, phone, name, username, email, google_id, is_premium, premium_expires_at, coin_balance, referral_code, created_at')
+        .select('id, phone, name, username, email, google_id, coin_balance, referral_code, created_at')
         .single();
       if (error || !newUser) return res.status(500).json({ error: 'Could not create account' });
       // Welcome bonus — 10 coins on first registration, for parity with the
@@ -805,7 +805,7 @@ export async function googleAuth(req: Request, res: Response) {
     // re-read so the response isn't a stale coin_balance:0 (A4-009).
     {
       const { data: fb } = await supabase
-        .from('users').select('coin_balance, is_premium, premium_expires_at').eq('id', user.id as string).maybeSingle();
+        .from('users').select('coin_balance').eq('id', user.id as string).maybeSingle();
       if (fb) Object.assign(user, fb);
     }
     return res.json({ accessToken, refreshToken, user, isNewUser: !existing });

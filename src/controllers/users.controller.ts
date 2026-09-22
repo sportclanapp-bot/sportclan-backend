@@ -16,7 +16,7 @@ import { notifyUsers, notifyUser } from '../utils/notify';
 // contact + wallet + account internals; NEVER serialize this to another viewer.
 // (Still never returns password_hash — that column is simply not listed.)
 const PUBLIC_FIELDS =
-  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, is_premium, premium_expires_at, coin_balance, is_available, streak_count, referral_code, trial_used, is_admin, notification_preferences, discoverability, message_privacy, tag_privacy, last_active_at, created_at';
+  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, coin_balance, is_available, streak_count, referral_code, is_admin, notification_preferences, discoverability, message_privacy, tag_privacy, last_active_at, created_at';
 
 // SC-344 · presence. "online" = active within this window; the FE heartbeats more
 // often than this so a continuously-active user stays green, and stops on
@@ -31,10 +31,9 @@ export function computeIsOnline(lastActiveAt: string | null | undefined): boolea
 // SC-246: the ONLY fields safe to serialize to a DIFFERENT viewer (getUserById).
 // Deliberately EXCLUDES phone, email, coin_balance, referral_code, is_admin,
 // notification_preferences, message_privacy, discoverability, tag_privacy,
-// premium_expires_at, trial_used. `dob` is included but nulled below unless
-// show_dob. `is_premium` is a public boolean (the expiry timestamp is not).
+// `dob` is included but nulled below unless show_dob.
 const PUBLIC_USER_FIELDS =
-  'id, name, username, profile_picture_url, bio, link, city_id, gender, account_type, is_premium, is_available, streak_count, last_active_at, dob, show_dob, created_at';
+  'id, name, username, profile_picture_url, bio, link, city_id, gender, account_type, is_available, streak_count, last_active_at, dob, show_dob, created_at';
 
 // Fire smart engagement notifications lazily from /users/me. Best-effort,
 // never throws — failures here must not block the main profile response.
@@ -825,7 +824,7 @@ export async function getFollowers(req: Request, res: Response) {
   const blocked = await blockedUserIds(req.userId);
   const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
     .from('follow_relationships')
-    .select('follower_id, users:follower_id!inner (id, name, username, profile_picture_url, bio, is_premium)')
+    .select('follower_id, users:follower_id!inner (id, name, username, profile_picture_url, bio)')
     .eq('following_id', id)
     .order('created_at', { ascending: false })
     .range(p.from, p.to), 'users'), 'follower_id', blocked);
@@ -844,7 +843,7 @@ export async function getFollowing(req: Request, res: Response) {
   const blocked = await blockedUserIds(req.userId);
   const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
     .from('follow_relationships')
-    .select('following_id, users:following_id!inner (id, name, username, profile_picture_url, bio, is_premium)')
+    .select('following_id, users:following_id!inner (id, name, username, profile_picture_url, bio)')
     .eq('follower_id', id)
     .order('created_at', { ascending: false })
     .range(pg.from, pg.to), 'users'), 'following_id', blocked);
@@ -1007,7 +1006,7 @@ export async function discoverPlayers(req: Request, res: Response) {
   const matchedIds = filteredProfiles.map((p) => p.user_id);
   const { data: users } = await supabase
     .from('users')
-    .select('id, name, username, profile_picture_url, city_id, is_premium, is_available, streak_count, discoverability')
+    .select('id, name, username, profile_picture_url, city_id, is_available, streak_count, discoverability')
     .in('id', matchedIds)
     .is('deleted_at', null); // SC-77: exclude soft-deleted accounts from discovery
 
@@ -1041,7 +1040,6 @@ export async function discoverPlayers(req: Request, res: Response) {
         username: u.username,
         profile_picture_url: u.profile_picture_url,
         city_id: u.city_id,
-        is_premium: u.is_premium,
         is_available: !!u.is_available,
         streak_count: u.streak_count ?? 0,
         rating: p.rating,
@@ -1236,7 +1234,7 @@ export async function getRival(req: Request, res: Response) {
 
   const { data: users } = await supabase
     .from('users')
-    .select('id, name, username, profile_picture_url, city_id, is_premium')
+    .select('id, name, username, profile_picture_url, city_id')
     .in('id', candidateIds)
     .is('deleted_at', null); // SC-77: a deleted account can't be surfaced as a rival
   const userMap = new Map<string, any>();
@@ -1286,7 +1284,6 @@ export async function getRival(req: Request, res: Response) {
       username: match.user.username,
       profile_picture_url: match.user.profile_picture_url,
       city_id: match.user.city_id,
-      is_premium: !!match.user.is_premium,
       rating: match.profile.rating,
       matches_played: match.profile.matches_played,
       wins: match.profile.wins,

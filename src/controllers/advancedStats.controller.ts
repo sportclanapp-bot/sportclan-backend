@@ -12,7 +12,7 @@ import { isBlockedBetween } from '../utils/blocks';
 // This endpoint adds what free does NOT: full rating trajectory + peak, win-rate
 // over time, head-to-head opponent records, and win-rate splits by time / day /
 // format / city. It NEVER fences an existing read — the ONLY new gate is the
-// is_premium check below.
+// SC-434: the premium check that stood below is gone.
 //
 // NO fabrication (SC-155): every number derives from a real row. Thin data
 // returns an honest lowData flag, never an invented trend.

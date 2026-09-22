@@ -531,8 +531,6 @@ export async function loadFullData(req: Request, res: Response) {
         bio: rand(PUNE_BIOS),
         gender: isFemale ? 'female' : 'male',
         dob: dobFromAge(randInt(18, 45)),
-        is_premium: i < 30,
-        premium_expires_at: i < 30 ? new Date(Date.now() + 90 * 86400000).toISOString() : null,
         coin_balance: randInt(50, 800),
       });
     }
@@ -1333,8 +1331,6 @@ export async function loadFullData(req: Request, res: Response) {
     // ── STEP 18: Update caller state + add to Pune Warriors cricket ──────
     const callerPatch: any = {
       coin_balance: 2500,
-      is_premium: true,
-      premium_expires_at: new Date(Date.now() + 180 * day).toISOString(),
     };
     // Preserve existing referral_code if set, otherwise seed one
     const { data: callerExisting } = await supabase

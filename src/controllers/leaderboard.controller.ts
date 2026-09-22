@@ -23,7 +23,7 @@ import { istMonthStartIso } from '../utils/appTime';
 // `.in()` blew past PostgREST's limits, returned no users, and every row fell
 // back to name "Player" / null username (SC-4/SC-10).
 
-const USER_FIELDS = 'id, name, username, profile_picture_url, city_id, is_premium';
+const USER_FIELDS = 'id, name, username, profile_picture_url, city_id';
 
 type Row = { user_id: string; rating: number; matches_played: number; wins: number };
 
@@ -44,7 +44,6 @@ function toEntry(p: Row, rank: number, u: any) {
     username: u?.username ?? null,
     profile_picture_url: u?.profile_picture_url ?? null,
     city_id: u?.city_id ?? null,
-    is_premium: !!u?.is_premium,
     rating: p.rating,
     matches_played: p.matches_played,
     wins: p.wins,

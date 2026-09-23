@@ -104,3 +104,49 @@ describe('SC-442 · the unplayed sweep predicate', () => {
     expect(body).not.toContain('.delete(');
   });
 });
+
+/**
+ * SC-443 (M5) · results are ordered by when they FINISHED.
+ *
+ * Two problems, found in that order. Everything was ordered by scheduled_at
+ * desc, and Postgres orders DESC with NULLS FIRST, so every undated row sorted
+ * ahead of every dated one — ~45 screens of scrolling never reached a match
+ * completed fifteen minutes earlier. With nullsFirst fixed and the dates
+ * showing, the top of the list became matches scheduled for NEXT WEEK that were
+ * already completed: seed rows with a future scheduled_at. "Most recent results
+ * first" has to mean most recently PLAYED.
+ */
+describe('SC-443 · completed lists order by finish time', () => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  const body = (() => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', 'controllers', 'matches.controller.ts'), 'utf8',
+    );
+    const start = src.indexOf('export async function listMatches');
+    const next = src.indexOf('\nexport ', start + 10);
+    return src.slice(start, next === -1 ? undefined : next)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+  })();
+
+  test('finished statuses sort by updated_at, not scheduled_at', () => {
+    expect(body).toContain("status === 'completed' || status === 'abandoned'");
+    expect(body).toMatch(/order\('updated_at', \{ ascending: false, nullsFirst: false \}\)/);
+  });
+
+  test('unfinished lists still sort by kick-off, which is the right field there', () => {
+    expect(body).toMatch(/order\('scheduled_at', \{ ascending: false, nullsFirst: false \}\)/);
+  });
+
+  test('NULLS LAST is kept on both, so undated rows never lead', () => {
+    const orders = body.match(/nullsFirst: false/g) ?? [];
+    expect(orders.length).toBe(2);
+  });
+
+  test('the history scopings still bypass the voided filter', () => {
+    // M5's new routes rely on this: a voided match must stay reachable from a
+    // team's history and from your own, which is what makes it correctable.
+    expect(body).toContain('shouldHideVoided({ status, teamScoped: !!team_id, mine: mine === \'1\' })');
+  });
+});

@@ -652,16 +652,26 @@ export async function listMatches(req: Request, res: Response) {
     let query = supabase
       .from('matches')
       .select('*', { count: 'exact' })
-      // SC-442 (M5/F-51) · NULLS LAST.
-      //
-      // Postgres orders DESC with NULLS FIRST by default, and a great many rows
-      // carry no scheduled_at. Every one of them therefore sorted ahead of every
-      // dated match, so "most recent results first" put the undated ones first
-      // and buried a match completed minutes ago. Verified the hard way: ~45
-      // screens of scrolling through the completed list never reached a match
-      // finished fifteen minutes earlier.
-      .order('scheduled_at', { ascending: false, nullsFirst: false })
       .range(p.from, p.to);
+    // SC-443 (M5) · results are ordered by when they FINISHED.
+    //
+    // Everything was ordered by scheduled_at desc. Two problems, found in that
+    // order. First, Postgres orders DESC with NULLS FIRST, and a great many rows
+    // carry no scheduled_at, so every undated row sorted ahead of every dated
+    // one — ~45 screens of scrolling never reached a match completed fifteen
+    // minutes earlier (SC-442 fixed that with nullsFirst: false). Then, with the
+    // dates showing, the top of the list was matches scheduled for NEXT WEEK
+    // that were somehow already completed: seed rows whose scheduled_at is in
+    // the future. "Most recent results first" has to mean most recently PLAYED.
+    //
+    // There is no completed_at column, so updated_at is the proxy — it is bumped
+    // on completion and is the same field voidDeadline treats as "ended".
+    // Upcoming lists still order by scheduled_at, because there the kick-off
+    // time IS the thing being sorted.
+    const finishedFirst = status === 'completed' || status === 'abandoned';
+    query = finishedFirst
+      ? query.order('updated_at', { ascending: false, nullsFirst: false })
+      : query.order('scheduled_at', { ascending: false, nullsFirst: false });
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (status) query = query.eq('status', status);
     if (tournament_id) query = query.eq('tournament_id', tournament_id);

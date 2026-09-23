@@ -175,3 +175,60 @@ describe('SC-442 · toss survives recompute', () => {
     expect(r.text).toBe('A won by 6 runs');
   });
 });
+
+/**
+ * SC-442 · the derivation's INPUTS must actually be loaded.
+ *
+ * The wickets branch was correct from the start and still reported "won by N
+ * runs" on device, three times, because its inputs kept going missing in
+ * different ways:
+ *
+ *   1. toss_winner_side was dropped by recomputeSummary  (fixed)
+ *   2. result/winner_side/walkover were dropped the same way  (fixed)
+ *   3. toss_choice was never SELECTED in completeMatch  (this one)
+ *
+ * The third hid behind a type assertion — `(match as { toss_choice?: ... })` —
+ * which told the compiler the field was there instead of asking. These tests
+ * assert the wiring, because every unit test of the pure function passed
+ * throughout while the feature was broken in production.
+ */
+describe('SC-442 · completeMatch loads what the derivation needs', () => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'controllers', 'matches.controller.ts'), 'utf8',
+  );
+  const body = (() => {
+    const start = src.indexOf('export async function completeMatch');
+    const next = src.indexOf('\nexport ', start + 10);
+    // Comments stripped: the removal of the cast is DOCUMENTED in one, and a
+    // guard its own explanation can fail is a guard people delete.
+    return src.slice(start, next === -1 ? undefined : next)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+  })();
+
+  test('toss_choice is selected', () => {
+    const select = body.slice(body.indexOf(".select('id, sport_id"));
+    expect(select.slice(0, 400)).toContain('toss_choice');
+  });
+
+  test('score_summary is selected, for toss_winner_side', () => {
+    const select = body.slice(body.indexOf(".select('id, sport_id"));
+    expect(select.slice(0, 400)).toContain('score_summary');
+  });
+
+  test('toss_choice is read directly, not through a cast that hides its absence', () => {
+    expect(body).toContain('tossChoice: match.toss_choice');
+    expect(body).not.toMatch(/match as \{ toss_choice/);
+  });
+
+  test('both toss inputs reach deriveResultText', () => {
+    const call = body.slice(body.indexOf('deriveResultText({'));
+    const args = call.slice(0, call.indexOf('});'));
+    expect(args).toContain('tossWinnerSide');
+    expect(args).toContain('tossChoice');
+    expect(args).toContain('aWickets');
+    expect(args).toContain('bWickets');
+  });
+});

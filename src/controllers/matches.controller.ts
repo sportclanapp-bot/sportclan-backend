@@ -1524,7 +1524,11 @@ export async function completeMatch(req: Request, res: Response) {
 
     const { data: match } = await supabase
       .from('matches')
-      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary')
+      // SC-442: toss_choice is REQUIRED here — deriveResultText needs it to know
+      // who was chasing, and a cricket win is described by wickets or by runs
+      // depending on the answer. It was missing, so a successful chase reported
+      // "won by N runs". See the note at the derivation call below.
+      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1943,7 +1947,14 @@ export async function completeMatch(req: Request, res: Response) {
         aWickets: Number(ss?.A?.wickets ?? 0),
         bWickets: Number(ss?.B?.wickets ?? 0),
         tossWinnerSide: (ss?.toss_winner_side as 'A' | 'B' | undefined) ?? null,
-        tossChoice: (match as { toss_choice?: string | null }).toss_choice ?? null,
+        // SC-442: read directly, NOT through a cast. This line was
+        // `(match as { toss_choice?: string | null }).toss_choice` and the
+        // column was not in the select above, so it was silently undefined and
+        // every chase reported "won by N runs". The assertion is what hid it —
+        // it told the compiler the field existed instead of asking whether it
+        // did. Four layers of this bug were found one at a time; this was the
+        // last, and the only one a type could have caught for free.
+        tossChoice: match.toss_choice ?? null,
         explicitWinner,
       });
 

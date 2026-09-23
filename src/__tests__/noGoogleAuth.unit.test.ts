@@ -47,10 +47,12 @@ describe('the dependency went with it', () => {
     expect(pkg.dependencies['google-auth-library']).toBeUndefined();
   });
 
-  it('but firebase-admin still works — it pulls its own copy', () => {
-    // Push notifications depend on it transitively. Removing the DIRECT
-    // dependency is the whole change; the transitive one must stay.
-    expect(pkg.dependencies['firebase-admin']).toBeDefined();
+  it('and firebase-admin is gone too, since push moved to Expo', () => {
+    // When Google sign-in was removed, firebase-admin stayed because push
+    // used it. Push now goes through Expo's service (expo-server-sdk), so the
+    // last Google server-side dependency went with it.
+    expect(pkg.dependencies['firebase-admin']).toBeUndefined();
+    expect(pkg.dependencies['expo-server-sdk']).toBeDefined();
   });
 });
 

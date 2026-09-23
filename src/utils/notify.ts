@@ -2,7 +2,7 @@
 // to the target user's devices. Best-effort: a failure in one path never
 // blocks the caller (and never throws) because push is always optional.
 import { supabase } from './supabase';
-import { sendPushToTokens } from './fcm';
+import { sendPushToTokens } from './expoPush';
 import { blockedUserIds } from './blocks';
 import { deletedIdSet } from './activeUser';
 

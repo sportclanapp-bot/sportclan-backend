@@ -54,6 +54,7 @@ import { queryAliases } from './middleware/queryAliases.middleware';
 import { sweepStaleLiveMatches, sweepUnplayedScheduledMatches } from './controllers/matches.controller';
 import { sweepTournamentsDue } from './controllers/tournaments.controller';
 import { purgeExpiredAccountsCore } from './controllers/account.controller';
+import { checkPushReceipts } from './utils/expoPush';
 import {
   runPublishScheduledPosts,
   runSmartMatchNotifications,
@@ -341,6 +342,22 @@ app.listen(PORT, () => {
   };
   void runAccountPurge();
   setInterval(runAccountPurge, 60 * 60 * 1000).unref();
+
+  // Push receipts, hourly. Expo answers a send with a ticket at once and a
+  // receipt ~15 minutes later saying what FCM did. DeviceNotRegistered on a
+  // receipt means the app is gone from that device, and the token is deleted
+  // here - without this the push_tokens table fills with the dead for ever.
+  // Tickets live in push_tickets (migration 094) so a deploy restart cannot
+  // lose a cycle. Idempotent: a ticket is checked once.
+  const runPushReceipts = async () => {
+    try {
+      const { checked, removed } = await checkPushReceipts();
+      if (checked) console.log(`[push-receipts] checked ${checked}, removed ${removed}`); // eslint-disable-line no-console
+    } catch (e) {
+      console.warn('[push-receipts] failed', e instanceof Error ? e.message : e); // eslint-disable-line no-console
+    }
+  };
+  setInterval(runPushReceipts, 60 * 60 * 1000).unref();
 
   // Daily notification jobs at ~09:00 IST; weekly digest additionally on Monday.
   // The hourly tick acts only when the IST hour is 9; the per-user/day dedupe

@@ -53,31 +53,58 @@ $$ LANGUAGE plpgsql;
 -- ---------------------------------------------------------------------------
 -- BLOCK 2 · Correct whatever has already drifted.
 --
--- Touches only the rows that are actually wrong, so it is cheap and its row
--- count is itself the answer to "how bad was it?".
+-- Touches only the rows that are actually wrong (IS DISTINCT FROM), so it is
+-- cheap, it is safe to re-run, and the row count it reports is itself the
+-- answer to "how bad was it?".
+--
+-- One grouped aggregate per table, joined once — NOT a correlated count per
+-- post. Same answer, but it reads post_likes and post_comments once each
+-- instead of once per post, which on 15k posts and 30k comments is the
+-- difference between a query you watch and one you don't notice.
+--
+-- LEFT JOIN + COALESCE, because a post with no likes has no row in the
+-- aggregate at all: an inner join would skip exactly the posts whose count
+-- most needs to be 0.
 -- ---------------------------------------------------------------------------
 UPDATE community_posts p
    SET likes_count = c.n
-  FROM (SELECT id, (SELECT count(*) FROM post_likes l WHERE l.post_id = community_posts.id) AS n
-          FROM community_posts) c
+  FROM (
+    SELECT p2.id, COALESCE(l.n, 0) AS n
+      FROM community_posts p2
+      LEFT JOIN (SELECT post_id, count(*) AS n FROM post_likes GROUP BY post_id) l
+             ON l.post_id = p2.id
+  ) c
  WHERE p.id = c.id
    AND p.likes_count IS DISTINCT FROM c.n;
 
 UPDATE community_posts p
    SET comments_count = c.n
-  FROM (SELECT id, (SELECT count(*) FROM post_comments k WHERE k.post_id = community_posts.id) AS n
-          FROM community_posts) c
+  FROM (
+    SELECT p2.id, COALESCE(k.n, 0) AS n
+      FROM community_posts p2
+      LEFT JOIN (SELECT post_id, count(*) AS n FROM post_comments GROUP BY post_id) k
+             ON k.post_id = p2.id
+  ) c
  WHERE p.id = c.id
    AND p.comments_count IS DISTINCT FROM c.n;
 
 
 -- ---------------------------------------------------------------------------
--- BLOCK 3 · Proof. Expected: 0 rows, before and after.
--- Any row here is a cached count that disagrees with the rows it caches.
+-- BLOCK 3 · Proof. Expected: 0 rows AFTER block 2.
+--
+-- Run it BEFORE block 2 as well, if you want the drift measured rather than
+-- merely corrected: every row it returns then is a post whose cached count
+-- disagreed with the rows it caches, with both numbers side by side.
+--
+-- Same shape as block 2 so the two cannot disagree about what "correct" means.
 -- ---------------------------------------------------------------------------
-SELECT p.id, p.likes_count, p.comments_count,
-       (SELECT count(*) FROM post_likes    l WHERE l.post_id = p.id) AS real_likes,
-       (SELECT count(*) FROM post_comments k WHERE k.post_id = p.id) AS real_comments
+SELECT p.id,
+       p.likes_count,
+       COALESCE(l.n, 0) AS real_likes,
+       p.comments_count,
+       COALESCE(k.n, 0) AS real_comments
   FROM community_posts p
- WHERE p.likes_count    <> (SELECT count(*) FROM post_likes    l WHERE l.post_id = p.id)
-    OR p.comments_count <> (SELECT count(*) FROM post_comments k WHERE k.post_id = p.id);
+  LEFT JOIN (SELECT post_id, count(*) AS n FROM post_likes    GROUP BY post_id) l ON l.post_id = p.id
+  LEFT JOIN (SELECT post_id, count(*) AS n FROM post_comments GROUP BY post_id) k ON k.post_id = p.id
+ WHERE p.likes_count    IS DISTINCT FROM COALESCE(l.n, 0)
+    OR p.comments_count IS DISTINCT FROM COALESCE(k.n, 0);

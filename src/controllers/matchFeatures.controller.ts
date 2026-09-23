@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { calculateDLSTarget } from '../utils/dls';
+import { calculateDLSTarget, dlsInputProblem } from '../utils/dls';
 import { aggregatePlayers, isGuestId, recomputeSummary, type CricketPlayerLine } from './scoring.controller';
 import { isTerminalMatchStatus } from '../utils/validation';
 import { canOfficiateMatch } from '../utils/tournamentAuth';
@@ -294,6 +294,16 @@ export async function applyDLS(req: Request, res: Response) {
     }
     const gate = await loadScorableMatch(id, userId, deviceIdOf(req));
     if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg, ...(gate.error.code ? { code: gate.error.code } : {}) });
+
+    // F-44: before the gate this endpoint answered anything it was asked,
+    // including a match of zero overs, and stored the answer on the match.
+    const problem = dlsInputProblem({
+      team1Score: Number(team1_score),
+      totalOvers: Number(total_overs),
+      team2OversLeft: Number(team2_overs_remaining),
+      team2Wickets: Number(team2_wickets),
+    });
+    if (problem) return res.status(400).json({ error: problem, code: 'DLS_IMPOSSIBLE' });
 
     const result = calculateDLSTarget(
       Number(team1_score),

@@ -64,3 +64,40 @@ export function calculateDLSTarget(
     method: 'DLS',
   };
 }
+
+/**
+ * F-44 · refuse the impossible instead of answering it.
+ *
+ * `calculateDLSTarget` has a guard for zero Team-1 resources that returns
+ * "no reduction" so the caller never sees a NaN. That is correct arithmetic and
+ * a terrible answer: with totalOvers = 0 and a Team-1 score of 0 it returns a
+ * revised target of 1, which the app printed as "Revised target: 1" beside a
+ * Calculate button, with nothing to say it was nonsense. A scorer in the rain
+ * could act on it.
+ *
+ * So the endpoint validates first. The app validates too — it has to, to put the
+ * reason on its own button before the request is made — but a client-side check
+ * is a courtesy, not a rule, and this is the rule. Same wording on both sides so
+ * a scorer never sees the refusal change shape depending on where it came from.
+ *
+ * Returns the reason, or null when the numbers describe a real match.
+ */
+export function dlsInputProblem(input: {
+  team1Score: number;
+  totalOvers: number;
+  team2OversLeft: number;
+  team2Wickets: number;
+}): string | null {
+  const { team1Score, totalOvers, team2OversLeft, team2Wickets } = input;
+  if (![team1Score, totalOvers, team2OversLeft, team2Wickets].every((n) => Number.isFinite(n))) {
+    return 'Those are not all numbers.';
+  }
+  if (totalOvers < 1) return 'Total overs must be at least 1 — there is nothing to reduce from.';
+  if (team1Score < 0) return "Team 1's score cannot be negative.";
+  if (team2Wickets < 0 || team2Wickets > 10) return 'Wickets lost is between 0 and 10.';
+  if (team2Wickets === 10) return 'Team 2 is all out — the innings is over, so there is no target to revise.';
+  if (team2OversLeft < 0) return 'Overs remaining cannot be negative.';
+  if (team2OversLeft > totalOvers) return 'Team 2 cannot have more overs left than the match allows.';
+  if (team2OversLeft === 0) return 'No overs remain — there is nothing left to chase in.';
+  return null;
+}

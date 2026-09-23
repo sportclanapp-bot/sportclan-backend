@@ -409,7 +409,19 @@ export interface CricketPlayerLine {
   name?: string; // SC-14/guest: display name captured from the event payload
   runs: number; balls: number; fours: number; sixes: number;
   out: boolean; dismissal?: string;
+  /**
+   * F-36 · who ELSE was in the dismissal, so a scorecard can read "c Sharma b
+   * Khan" rather than the bare kind. Carried on the line because the rollup is
+   * the only thing the app reads — it never sees the raw events.
+   */
+  dismissal_fielder?: string; dismissal_bowler?: string;
   bowl_balls: number; bowl_runs: number; bowl_wickets: number;
+  /**
+   * Fielding credit. These have existed as columns on innings_stats since the
+   * table was created and were written as a literal 0 for every player of every
+   * match, because the app sent no fielder and there was nothing to count.
+   */
+  catches: number; runouts: number; stumpings: number;
 }
 
 export function aggregateCricketPlayers(
@@ -418,7 +430,11 @@ export function aggregateCricketPlayers(
   const players: Record<string, CricketPlayerLine> = {};
   const ensure = (id: string, side: 'A' | 'B', name?: string): CricketPlayerLine => {
     if (!players[id]) {
-      players[id] = { side, runs: 0, balls: 0, fours: 0, sixes: 0, out: false, bowl_balls: 0, bowl_runs: 0, bowl_wickets: 0 };
+      players[id] = {
+        side, runs: 0, balls: 0, fours: 0, sixes: 0, out: false,
+        bowl_balls: 0, bowl_runs: 0, bowl_wickets: 0,
+        catches: 0, runouts: 0, stumpings: 0,
+      };
     }
     // First non-empty name wins — lets the scorecard/MVP resolve a real name
     // straight from the rollup (fixes SC-52) and names guest players too.
@@ -457,18 +473,35 @@ export function aggregateCricketPlayers(
         else w.bowl_runs += runs;     // wides/no-balls ARE charged to the bowler
       }
     } else if (e.event_type === 'wicket') {
+      // Normalised once, and used by all three of the rules below. Until F-36
+      // the app sent nothing at all, so this was the empty string for EVERY
+      // wicket ever recorded — which is not 'runout', so the bowler was credited
+      // with every run-out in the match. The rule was right; it was never fed.
+      const wt = String(p.wicket_type || p.type || '').toLowerCase().replace(/[^a-z]/g, '');
+      const fielderId: string | undefined = p.fielder_id;
+      const fielderName: string | undefined = p.fielder_name;
       if (batId) {
         const b = ensure(batId, batSide, batName);
         if (!p.is_extra) b.balls += 1;
         b.out = true;
         b.dismissal = p.wicket_type || p.type || 'out';
+        if (fielderName) b.dismissal_fielder = fielderName;
+        if (bowlName) b.dismissal_bowler = bowlName;
       }
       if (bowlId) {
         const w = ensure(bowlId, bowlSide, bowlName);
         if (!p.is_extra) w.bowl_balls += 1;
-        const wt = String(p.wicket_type || p.type || '').toLowerCase().replace(/[^a-z]/g, '');
         // Run-outs / retirements aren't credited to the bowler.
         if (wt !== 'runout' && wt !== 'retired' && wt !== 'retiredhurt') w.bowl_wickets += 1;
+      }
+      // The fielder is on the BOWLING side — crediting them to the batting side
+      // would put a catch in the batting card, which is how a fielding stat gets
+      // quietly attributed to the wrong team.
+      if (fielderId) {
+        const f = ensure(fielderId, bowlSide, fielderName);
+        if (wt === 'caught') f.catches += 1;
+        else if (wt === 'runout') f.runouts += 1;
+        else if (wt === 'stumped') f.stumpings += 1;
       }
     }
   }
@@ -872,9 +905,9 @@ export async function writeCricketInningsStats(matchId: string): Promise<void> {
     bowling_runs: line.bowl_runs,
     bowling_wickets: line.bowl_wickets,
     bowling_maidens: 0,
-    catches: 0,
-    runouts: 0,
-    stumpings: 0,
+    catches: line.catches,
+    runouts: line.runouts,
+    stumpings: line.stumpings,
   }));
   if (rows.length === 0) return;
   await supabase

@@ -1,6 +1,48 @@
 import { isTeamManager } from '../utils/teamAuth';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { statusAfterFixtures, shouldGoLive } from '../utils/tournamentStatus';
+
+/**
+ * F-52 · the other half: something has to start the tournament on the day.
+ *
+ * With the draw no longer flipping the status, an `upcoming` tournament would
+ * sit at `upcoming` for ever. This is the hourly tick that starts it — on the
+ * EXISTING in-process scheduler, beside the match sweepers, so no new Render
+ * service is needed (decision D2).
+ *
+ * Only tournaments that have fixtures: a cup whose draw was never made is not
+ * live, it is unstarted, and flipping it would swap one wrong badge for
+ * another. Idempotent — the `.eq('status', 'upcoming')` on the write means a
+ * second instance on the same tick, or an overlapping run, changes nothing.
+ */
+export async function sweepTournamentsDue(): Promise<{ started: number }> {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: due } = await supabase
+    .from('tournaments')
+    .select('id, status, start_date')
+    .eq('status', 'upcoming')
+    .not('start_date', 'is', null)
+    .lte('start_date', today)
+    .limit(200);
+
+  let started = 0;
+  for (const t of (due ?? []) as { id: string; status: string; start_date: string | null }[]) {
+    const { count } = await supabase
+      .from('matches')
+      .select('id', { count: 'exact', head: true })
+      .eq('tournament_id', t.id);
+    if (!shouldGoLive(t, (count ?? 0) > 0)) continue;
+    const { error } = await supabase
+      .from('tournaments')
+      .update({ status: 'live' })
+      .eq('id', t.id)
+      .eq('status', 'upcoming');
+    if (!error) started += 1;
+  }
+  return { started };
+}
+
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
@@ -2114,7 +2156,12 @@ export async function generateFixtures(req: Request, res: Response) {
         const winnerId = bm?.team_a_id ?? bm?.team_b_id;
         if (winnerId) await resolveMatchWinner(byeId, winnerId);
       }
-      await supabase.from('tournaments').update({ status: 'live' }).eq('id', id);
+      // F-52: drawing the fixtures is preparation, not a start whistle. This goes
+      // live only if the start date has arrived; otherwise the hourly sweep
+      // (sweepTournamentsDue) flips it on the day.
+      await supabase.from('tournaments')
+        .update({ status: statusAfterFixtures(tournament.start_date as string | null) })
+        .eq('id', id);
       const { count } = await supabase
         .from('matches')
         .select('id', { count: 'exact', head: true })
@@ -2163,7 +2210,12 @@ export async function generateFixtures(req: Request, res: Response) {
         const { error } = await supabase.from('matches').insert(matchRows).select('id');
         if (error) throw new Error('fixture insert failed');
       }
-      await supabase.from('tournaments').update({ status: 'live' }).eq('id', id);
+      // F-52: drawing the fixtures is preparation, not a start whistle. This goes
+      // live only if the start date has arrived; otherwise the hourly sweep
+      // (sweepTournamentsDue) flips it on the day.
+      await supabase.from('tournaments')
+        .update({ status: statusAfterFixtures(tournament.start_date as string | null) })
+        .eq('id', id);
       return res.json({ success: true, matchesCreated: matchRows.length, format });
     }
 
@@ -2233,7 +2285,12 @@ export async function generateFixtures(req: Request, res: Response) {
       }
       await insertSingleElim(base, koRound1, (r, m) => schedGK.assignments.get(keyOf(r, m)));
 
-      await supabase.from('tournaments').update({ status: 'live' }).eq('id', id);
+      // F-52: drawing the fixtures is preparation, not a start whistle. This goes
+      // live only if the start date has arrived; otherwise the hourly sweep
+      // (sweepTournamentsDue) flips it on the day.
+      await supabase.from('tournaments')
+        .update({ status: statusAfterFixtures(tournament.start_date as string | null) })
+        .eq('id', id);
       const { count } = await supabase
         .from('matches')
         .select('id', { count: 'exact', head: true })

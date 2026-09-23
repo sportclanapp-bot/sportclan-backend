@@ -791,6 +791,107 @@ export async function closePost(req: Request, res: Response) {
 }
 
 // ─── LIKE / UNLIKE ──────────────────────────────────────────────────────────
+
+/**
+ * F-32 + the 0-likes report · ONE like notification per post, and it tells the
+ * truth about the post right now.
+ *
+ * Two symptoms, one cause. The report was "a post shows 0 likes while a like
+ * notification for it exists", and the earlier pass found "10+ consecutive
+ * identical 'Z326 Agra liked your post' rows". Both come from the same place:
+ * likePost inserted a notification and unlikePost did nothing at all. So a
+ * like / unlike / like cycle — a tap, a second thought, a tap again — left a
+ * new row every time, and if the last action was an unlike, every one of those
+ * rows was about a like that no longer exists.
+ *
+ * The count is not cached anywhere here. Both paths re-read post_likes and
+ * rewrite the ONE notification to match:
+ *
+ *   0 likes  → the notification is deleted. The event was retracted; it is not
+ *              history worth keeping, and leaving it is exactly the complaint.
+ *   1 like   → "<name> liked your post"
+ *   n likes  → "<newest name> and n-1 others liked your post"
+ *
+ * A NEW like re-raises the row (unread, fresh timestamp) because it is news. An
+ * unlike only corrects the wording — it never marks something unread to tell
+ * someone that less has happened.
+ */
+async function syncLikeNotification(postId: string, authorId: string | null | undefined, actorId: string, liked: boolean): Promise<void> {
+  if (!authorId || authorId === actorId) return;
+
+  const { count } = await supabase
+    .from('post_likes')
+    .select('post_id', { count: 'exact', head: true })
+    .eq('post_id', postId);
+  const likes = count ?? 0;
+
+  const { data: rows } = await supabase
+    .from('notifications')
+    .select('id, data, read')
+    .eq('user_id', authorId)
+    .eq('type', 'like')
+    .eq('data->>post_id', postId)
+    .order('created_at', { ascending: false });
+  const existing = (rows ?? []) as { id: string; data: Record<string, string> | null; read: boolean }[];
+
+  if (likes === 0) {
+    if (existing.length > 0) {
+      await supabase.from('notifications').delete().in('id', existing.map((r) => r.id));
+    }
+    return;
+  }
+
+  // Whoever liked it most recently leads the sentence — not necessarily the
+  // actor of THIS request, because an unlike can leave someone else on top.
+  const { data: newest } = await supabase
+    .from('post_likes')
+    .select('user_id')
+    .eq('post_id', postId)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const leadId = ((newest ?? [])[0] as { user_id?: string } | undefined)?.user_id ?? actorId;
+  const leadName = await displayName(leadId);
+  const others = likes - 1;
+  const body = others === 0
+    ? `${leadName} liked your post`
+    : `${leadName} and ${others} other${others === 1 ? '' : 's'} liked your post`;
+
+  if (existing.length === 0) {
+    // No row yet — create it through the normal path so every gate still runs
+    // (self, block, soft-deleted, notification preferences).
+    notifyEngagement(authorId, actorId, {
+      type: 'like',
+      title: 'New like',
+      body: () => body,
+      data: { post_id: postId, actor_id: leadId, actor_count: String(likes) },
+    });
+    return;
+  }
+
+  // Collapse any rows an earlier build already left behind, so the fix also
+  // tidies the pile it is preventing.
+  const [keep, ...dupes] = existing;
+  if (dupes.length > 0) {
+    await supabase.from('notifications').delete().in('id', dupes.map((r) => r.id));
+  }
+  await supabase
+    .from('notifications')
+    .update({
+      body,
+      ...(liked ? { read: false, created_at: new Date().toISOString() } : {}),
+      data: { ...(keep!.data ?? {}), post_id: postId, actor_id: leadId, actor_count: String(likes) },
+    })
+    .eq('id', keep!.id);
+}
+
+/** Off the response path, like every other notification write (SC-112). */
+function syncLikeNotificationAsync(postId: string, authorId: string | null | undefined, actorId: string, liked: boolean): void {
+  void syncLikeNotification(postId, authorId, actorId, liked).catch((err) =>
+    // eslint-disable-next-line no-console
+    console.error('[notify] like sync failed', err),
+  );
+}
+
 export async function likePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
@@ -811,12 +912,9 @@ export async function likePost(req: Request, res: Response) {
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   // SC-204: notify the post author of a NEW like (self-like already filtered).
-  notifyEngagement(likePostRow.author_id, userId, {
-    type: 'like',
-    title: 'New like',
-    body: (n) => `${n} liked your post`,
-    data: { post_id: id, actor_id: userId },
-  });
+  // F-32: one row per post, rewritten from the live count — see
+  // syncLikeNotification for why ten of them used to pile up.
+  syncLikeNotificationAsync(id, likePostRow.author_id, userId, true);
   return res.json({ liked: true });
 }
 
@@ -829,6 +927,12 @@ export async function unlikePost(req: Request, res: Response) {
     .delete()
     .eq('post_id', id)
     .eq('user_id', userId);
+
+  // The notification outlived the like it was about. That is the whole of the
+  // "0 likes, but a like notification exists" report.
+  const { data: row } = await supabase
+    .from('community_posts').select('author_id').eq('id', id).maybeSingle();
+  syncLikeNotificationAsync(id, (row as { author_id?: string } | null)?.author_id, userId, false);
 
   return res.json({ liked: false });
 }

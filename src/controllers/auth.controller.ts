@@ -30,7 +30,13 @@ const EARLY_BIRD_COINS = 50;
 /** Award the 50 welcome coins to a freshly-created user. Best-effort. */
 async function grantEarlyBirdCoins(userId: string): Promise<void> {
   try {
-    await awardCoins(userId, 'early_bird_grant', EARLY_BIRD_COINS, 'Welcome bonus');
+    // F-17: the label, not the grant. The wallet showed "Welcome bonus +50" and
+    // "Welcome to SportClan +10" one above the other — two near-identical names
+    // that sum to the promised 60 and read like the same row charged twice. The
+    // EVENT KEYS are untouched (they are the idempotency keys on coin_events;
+    // renaming one hands every existing user a second grant), so only what a
+    // person reads changes, and it now says which is which.
+    await awardCoins(userId, 'early_bird_grant', EARLY_BIRD_COINS, 'Early supporter bonus');
   } catch {
     // non-critical — premium is already set on the row
   }
@@ -487,7 +493,7 @@ export async function register(req: Request, res: Response) {
   // Welcome bonus — 10 coins on first registration. Idempotent via
   // the (user_id, event_type) unique key on coin_events.
   try {
-    await awardCoins(user.id, 'first_registration', 10, 'Welcome to SportClan');
+    await awardCoins(user.id, 'first_registration', 10, 'Signup bonus');
   } catch {
     // non-critical
   }
@@ -688,7 +694,7 @@ export async function registerEmail(req: Request, res: Response) {
   // Welcome bonus — 10 coins on first registration (parity with phone signup;
   // previously missing on email/Google, see A4-008). Idempotent via coin_events.
   try {
-    await awardCoins(user.id, 'first_registration', 10, 'Welcome to SportClan');
+    await awardCoins(user.id, 'first_registration', 10, 'Signup bonus');
   } catch {
     // non-critical
   }
@@ -839,7 +845,7 @@ export async function googleAuth(req: Request, res: Response) {
       // phone and email paths (Google previously got only the 50-coin early-bird
       // grant = 50 instead of 60, A4-008). Idempotent via coin_events.
       try {
-        await awardCoins(newUser.id, 'first_registration', 10, 'Welcome to SportClan');
+        await awardCoins(newUser.id, 'first_registration', 10, 'Signup bonus');
       } catch {
         // non-critical
       }

@@ -665,6 +665,30 @@ async function createJoinRequest(
   return { status: 200, body: { requested: true } };
 }
 
+/**
+ * F-58 · a request that has been decided is not still waiting to be read.
+ *
+ * "New join request" is an ACTIONABLE notification: it is sent ungated, to every
+ * manager, because someone has to do something about it. The moment one of them
+ * does, it stops being actionable — but nothing ever marked it read, so the
+ * bell kept saying "All · 1" hours after the request had been approved, and
+ * every other manager was still being asked to decide something already decided.
+ *
+ * Marking it read rather than deleting it: the request genuinely happened, and
+ * the row is how a manager finds their way back to the team. It just is not new
+ * any more. Matches on the same (team, requester) pair the notification was
+ * created with.
+ */
+async function clearJoinRequestNotifications(teamId: string, requesterId: string): Promise<void> {
+  await supabase
+    .from('notifications')
+    .update({ read: true })
+    .eq('type', 'team_join_requested')
+    .eq('read', false)
+    .eq('data->>teamId', teamId)
+    .eq('data->>requesterId', requesterId);
+}
+
 // POST /teams/join  { join_code }
 export async function joinTeamByCode(req: Request, res: Response) {
   const userId = req.userId;
@@ -914,6 +938,10 @@ export async function decideJoinRequest(req: Request, res: Response) {
       .update({ status, decided_by: userId, decided_at: new Date().toISOString() })
       .eq('id', reqRow.id);
 
+    // F-58: it has been decided, so it is no longer waiting on anyone —
+    // including the OTHER managers who were asked at the same time.
+    try { await clearJoinRequestNotifications(id, targetUserId); } catch { /* best-effort */ }
+
     // Notify the requester — ungated.
     try {
       const { data: team } = await supabase.from('teams').select('name').eq('id', id).maybeSingle();
@@ -949,6 +977,9 @@ export async function withdrawJoinRequest(req: Request, res: Response) {
     await supabase.from('team_join_requests')
       .update({ status: 'withdrawn', decided_at: new Date().toISOString() })
       .eq('id', reqRow.id);
+    // F-58: withdrawn counts too — asking a captain to decide on a request that
+    // has been taken back is the same dead end.
+    try { await clearJoinRequestNotifications(id, userId); } catch { /* best-effort */ }
     return res.json({ success: true });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

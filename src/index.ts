@@ -44,6 +44,7 @@ import { rateLimitBypassed } from './middleware/rateLimitBypass';
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
 import { queryAliases } from './middleware/queryAliases.middleware';
 import { sweepStaleLiveMatches, sweepUnplayedScheduledMatches } from './controllers/matches.controller';
+import { sweepTournamentsDue } from './controllers/tournaments.controller';
 import { purgeExpiredAccountsCore } from './controllers/account.controller';
 import {
   runPublishScheduledPosts,
@@ -290,6 +291,14 @@ app.listen(PORT, () => {
       if (abandoned) console.log(`[sweep-unplayed] abandoned ${abandoned}`); // eslint-disable-line no-console
     } catch (e) {
       console.warn('[sweep-unplayed] failed', e instanceof Error ? e.message : e); // eslint-disable-line no-console
+    }
+    // F-52: generating the draw no longer flips a tournament to LIVE a week
+    // before it starts, so something has to start it on the day. This is it.
+    try {
+      const { started } = await sweepTournamentsDue();
+      if (started) console.log(`[sweep-tournaments] started ${started}`); // eslint-disable-line no-console
+    } catch (e) {
+      console.warn('[sweep-tournaments] failed', e instanceof Error ? e.message : e); // eslint-disable-line no-console
     }
   };
   void runMatchSweeps();

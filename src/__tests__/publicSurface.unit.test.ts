@@ -20,7 +20,7 @@ const NOW_GATED = [
 // Endpoints that MUST stay public — gating any of these breaks sign-in.
 const MUST_STAY_PUBLIC = [
   'POST /auth/send-otp', 'POST /auth/verify-otp', 'POST /auth/register',
-  'POST /auth/register-email', 'POST /auth/login', 'POST /auth/otp/login',
+  'POST /auth/login', 'POST /auth/otp/login', // register-email removed 23 Sep 2026 (phone is mandatory)
   'POST /auth/refresh', 'POST /auth/logout', 'POST /auth/google',
   'POST /auth/reset-password', 'GET /auth/username/check',
   'GET /app/version', 'GET /cities',

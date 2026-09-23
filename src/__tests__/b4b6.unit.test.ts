@@ -195,10 +195,10 @@ describe('the signup coin grants are told apart', () => {
 
   it('and still totals 60, on every signup path there is', () => {
     expect(a).toContain('const EARLY_BIRD_COINS = 50;');
-    // TWO paths, not three: phone register and email register. The third was
-    // Google sign-in, removed 23 Sep 2026 — it had never worked in production
-    // (GOOGLE_CLIENT_ID was never set, so the endpoint 503'd from day one), so
-    // no account was ever granted through it.
-    expect(a.match(/'first_registration', 10,/g)?.length).toBe(2);
+    // ONE path. Google sign-in went first (never worked in production), then
+    // the phone-less email signup (23 Sep 2026): a verified mobile is the only
+    // recovery route this app has, so every account now starts with one. Email
+    // + password ride on that same call as optional extras.
+    expect(a.match(/'first_registration', 10,/g)?.length).toBe(1);
   });
 });

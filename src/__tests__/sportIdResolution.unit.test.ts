@@ -20,11 +20,12 @@ describe('SC-442 · sport id resolution on registration', () => {
     expect(src).not.toMatch(/sport_ids\.map\(\(sid: string\) =>/);
   });
 
-  test('BOTH registration paths resolve — phone and email', () => {
-    // Fixing only one would leave half the new accounts sportless, which is
-    // harder to notice than fixing neither.
+  test('the ONE registration path resolves', () => {
+    // This used to assert BOTH paths (phone and email) so a fix to one could
+    // not leave half of new accounts sportless. The email path was removed on
+    // 23 Sep 2026 — phone is mandatory — so there is one path, and it resolves.
     const uses = src.split('resolveSportIds(sport_ids)').length - 1;
-    expect(uses).toBe(2);
+    expect(uses).toBe(1);
   });
 
   test('it reuses the resolver that already accepts either form', () => {

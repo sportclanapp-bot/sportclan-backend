@@ -350,12 +350,21 @@ export async function verifyOtp(req: Request, res: Response) {
 export async function register(req: Request, res: Response) {
   const {
     phone, code,
-    name, username, email, gender, dob, link, city_id, bio,
+    name, username, email, password, gender, dob, link, city_id, bio,
     account_types, sport_ids, coupon_code,
   } = req.body || {};
 
   if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
   if (!name || !username) return res.status(400).json({ error: 'name and username are required' });
+  // A password is OPTIONAL on signup, and it is the only way one is ever set at
+  // signup now: the phone-less email+password path (registerEmail) is gone.
+  // Phone is mandatory because a verified number is the only recovery route
+  // this app has — there is no email provider, so nothing can be sent to an
+  // address. Email + password are extras that let someone sign in without an
+  // SMS; they are never a substitute for the number.
+  if (password != null && (typeof password !== 'string' || password.length < 8)) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
 
   const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // SC-72: reject a malformed phone up front so no account is created for junk
@@ -456,6 +465,7 @@ export async function register(req: Request, res: Response) {
       name,
       username,
       email: email || null,
+      password_hash: password ? await bcrypt.hash(password, 10) : null,
       gender: gender || null,
       dob: dob || null,
       link: link || null,
@@ -599,122 +609,6 @@ export async function login(req: Request, res: Response) {
   return res.json({ user: safe, accessToken, refreshToken });
 }
 
-// POST /auth/register-email
-//   { email, password, name, username,
-//     gender?, dob?, link?, city_id?, bio?, account_types?, sport_ids? }
-// Email+password registration. This is now a first-class signup path (not just
-// for reviewer/test accounts) so the onboarding flow is reachable without a
-// verified phone — phone-OTP signup is the primary path but OTP delivery is a
-// known launch gate, and email signup unblocks onboarding regardless (A1-003).
-export async function registerEmail(req: Request, res: Response) {
-  const {
-    email, password, name, username,
-    gender, dob, link, city_id, bio, account_types, sport_ids,
-  } = req.body || {};
-  if (!email || !password || !name || !username) {
-    return res.status(400).json({ error: 'email, password, name, and username are required' });
-  }
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  }
-  if (gender && !['male', 'female', 'other'].includes(gender)) {
-    return res.status(400).json({ error: 'gender must be male, female, or other' });
-  }
-
-  // Email must be free
-  const { data: existingEmail } = await supabase
-    .from('users').select('id').ilike('email', email.trim()).maybeSingle();
-  if (existingEmail) return res.status(409).json({ error: 'Email already registered' });
-
-  // Username must be free (case-insensitive)
-  const { data: existingUsername } = await supabase
-    .from('users').select('id').ilike('username', username).maybeSingle();
-  if (existingUsername) return res.status(409).json({ error: 'Username already taken' });
-
-  const password_hash = await bcrypt.hash(password, 10);
-
-  // Validate + normalize account types against the shared whitelist — same
-  // contract as phone register and PATCH /users/me/account-types. Empty/garbage
-  // falls back to ['player']. (Previously this path hardcoded the non-canonical
-  // 'fan' and skipped the join table — see A6-001.)
-  const normalizedAccountTypes = normalizeAccountTypes(account_types);
-  const primaryAccountType = normalizedAccountTypes[0];
-
-  // Generate a unique referral code (retry a couple of times on collision),
-  // matching the phone-register path so invite-a-friend works for email users.
-  const { generateReferralCode } = await import('./referrals.controller');
-  let referralCode = generateReferralCode();
-  for (let i = 0; i < 3; i++) {
-    const { data: existing } = await supabase
-      .from('users').select('id').eq('referral_code', referralCode).maybeSingle();
-    if (!existing) break;
-    referralCode = generateReferralCode();
-  }
-
-  // phone is NOT NULL in the schema — generate a unique placeholder for email-only accounts
-  const placeholderPhone = `+0${Date.now()}`;
-
-  const { data: user, error } = await supabase
-    .from('users')
-    .insert({
-      phone: placeholderPhone,
-      email: email.trim(),
-      name,
-      username,
-      password_hash,
-      gender: gender || null,
-      dob: dob || null,
-      link: link || null,
-      bio: bio || null,
-      city_id: city_id || null,
-      account_type: primaryAccountType,
-      coin_balance: 0,
-      referral_code: referralCode,
-    })
-    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, referral_code, created_at')
-    .single();
-  if (error || !user) {
-    return res.status(500).json({ error: error?.message || 'Failed to create user' });
-  }
-
-  // Best-effort multi-row inserts (mirrors phone register).
-  {
-    const rows = normalizedAccountTypes.map((t) => ({ user_id: user.id, account_type: t }));
-    await supabase.from('user_account_types').insert(rows);
-  }
-  {
-    // SC-442 (M9/F-02): same on the email path — the app sends slugs.
-    const resolvedSportIds = await resolveSportIds(sport_ids);
-    if (resolvedSportIds.length > 0) {
-      const rows = resolvedSportIds.map((sid) => ({ user_id: user.id, sport_id: sid }));
-      await supabase.from('user_sports').insert(rows);
-    }
-  }
-
-  // Welcome bonus — 10 coins on first registration (parity with phone signup;
-  // previously missing on email signup, see A4-008). Idempotent via coin_events.
-  try {
-    await awardCoins(user.id, 'first_registration', 10, 'Signup bonus');
-  } catch {
-    // non-critical
-  }
-
-  // Early-bird launch perk: 50 coins (premium set on the insert above).
-  await grantEarlyBirdCoins(user.id);
-
-  // Re-read post-grant balance so the response isn't a stale coin_balance:0 (A4-009).
-  {
-    const { data: fb } = await supabase
-      .from('users').select('coin_balance').eq('id', user.id).maybeSingle();
-    if (fb) Object.assign(user, fb);
-  }
-  const accessToken = generateAccessToken(user.id);
-  const refreshToken = generateRefreshToken(user.id);
-  await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
-  return res.json({ user, accessToken, refreshToken, isNewUser: true });
-}
-
-// POST /auth/refresh  { refreshToken }
 export async function refresh(req: Request, res: Response) {
   const { refreshToken } = req.body || {};
   if (!refreshToken) return res.status(400).json({ error: 'refreshToken is required' });

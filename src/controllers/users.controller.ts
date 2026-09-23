@@ -909,18 +909,27 @@ export async function getProfileCompleteness(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { data: user, error } = await supabase
     .from('users')
-    .select('name, email, city_id, profile_picture_url, bio')
+    .select('phone, name, email, city_id, profile_picture_url, bio')
     .eq('id', userId)
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!user) return res.status(404).json({ error: 'User not found' });
 
+  // A verified mobile number is the ONLY way this account can be recovered —
+  // there is no email provider, so nothing can ever be sent to an address.
+  // Accounts created through the old phone-less email signup carry a `+0…`
+  // placeholder that was never a number anyone held; for them this is the one
+  // item on the list that is not cosmetic, which is why it is listed FIRST and
+  // weighted as heavily as the photo. Everyone signing up now arrives with a
+  // real number, so for them it is always filled.
+  const hasRealPhone = !!user.phone && !String(user.phone).startsWith('+0');
+
   const checks: Array<{ field: string; filled: boolean; weight: number }> = [
-    { field: 'name', filled: !!user.name, weight: 20 },
-    { field: 'email', filled: !!user.email, weight: 15 },
-    { field: 'city_id', filled: !!user.city_id, weight: 15 },
+    { field: 'phone', filled: hasRealPhone, weight: 25 },
+    { field: 'name', filled: !!user.name, weight: 15 },
+    { field: 'email', filled: !!user.email, weight: 10 },
+    { field: 'city_id', filled: !!user.city_id, weight: 10 },
     { field: 'profile_picture_url', filled: !!user.profile_picture_url, weight: 25 },
-    { field: 'bio', filled: !!user.bio, weight: 10 },
   ];
   // Sport count contributes the remaining 15 points.
   const { count: sportCountRaw } = await supabase

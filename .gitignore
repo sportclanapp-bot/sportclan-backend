@@ -6,3 +6,6 @@ node_modules
 
 # Build output — Render builds from source (npm run build); no longer committed.
 dist/
+
+# Local-only notes holding secrets (CRON_SECRET, QA credentials). Never committed.
+*.local.md

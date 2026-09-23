@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import axios from 'axios';
 import { supabase } from '../utils/supabase';
 import { isValidIndianPhone, canonicalisePhone, phoneVariants } from '../utils/phone';
+import { resolveSportId } from '../utils/sportId';
 import {
   generateAccessToken,
   generateRefreshToken,
@@ -161,6 +162,35 @@ async function sendSmsOtp(phone: string, code: string): Promise<boolean> {
 }
 
 // POST /auth/send-otp  { phone, purpose?, channel? }
+
+/**
+ * SC-442 (M9/F-02) · accept sport SLUGS as well as ids.
+ *
+ * The register screen holds its selection as slugs ('cricket', 'badminton') and
+ * posts them as `sport_ids`, which are UUIDs everywhere else. The insert into
+ * user_sports therefore wrote values no sport row matched, and the account came
+ * out with NO sports — so a step that enforces "pick at least one" was silently
+ * discarded and the profile-completion card then asked the new user to add the
+ * sports they had just picked.
+ *
+ * Resolved here rather than in the app because resolveSportId already accepts
+ * either form (it is how match creation has always taken 'cricket'), and doing
+ * it server-side also fixes every build already installed.
+ *
+ * Unknown values are dropped rather than inserted: a bad slug should cost one
+ * sport, not the whole registration.
+ */
+async function resolveSportIds(raw: unknown): Promise<string[]> {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = await resolveSportId(v);
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
 export async function sendOtp(req: Request, res: Response) {
   const { phone, purpose = 'login', channel: rawChannel } = req.body || {};
   if (!phone) return res.status(400).json({ error: 'phone is required' });
@@ -440,9 +470,13 @@ export async function register(req: Request, res: Response) {
     const rows = normalizedAccountTypes.map((t) => ({ user_id: user.id, account_type: t }));
     await supabase.from('user_account_types').insert(rows);
   }
-  if (Array.isArray(sport_ids) && sport_ids.length > 0) {
-    const rows = sport_ids.map((sid: string) => ({ user_id: user.id, sport_id: sid }));
-    await supabase.from('user_sports').insert(rows);
+  {
+    // SC-442 (M9/F-02): the app sends slugs here; resolve them to ids.
+    const resolvedSportIds = await resolveSportIds(sport_ids);
+    if (resolvedSportIds.length > 0) {
+      const rows = resolvedSportIds.map((sid) => ({ user_id: user.id, sport_id: sid }));
+      await supabase.from('user_sports').insert(rows);
+    }
   }
 
   // SC-434: a coupon block stood here. It could grant premium months and OVERWRITE
@@ -642,9 +676,13 @@ export async function registerEmail(req: Request, res: Response) {
     const rows = normalizedAccountTypes.map((t) => ({ user_id: user.id, account_type: t }));
     await supabase.from('user_account_types').insert(rows);
   }
-  if (Array.isArray(sport_ids) && sport_ids.length > 0) {
-    const rows = sport_ids.map((sid: string) => ({ user_id: user.id, sport_id: sid }));
-    await supabase.from('user_sports').insert(rows);
+  {
+    // SC-442 (M9/F-02): same on the email path — the app sends slugs.
+    const resolvedSportIds = await resolveSportIds(sport_ids);
+    if (resolvedSportIds.length > 0) {
+      const rows = resolvedSportIds.map((sid) => ({ user_id: user.id, sport_id: sid }));
+      await supabase.from('user_sports').insert(rows);
+    }
   }
 
   // Welcome bonus — 10 coins on first registration (parity with phone signup;

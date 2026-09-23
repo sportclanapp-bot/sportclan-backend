@@ -791,6 +791,24 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
     .from('matches')
     .update({ score_summary: summary, updated_at: new Date().toISOString() })
     .eq('id', matchId);
+  // SC-442 (M1/B2-b) · carry the TOSS across the recompute.
+  //
+  // matches.controller sets score_summary.toss_winner_side when the toss is
+  // recorded — it is the only place the batting order survives for free-text
+  // teams, whose toss_winner_team_id is null — and its comment there claims
+  // "recomputeSummary preserves this key". It did not. This function rebuilds
+  // the summary from events, and the toss is not an event, so the key was
+  // dropped on the next recompute.
+  //
+  // That made M1's cricket result WRONG in a way that looked like M1's fault: a
+  // successful chase reported "won by N runs" instead of "by N wickets", because
+  // deriveResultText asks who was chasing, chasingSide needs the toss, and by
+  // then the toss was gone. Verified on device — the derivation was right all
+  // along and simply never got its input.
+  for (const k of ['toss_winner_side'] as const) {
+    if (existing[k] != null && summary[k] == null) summary[k] = existing[k];
+  }
+
   return summary;
 }
 

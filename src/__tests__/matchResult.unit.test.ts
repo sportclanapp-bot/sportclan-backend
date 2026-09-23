@@ -135,3 +135,43 @@ describe('SC-441 · other sports', () => {
     }
   });
 });
+
+/**
+ * SC-442 · the toss must survive a recompute, or the wickets branch is dead.
+ *
+ * Found on device: a successful chase still reported "won by N runs". The
+ * derivation above was correct; its INPUT was missing. matches.controller writes
+ * score_summary.toss_winner_side when the toss is recorded — the only place the
+ * batting order survives for free-text teams — and its comment claimed
+ * "recomputeSummary preserves this key". It did not: that function rebuilds the
+ * summary from events, the toss is not an event, so the key was dropped, and
+ * chasingSide then had nothing to go on.
+ */
+describe('SC-442 · toss survives recompute', () => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'controllers', 'scoring.controller.ts'), 'utf8',
+  );
+
+  test('recomputeSummary carries toss_winner_side over from the stored summary', () => {
+    expect(src).toContain('toss_winner_side');
+    expect(src).toMatch(/if \(existing\[k\] != null && summary\[k\] == null\) summary\[k\] = existing\[k\]/);
+  });
+
+  test('it only fills a GAP, so a recomputed value always wins', () => {
+    // Guarding on `summary[k] == null` means this can never overwrite something
+    // the recompute legitimately produced.
+    expect(src).toContain('summary[k] == null');
+  });
+
+  test('without the toss the derivation correctly falls back to runs', () => {
+    // The behaviour that made the bug look like M1's fault, pinned so the
+    // fallback stays sane if the toss is genuinely unknown (skipped toss).
+    const r = deriveResultText({
+      sport: 'cricket', teamAName: 'A', teamBName: 'B',
+      aScore: 6, bScore: 0, aWickets: 0, bWickets: 0,
+    });
+    expect(r.text).toBe('A won by 6 runs');
+  });
+});

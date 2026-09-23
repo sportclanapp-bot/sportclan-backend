@@ -193,8 +193,12 @@ describe('the signup coin grants are told apart', () => {
     expect(a).toContain("'first_registration'");
   });
 
-  it('and still totals 60', () => {
+  it('and still totals 60, on every signup path there is', () => {
     expect(a).toContain('const EARLY_BIRD_COINS = 50;');
-    expect(a.match(/'first_registration', 10,/g)?.length).toBe(3);
+    // TWO paths, not three: phone register and email register. The third was
+    // Google sign-in, removed 23 Sep 2026 — it had never worked in production
+    // (GOOGLE_CLIENT_ID was never set, so the endpoint 503'd from day one), so
+    // no account was ever granted through it.
+    expect(a.match(/'first_registration', 10,/g)?.length).toBe(2);
   });
 });

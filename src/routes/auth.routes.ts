@@ -8,7 +8,6 @@ import {
   otpLogin,
   refresh,
   logout,
-  googleAuth,
   resetPassword,
   changePhone,
   checkUsername,
@@ -25,7 +24,6 @@ router.post('/login', login);
 router.post('/otp/login', otpLogin);
 router.post('/refresh', refresh);
 router.post('/logout', logout);
-router.post('/google', googleAuth);
 router.post('/reset-password', resetPassword);
 router.post('/change-phone', authenticateToken, changePhone);
 

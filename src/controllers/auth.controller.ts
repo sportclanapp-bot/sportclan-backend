@@ -16,7 +16,7 @@ import { awardCoins } from '../utils/coins';
 const OTP_TTL_SECONDS = 300; // 5 minutes
 
 // ─── Welcome coins ───────────────────────────────────────────────────────────
-// Every NEW signup (phone, email or Google) gets 50 coins, on top of the 10 for
+// Every NEW signup (phone or email) gets 50 coins, on top of the 10 for
 // first_registration — 60 in total.
 //
 // SC-434: this grant used to ALSO set is_premium + a 3-month expiry, because
@@ -692,7 +692,7 @@ export async function registerEmail(req: Request, res: Response) {
   }
 
   // Welcome bonus — 10 coins on first registration (parity with phone signup;
-  // previously missing on email/Google, see A4-008). Idempotent via coin_events.
+  // previously missing on email signup, see A4-008). Idempotent via coin_events.
   try {
     await awardCoins(user.id, 'first_registration', 10, 'Signup bonus');
   } catch {
@@ -764,123 +764,6 @@ export async function checkUsername(req: Request, res: Response) {
 
 // SC-434: validateCoupon lived here. Removed with coupons; the table stays.
 
-// POST /auth/google  { idToken }
-// Verifies the Google ID token, extracts email/name/picture, and either
-// logs in an existing user or creates a new one. Returns JWT tokens.
-//
-// Requires GOOGLE_CLIENT_ID in .env. Without it, all requests return 503.
-export async function googleAuth(req: Request, res: Response) {
-  const { idToken } = req.body || {};
-  if (!idToken) return res.status(400).json({ error: 'idToken is required' });
-
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  if (!clientId) {
-    return res.status(503).json({ error: 'Google Sign-In not configured. Set GOOGLE_CLIENT_ID in .env.' });
-  }
-
-  try {
-    // Verify the token with Google. google-auth-library is optional —
-    // if not installed, we decode the JWT payload directly (less secure
-    // but functional for development; install google-auth-library for
-    // production-grade verification).
-    // SC-149: verify the ID token cryptographically (signature + audience). There is
-    // NO decode-without-verification fallback — a missing library or a failed
-    // verification FAILS CLOSED. A missing crypto library must never downgrade to
-    // "trust the input" (that let anyone forge a Google identity).
-    let payload: { email?: string; name?: string; picture?: string; sub?: string };
-    try {
-      const { OAuth2Client } = await import('google-auth-library');
-      const client = new OAuth2Client(clientId);
-      const ticket = await client.verifyIdToken({ idToken, audience: clientId });
-      payload = ticket.getPayload() as typeof payload;
-    } catch (err: any) {
-      const code = err?.code ?? '';
-      if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND' || /Cannot find module/i.test(err?.message ?? '')) {
-        // The verification library is unavailable — do NOT trust the token. Fail closed, loudly.
-        // eslint-disable-next-line no-console
-        console.error('[google-auth] google-auth-library unavailable — OAuth verification cannot run', err?.message);
-        return res.status(503).json({ error: 'Google Sign-In temporarily unavailable' });
-      }
-      // Token failed verification (bad signature / audience / expiry) → reject.
-      // eslint-disable-next-line no-console
-      console.warn('[google-auth] ID token verification failed', err?.message);
-      return res.status(401).json({ error: 'Invalid Google token' });
-    }
-
-    if (!payload?.email) return res.status(400).json({ error: 'Token missing email' });
-
-    // Check if user exists by google_id or email
-    const { data: existing } = await supabase
-      .from('users')
-      .select('id, phone, name, username, email, google_id, coin_balance, referral_code, created_at')
-      .or(`google_id.eq.${payload.sub},email.eq.${payload.email}`)
-      .maybeSingle();
-
-    let user: Record<string, unknown>;
-
-    if (existing) {
-      // Update google_id if missing
-      if (!existing.google_id && payload.sub) {
-        await supabase.from('users').update({ google_id: payload.sub }).eq('id', existing.id);
-      }
-      user = existing;
-    } else {
-      // Create new user
-      const username = payload.email!.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') + Math.floor(Math.random() * 100);
-      const { data: newUser, error } = await supabase
-        .from('users')
-        .insert({
-          name: payload.name ?? 'Google User',
-          username,
-          email: payload.email,
-          google_id: payload.sub ?? null,
-          profile_picture_url: payload.picture ?? null,
-          account_type: 'player',
-          coin_balance: 0,
-        })
-        .select('id, phone, name, username, email, google_id, coin_balance, referral_code, created_at')
-        .single();
-      if (error || !newUser) return res.status(500).json({ error: 'Could not create account' });
-      // Welcome bonus — 10 coins on first registration, for parity with the
-      // phone and email paths (Google previously got only the 50-coin early-bird
-      // grant = 50 instead of 60, A4-008). Idempotent via coin_events.
-      try {
-        await awardCoins(newUser.id, 'first_registration', 10, 'Signup bonus');
-      } catch {
-        // non-critical
-      }
-      // Early-bird launch perk: 50 coins (premium set on the insert above).
-      await grantEarlyBirdCoins(newUser.id);
-      // Seed the multi-type join table so the new account is consistent with
-      // phone signups (which populate user_account_types).
-      await supabase
-        .from('user_account_types')
-        .insert({ user_id: newUser.id, account_type: 'player' })
-        .then(undefined, () => undefined);
-      user = newUser;
-    }
-
-    const { generateAccessToken, generateRefreshToken } = await import('../utils/jwt');
-    const accessToken = generateAccessToken(user.id as string);
-    const refreshToken = generateRefreshToken(user.id as string);
-
-    await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
-
-    // New Google users had their grants applied after `user` was captured —
-    // re-read so the response isn't a stale coin_balance:0 (A4-009).
-    {
-      const { data: fb } = await supabase
-        .from('users').select('coin_balance').eq('id', user.id as string).maybeSingle();
-      if (fb) Object.assign(user, fb);
-    }
-    return res.json({ accessToken, refreshToken, user, isNewUser: !existing });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : 'Google auth failed';
-    return res.status(500).json({ error: msg });
-  }
-}
-
-// POST /auth/reset-password  { phone, code, newPassword }
 export async function resetPassword(req: Request, res: Response) {
   const { phone, code, newPassword } = req.body || {};
   if (!phone || !code || !newPassword) {

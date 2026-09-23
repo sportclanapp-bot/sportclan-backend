@@ -8,7 +8,7 @@
 --
 -- The ticket ids have to be kept somewhere between send and check. In memory
 -- would lose a cycle on every deploy (Render restarts the process), so they are
--- kept here. Rows are small, short-lived, and pruned by block 3's rule.
+-- kept here. Rows are small and short-lived; CHECK-094 block 4 is the prune.
 --
 -- Additive. Safe to apply BEFORE the deploy: code that does not know about the
 -- table is unaffected, and the sender tolerates the table being absent (the

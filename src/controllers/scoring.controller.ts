@@ -227,6 +227,28 @@ export async function createEvent(req: Request, res: Response) {
           else delete payload[k];
         }
       }
+
+      // SC-442 (M6) · one person cannot bat and bowl the same delivery.
+      //
+      // The app's picker was letting a player from the FIELDING side be chosen
+      // as striker, and then the same person as bowler — so one player batted
+      // and bowled to himself, and the finished scorecard credited him with runs
+      // he had scored for both teams. The picker is now restricted by side, but
+      // the server must refuse it too: an old build keeps posting whatever it
+      // likes, and this is the only place that sees every delivery.
+      //
+      // Deliberately narrow. The server cannot cheaply verify squad membership
+      // for free-text and guest sides without a per-ball roster lookup, so it
+      // asserts the one thing that is impossible in any form of cricket rather
+      // than guessing at the rest.
+      const batId = payload.batsman_id ?? payload.player_id;
+      const bowlId = payload.bowler_id;
+      if (batId && bowlId && batId === bowlId) {
+        return res.status(400).json({
+          error: 'The batter and the bowler cannot be the same player.',
+          code: 'SAME_PLAYER_BOTH_ROLES',
+        });
+      }
     }
 
     // SC-113: atomic, race-safe insert. record_match_event serializes per-match

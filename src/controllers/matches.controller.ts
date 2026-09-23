@@ -646,7 +646,15 @@ export async function listMatches(req: Request, res: Response) {
     let query = supabase
       .from('matches')
       .select('*', { count: 'exact' })
-      .order('scheduled_at', { ascending: false })
+      // SC-442 (M5/F-51) · NULLS LAST.
+      //
+      // Postgres orders DESC with NULLS FIRST by default, and a great many rows
+      // carry no scheduled_at. Every one of them therefore sorted ahead of every
+      // dated match, so "most recent results first" put the undated ones first
+      // and buried a match completed minutes ago. Verified the hard way: ~45
+      // screens of scrolling through the completed list never reached a match
+      // finished fifteen minutes earlier.
+      .order('scheduled_at', { ascending: false, nullsFirst: false })
       .range(p.from, p.to);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (status) query = query.eq('status', status);
@@ -2090,6 +2098,46 @@ async function canVoidMatch(match: { created_by?: string | null; umpire_id?: str
   return (data as { is_admin?: boolean } | null)?.is_admin === true;
 }
 
+/**
+ * SC-442 (M5/D3) · how long after a match ends it can still be voided.
+ *
+ * Decision D3. Voiding rewrites records, ratings and standings that other people
+ * have already seen, so it cannot stay open forever — but it has to stay open
+ * long enough for a mistake spotted the following weekend to be fixed. Seven
+ * days from the end of the match.
+ *
+ * Restoring is deliberately NOT bounded by this. Un-voiding only puts back what
+ * the void took away, so the risk runs the other way: a match voided in error on
+ * day 7 must not become permanently uncountable on day 8.
+ */
+export const VOID_WINDOW_DAYS = 7;
+
+/** "A vs B", or a neutral fallback for a match with no team names. */
+function matchLabel(m: { team_a_name?: string | null; team_b_name?: string | null } | null): string {
+  if (m?.team_a_name && m?.team_b_name) return `${m.team_a_name} vs ${m.team_b_name}`;
+  return 'A match you played in';
+}
+
+/** When the void window closes, or null when the match has not ended. */
+export function voidDeadline(match: { status?: string | null; updated_at?: string | null; scheduled_at?: string | null }): Date | null {
+  if (match.status !== 'completed' && match.status !== 'abandoned') return null;
+  const ended = match.updated_at ?? match.scheduled_at;
+  if (!ended) return null;
+  const t = Date.parse(ended);
+  if (Number.isNaN(t)) return null;
+  return new Date(t + VOID_WINDOW_DAYS * 24 * 3600_000);
+}
+
+/** A live or scheduled match is always voidable; a finished one only in window. */
+export function withinVoidWindow(
+  match: { status?: string | null; updated_at?: string | null; scheduled_at?: string | null },
+  now: number = Date.now(),
+): boolean {
+  const deadline = voidDeadline(match);
+  if (!deadline) return true;
+  return now <= deadline.getTime();
+}
+
 export async function voidMatch(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -2107,7 +2155,7 @@ export async function voidMatch(req: Request, res: Response) {
 
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at')
+      .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at, updated_at, scheduled_at, team_a_id, team_b_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -2118,6 +2166,17 @@ export async function voidMatch(req: Request, res: Response) {
     // can never double-subtract somebody's record.
     if (match.voided_at) {
       return res.json({ success: true, already_voided: true, match });
+    }
+    // SC-442 (M5/D3): the window closes 7 days after the match ends. Checked
+    // AFTER permission so a stranger learns nothing about timing, and before any
+    // write so a refusal changes nothing.
+    if (!withinVoidWindow(match)) {
+      const deadline = voidDeadline(match);
+      return res.status(403).json({
+        error: `Matches can only be voided within ${VOID_WINDOW_DAYS} days of finishing. This one closed on ${deadline?.toDateString() ?? 'an earlier date'}.`,
+        code: 'VOID_WINDOW_CLOSED',
+        void_deadline: deadline?.toISOString() ?? null,
+      });
     }
 
     // Walk back what completion materialised BEFORE setting the flag, so the
@@ -2138,6 +2197,23 @@ export async function voidMatch(req: Request, res: Response) {
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
+    // SC-442 (M5/D3) · tell both teams. A void changes records, ratings and
+    // standings that people have already seen, so the people it changed them for
+    // are told — not left to notice. Best-effort and fire-and-forget: a
+    // notification failure must never undo a completed void.
+    try {
+      const audience = await matchAudienceIds(id, match.team_a_id, match.team_b_id);
+      const others = audience.filter((u) => u !== userId);
+      if (others.length > 0) {
+        void notifyUsers(others, {
+          type: 'match_voided',
+          title: 'Match voided',
+          body: `${matchLabel(updated)} was voided and no longer counts. Reason: ${reason}`,
+          data: { matchId: id, screen: 'MatchDetail' },
+        });
+      }
+    } catch { /* best-effort */ }
+
     return res.json({ success: true, match: updated, reversed_players: deltas.length });
   } catch (e) {
     console.error('voidMatch error:', e instanceof Error ? e.message : e);
@@ -2152,7 +2228,7 @@ export async function unvoidMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at')
+      .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at, team_a_id, team_b_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -2175,6 +2251,22 @@ export async function unvoidMatch(req: Request, res: Response) {
 
     const deltas = await recordDeltas(id);
     if (deltas.length > 0) await applyRecordDeltas(match.sport_id, deltas, 1);
+
+    // SC-442 (M5/D3) · the same audience that heard about the void hears about
+    // the restore. Telling people a match stopped counting and never telling
+    // them it counts again is the worse half of a promise.
+    try {
+      const audience = await matchAudienceIds(id, match.team_a_id, match.team_b_id);
+      const others = audience.filter((u) => u !== userId);
+      if (others.length > 0) {
+        void notifyUsers(others, {
+          type: 'match_restored',
+          title: 'Match restored',
+          body: `${matchLabel(updated)} counts again.`,
+          data: { matchId: id, screen: 'MatchDetail' },
+        });
+      }
+    } catch { /* best-effort */ }
 
     return res.json({ success: true, match: updated, restored_players: deltas.length });
   } catch (e) {

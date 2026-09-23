@@ -1,5 +1,12 @@
 import 'dotenv/config';
 
+// FIRST, before anything else can throw. An error while wiring the app is
+// precisely the error most worth reporting, and it is the one a reporter
+// initialised further down would miss.
+import { initSentry, installProcessHandlers } from './utils/sentry';
+initSentry();
+installProcessHandlers();
+
 import path from 'path';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
@@ -42,6 +49,7 @@ import { rateLimitKey, verifiedUserId } from './middleware/rateLimitKey';
 import { rateLimitBypassed } from './middleware/rateLimitBypass';
 
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
+import { sentryErrorHandler } from './middleware/sentryError';
 import { queryAliases } from './middleware/queryAliases.middleware';
 import { sweepStaleLiveMatches, sweepUnplayedScheduledMatches } from './controllers/matches.controller';
 import { sweepTournamentsDue } from './controllers/tournaments.controller';
@@ -228,6 +236,12 @@ app.use('/internal/jobs', jobsRoutes);
 app.use('/admin', adminRoutes);
 
 // Final backstop for uncaught throws (must be last).
+//
+// sentryErrorHandler goes BEFORE globalErrorHandler, deliberately: the backstop
+// sanitises the error into a clean 500 for the caller, and a reporter placed
+// after it would capture the sanitised version — the one with the detail
+// removed. Sentry sees the real throw; the caller still sees the safe one.
+app.use(sentryErrorHandler);
 app.use(globalErrorHandler);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);

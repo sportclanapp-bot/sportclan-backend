@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { VALID_ACCOUNT_TYPES } from '../constants/accountTypes';
 import { parsePagination, pageMeta } from '../utils/pagination';
 import { authenticateToken } from '../middleware/auth.middleware';
+import { blockedUserIds, excludeIds } from '../utils/blocks';
 
 const router = Router();
 
@@ -42,18 +43,33 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
 
   const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 20, maxLimit: 50 });
 
-  const { data: rows, error, count } = await supabase
+  // F-63 / D7 — this directory was the one people-listing endpoint with NEITHER
+  // filter on it. Search, the feed, kudos, rivals and the follower lists all
+  // exclude blocked and soft-deleted users; /services excluded neither, so a
+  // person you had blocked sat in your umpire list behind a Contact button, and
+  // a deleted account stayed listed as a coach under the name "Deleted User".
+  //
+  // Both go into the QUERY rather than a post-filter, so `count` stays the true
+  // total: filtering the page in JS afterwards is how a directory ends up
+  // reporting "24 coaches" and rendering 22 (the SC-28 class).
+  const blocked = await blockedUserIds(req.userId);
+  let q = supabase
     .from('user_account_types')
     .select(
       'user_id, users:user_id!inner(id, name, username, profile_picture_url, bio, city_id)',
       { count: 'exact' },
     )
     .eq('account_type', type)
+    // SC-77: `!inner` above means this drops the PROVIDER row, not just the name.
+    .is('users.deleted_at', null)
     // SC-434: this used to be `.eq('users.is_premium', true)` — a coach or umpire
     // who had not paid did not appear in the directory at all. Every provider is
     // listed now.
     .order('user_id', { ascending: true })
     .range(p.from, p.to);
+  // Either direction: they blocked you, or you blocked them (SC-81/82).
+  q = excludeIds(q, 'user_id', blocked);
+  const { data: rows, error, count } = await q;
   if (error) return res.status(500).json({ error: error.message });
 
   const providers = (rows || []).map((r: any) => r.users).filter(Boolean);

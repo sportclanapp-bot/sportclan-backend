@@ -123,3 +123,56 @@ UNION ALL
 SELECT 'matches', count(*)
   FROM matches m
  WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = m.created_by);
+
+
+-- ---------------------------------------------------------------------------
+-- BLOCK 6 · THE SCRUB, EXERCISED. Run after a purge that reported purged > 0.
+--
+-- Added 23 Sep 2026, when @qadel961_qa was back-dated to deleted_at = now() -
+-- 31 days so the job had a real row to act on. The endpoint returned
+-- {"purged":1}, then {"purged":0} twice.
+--
+-- Three questions, one answer each:
+--   1. did anything disappear?          users_total must not move.
+--   2. did the job record its work?     already_purged must match what it said.
+--   3. is there anything personal left? the row must be a tombstone.
+--
+-- `phone` is the one field that cannot be null (NOT NULL + UNIQUE, migration
+-- 001), so it carries the same 'deleted:<id>' sentinel that re-registration
+-- writes. Everything else is null, zero or the scrubbed placeholder.
+-- ---------------------------------------------------------------------------
+SELECT
+  count(*)                                       AS users_total,        -- expect 10957
+  count(*) FILTER (WHERE deleted_at IS NOT NULL) AS soft_deleted,       -- expect 2
+  count(*) FILTER (WHERE purged_at  IS NOT NULL) AS already_purged,     -- expect 1
+  count(*) FILTER (WHERE deleted_at IS NOT NULL
+                     AND purged_at IS NULL
+                     AND deleted_at < now() - interval '30 days') AS still_due  -- expect 0
+FROM users;
+
+
+-- What is left on the scrubbed row. Expect exactly one row, and every column
+-- after `purged_at` to read null / 0 / the placeholder.
+SELECT
+  id,
+  purged_at,
+  phone,                 -- expect 'deleted:<id>'
+  name,                  -- expect 'Deleted User'
+  username,              -- expect 'deleted_<8 hex>'
+  email, password_hash, google_id, profile_picture_url, bio,
+  gender, dob, city_id, state, referral_code, referred_by,
+  coin_balance,          -- expect 0
+  is_available, streak_count, checkin_streak,
+  last_active_at, last_match_date, last_checkin_date,
+  deleted_at             -- UNCHANGED: the login lockout is not undone by a scrub
+FROM users
+WHERE purged_at IS NOT NULL;
+
+
+-- The tombstone's whole purpose: its content must still join. Expect 0 orphans.
+SELECT 'community_posts' AS table_name, count(*) AS orphaned
+  FROM community_posts p WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = p.author_id)
+UNION ALL SELECT 'post_comments', count(*)
+  FROM post_comments c WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = c.author_id)
+UNION ALL SELECT 'user_reviews', count(*)
+  FROM user_reviews r WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = r.reviewer_id);

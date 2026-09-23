@@ -805,7 +805,22 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
   // deriveResultText asks who was chasing, chasingSide needs the toss, and by
   // then the toss was gone. Verified on device — the derivation was right all
   // along and simply never got its input.
-  for (const k of ['toss_winner_side'] as const) {
+  // The same applies to everything else written into score_summary OUTSIDE this
+  // function. A recompute runs on every event, and this app's outbox makes a
+  // LATE event after a match has ended entirely routine — an offline scorer
+  // draining their queue. Without this, that recompute silently wiped:
+  //
+  //   result, winner_side          set by completeMatch when the match ends
+  //   walkover, walkover_reason    set there too, for a forfeit
+  //
+  // Losing winner_side is not cosmetic: team insights reads it to decide W/L/D,
+  // so a completed match with a clear winner would start reporting as a DRAW.
+  // That is the shape of F-49, still open from the user-flow test.
+  //
+  // `declared` is NOT in this list and must not be: it comes from a declaration
+  // EVENT and is rebuilt correctly above, so preserving it would pin a stale
+  // value against a legitimate recompute.
+  for (const k of ['toss_winner_side', 'result', 'winner_side', 'walkover', 'walkover_reason'] as const) {
     if (existing[k] != null && summary[k] == null) summary[k] = existing[k];
   }
 

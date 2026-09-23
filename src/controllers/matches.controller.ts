@@ -375,7 +375,13 @@ export async function setMatchTossHandler(req: Request, res: Response) {
   };
   // Persist the toss winner by SIDE inside score_summary (JSONB, no schema
   // change) so the batting order is correct for free-text-team matches where
-  // toss_winner_team_id is null (L-003). recomputeSummary preserves this key.
+  // toss_winner_team_id is null (L-003).
+  //
+  // SC-442: this comment used to assert "recomputeSummary preserves this key".
+  // It did not — the claim was written as fact and never checked, and the key
+  // was dropped on the next recompute, which made a successful chase report
+  // "won by N runs" instead of "by N wickets". It IS preserved now, explicitly,
+  // alongside result/winner_side/walkover.
   if (tossWinnerSide === 'A' || tossWinnerSide === 'B') {
     const ss = (match.score_summary as Record<string, unknown>) || {};
     ss.toss_winner_side = tossWinnerSide;

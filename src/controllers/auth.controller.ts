@@ -323,7 +323,7 @@ export async function verifyOtp(req: Request, res: Response) {
   }
   const entry = await getOtp(p);
   if (!entry) return res.status(400).json({ error: 'No OTP requested or OTP expired' });
-  if (entry.code !== code) return res.status(400).json({ error: 'Invalid OTP' });
+  if (entry.code !== code) return res.status(400).json({ error: 'That code isn\u2019t right. Check the 6 digits and try again.' });
   // Mark verified — store VERIFIED with fresh TTL
   await setOtp(p, 'VERIFIED', entry.purpose, OTP_TTL_SECONDS);
   return res.json({ success: true, verified: true });
@@ -533,7 +533,7 @@ export async function otpLogin(req: Request, res: Response) {
     // Accept either the original code or the VERIFIED marker (verify-otp may
     // have already been called separately by the client).
     if (entry.code !== code && entry.code !== 'VERIFIED') {
-      return res.status(400).json({ error: 'Invalid OTP' });
+      return res.status(400).json({ error: 'That code isn\u2019t right. Check the 6 digits and try again.' });
     }
   }
 

@@ -1638,8 +1638,12 @@ export async function completeMatch(req: Request, res: Response) {
       const { data: sportRow } = await supabase
         .from('sports').select('allows_draw').eq('id', match.sport_id).maybeSingle();
       if ((sportRow as { allows_draw?: boolean } | null)?.allows_draw === false) {
+        // F-24: the old wording was "This sport can't end level", which a scorer
+        // read at 2–1 in points — nothing was level. The condition is not "the
+        // scores are equal", it is "no winner has been decided yet", and saying
+        // "level" made the refusal contradict the score on the screen behind it.
         return res.status(400).json({
-          error: "This sport can't end level — pick the winning team (play on until there's a winner).",
+          error: "No side has won this match yet — keep scoring until someone does, or name the winning team.",
           code: 'NEEDS_DECISIVE_WINNER',
         });
       }

@@ -295,6 +295,30 @@ app.listen(PORT, () => {
   void runMatchSweeps();
   setInterval(runMatchSweeps, 60 * 60 * 1000).unref();
 
+  // B2-a · the 30-day account scrub, hourly, on the SAME in-process scheduler.
+  //
+  // purgeExpiredAccountsCore has been imported into this file and never called
+  // since it was written, so the Delete account screen's "any remaining records
+  // are erased after 30 days" has never been kept. It is called now — and it no
+  // longer deletes anything: it scrubs the residual personal fields off the row
+  // and leaves an anonymous tombstone, so the posts and reviews the same screen
+  // promises WILL stay can still resolve to an author. See the block comment on
+  // purgeExpiredAccountsCore for why the original DELETE could never have run.
+  //
+  // Idempotent on purged_at, so an overlapping tick, a second instance or a
+  // restart mid-run is harmless — the same property the match sweepers rely on,
+  // and the reason no new Render service is needed (decision D2).
+  const runAccountPurge = async () => {
+    try {
+      const { purged } = await purgeExpiredAccountsCore();
+      if (purged) console.log(`[purge-accounts] scrubbed ${purged}`); // eslint-disable-line no-console
+    } catch (e) {
+      console.warn('[purge-accounts] failed', e instanceof Error ? e.message : e); // eslint-disable-line no-console
+    }
+  };
+  void runAccountPurge();
+  setInterval(runAccountPurge, 60 * 60 * 1000).unref();
+
   // Daily notification jobs at ~09:00 IST; weekly digest additionally on Monday.
   // The hourly tick acts only when the IST hour is 9; the per-user/day dedupe
   // guarantees at-most-once even if a tick overlaps or the process restarts.

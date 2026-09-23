@@ -3,7 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { LIMITS, ARRAY_LIMITS, tooManyItems, firstDisallowedImageUrl } from '../utils/validation';
-import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
+import { excludeDeleted } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
@@ -188,19 +188,26 @@ export async function listPosts(req: Request, res: Response) {
   // builder that was never executed, and a second query whose result was
   // discarded — before running the real `q` below (A6-011). Both removed; `q`
   // is the single source of truth (and we no longer fire a wasted round-trip).
-  // SC-77: `!inner` + excludeDeletedEmbed below drops posts whose author is a
-  // soft-deleted account so they don't linger in the feed.
+  // B2-a · a deleted author's post STAYS. It used to be dropped here — `!inner`
+  // plus excludeDeletedEmbed removes the PARENT row, not the name — which made
+  // the Delete account screen's "posts you made stay visible (without your
+  // name)" false from the moment anyone deleted their account, three years
+  // before the 30-day purge would have been blamed for it.
+  //
+  // The author now renders as the scrubbed row itself: "Deleted User", no
+  // avatar. `deleted_at` rides along so the app knows not to offer a tap
+  // through to a profile that 404s. The PERSON stays hidden everywhere else —
+  // search, discovery, rosters, the leaderboard — exactly as before.
   let q = supabase
     .from('community_posts')
     .select(`
       *,
-      author:users!author_id!inner(id, name, username, profile_picture_url),
+      author:users!author_id!inner(id, name, username, profile_picture_url, deleted_at),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name),
       match:${matchJoin}(id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
     `)
     .limit(pageSize);
-  q = excludeDeletedEmbed(q, 'author');
   if (sortMode === 'trending') {
     // SC-138: deterministic order even when likes_count ties (created_at, then id).
     q = q
@@ -309,16 +316,15 @@ export async function getSportStoryCounts(req: Request, res: Response) {
   const since = (req.query.since as string) ||
     new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  // SC-106: don't count posts whose author is soft-deleted (SC-77 `!inner` +
-  // excludeDeletedEmbed) or blocked either direction (SC-82). Cosmetic count, so
-  // keep it simple — just guard the source rows.
+  // SC-106: block-filtered either direction (SC-82). B2-a: posts by a deleted
+  // author are COUNTED now, because they are still in the feed — a story count
+  // that disagrees with the list it is counting is worse than either number.
   let query = supabase
     .from('community_posts')
     .select('sport_id, sport:sports!sport_id(id, name, emoji), author:users!author_id!inner(id)')
     .gt('created_at', since)
     .not('sport_id', 'is', null)
     .is('scheduled_at', null); // SC-218: don't let unpublished scheduled posts inflate the story count
-  query = excludeDeletedEmbed(query, 'author');
   query = excludeIds(query, 'author_id', await blockedUserIds(req.userId));
   const { data, error } = await query;
 
@@ -351,13 +357,14 @@ export async function getPost(req: Request, res: Response) {
     .from('community_posts')
     .select(`
       *,
-      author:users!author_id!inner(id, name, username, profile_picture_url),
+      author:users!author_id!inner(id, name, username, profile_picture_url, deleted_at),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name),
       match:matches!match_id(id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
     `)
-    .eq('id', id)
-    .is('author.deleted_at', null);
+    // B2-a: no deleted-author filter. This is the same post the feed shows; a
+    // post you can see in a list and not open is the worse of the two bugs.
+    .eq('id', id);
   query = excludeIds(query, 'author_id', await blockedUserIds(req.userId));
   const { data, error } = await query.maybeSingle();
 
@@ -842,10 +849,13 @@ export async function listComments(req: Request, res: Response) {
     .from('post_comments')
     .select(`
       *,
-      author:users!author_id!inner(id, name, username, profile_picture_url)
+      author:users!author_id!inner(id, name, username, profile_picture_url, deleted_at)
     `, { count: 'exact' })
     .eq('post_id', id)
-    .is('author.deleted_at', null)
+    // B2-a: a deleted author's comment stays, attributed to "Deleted User".
+    // Removing it silently rewrote the thread it was part of — replies to it
+    // were left answering nothing.
+
     .order('created_at', { ascending: true })
     .range(lcp.from, lcp.to);
   cq = excludeIds(cq, 'author_id', await blockedUserIds(req.userId));

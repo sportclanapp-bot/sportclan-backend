@@ -1666,15 +1666,22 @@ export async function updateSportProfile(req: Request, res: Response) {
 export async function getReviews(req: Request, res: Response) {
   const { id } = req.params;
   try {
-    // SC-77: hide reviews by a soft-deleted account. Block edge (optionalAuth):
-    // hide reviews authored by anyone the viewer has blocked either direction.
+    // B2-a · a review by a deleted account STAYS, anonymously.
+    //
+    // SC-77 hid it entirely, which made the Delete account screen's "reviews you
+    // wrote about other users remain anonymous" false — and quietly rewrote a
+    // provider's reputation every time one of their reviewers left the app.
+    // The reviewer renders as the scrubbed row: "Deleted User", no avatar.
+    //
+    // Block edge (optionalAuth) is unchanged: reviews by anyone the viewer has
+    // blocked either direction are still hidden from THAT viewer.
     const blocked = await blockedUserIds(req.userId);
-    const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
+    const { data, error } = await excludeIds(supabase
       .from('user_reviews')
-      .select('id, rating, comment, created_at, reviewer:users!reviewer_id!inner(id, name, profile_picture_url)')
+      .select('id, rating, comment, created_at, reviewer:users!reviewer_id!inner(id, name, profile_picture_url, deleted_at)')
       .eq('reviewed_id', id)
       .order('created_at', { ascending: false })
-      .limit(50), 'reviewer'), 'reviewer_id', blocked);
+      .limit(50), 'reviewer_id', blocked);
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
     // SC-370: `count` and `avgRating` used to be computed from `data` — which is
@@ -1683,10 +1690,13 @@ export async function getReviews(req: Request, res: Response) {
     // newest 50 presented as their overall score. Aggregate over EVERY matching
     // row instead, with the same soft-delete and block exclusions, and keep the
     // 50 only for rendering.
-    const { data: allRatings } = await excludeIds(excludeDeletedEmbed(supabase
+    // B2-a: and it keeps COUNTING towards the average, for the same reason —
+    // a rating that was honestly given does not become wrong because the person
+    // who gave it left.
+    const { data: allRatings } = await excludeIds(supabase
       .from('user_reviews')
       .select('rating, reviewer:users!reviewer_id!inner(id)')
-      .eq('reviewed_id', id), 'reviewer'), 'reviewer_id', blocked);
+      .eq('reviewed_id', id), 'reviewer_id', blocked);
     const ratings = (allRatings ?? []).map((r: any) => r.rating as number).filter((n) => typeof n === 'number');
     const avgRating = ratings.length > 0
       ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10

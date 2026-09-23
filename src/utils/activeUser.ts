@@ -3,12 +3,22 @@ import { supabase } from './supabase';
 /**
  * SC-77/78/79 — hide soft-deleted users from every OTHER-facing read.
  *
- * Account deletion (SC-70) is final: the `users` row is kept for the 30-day
- * grace / login-block / phone-hold window with `deleted_at` set and identity
- * scrubbed ("Deleted User"). The DB cascade-purges all of the user's content
- * at 30 days — but until then the row still exists, so any read that surfaces a
- * user or their content must exclude `deleted_at IS NOT NULL` rows or the
- * deleted account leaks (post in feed, rank on leaderboard, team captain, …).
+ * Account deletion (SC-70) is final: the `users` row is kept with `deleted_at`
+ * set and identity scrubbed ("Deleted User"). B2-a: it is kept FOR EVER. After
+ * 30 days the remaining personal fields are scrubbed too and the row becomes an
+ * anonymous tombstone — it is never hard-deleted, because the cascades that
+ * would have fired take whole teams, tournaments and other people's matches
+ * with them.
+ *
+ * So these helpers hide the PERSON: they must be applied to any read that
+ * surfaces a user as a user, or the deleted account leaks (rank on the
+ * leaderboard, a team captain, a search hit, a directory entry).
+ *
+ * They must NOT be applied to that person's CONTENT. An `!inner` embed plus
+ * excludeDeletedEmbed drops the PARENT row, not the name — which is how
+ * "posts you made stay visible (without your name)" came to be false. Posts,
+ * comments and reviews keep rendering, attributed to the scrubbed row. The full
+ * list of which path chose which is pinned in deletedUserVisibility.unit.test.
  *
  * ONE shared mechanism — three shapes, so future read paths just reuse these:
  *   • direct `users` query      → excludeDeleted(query)

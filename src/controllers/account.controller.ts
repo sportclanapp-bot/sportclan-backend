@@ -132,33 +132,121 @@ export async function deleteAccount(req: Request, res: Response) {
 }
 
 // POST /account/purge-expired — cron-callable endpoint (must include
-// X-Cron-Secret header matching CRON_SECRET env). Hard-deletes accounts
-// whose deleted_at is older than 30 days.
+// X-Cron-Secret header matching CRON_SECRET env), and the hourly in-process
+// sweep in index.ts. Scrubs accounts whose deleted_at is older than 30 days.
 //
-// Production: hook this up to a Render cron job or Supabase pg_cron to run
-// daily.
+// ---------------------------------------------------------------------------
+// B2-a · THIS JOB NEVER DELETES A ROW. It used to.
+//
+// The original did `DELETE FROM users WHERE id IN (expired)` and trusted a
+// comment reading "FK cascades on user_id SHOULD clear content automatically".
+// The dry run against the real schema (supabase/checks/CHECK-b2a-purge-dryrun,
+// findings in B2A-purge-findings.md) showed what "should" was hiding:
+//
+//   • teams.created_by, tournaments.created_by and matches.created_by are
+//     ON DELETE CASCADE. A founder leaving would take the whole team, its
+//     tournaments and the matches OTHER PEOPLE PLAYED IN with them.
+//   • community_posts.author_id, post_comments.author_id, messages.sender_id
+//     and user_reviews (both sides) are CASCADE too — the exact content the
+//     Delete account screen promises stays.
+//   • and ten FKs are NO ACTION (kudos, mvp_user_id, match_ratings,
+//     team_expenses, referred_by, …), so the DELETE would throw for the WHOLE
+//     batch — one statement, one failure, permanently, from the first real
+//     account that had ever given kudos.
+//
+// So the row stays, for good, scrubbed of everything personal. What is left is
+// a tombstone: no name, no number, nothing that identifies anyone — but still
+// joinable, which is the only way "your posts stay, without your name" can be
+// true at all. Fixing the cascades themselves (option B) is a post-launch job;
+// it is recorded in FIX_PLAN.md.
+// ---------------------------------------------------------------------------
+
+/** The 30-day retention window, in ms. */
+const PURGE_AFTER_MS = 30 * 86400000;
+
+/**
+ * What a purged row keeps: nothing that identifies a person.
+ *
+ * `phone` is the one field that cannot simply be nulled — it is NOT NULL in the
+ * schema (migration 001) and uniquely indexed. It takes the SAME
+ * `deleted:<id>` sentinel that re-registration already writes in
+ * auth.controller, rather than inventing a second shape for the same idea.
+ *
+ * Preferences (discoverability / message_privacy / tag_privacy) are left alone:
+ * they are NOT NULL with defaults and say nothing about a person.
+ */
+export function tombstoneFields(userId: string, nowIso: string) {
+  return {
+    phone: `deleted:${userId}`,
+    email: null,
+    name: 'Deleted User',
+    username: `deleted_${userId.slice(0, 8)}`,
+    password_hash: null,
+    google_id: null,
+    profile_picture_url: null,
+    bio: null,
+    gender: null,
+    dob: null,
+    city_id: null,
+    state: null,
+    referral_code: null,
+    referred_by: null,
+    coin_balance: 0,
+    is_available: false,
+    streak_count: 0,
+    checkin_streak: 0,
+    last_active_at: null,
+    last_match_date: null,
+    last_checkin_date: null,
+    purged_at: nowIso,
+  };
+}
+
 // Core purge logic, callable BOTH from the cron endpoint and the in-process
-// hourly sweep (SC-217 — the endpoint alone never ran because CRON_SECRET is
-// unset). Only ever hard-deletes rows whose deleted_at is a real timestamp older
-// than 30 days (the `.not deleted_at is null` guard makes it impossible to touch
-// a live account). Idempotent — a second run finds nothing.
+// hourly sweep (SC-217 — the endpoint alone never ran because nothing called
+// it). Only ever touches rows whose deleted_at is a real timestamp older than
+// 30 days: the `.not deleted_at is null` guard makes it impossible to reach a
+// live account.
+//
+// Idempotent, and idempotent for a reason that matters: the filter is
+// `purged_at IS NULL`, not `deleted_at`. `deleted_at` stays set for ever, so a
+// job keyed on it alone would re-scrub the same rows every hour until the end
+// of time, rewriting purged_at and logging phantom work on each tick.
+//
+// Row by row rather than one bulk UPDATE, because the phone sentinel is derived
+// from each id — and because one bad row then costs one row, not the batch,
+// which is the failure mode that made the DELETE version unrecoverable.
 export async function purgeExpiredAccountsCore(): Promise<{ purged: number; ids: string[] }> {
-  const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+  const cutoff = new Date(Date.now() - PURGE_AFTER_MS).toISOString();
 
   const { data: expired, error: fetchErr } = await supabase
     .from('users')
     .select('id')
     .lt('deleted_at', cutoff)
-    .not('deleted_at', 'is', null);
+    .not('deleted_at', 'is', null)
+    .is('purged_at', null);
   if (fetchErr) throw new Error(fetchErr.message);
   if (!expired || expired.length === 0) return { purged: 0, ids: [] };
 
-  const ids = expired.map((u: { id: string }) => u.id);
-  // Hard-delete the user rows. FK cascades on user_id should clear content
-  // automatically; anything that's set to SET NULL will detach.
-  const { error: delErr } = await supabase.from('users').delete().in('id', ids);
-  if (delErr) throw new Error(delErr.message);
-  return { purged: ids.length, ids };
+  const nowIso = new Date().toISOString();
+  const done: string[] = [];
+  for (const { id } of expired as { id: string }[]) {
+    const { error } = await supabase
+      .from('users')
+      .update(tombstoneFields(id, nowIso))
+      // Belt and braces: the guard is repeated on the WRITE, so a second
+      // instance running the same tick cannot scrub a row twice.
+      .eq('id', id)
+      .is('purged_at', null);
+    if (error) {
+      // Best-effort, per row. A column that will not take its value is a
+      // problem for that account, not a reason to strand every other one.
+      console.warn('[purge-accounts] could not scrub', id, error.message); // eslint-disable-line no-console
+      continue;
+    }
+    done.push(id);
+  }
+  return { purged: done.length, ids: done };
 }
 
 export async function purgeExpiredAccounts(req: Request, res: Response) {

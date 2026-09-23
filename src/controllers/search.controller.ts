@@ -188,14 +188,16 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
     .from('community_posts')
     .select(`
       id, content, created_at, likes_count, comments_count, scheduled_at, author_id,
-      author:users!author_id!inner(id, name, username, profile_picture_url),
+      author:users!author_id!inner(id, name, username, profile_picture_url, deleted_at),
       sport:sports!sport_id(id, name, emoji)
     `)
     .ilike('content', `%${escapeLike(q)}%`)
     .order('created_at', { ascending: false })
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging (no overlap/gaps)
     .range(p.from, p.to);
-  query = excludeDeletedEmbed(query, 'author'); // SC-77
+  // B2-a: no deleted-author filter here either — searching for a phrase and not
+  // finding the post that contains it, because its author left, is the same bug
+  // as the feed's. The PERSON tabs below still exclude deleted accounts.
   query = excludeIds(query, 'author_id', await blockedUserIds(callerId)); // SC-81
 
   if (sportId) query = query.eq('sport_id', sportId);

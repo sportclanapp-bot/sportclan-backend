@@ -54,8 +54,13 @@ CREATE INDEX IF NOT EXISTS idx_users_purge_due
 -- ---------------------------------------------------------------------------
 -- BLOCK 3 · Proof this migration cannot have deleted anything.
 --
--- Run it before and after. The three numbers must be identical, and
--- would_purge_now is what the first sweep will touch.
+-- Runs AFTER block 1, because it reads purged_at and block 1 is what creates
+-- it. The "before" half is CHECK-092 block 1, which is why that one does not
+-- name the column.
+--
+-- users_total, posts/comments/reviews/teams/matches must match the baseline
+-- exactly; already_purged must be 0; and would_purge_now is what the first
+-- hourly sweep will touch once the deploy lands.
 -- ---------------------------------------------------------------------------
 SELECT
   count(*)                                                    AS users_total,

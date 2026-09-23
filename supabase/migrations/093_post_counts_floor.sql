@@ -51,7 +51,23 @@ $$ LANGUAGE plpgsql;
 
 
 -- ---------------------------------------------------------------------------
--- BLOCK 2 · Correct whatever has already drifted.
+-- BLOCK 2 · NOT RUN ON PRODUCTION (23 Sep 2026). Deferred to the launch wipe.
+--
+-- Dipak applied block 1 only. The drift on prod is not drift: it is SEED DATA.
+-- Thousands of seeded posts carry made-up counts — 80 likes with zero rows in
+-- post_likes — and recounting would set every one of them to 0, which is
+-- correct and would make the app look dead for the rest of testing.
+--
+-- So this block is deliberately outstanding. It must be run as part of the
+-- pre-launch data reset, OR is made moot by it if the reset drops and reseeds
+-- community_posts (a fresh seed that inserts real post_likes rows leaves
+-- nothing for it to correct). Either way the decision has to be made there and
+-- not forgotten: block 1 stops NEW drift, it does not undo the old.
+--
+-- Block 3 is the check that answers "is it still outstanding?" — it returns
+-- rows today, and must return none once the reset is done.
+--
+-- Correct whatever has already drifted.
 --
 -- Touches only the rows that are actually wrong (IS DISTINCT FROM), so it is
 -- cheap, it is safe to re-run, and the row count it reports is itself the

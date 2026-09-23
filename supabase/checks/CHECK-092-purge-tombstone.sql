@@ -12,12 +12,19 @@
 
 
 -- ---------------------------------------------------------------------------
--- BLOCK 1 · BASELINE. Run this before the deploy and keep the numbers.
+-- BLOCK 1 · BASELINE. Run this BEFORE applying migration 092 and keep the
+-- numbers.
+--
+-- No purged_at column here, deliberately: 092 is what adds it, so naming it in
+-- the pre-migration baseline makes this block fail with "column purged_at does
+-- not exist" — on the one run whose whole job is to record the before picture.
+-- Its value at this point is known anyway: nothing has been purged, because
+-- nothing could have been.
 -- ---------------------------------------------------------------------------
 SELECT
   count(*)                                        AS users_total,
   count(*) FILTER (WHERE deleted_at IS NOT NULL)  AS soft_deleted,
-  count(*) FILTER (WHERE purged_at  IS NOT NULL)  AS purged,
+  0                                               AS purged,
   (SELECT count(*) FROM community_posts)          AS posts_total,
   (SELECT count(*) FROM post_comments)            AS comments_total,
   (SELECT count(*) FROM user_reviews)             AS reviews_total,

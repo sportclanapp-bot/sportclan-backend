@@ -32,6 +32,27 @@ export function sanitizeErrorResponses(req: Request, res: Response, next: NextFu
 }
 
 /**
+ * express.json's parser rejects a body it cannot parse with a SyntaxError that
+ * carries `type: 'entity.parse.failed'` and `status: 400`.
+ */
+export function isMalformedBody(err: unknown): boolean {
+  return (err as { type?: string } | null)?.type === 'entity.parse.failed';
+}
+
+/**
+ * True for an error that describes a bad REQUEST rather than a fault in the
+ * server: the body parser's own rejections (malformed JSON, oversized body,
+ * wrong charset), which arrive with a 4xx status and `expose: true`. These get
+ * a 4xx response and must not be reported as crashes — a client, or anyone
+ * probing the API, could otherwise spend the error quota at will.
+ */
+export function isClientError(err: unknown): boolean {
+  const e = err as { status?: number; statusCode?: number; expose?: boolean } | null;
+  const status = e?.status ?? e?.statusCode;
+  return typeof status === 'number' && status >= 400 && status < 500 && e?.expose === true;
+}
+
+/**
  * Backstop #2: final Express error handler for uncaught throws / rejected async
  * handlers that bubble up. Logs the detail server-side and returns a generic
  * 500. Mounted AFTER all routes.
@@ -39,9 +60,21 @@ export function sanitizeErrorResponses(req: Request, res: Response, next: NextFu
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function globalErrorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   const detail = (err as { message?: string })?.message ?? String(err);
-  // eslint-disable-next-line no-console
-  console.error(`[unhandled ${req.method} ${req.originalUrl}]`, detail);
+  if (isClientError(err)) {
+    // A bad request, not a server fault: one line, not an "unhandled" alarm.
+    // eslint-disable-next-line no-console
+    console.warn(`[bad request ${req.method} ${req.originalUrl}]`, detail);
+  } else {
+    // eslint-disable-next-line no-console
+    console.error(`[unhandled ${req.method} ${req.originalUrl}]`, detail);
+  }
   if (res.headersSent) return;
+  // A body that isn't JSON is the caller's mistake, not ours: 400, and it says
+  // which part of the request was wrong. It used to fall through to a 500 —
+  // and, worse, be reported to Sentry as a server crash (SPORTCLAN-BACKEND-3).
+  if (isMalformedBody(err)) {
+    return res.status(400).json({ error: 'Request body is not valid JSON.' });
+  }
   // SC-109: an oversized request body (the express.json limit) throws a
   // PayloadTooLargeError — return a clean 413 instead of a generic 500. The
   // memory ceiling is already bounded by the body-parser limit.

@@ -13,8 +13,13 @@
  */
 import type { Request, Response, NextFunction } from 'express';
 import { captureError } from '../utils/sentry';
+import { isClientError } from './errorSanitizer';
 
 export function sentryErrorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
+  // A malformed or oversized request is answered with a 4xx and is not a
+  // crash. Reporting it let any caller spend the free error quota
+  // (SPORTCLAN-BACKEND-3 was a deliberately malformed JSON body).
+  if (isClientError(err)) return next(err);
   try {
     captureError(err, {
       method: req.method,

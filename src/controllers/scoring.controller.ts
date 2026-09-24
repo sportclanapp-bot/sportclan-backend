@@ -395,6 +395,43 @@ function setWon(
   return null;
 }
 
+/**
+ * Replay rally/carrom score events into sets.
+ *
+ * U-29: once a side has won ceil(maxSets/2) sets the match is decided and
+ * nothing after it counts. The loop used to open a new set after the decider
+ * like after any other, so a finished best-of-3 carried an empty 4th set, and
+ * any stray point after the decider was scored into it.
+ */
+export function rollupSets(
+  cfg: { target: number; cap?: number; maxSets: number; finalTarget?: number; winBy2: boolean },
+  events: { event_type: string; payload: any }[],
+  sideOf: (p: any) => 'A' | 'B',
+): { setsA: number; setsB: number; setScoresA: number[]; setScoresB: number[]; curA: number; curB: number; decided: 'A' | 'B' | null } {
+  const need = Math.ceil(cfg.maxSets / 2);
+  let curA = 0, curB = 0, setsA = 0, setsB = 0, period = 1;
+  let decided: 'A' | 'B' | null = null;
+  const setScoresA: number[] = [], setScoresB: number[] = [];
+  for (const e of events) {
+    if (decided) break;
+    if (e.event_type !== 'score') continue;
+    const p: any = e.payload || {};
+    // Rally points are 1; carrom pieces/queen carry value (1 or 3).
+    const v = Number(p.value ?? 1);
+    if (sideOf(p) === 'A') curA += v; else curB += v;
+    const target = cfg.finalTarget && period === cfg.maxSets ? cfg.finalTarget : cfg.target;
+    const w = setWon(curA, curB, target, cfg.cap, cfg.winBy2);
+    if (w) {
+      setScoresA.push(curA); setScoresB.push(curB);
+      if (w === 'A') setsA += 1; else setsB += 1;
+      curA = 0; curB = 0; period += 1;
+      if (setsA >= need) decided = 'A';
+      else if (setsB >= need) decided = 'B';
+    }
+  }
+  return { setsA, setsB, setScoresA, setScoresB, curA, curB, decided };
+}
+
 // Per-player cricket rollup (A5-003/004). Player identity rides in the event
 // payload (`batsman_id` / `bowler_id`, or `player_id` as a batting fallback) —
 // there are no dedicated columns on match_events. The batting `team_side` in
@@ -702,26 +739,10 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
     }
     A.points = A.score; B.points = B.score;
   } else if (SET_CONFIG[slug]) {
-    const cfg = SET_CONFIG[slug];
-    let curA = 0, curB = 0, setsA = 0, setsB = 0, period = 1;
-    const setScoresA: number[] = [], setScoresB: number[] = [];
-    for (const e of events) {
-      if (e.event_type !== 'score') continue;
-      const p: any = e.payload || {};
-      // Rally points are 1; carrom pieces/queen carry value (1 or 3).
-      const v = Number(p.value ?? 1);
-      if (sideOf(p) === 'A') curA += v; else curB += v;
-      const target = cfg.finalTarget && period === cfg.maxSets ? cfg.finalTarget : cfg.target;
-      const w = setWon(curA, curB, target, cfg.cap, cfg.winBy2);
-      if (w) {
-        setScoresA.push(curA); setScoresB.push(curB);
-        if (w === 'A') setsA += 1; else setsB += 1;
-        curA = 0; curB = 0; period += 1;
-      }
-    }
-    A.score = setsA; B.score = setsB;
-    A.sets = setScoresA; B.sets = setScoresB;
-    A.points = curA; B.points = curB; // current in-progress set/board
+    const r = rollupSets(SET_CONFIG[slug], events, sideOf);
+    A.score = r.setsA; B.score = r.setsB;
+    A.sets = r.setScoresA; B.sets = r.setScoresB;
+    A.points = r.curA; B.points = r.curB; // current in-progress set/board
   } else if (slug === 'chess') {
     // SC-47: chess records a single `result` event ({winner: white|black|draw}).
     // Reflect it as A/B scores (1-0 / 0-1 / ½-½) plus a result string + winner

@@ -72,3 +72,40 @@ describe('SC-442 · the handler wires it in the right order', () => {
     expect(tail).toMatch(/catch \{/);
   });
 });
+
+describe('U-37 · the window runs from completion, not the last write', () => {
+  test('completed_at wins over a later updated_at', () => {
+    // A void and a restore each bumped updated_at, restarting the seven days.
+    const m = { status: 'completed', completed_at: ended(8), updated_at: ended(0) };
+    expect(withinVoidWindow(m, now)).toBe(false);
+    expect(voidDeadline(m)?.toISOString())
+      .toBe(new Date(Date.parse(ended(8)) + VOID_WINDOW_DAYS * DAY).toISOString());
+  });
+
+  test('an abandoned match, which has no completed_at, falls back to updated_at', () => {
+    expect(withinVoidWindow({ status: 'abandoned', completed_at: null, updated_at: ended(3) }, now)).toBe(true);
+    expect(withinVoidWindow({ status: 'abandoned', completed_at: null, updated_at: ended(9) }, now)).toBe(false);
+  });
+
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'matches.controller.ts'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  const fn = (name: string) => {
+    const start = src.indexOf(`export async function ${name}`);
+    const next = src.indexOf('\nexport ', start + 10);
+    return src.slice(start, next === -1 ? undefined : next);
+  };
+
+  test('neither void nor restore writes updated_at', () => {
+    for (const name of ['voidMatch', 'unvoidMatch']) {
+      const body = fn(name);
+      expect(body.length).toBeGreaterThan(100);
+      expect(body).not.toMatch(/updated_at:\s*new Date\(\)/);
+    }
+  });
+
+  test('the void handler reads completed_at, so the window can use it', () => {
+    expect(fn('voidMatch')).toMatch(/\.select\('[^']*completed_at[^']*'\)/);
+  });
+});

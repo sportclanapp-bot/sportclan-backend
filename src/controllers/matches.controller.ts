@@ -664,8 +664,9 @@ export async function listMatches(req: Request, res: Response) {
     // that were somehow already completed: seed rows whose scheduled_at is in
     // the future. "Most recent results first" has to mean most recently PLAYED.
     //
-    // There is no completed_at column, so updated_at is the proxy — it is bumped
-    // on completion and is the same field voidDeadline treats as "ended".
+    // updated_at is the proxy — it is bumped on completion. (completed_at, SC-415,
+    // exists only for completed rows, not abandoned ones, so it can't order both.)
+    // Void and restore deliberately do NOT bump it (U-37).
     // Upcoming lists still order by scheduled_at, because there the kick-off
     // time IS the thing being sorted.
     const finishedFirst = status === 'completed' || status === 'abandoned';
@@ -2149,10 +2150,25 @@ function matchLabel(m: { team_a_name?: string | null; team_b_name?: string | nul
   return 'A match you played in';
 }
 
-/** When the void window closes, or null when the match has not ended. */
-export function voidDeadline(match: { status?: string | null; updated_at?: string | null; scheduled_at?: string | null }): Date | null {
+type VoidWindowMatch = {
+  status?: string | null;
+  completed_at?: string | null;
+  updated_at?: string | null;
+  scheduled_at?: string | null;
+};
+
+/**
+ * When the void window closes, or null when the match has not ended.
+ *
+ * U-37: measured from `completed_at` — stamped once, at completion (SC-415).
+ * It used to be `updated_at`, which ANY write to the row moves: a void and a
+ * restore each bumped it, so void → restore restarted the seven days and the
+ * window never had to close. `updated_at` is only the fallback for an abandoned
+ * match, which has no completed_at.
+ */
+export function voidDeadline(match: VoidWindowMatch): Date | null {
   if (match.status !== 'completed' && match.status !== 'abandoned') return null;
-  const ended = match.updated_at ?? match.scheduled_at;
+  const ended = match.completed_at ?? match.updated_at ?? match.scheduled_at;
   if (!ended) return null;
   const t = Date.parse(ended);
   if (Number.isNaN(t)) return null;
@@ -2161,7 +2177,7 @@ export function voidDeadline(match: { status?: string | null; updated_at?: strin
 
 /** A live or scheduled match is always voidable; a finished one only in window. */
 export function withinVoidWindow(
-  match: { status?: string | null; updated_at?: string | null; scheduled_at?: string | null },
+  match: VoidWindowMatch,
   now: number = Date.now(),
 ): boolean {
   const deadline = voidDeadline(match);
@@ -2186,7 +2202,7 @@ export async function voidMatch(req: Request, res: Response) {
 
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at, updated_at, scheduled_at, team_a_id, team_b_id')
+      .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at, completed_at, updated_at, scheduled_at, team_a_id, team_b_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -2221,7 +2237,9 @@ export async function voidMatch(req: Request, res: Response) {
         voided_at: new Date().toISOString(),
         voided_by: userId,
         void_reason: reason,
-        updated_at: new Date().toISOString(),
+        // No updated_at bump (U-37): voiding is a flag, not a new ending. The
+        // bump restarted the void window and floated the match to the top of
+        // "recent results", which orders by updated_at.
       })
       .eq('id', id)
       .select('*')
@@ -2274,7 +2292,7 @@ export async function unvoidMatch(req: Request, res: Response) {
     // match again, then re-apply with the opposite sign.
     const { data: updated, error } = await supabase
       .from('matches')
-      .update({ voided_at: null, voided_by: null, void_reason: null, updated_at: new Date().toISOString() })
+      .update({ voided_at: null, voided_by: null, void_reason: null }) // no updated_at bump (U-37)
       .eq('id', id)
       .select('*')
       .single();

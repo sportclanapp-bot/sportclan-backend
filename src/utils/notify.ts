@@ -40,6 +40,12 @@ const PREF_CATEGORY: Record<string, string> = {
   match_left: 'matches',
   // Scheduling: a rescheduled fixture / a tournament schedule-or-venue change.
   match_rescheduled: 'matches',
+  // Phase 3 / U-10: "a match was created against your team" — match news, so the
+  // 'matches' toggle silences it. (match_challenge and its answers,
+  // match_challenge_accepted / _declined, are deliberately UNMAPPED: a singles
+  // challenge is a direct, actionable request to one person — the sibling of a
+  // team join request — and must always arrive.)
+  match_scheduled: 'matches',
   tournament_updated: 'matches',
   score_update: 'matches',
   smart_match: 'matches',

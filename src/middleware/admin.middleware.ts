@@ -13,16 +13,20 @@ import { supabase } from '../utils/supabase';
  *
  * Must be used after `authenticateToken`.
  */
-export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const userId = req.userId;
-  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
+/**
+ * The ONE answer to "is this person an admin", shared by the route gate and by
+ * /users/me (Phase 3: the server tells the app). The app used to read the DB
+ * column `users.is_admin` directly, while the gate also honours the
+ * ADMIN_USER_IDS whitelist — so a whitelisted admin (@scadmin970_qa) passed
+ * every admin route but never saw the Admin screen, or its "Test Sentry" button.
+ */
+export async function isAdminUser(userId: string): Promise<boolean> {
   // 1. ENV whitelist
   const whitelist = (process.env.ADMIN_USER_IDS || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  if (whitelist.includes(userId)) return next();
+  if (whitelist.includes(userId)) return true;
 
   // 2. DB lookup (graceful on missing column)
   try {
@@ -31,12 +35,16 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
       .select('is_admin')
       .eq('id', userId)
       .maybeSingle();
-    if (!error && data && (data as { is_admin?: boolean }).is_admin === true) {
-      return next();
-    }
+    if (!error && data && (data as { is_admin?: boolean }).is_admin === true) return true;
   } catch {
-    // ignore — fall through to 403
+    // ignore — not admin
   }
+  return false;
+}
 
+export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  if (await isAdminUser(userId)) return next();
   return res.status(403).json({ error: 'Admin access required' });
 }

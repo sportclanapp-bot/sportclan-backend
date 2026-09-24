@@ -34,6 +34,8 @@ import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats } from './scoring.controller';
 import { awardBadgesSafe } from './badges.controller';
+import { isSinglesSport, winnerSideOf, challengeText, pendingRankedOpponent, isSinglesShape } from '../utils/singles';
+import { isBlockedBetween } from '../utils/blocks';
 
 // POST /matches — create. FREE for all (Change #6).
 export async function createMatch(req: Request, res: Response) {
@@ -56,7 +58,10 @@ export async function createMatch(req: Request, res: Response) {
       players_needed,
       is_ranked,
       join_policy,
+      mode,
+      opponent_id,
     } = req.body || {};
+    const singles = mode === 'singles';
 
     const cleanVenueOrErr = normaliseVenue(venue);
     if (cleanVenueOrErr === VENUE_TOO_LONG) {
@@ -73,10 +78,44 @@ export async function createMatch(req: Request, res: Response) {
     // Validate the sport (unknown/malformed/deactivated → clean 400, not a 500).
     const sportErr = await validateSportForCreate(sport_id);
     if (sportErr) return res.status(400).json({ error: sportErr });
-    // A ranked match counts toward ELO / leaderboards, so it must be played
-    // between two REGISTERED teams (free-text sides have no roster to attribute
-    // stats to). Per-side lineup (>=2) is enforced at completion (A5-003 P3).
-    if (is_ranked && (!team_a_id || !team_b_id)) {
+    // Phase 3 · SINGLES: a one-a-side sport played between two PEOPLE. Validated
+    // up front so nothing is written for a bad request. See utils/singles.
+    let singlesSides: { aName: string; bName: string; opponentId: string; sportName: string } | null = null;
+    if (singles) {
+      if (team_a_id || team_b_id) {
+        return res.status(400).json({ error: 'A singles match is between two players, not teams.', code: 'SINGLES_NO_TEAMS' });
+      }
+      if (typeof opponent_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(opponent_id)) {
+        return res.status(400).json({ error: 'Pick the player you are playing against.', code: 'OPPONENT_REQUIRED' });
+      }
+      if (opponent_id === userId) {
+        return res.status(400).json({ error: 'You can’t play against yourself.', code: 'OPPONENT_IS_SELF' });
+      }
+      const resolved = await resolveSportId(String(sport_id));
+      const [{ data: sportRow }, { data: people }] = await Promise.all([
+        supabase.from('sports').select('slug, name').eq('id', resolved ?? sport_id).maybeSingle(),
+        supabase.from('users').select('id, name, username, deleted_at').in('id', [userId, opponent_id]),
+      ]);
+      if (!isSinglesSport((sportRow as { slug?: string } | null)?.slug)) {
+        return res.status(400).json({ error: 'This sport isn’t played one-a-side.', code: 'NOT_A_SINGLES_SPORT' });
+      }
+      const me = (people ?? []).find((u) => u.id === userId);
+      const opp = (people ?? []).find((u) => u.id === opponent_id);
+      if (!opp || opp.deleted_at) {
+        return res.status(404).json({ error: 'That player could not be found.', code: 'OPPONENT_NOT_FOUND' });
+      }
+      if (await isBlockedBetween(userId, opponent_id)) {
+        // Same answer as "not found": a block must not be discoverable.
+        return res.status(404).json({ error: 'That player could not be found.', code: 'OPPONENT_NOT_FOUND' });
+      }
+      const label = (u: { name?: string | null; username?: string | null } | undefined) =>
+        (u?.name || (u?.username ? `@${u.username}` : '') || 'Player').slice(0, 60);
+      singlesSides = { aName: label(me), bName: label(opp), opponentId: opponent_id, sportName: (sportRow as { name?: string }).name ?? 'Singles' };
+    }
+    // A ranked match counts toward ELO / leaderboards, so each side must be a
+    // real registered roster: two REGISTERED teams, or — for singles — two
+    // registered players (free-text sides have no one to attribute stats to).
+    if (is_ranked && !singles && (!team_a_id || !team_b_id)) {
       return res.status(400).json({ error: 'Ranked matches require two registered teams.' });
     }
     // SC-245: a team can't play itself — a nonsensical fixture and (if ranked)
@@ -93,16 +132,16 @@ export async function createMatch(req: Request, res: Response) {
         tournament_id: tournament_id || null,
         team_a_id: team_a_id || null,
         team_b_id: team_b_id || null,
-        team_a_name: team_a_name || null,
-        team_b_name: team_b_name || null,
+        team_a_name: singlesSides ? singlesSides.aName : team_a_name || null,
+        team_b_name: singlesSides ? singlesSides.bName : team_b_name || null,
         scheduled_at: scheduled_at || null,
         venue: cleanVenue,
         city_id: city_id || null,
         format: format || null,
         overs: overs ?? null,
         status: 'scheduled',
-        is_open: !!is_open,
-        players_needed: players_needed ?? 0,
+        is_open: singles ? false : !!is_open,
+        players_needed: singles ? 0 : players_needed ?? 0,
         is_ranked: !!is_ranked,
         join_policy: joinPolicy,
         created_by: userId,
@@ -126,6 +165,52 @@ export async function createMatch(req: Request, res: Response) {
       }
     }
 
+    // Phase 3 · singles: the two players ARE the line-up, from the start — so a
+    // singles match always counts, and there is no line-up step to forget.
+    if (singlesSides) {
+      const { error: seedErr } = await supabase.from('match_participants').insert([
+        { match_id: data.id, user_id: userId, team_side: 'A' },
+        { match_id: data.id, user_id: singlesSides.opponentId, team_side: 'B' },
+      ]);
+      if (seedErr) {
+        // Without its players a singles match is meaningless; don't leave it behind.
+        await supabase.from('matches').delete().eq('id', data.id);
+        return res.status(500).json({ error: 'Could not create the match. Try again.' });
+      }
+      const text = challengeText({
+        challengerName: singlesSides.aName,
+        sportName: singlesSides.sportName,
+        ranked: !!is_ranked,
+        when: null,
+      });
+      void notifyUsers([singlesSides.opponentId], {
+        type: 'match_challenge',
+        title: text.title,
+        body: text.body,
+        data: { matchId: data.id, screen: 'MatchDetail' },
+      }, { actorId: userId });
+    } else if (team_a_id || team_b_id) {
+      // U-10: a match against your team used to be created in silence — the other
+      // side learned of it from the 15-minute reminder, if at all.
+      try {
+        const audience = await matchAudienceIds(data.id, team_a_id, team_b_id);
+        if (audience.length > 0) {
+          // Registered teams carry no denormalised name on the match row (they
+          // are attached at read time), so look them up for the sentence.
+          const ids = [team_a_id, team_b_id].filter(Boolean) as string[];
+          const { data: teams } = await supabase.from('teams').select('id, name').in('id', ids);
+          const nameOf = (tid: string | null | undefined, fallback: string | null) =>
+            (teams ?? []).find((t) => t.id === tid)?.name ?? fallback ?? 'TBD';
+          void notifyUsers(audience, {
+            type: 'match_scheduled',
+            title: 'New match',
+            body: `${nameOf(team_a_id, data.team_a_name)} vs ${nameOf(team_b_id, data.team_b_name)}${cleanVenue ? ` · ${cleanVenue}` : ''}`,
+            data: { matchId: data.id, screen: 'MatchDetail' },
+          }, { actorId: userId });
+        }
+      } catch { /* best-effort */ }
+    }
+
     // Best-effort venue upsert — tracks frequently-used venues for the
     // autocomplete in CreateMatchScreen. Errors are swallowed.
     if (cleanVenue) {
@@ -134,6 +219,91 @@ export async function createMatch(req: Request, res: Response) {
 
     return res.json({ match: data });
   } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/**
+ * GET /matches/history?user_id=me|<uuid>&limit=&offset=
+ *
+ * Phase 3 · decision 4. "Your match history" used to be `?mine=1`, which is
+ * created_by — so the person who PLAYED (B, captain of the losing side) saw
+ * "No matches played yet", the umpire saw nothing, and the organiser's tile
+ * read "0 matches" above a list of five matches they had merely set up.
+ *
+ * History is now what you took part in:
+ *   played     — you were in the line-up (match_participants)
+ *   officiated — you were the umpire
+ * Each row carries `my_role` and `my_side`. Team membership without a line-up
+ * spot is NOT "played" (decision 4). Finished matches only; a voided one is
+ * listed (with its voided_at) but not counted.
+ */
+/**
+ * The pure half of matchHistory: newest first (by completion, then last write,
+ * then schedule), each row labelled, and counts that exclude voided and
+ * abandoned matches — the same rule as the profile's officiated count.
+ */
+export function buildHistory(
+  rows: any[],
+  sideOf: Map<string, string>,
+  offset: number,
+  limit: number,
+): { matches: any[]; played_count: number; officiated_count: number; has_more: boolean } {
+  const at = (m: any) => Date.parse(m.completed_at ?? m.updated_at ?? m.scheduled_at ?? '') || 0;
+  const sorted = [...rows].sort((x, y) => at(y) - at(x));
+  for (const m of sorted) {
+    // Played wins over officiated if both were ever true of one match.
+    m.my_role = sideOf.has(m.id) ? 'played' : 'officiated';
+    m.my_side = sideOf.get(m.id) ?? null;
+  }
+  const counts = (role: string) =>
+    sorted.filter((m) => m.my_role === role && m.status === 'completed' && !m.voided_at).length;
+  return {
+    matches: sorted.slice(offset, offset + limit),
+    played_count: counts('played'),
+    officiated_count: counts('officiated'),
+    has_more: offset + limit < sorted.length,
+  };
+}
+
+export async function matchHistory(req: Request, res: Response) {
+  const viewer = req.userId;
+  if (!viewer) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const raw = String((req.query as Record<string, string | undefined>).user_id ?? 'me');
+    const target = raw === 'me' ? viewer : raw;
+    if (!/^[0-9a-f-]{36}$/i.test(target)) return res.status(400).json({ error: 'user_id must be a user id' });
+    // A block hides a person's history from the other, in both directions.
+    if (target !== viewer && (await isBlockedBetween(viewer, target))) {
+      return res.json({ matches: [], played_count: 0, officiated_count: 0, has_more: false });
+    }
+    const limit = Math.min(Math.max(Number((req.query as any).limit ?? 50) || 50, 1), 100);
+    const offset = Math.max(Number((req.query as any).offset ?? 0) || 0, 0);
+
+    const [partsRes, umpRes] = await Promise.all([
+      supabase.from('match_participants').select('match_id, team_side').eq('user_id', target),
+      supabase.from('matches').select('id').eq('umpire_id', target),
+    ]);
+    const sideOf = new Map<string, string>();
+    for (const p of partsRes.data ?? []) sideOf.set(p.match_id as string, p.team_side as string);
+    const officiated = new Set((umpRes.data ?? []).map((m) => m.id as string));
+    const ids = Array.from(new Set([...sideOf.keys(), ...officiated]));
+    if (ids.length === 0) return res.json({ matches: [], played_count: 0, officiated_count: 0, has_more: false });
+
+    const rows: any[] = [];
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data, error } = await supabase
+        .from('matches')
+        .select('*')
+        .in('id', ids.slice(i, i + 200))
+        .in('status', ['completed', 'abandoned']);
+      if (error) return res.status(500).json({ error: sanitizeError(error) });
+      rows.push(...(data ?? []));
+    }
+    const out = buildHistory(rows, sideOf, offset, limit);
+    await attachTeamNames(out.matches);
+    return res.json(out);
+  } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
@@ -1512,7 +1682,7 @@ export async function completeMatch(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
-    const { winner_team_id, walkover, walkover_reason, is_draw, idempotent } = req.body || {};
+    const { winner_team_id, winner_side, walkover, walkover_reason, is_draw, idempotent } = req.body || {};
 
     // SC-376: let the recorder submit the SCORE alongside the result.
     //
@@ -1548,6 +1718,17 @@ export async function completeMatch(req: Request, res: Response) {
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can complete' : 'Only the creator or umpire can complete' });
     }
+    // Phase 3: the winning SIDE, from a team id or — for a match with no teams
+    // (singles, casual free-text) — from `winner_side`. Everything below that
+    // needs a winner reads this, not winner_team_id: with teams-only logic a
+    // decisive free-text match could never be completed, and a ranked singles
+    // win would have been scored as a draw.
+    const winnerSide = winnerSideOf({
+      winner_team_id,
+      winner_side,
+      team_a_id: match.team_a_id,
+      team_b_id: match.team_b_id,
+    });
     // SC-430: one scorer per match — ending the match is a scoring write like any other.
     // 409 with LEASE_LOST so the outbox halts the queue and asks the human rather
     // than dropping or silently merging anything.
@@ -1586,7 +1767,7 @@ export async function completeMatch(req: Request, res: Response) {
     // result" case stops being blocked. The bracket and allows_draw guards
     // below still run, so is_draw cannot force a draw onto a knockout tie or a
     // decisive-only sport.
-    if (match.status === 'scheduled' && !winner_team_id && !is_draw) {
+    if (match.status === 'scheduled' && !winner_team_id && !winnerSide && !is_draw) {
       const { count } = await supabase
         .from('match_events')
         .select('id', { count: 'exact', head: true })
@@ -1635,7 +1816,7 @@ export async function completeMatch(req: Request, res: Response) {
     // here is e.g. an organiser "record result" that left the winner blank.
     // `=== false` (not `!allows_draw`) so it fails OPEN if the column is ever
     // absent — never wrongly blocks a legitimate tie.
-    if (!winner_team_id) {
+    if (!winnerSide) {
       const { data: sportRow } = await supabase
         .from('sports').select('allows_draw').eq('id', match.sport_id).maybeSingle();
       if ((sportRow as { allows_draw?: boolean } | null)?.allows_draw === false) {
@@ -1695,7 +1876,7 @@ export async function completeMatch(req: Request, res: Response) {
       allPlayerIds = [...teamA, ...teamB];
 
       let outcome: 1 | 0 | 0.5 = 0.5;
-      if (winner_team_id) outcome = winner_team_id === match.team_a_id ? 1 : 0;
+      if (winnerSide) outcome = winnerSide === 'A' ? 1 : 0;
 
       const { data: existingProfiles } = await supabase
         .from('user_sport_profiles')
@@ -1725,8 +1906,8 @@ export async function completeMatch(req: Request, res: Response) {
         const result = isTeamA ? resultA : resultB;
         const oldRating = profile.rating;
         const clampedRating = Math.max(100, Math.round((oldRating + result.delta) * 100) / 100);
-        const isWinner = winner_team_id ? (isTeamA ? outcome === 1 : outcome === 0) : false;
-        const isLoser = winner_team_id ? (isTeamA ? outcome === 0 : outcome === 1) : false;
+        const isWinner = winnerSide ? (isTeamA ? outcome === 1 : outcome === 0) : false;
+        const isLoser = winnerSide ? (isTeamA ? outcome === 0 : outcome === 1) : false;
         corePayloadProfiles.push({
           user_id: uid,
           sport_id: match.sport_id,
@@ -1735,14 +1916,14 @@ export async function completeMatch(req: Request, res: Response) {
           matches_played: profile.matches_played + 1,
           wins: profile.wins + (isWinner ? 1 : 0),
           losses: profile.losses + (isLoser ? 1 : 0),
-          draws: profile.draws + (!winner_team_id ? 1 : 0),
+          draws: profile.draws + (!winnerSide ? 1 : 0),
           // SC-131 deltas — read by finalize_match (mig 054), applied ADDITIVELY so
           // concurrent completions of a player's different matches don't lose an update.
           // Both shapes travel together, so the JS is drop-in with either function version.
           rating_delta: Math.round(result.delta * 100) / 100,
           win_inc: isWinner ? 1 : 0,
           loss_inc: isLoser ? 1 : 0,
-          draw_inc: !winner_team_id ? 1 : 0,
+          draw_inc: !winnerSide ? 1 : 0,
         });
         ratingHistoryRows.push({
           user_id: uid,
@@ -1780,8 +1961,7 @@ export async function completeMatch(req: Request, res: Response) {
         const aS = Number(ss?.A?.score ?? ss?.A?.runs ?? 0);
         const bS = Number(ss?.B?.score ?? ss?.B?.runs ?? 0);
         casualWinnerSide = aS > bS ? 'A' : bS > aS ? 'B' : null;
-        if (winner_team_id === match.team_a_id) casualWinnerSide = 'A';
-        else if (winner_team_id === match.team_b_id) casualWinnerSide = 'B';
+        if (winnerSide) casualWinnerSide = winnerSide;
       } catch { /* no scores → draw */ }
       for (const p of participants) {
         const isWin = casualWinnerSide != null && p.team_side === casualWinnerSide;
@@ -1858,8 +2038,7 @@ export async function completeMatch(req: Request, res: Response) {
     // gifts), a casual win must never mint currency.
     if (match.is_ranked && !walkover && allPlayerIds.length > 0) {
       // Award 5 coins to winners — idempotent per (user,match) via coin_events.
-      if (winner_team_id) {
-        const winnerSide = winner_team_id === match.team_a_id ? 'A' : 'B';
+      if (winnerSide) {
         const winnerIds = (participants ?? []).filter((p) => p.team_side === winnerSide).map((p) => p.user_id);
         for (const uid of winnerIds) void awardCoins(uid, `win_match_${id}`, 5, 'Won a match');
       }
@@ -1906,6 +2085,7 @@ export async function completeMatch(req: Request, res: Response) {
     // never writes → "Match Draw" for app-scored matches (A5-007); and it relied
     // on winner_team_id, which is null for free-text-team matches → no winner
     // recorded even with a clear winner (L-001/L-002). winner_side fixes both.
+    let resultForNotice: string | null = null;
     try {
       const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
       // SC-343: normalize (Table Tennis is 'table-tennis' in the DB but the
@@ -1949,11 +2129,9 @@ export async function completeMatch(req: Request, res: Response) {
       // The explicit winner is passed in rather than applied first, so it can no
       // longer force a winner onto level scores — that is what produced
       // "WINNER T70450 · won by 0 runs" on a 0/0 vs 0/0 match.
-      const explicitWinner: 'A' | 'B' | null =
-        winner_team_id && winner_team_id === match.team_a_id ? 'A'
-        : winner_team_id && winner_team_id === match.team_b_id ? 'B'
-        : null;
-      const { text: resultText, winnerSide } = deriveResultText({
+      // Phase 3: the side named by team id OR winner_side (singles have no teams).
+      const explicitWinner: 'A' | 'B' | null = winnerSide;
+      const { text: resultText, winnerSide: derivedSide } = deriveResultText({
         sport: slug,
         teamAName: aName,
         teamBName: bName,
@@ -1974,23 +2152,24 @@ export async function completeMatch(req: Request, res: Response) {
       });
 
       ss.result = resultText;
-      ss.winner_side = winnerSide;
+      ss.winner_side = derivedSide;
+      resultForNotice = resultText;
       // SC-254: mark a walkover so it's distinguishable from a genuine 0-0 played
       // result, and override the score-derived text ("… won by 0 runs") with the
       // forfeit label. winner_team_id is always present on a walkover → winnerSide
       // is set here.
-      if (walkover && winnerSide) {
+      if (walkover && derivedSide) {
         ss.walkover = true;
         if (walkover_reason) ss.walkover_reason = String(walkover_reason).slice(0, 200);
-        const wName = winnerSide === 'A' ? aName : bName;
+        const wName = derivedSide === 'A' ? aName : bName;
         ss.result = `${wName} won by walkover`;
       }
       const patch: Record<string, any> = { score_summary: ss };
       // Backfill winner_team_id when the client didn't send it but a real team
       // maps to the winning side. Free-text matches keep null team ids (winner
       // is recorded via winner_side only).
-      if (!winner_team_id && winnerSide) {
-        const wid = winnerSide === 'A' ? match.team_a_id : match.team_b_id;
+      if (!winner_team_id && derivedSide) {
+        const wid = derivedSide === 'A' ? match.team_a_id : match.team_b_id;
         if (wid) patch.winner_team_id = wid;
       }
       // SC-373: record HOW the match was decided, so a draw is a fact of its own
@@ -1998,7 +2177,9 @@ export async function completeMatch(req: Request, res: Response) {
       // itself goes through the finalize_match RPC, which knows nothing about
       // this column — putting it on the JS update beside that RPC reached only
       // the pre-migration fallback, i.e. never in production.
-      patch.result_type = walkover ? 'walkover' : ((winner_team_id || patch.winner_team_id) ? 'decisive' : 'draw');
+      // Phase 3: decisive when a SIDE won — a singles or free-text win has no
+      // team id, and keying on one recorded every such win as a draw.
+      patch.result_type = walkover ? 'walkover' : ((winner_team_id || patch.winner_team_id || derivedSide) ? 'decisive' : 'draw');
       // SC-415: stamp when the match was ACTUALLY completed. The activity heatmap
       // used to bucket by scheduled_at, so a match completed on a different day
       // from its slot landed on the wrong day — or vanished entirely when the
@@ -2053,6 +2234,23 @@ export async function completeMatch(req: Request, res: Response) {
         body: `Your ${sportName} rating changed: ${row.old_rating} \u2192 ${row.new_rating} (${sign}${row.delta})`,
         data: { sportId: match.sport_id, screen: 'SportProfile' },
       });
+    }
+
+    // U-32: tell the people it happened to. Nobody was told a match had finished
+    // or who won; the line-up and both teams' rosters (the same audience a void
+    // reaches) now get the stored result sentence. Not the person who ended it.
+    if (!walkover) {
+      try {
+        const audience = await matchAudienceIds(id, match.team_a_id, match.team_b_id);
+        if (audience.length > 0) {
+          void notifyUsers(audience, {
+            type: 'match_result',
+            title: 'Match result',
+            body: resultForNotice ?? `${match.team_a_name ?? 'Your match'} is complete.`,
+            data: { matchId: id, screen: 'MatchDetail' },
+          }, { actorId: userId });
+        }
+      } catch { /* best-effort */ }
     }
 
     // PRD Section 4: if the match had an assigned umpire, prompt all

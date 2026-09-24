@@ -35,6 +35,9 @@ export const KNOWN_EVENT_TYPES = [
   // Chess
   'move',
   'queen',
+  // Rally sports · Phase 3: the scorer's correction to the automatic serve
+  // indicator. Carries no score; every rollup ignores it.
+  'serve_swap',
   // Generic / shared
   'score',
   'point',

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { supabase } from '../utils/supabase';
+import { pendingRankedOpponent } from '../utils/singles';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
@@ -53,7 +54,7 @@ async function fanoutScoreUpdate(
 export async function authorizeScorer(matchId: string, userId: string, deviceId?: string | null) {
   const { data: match } = await supabase
     .from('matches')
-    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at')
+    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_b_name')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return { ok: false as const, status: 404, error: 'Match not found' };
@@ -197,6 +198,20 @@ export async function createEvent(req: Request, res: Response) {
       }
       if (outOfRange(payload.runs, 0, 7)) {
         return res.status(400).json({ error: 'runs must be an integer between 0 and 7' });
+      }
+    }
+
+    // Phase 3 · decision 2: a RANKED singles match cannot start until the
+    // opponent has accepted. Checked only before the first point (status still
+    // scheduled) — once it is live, it was accepted. 409 so the scorer's outbox
+    // halts and asks rather than dropping the point.
+    if (match.status === 'scheduled' || match.status === 'upcoming') {
+      const gate = await pendingRankedOpponent(match);
+      if (gate.pending) {
+        return res.status(409).json({
+          error: `${gate.opponentName ?? 'Your opponent'} hasn't accepted this ranked match yet. It can start once they do.`,
+          code: 'OPPONENT_NOT_ACCEPTED',
+        });
       }
     }
 

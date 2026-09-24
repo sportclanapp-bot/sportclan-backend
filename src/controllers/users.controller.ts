@@ -1,4 +1,6 @@
 import { Request, Response } from 'express';
+import { isAdminUser } from '../middleware/admin.middleware';
+import { officiatedCount } from '../utils/officiated';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { inviteFreshCutoffIso } from './invites.controller';
@@ -245,6 +247,10 @@ export async function getMe(req: Request, res: Response) {
     // best-effort — never fail the profile over it
   }
 
+  // Phase 3: the server says who is an admin (DB flag OR the env whitelist), and
+  // umpires see how many matches they have officiated.
+  const [is_admin, officiated_count] = await Promise.all([isAdminUser(userId), officiatedCount(userId)]);
+
   return res.json({
     user: {
       ...data,
@@ -254,6 +260,8 @@ export async function getMe(req: Request, res: Response) {
       followers_count,
       following_count,
       sport_ids,
+      is_admin,
+      officiated_count,
     },
   });
 }
@@ -415,6 +423,8 @@ export async function getUserById(req: Request, res: Response) {
     // best-effort — a stats hiccup must not fail the profile
   }
   safeUser.total_matches = total_matches;
+  // Phase 3 · decision 4: an umpire's public profile shows what they've officiated.
+  safeUser.officiated_count = await officiatedCount(id);
 
   return res.json({
     user: safeUser,

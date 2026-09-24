@@ -7,6 +7,8 @@ import { isTerminalMatchStatus } from '../utils/validation';
 import { canOfficiateMatch } from '../utils/tournamentAuth';
 import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
+import { isSinglesShape } from '../utils/singles';
+import { notifyUser } from '../utils/notify';
 
 /**
  * Shared gate for match-mutating feature endpoints (DLS, event edit/delete,
@@ -48,6 +50,34 @@ async function loadScorableMatch(
     }
   }
   return {};
+}
+
+/**
+ * Phase 3 · the challenger hears the answer. Only when the one answering is the
+ * singles opponent (side B of a no-team, one-a-side match) — a team member's
+ * RSVP to a team match stays the quiet thing it always was. Best-effort.
+ */
+async function notifyChallengerOfAnswer(matchId: string, userId: string, accepted: boolean): Promise<void> {
+  try {
+    const [{ data: match }, { data: parts }] = await Promise.all([
+      supabase.from('matches').select('id, created_by, team_a_id, team_b_id, team_b_name, is_ranked, status').eq('id', matchId).maybeSingle(),
+      supabase.from('match_participants').select('user_id, team_side').eq('match_id', matchId),
+    ]);
+    if (!match || isTerminalMatchStatus(match.status)) return;
+    if (!isSinglesShape(match, parts ?? [])) return;
+    const opponent = (parts ?? []).find((p) => p.team_side === 'B')?.user_id;
+    if (opponent !== userId || !match.created_by || match.created_by === userId) return;
+    const who = match.team_b_name ?? 'Your opponent';
+    await notifyUser({
+      userId: match.created_by,
+      type: accepted ? 'match_challenge_accepted' : 'match_challenge_declined',
+      title: accepted ? `${who} accepted` : `${who} declined`,
+      body: accepted
+        ? `Your ${match.is_ranked ? 'ranked ' : ''}singles match is on.`
+        : 'They can’t make this match. You can cancel it or pick another time.',
+      data: { matchId, screen: 'MatchDetail' },
+    });
+  } catch { /* best-effort */ }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -263,6 +293,15 @@ export async function setMatchAvailability(req: Request, res: Response) {
       return res.status(400).json({ error: 'status must be available, unavailable, or maybe' });
     }
 
+    // Phase 3: for a singles match this row IS the opponent's answer to the
+    // challenge. Read the previous answer so a repeat tap doesn't re-notify.
+    const { data: prev } = await supabase
+      .from('match_availability')
+      .select('status')
+      .eq('match_id', id)
+      .eq('user_id', userId)
+      .maybeSingle();
+
     const { data, error } = await supabase
       .from('match_availability')
       .upsert(
@@ -272,6 +311,10 @@ export async function setMatchAvailability(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    if ((prev as { status?: string } | null)?.status !== status && status !== 'maybe') {
+      void notifyChallengerOfAnswer(id, userId, status === 'available');
+    }
     return res.json({ availability: data });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

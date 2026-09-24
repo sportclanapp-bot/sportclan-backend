@@ -23,6 +23,8 @@ export async function awardCoins(
    * no existing caller changes behaviour by being left alone.
    */
   description?: string,
+  /** V-6: the transaction type; a reversal is 'coins_reversed', not 'earned'. */
+  txType: string = 'coins_earned',
 ): Promise<AwardResult> {
   // Does the event already exist?
   const { data: existing } = await supabase
@@ -74,7 +76,7 @@ export async function awardCoins(
   const newBalance = currentBalance + coins;
   await supabase.from('transactions').insert({
     user_id: userId,
-    type: 'coins_earned',
+    type: txType,
     coins,
     description: description ?? eventType,
     status: 'completed',

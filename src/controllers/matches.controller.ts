@@ -36,6 +36,7 @@ import { recomputeSummary, writeCricketInningsStats } from './scoring.controller
 import { awardBadgesSafe } from './badges.controller';
 import { isSinglesSport, winnerSideOf, challengeText, pendingRankedOpponent, isSinglesShape } from '../utils/singles';
 import { isBlockedBetween } from '../utils/blocks';
+import { reconcileWinCoins } from '../utils/winCoins';
 
 /** U-13: is `userId` someone who could be in this match's line-up? */
 export async function viewerCanPlay(
@@ -2488,6 +2489,9 @@ export async function voidMatch(req: Request, res: Response) {
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
+    // V-6: a voided win pays nothing — take the +5 win coins back (ledger).
+    await reconcileWinCoins(id).catch(() => undefined);
+
     // SC-442 (M5/D3) · tell both teams. A void changes records, ratings and
     // standings that people have already seen, so the people it changed them for
     // are told — not left to notice. Best-effort and fire-and-forget: a
@@ -2542,6 +2546,9 @@ export async function unvoidMatch(req: Request, res: Response) {
 
     const deltas = await recordDeltas(id);
     if (deltas.length > 0) await applyRecordDeltas(match.sport_id, deltas, 1);
+
+    // V-6: a restored win pays again — re-grant the +5 win coins (ledger).
+    await reconcileWinCoins(id).catch(() => undefined);
 
     // SC-442 (M5/D3) · the same audience that heard about the void hears about
     // the restore. Telling people a match stopped counting and never telling

@@ -4,6 +4,7 @@ import { deviceIdOf } from '../utils/deviceHeader';
 import { supabase } from '../utils/supabase';
 import { pendingRankedOpponent } from '../utils/singles';
 import { tennisReplay, type TennisScore } from '../utils/tennisCore';
+import { scorePush } from '../utils/scorePush';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
@@ -331,18 +332,13 @@ export async function createEvent(req: Request, res: Response) {
               : `${playerName} out | ${teamName(side)} ${scoreStr}`;
           void fanoutScoreUpdate(matchId, title, body, userId);
         } else {
-          // generic score / goal — points or goals across all other sports.
-          // Rally-family sports (badminton/TT/volleyball/pickleball/tennis) keep
-          // the live running count in `points` (their `score` is sets-won, 0
-          // early game); football goals / basketball points keep it in
-          // `score`/`goals`.
-          const val = (s: any) => {
-            if (!s) return 0;
-            if (Array.isArray(s.sets)) return s.points ?? 0;
-            return s.score ?? s.goals ?? s.points ?? 0;
-          };
-          const title = payload?.kind === 'goal' ? 'GOAL!' : 'Score!';
-          const body = `${teamName(side)} scores! ${val(summary.A)}-${val(summary.B)}`;
+          // V-5: sports scored in games/sets push when a game (tennis: a set)
+          // ends, quoting it — not on every rally, and never "scores! 0-0".
+          const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
+          const slug = String((sportRow as { slug?: string } | null)?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
+          const push = scorePush({ slug, summary, side: side === 'B' ? 'B' : 'A', teamName: teamName(side), kind: payload?.kind as string | undefined });
+          if (!push) return res.json({ event });
+          const { title, body } = push;
           void fanoutScoreUpdate(matchId, title, body, userId);
         }
       }

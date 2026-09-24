@@ -1,0 +1,56 @@
+/**
+ * V-5 · what a live score push says — and whether there is one at all.
+ *
+ * The fan-out pushed on EVERY 'score' event. For a rally sport that is every
+ * rally: test 3's badminton match sent each player 92 pushes. And it quoted the
+ * summary's live `points`, which a game-ending point has already reset — so the
+ * point that won a game was announced as "SC434 Fresh QA scores! 0-0".
+ *
+ * Now, for sports scored in games and sets, a push marks the moment that
+ * matters and quotes it:
+ *   rally / carrom  a GAME ends   → "QA Flow Test wins game 2 · 23–21"
+ *   tennis          a SET ends    → "SC434 Fresh QA wins set 3 · 7–6 (7–5)"
+ * A point that ends nothing sends nothing. (The match end has its own
+ * match_result notification.) Every other sport keeps the old per-score push.
+ */
+type SideLine = { score?: number; points?: number; games?: number; sets?: number[]; goals?: number } | undefined;
+
+const RALLY = new Set(['badminton', 'tabletennis', 'pickleball', 'volleyball', 'carrom']);
+
+export function scorePush(args: {
+  slug: string;
+  summary: { A?: SideLine; B?: SideLine; set_tiebreaks?: Array<{ A: number; B: number } | null> };
+  side: 'A' | 'B';
+  teamName: string;
+  kind?: string;
+}): { title: string; body: string } | null {
+  const { slug, summary, side, teamName, kind } = args;
+  const A = summary.A ?? {};
+  const B = summary.B ?? {};
+  const setsA = A.sets ?? [];
+  const setsB = B.sets ?? [];
+  const n = Math.max(setsA.length, setsB.length);
+  const mine = (a: number, b: number) => (side === 'A' ? `${a}–${b}` : `${b}–${a}`);
+
+  if (RALLY.has(slug)) {
+    // A game just ended exactly when the live points are back at 0-0 and a
+    // completed game exists — this event was its last point.
+    const gameEnded = n > 0 && (A.points ?? 0) === 0 && (B.points ?? 0) === 0;
+    if (!gameEnded) return null;
+    const word = slug === 'volleyball' ? 'set' : slug === 'carrom' ? 'board' : 'game';
+    return { title: `${word[0]!.toUpperCase()}${word.slice(1)} to ${teamName}`, body: `${teamName} wins ${word} ${n} · ${mine(setsA[n - 1] ?? 0, setsB[n - 1] ?? 0)}` };
+  }
+
+  if (slug === 'tennis') {
+    const setEnded = n > 0 && (A.games ?? 0) === 0 && (B.games ?? 0) === 0 && (A.points ?? 0) === 0 && (B.points ?? 0) === 0;
+    if (!setEnded) return null;
+    const tb = summary.set_tiebreaks?.[n - 1];
+    const games = mine(setsA[n - 1] ?? 0, setsB[n - 1] ?? 0);
+    const tbText = tb ? ` (${mine(tb.A, tb.B)})` : '';
+    return { title: `Set to ${teamName}`, body: `${teamName} wins set ${n} · ${games}${tbText}` };
+  }
+
+  // Goals and baskets: every score is the moment.
+  const val = (s: SideLine) => (s ? s.score ?? s.goals ?? s.points ?? 0 : 0);
+  return { title: kind === 'goal' ? 'GOAL!' : 'Score!', body: `${teamName} scores! ${val(summary.A)}-${val(summary.B)}` };
+}

@@ -56,7 +56,9 @@ test('singles sports are the one-a-side ones, whatever the slug spelling', () =>
 test('the challenge says who, what, and that it needs an answer', () => {
   const t = challengeText({ challengerName: 'SC434 Fresh QA', sportName: 'Badminton', ranked: true, when: null });
   expect(t.title).toBe('SC434 Fresh QA challenged you');
-  expect(t.body).toBe('a ranked badminton singles match. Open it to accept or decline.');
+  expect(t.body).toBe('A ranked badminton singles match. Open it to accept or decline.');
+  expect(challengeText({ challengerName: 'X', sportName: 'Tennis', ranked: false, when: null }).body)
+    .toBe('A tennis singles match. Open it to accept or decline.');
 });
 
 describe('wiring', () => {

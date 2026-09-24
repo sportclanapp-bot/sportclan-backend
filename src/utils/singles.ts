@@ -74,7 +74,8 @@ export function challengeText(args: {
   ranked: boolean;
   when: string | null;
 }): { title: string; body: string } {
-  const kind = args.ranked ? 'a ranked' : 'a';
+  // V-2: a sentence, so it starts with a capital — it reads on its own under the title.
+  const kind = args.ranked ? 'A ranked' : 'A';
   const when = args.when ? ` · ${args.when}` : '';
   return {
     title: `${args.challengerName} challenged you`,

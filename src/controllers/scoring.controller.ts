@@ -207,7 +207,10 @@ export async function createEvent(req: Request, res: Response) {
     // opponent has accepted. Checked only before the first point (status still
     // scheduled) — once it is live, it was accepted. 409 so the scorer's outbox
     // halts and asks rather than dropping the point.
-    if (match.status === 'scheduled' || match.status === 'upcoming') {
+    // V-3: a serve swap before the first rally is a pre-match setting (the
+    // toss), not play — it neither starts the match nor needs the opponent's yes.
+    const startsPlay = event_type !== 'serve_swap';
+    if (startsPlay && (match.status === 'scheduled' || match.status === 'upcoming')) {
       const gate = await pendingRankedOpponent(match);
       if (gate.pending) {
         return res.status(409).json({
@@ -221,7 +224,7 @@ export async function createEvent(req: Request, res: Response) {
     // to `live`. The toss handler already does this for the normal flow; this
     // covers the "skip toss" path where scoring starts without a recorded toss.
     // Guard so we never downgrade a completed/cancelled match.
-    if (match.status === 'scheduled' || match.status === 'upcoming') {
+    if (startsPlay && (match.status === 'scheduled' || match.status === 'upcoming')) {
       try {
         await supabase.from('matches').update({ status: 'live' }).eq('id', matchId);
       } catch {

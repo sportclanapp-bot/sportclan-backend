@@ -8,6 +8,7 @@ import { istDay, istDayStartIso } from '../utils/appTime';
 import { formatTimeIst } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCounts';
+import { plural } from '../utils/plural';
 
 // ────────────────────────────────────────────────────────────────────────────
 // TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
@@ -950,8 +951,8 @@ export async function runReEngagement(): Promise<{ sent: number }> {
       const rows: NotifRow[] = []; const userIds: string[] = []; const bodies = new Map<string, string>();
       for (const u of chunkUsers) {
         const un = unread.get(u.id) ?? 0; const nf = followers.get(u.id) ?? 0;
-        const body = un > 0 ? `You have ${un} unread notifications in SportClan`
-          : nf > 0 ? `${nf} players followed you while you were away!`
+        const body = un > 0 ? `You have ${plural(un, 'unread notification', 'unread notifications')} in SportClan`
+          : nf > 0 ? `${plural(nf, 'player', 'players')} followed you while you were away!`
           : `Your SportClan clan misses you! 🏆 See what's happening`;
         rows.push({ user_id: u.id, type: 'reengagement', title: 'We miss you!', body, data: { screen: 'HomeMain' } });
         userIds.push(u.id); bodies.set(u.id, body);
@@ -1021,7 +1022,7 @@ export async function runWeeklyDigest(): Promise<{ sent: number }> {
       for (const u of chunkUsers) {
         const nf = followers.get(u.id) ?? 0; const mp = matches.get(u.id) ?? 0;
         if (nf === 0 && mp === 0) continue; // skip users with no weekly activity
-        const body = `📊 Your week: +${nf} followers, ${mp} matches played`;
+        const body = `📊 Your week: +${plural(nf, 'follower', 'followers')}, ${plural(mp, 'match', 'matches')} played`;
         rows.push({ user_id: u.id, type: 'weekly_digest', title: 'Your weekly digest', body, data: { followers: nf, matches: mp } });
         userIds.push(u.id); bodies.set(u.id, body);
       }

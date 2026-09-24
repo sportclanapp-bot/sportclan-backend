@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { notifyUser } from '../utils/notify';
 import { parsePagination, isRangeError, pageMeta } from '../utils/pagination';
+import { plural } from '../utils/plural';
 
 // POST /notifications/token  { token, platform: 'ios'|'android'|'web' }
 // Saves (or upserts) a push token for the authenticated user.
@@ -181,7 +182,7 @@ export async function weeklyDigest(req: Request, res: Response) {
       userId,
       type: 'weekly_digest',
       title: 'Your Week in Sports',
-      body: `${stats.matches_played} matches \u00B7 ${stats.rating_change >= 0 ? '+' : ''}${stats.rating_change} rating \u00B7 ${stats.new_followers} new followers`,
+      body: `${plural(stats.matches_played, 'match', 'matches')} \u00B7 ${stats.rating_change >= 0 ? '+' : ''}${stats.rating_change} rating \u00B7 ${plural(stats.new_followers, 'new follower', 'new followers')}`,
       data: stats as any,
     });
   }

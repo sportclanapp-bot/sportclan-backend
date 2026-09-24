@@ -3,6 +3,7 @@ import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { supabase } from '../utils/supabase';
 import { pendingRankedOpponent } from '../utils/singles';
+import { tennisReplay, type TennisScore } from '../utils/tennisCore';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
@@ -391,11 +392,9 @@ const SET_CONFIG: Record<
   pickleball:  { target: 11, maxSets: 3, winBy2: true },
   volleyball:  { target: 25, maxSets: 5, finalTarget: 15, winBy2: true },
   carrom:      { target: 25, maxSets: 3, winBy2: false }, // boards to 25, no 2-lead
-  // Tennis scored at games→sets granularity (each 'score' event = a game won):
-  // 6 games to take a set with a 2-game lead, or 7-6 via the cap (tiebreak),
-  // best of 3 sets — consistent with its racket peers (SC-15). Previously tennis
-  // was absent here and fell through to the generic flat point tally.
-  tennis:      { target: 6, cap: 7, maxSets: 3, winBy2: true },
+  // Tennis is NOT here (T-1): this table reads each 'score' event as a whole
+  // game/board, and tennis events are POINTS. It has its own branch in
+  // recomputeSummary, replayed through the shared tennisCore.
 };
 
 function setWon(
@@ -694,6 +693,7 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
 
   const A: Record<string, any> = { score: 0 };
   const B: Record<string, any> = { score: 0 };
+  let tennisState: TennisScore | null = null;
   const sides: Record<'A' | 'B', Record<string, any>> = { A, B };
   const sideOf = (p: any): 'A' | 'B' => ((p?.team_side as 'A' | 'B') === 'B' ? 'B' : 'A');
   let chessResult: string | null = null; // SC-47
@@ -753,6 +753,17 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
       if (e.event_type === 'score') sides[sideOf(p)].score += Number(p.value ?? 0);
     }
     A.points = A.score; B.points = B.score;
+  } else if (slug === 'tennis') {
+    // T-1/T-2 · per-POINT events through the shared rule (utils/tennisCore, the
+    // same file the app scores with): points → games → sets, with a real 6-6
+    // tiebreak. The server used to count every point as a GAME.
+    tennisState = tennisReplay(
+      events.filter((e) => e.event_type === 'score').map((e) => sideOf(e.payload || {})),
+    );
+    A.score = tennisState.setsWon.A; B.score = tennisState.setsWon.B;       // sets won
+    A.sets = tennisState.sets.map((x) => x.A); B.sets = tennisState.sets.map((x) => x.B); // games per set
+    A.games = tennisState.games.A; B.games = tennisState.games.B;           // current set
+    A.points = tennisState.points.A; B.points = tennisState.points.B;       // current game / tiebreak
   } else if (SET_CONFIG[slug]) {
     const r = rollupSets(SET_CONFIG[slug], events, sideOf);
     A.score = r.setsA; B.score = r.setsB;
@@ -846,6 +857,12 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
   // goals/points/rally-points. Side totals (A/B) above are untouched, so results
   // and the A7-002 results surface don't change.
   summary.players = aggregatePlayers(slug, events as any[]);
+  if (tennisState) {
+    // The tiebreak in play, and each completed set's tiebreak points (or null),
+    // so a hub card or result can say "7–6 (7–5)".
+    summary.tiebreak = tennisState.tiebreak;
+    summary.set_tiebreaks = tennisState.sets.map((x) => x.tiebreak ?? null);
+  }
   // Chess has no scoring events, so aggregatePlayers yields an empty map. Instead
   // represent the credited WINNER as a 1-entry rollup keyed by their player_id
   // (guest-safe) with { name, side: winner_side }, so the scorecard/MVP can

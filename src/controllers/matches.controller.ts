@@ -724,6 +724,21 @@ export async function leaveMatch(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
+    // V-1: leaving is for OPEN pickups — a group that loses one of several. In
+    // a singles match it strands the other player with a one-person "match",
+    // and on a team match the line-up belongs to the officials. The challenger
+    // cancels, the opponent declines, a team player answers "Can't".
+    const { data: m } = await supabase
+      .from('matches').select('is_open, team_a_id, team_b_id').eq('id', id).maybeSingle();
+    if (m && !m.is_open) {
+      const singles = !m.team_a_id && !m.team_b_id;
+      return res.status(409).json({
+        error: singles
+          ? 'You can’t leave a singles match — decline the challenge instead, or the organiser can cancel it.'
+          : 'Only open pickup matches can be left. Answer “Can’t” so the organiser knows.',
+        code: 'NOT_AN_OPEN_MATCH',
+      });
+    }
     const { data, error } = await supabase.rpc('leave_open_match', {
       p_match_id: id,
       p_user_id: userId,

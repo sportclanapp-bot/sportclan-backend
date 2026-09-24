@@ -319,6 +319,16 @@ export async function notifyUnlessBlocked(actorId: string, args: NotifyArgs): Pr
 // a pre-match change (the normal case) — the entered teams were never told. A
 // TBD/null team side is skipped (nobody there yet). Casual matches with
 // free-text teams (null team ids) fall back to participants only.
+/**
+ * W-5: the people who pressed Follow on a match. They get every set/game push
+ * while it runs, so they get the result too — they used to hear each set and
+ * never who won.
+ */
+export async function matchFollowerIds(matchId: string): Promise<string[]> {
+  const { data } = await supabase.from('match_followers').select('user_id').eq('match_id', matchId);
+  return Array.from(new Set((data ?? []).map((f: { user_id: string }) => f.user_id).filter(Boolean)));
+}
+
 export async function matchAudienceIds(
   matchId: string,
   teamAId: string | null | undefined,

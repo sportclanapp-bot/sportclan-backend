@@ -7,7 +7,7 @@ import { getMatchLiveStatus } from '../utils/liveStatus';
 import { istDay } from '../utils/appTime';
 import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
-import { notifyUser, notifyUsers, matchAudienceIds } from '../utils/notify';
+import { notifyUser, notifyUsers, matchAudienceIds, matchFollowerIds } from '../utils/notify';
 import { isTournamentOrganiser, canOfficiateMatch } from '../utils/tournamentAuth';
 import { blockedUserIds } from '../utils/blocks';
 import { upsertVenue } from './venues.controller';
@@ -2283,10 +2283,15 @@ export async function completeMatch(req: Request, res: Response) {
 
     // U-32: tell the people it happened to. Nobody was told a match had finished
     // or who won; the line-up and both teams' rosters (the same audience a void
-    // reaches) now get the stored result sentence. Not the person who ended it.
+    // reaches) now get the stored result sentence — and so do its followers
+    // (W-5), who were told every set but not who won. Not the person who ended it.
     if (!walkover) {
       try {
-        const audience = await matchAudienceIds(id, match.team_a_id, match.team_b_id);
+        const [players, followers] = await Promise.all([
+          matchAudienceIds(id, match.team_a_id, match.team_b_id),
+          matchFollowerIds(id),
+        ]);
+        const audience = Array.from(new Set([...players, ...followers]));
         if (audience.length > 0) {
           void notifyUsers(audience, {
             type: 'match_result',

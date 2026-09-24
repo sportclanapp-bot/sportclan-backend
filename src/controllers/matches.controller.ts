@@ -37,6 +37,25 @@ import { awardBadgesSafe } from './badges.controller';
 import { isSinglesSport, winnerSideOf, challengeText, pendingRankedOpponent, isSinglesShape } from '../utils/singles';
 import { isBlockedBetween } from '../utils/blocks';
 
+/** U-13: is `userId` someone who could be in this match's line-up? */
+export async function viewerCanPlay(
+  match: { team_a_id?: string | null; team_b_id?: string | null; umpire_id?: string | null },
+  userId: string | undefined,
+  participantIds: string[],
+): Promise<boolean> {
+  if (!userId || match.umpire_id === userId) return false;
+  if (participantIds.includes(userId)) return true;
+  const teamIds = [match.team_a_id, match.team_b_id].filter(Boolean) as string[];
+  if (teamIds.length === 0) return false;
+  const { data } = await supabase
+    .from('team_members')
+    .select('team_id')
+    .eq('user_id', userId)
+    .in('team_id', teamIds)
+    .limit(1);
+  return (data ?? []).length > 0;
+}
+
 // POST /matches — create. FREE for all (Change #6).
 export async function createMatch(req: Request, res: Response) {
   const userId = req.userId;
@@ -1161,6 +1180,16 @@ export async function getMatch(req: Request, res: Response) {
     // compute from created_by alone — that gap under-showed Score to co-organisers
     // and over-showed it (→403) to a fixture creator later removed as organiser.
     matchWithRating.can_officiate = await canOfficiateMatch(match, userId);
+
+    // U-13: could this viewer actually be in the line-up? Only then is "Are you
+    // playing?" a question worth asking them. It was shown to everyone — the
+    // umpire and pure spectators included. True for someone already in the
+    // line-up, or on either team's roster; never for the match's umpire.
+    const participantIds = (participants ?? []).map((p) => {
+      const u = (p as { user?: { id?: string } | Array<{ id?: string }> | null }).user;
+      return (Array.isArray(u) ? u[0]?.id : u?.id) ?? '';
+    }).filter(Boolean);
+    matchWithRating.viewer_can_play = await viewerCanPlay(match, userId, participantIds);
 
     // SC-259: expose the parent tournament's FORMAT so the client can tell a real
     // knockout bracket match (needs a decisive winner / walkover advancing-team)

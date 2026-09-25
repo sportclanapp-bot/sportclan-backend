@@ -2141,6 +2141,16 @@ export async function completeMatch(req: Request, res: Response) {
     // here is e.g. an organiser "record result" that left the winner blank.
     // `=== false` (not `!allows_draw`) so it fails OPEN if the column is ever
     // absent — never wrongly blocks a legitimate tie.
+    // F-17: a chess game ends with a result. With none recorded (no result
+    // event, no winner named, no explicit draw) the completion used to go
+    // through and store a draw nobody had entered. Walkovers are exempt.
+    if (!winnerSide && !is_draw && !walkover && normSportSlug(sportRow?.slug) === 'chess'
+      && !['White wins', 'Black wins', 'Draw'].includes(String(canonical?.chess?.result ?? ''))) {
+      return res.status(400).json({
+        error: 'Record the result first: White wins, Black wins or a draw.',
+        code: 'CHESS_RESULT_REQUIRED',
+      });
+    }
     if (!winnerSide) {
       if (sportRow?.allows_draw === false) {
         // F-24: the old wording was "This sport can't end level", which a scorer

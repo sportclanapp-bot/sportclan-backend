@@ -37,3 +37,10 @@ test('the profile reads the rollups, not created_by', () => {
   expect(stats).not.toContain('created_by === id');
   expect(stats).toContain("...(slug === 'hockey' ? { green_cards: cards('green') } : {}),");
 });
+
+test('only this sport\'s completed, unvoided matches count', () => {
+  const parts = src.slice(src.indexOf('const partsP = Promise.resolve(supabase'), src.indexOf('cityP.catch('));
+  expect(parts).toContain(".is('match.voided_at', null)");
+  expect(parts).toContain(".eq('match.sport_id', sportId)");
+  expect(parts).toContain(".eq('match.status', 'completed')");
+});

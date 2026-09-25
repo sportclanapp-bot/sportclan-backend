@@ -1340,11 +1340,17 @@ export async function getSportProfile(req: Request, res: Response) {
   const cityP = Promise.resolve(supabase.from('users').select('city_id').eq('id', id).maybeSingle());
   // SC-424: through an !inner join on matches so a VOIDED match drops out here,
   // once, for every per-sport branch below (see statsTask).
+  // F-53 (MATCH_CREATE_TEST_5): THIS sport's completed matches only. The list
+  // had no sport or status filter, so once the stats read the credited player a
+  // basketball profile summed that player's badminton and carrom points too
+  // (75 for a player with 5), and abandoned matches counted.
   const partsP = Promise.resolve(supabase
     .from('match_participants')
-    .select('match_id, match:matches!inner(id, voided_at)')
+    .select('match_id, match:matches!inner(id, voided_at, sport_id, status)')
     .eq('user_id', id)
-    .is('match.voided_at', null));
+    .is('match.voided_at', null)
+    .eq('match.sport_id', sportId)
+    .eq('match.status', 'completed'));
   cityP.catch(() => undefined);
   partsP.catch(() => undefined);
   const [hidden, inactive, { data: profile }] = await Promise.all([

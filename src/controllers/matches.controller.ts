@@ -39,7 +39,7 @@ import { isBlockedBetween } from '../utils/blocks';
 import { reconcileWinCoins } from '../utils/winCoins';
 import { stepTimer } from '../utils/stepTimer';
 import { leaseRefusal } from '../utils/leaseCore';
-import { getSport, normSportSlug } from '../utils/sportCache';
+import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 
 /** U-13: is `userId` someone who could be in this match's line-up? */
 export async function viewerCanPlay(
@@ -779,8 +779,9 @@ async function attachChessElo(matches: any[]): Promise<void> {
   if (!matches || matches.length === 0) return;
   const sportIds = [...new Set(matches.map((m) => m.sport_id).filter(Boolean))];
   if (sportIds.length === 0) return;
-  const { data: sports } = await supabase.from('sports').select('id, slug').in('id', sportIds);
-  const chessSportId = (sports || []).find(
+  // The cached sports table — this was a query on every match list.
+  const sports = (await allSports()) ?? [];
+  const chessSportId = sports.filter((x) => sportIds.includes(x.id)).find(
     (s: any) => String(s.slug).toLowerCase().replace(/[-_\s]/g, '') === 'chess',
   )?.id;
   if (!chessSportId) return;
@@ -913,8 +914,11 @@ export async function listMatches(req: Request, res: Response) {
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     const matches = data || [];
-    await attachChessElo(matches); // chess cards show both players' real ELO
-    await attachTeamNames(matches); // SC-366: live cards need real team names
+    // Independent (different fields) — together, not one after the other.
+    await Promise.all([
+      attachChessElo(matches), // chess cards show both players' real ELO
+      attachTeamNames(matches), // SC-366: live cards need real team names
+    ]);
     return res.json({ matches, ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

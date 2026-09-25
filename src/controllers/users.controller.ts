@@ -13,6 +13,7 @@ import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
+import { stepTimer } from '../utils/stepTimer';
 
 // SELF-only fields — the full row for /users/me + own-profile writes. Contains
 // contact + wallet + account internals; NEVER serialize this to another viewer.
@@ -134,19 +135,59 @@ async function runSmartNotifications(userId: string): Promise<void> {
 export async function getMe(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const timer = stepTimer();
   // SC-434: a lazy premium-expiry check ran here on every /users/me — it flipped
   // is_premium off and could fire an "expiring soon" notification. Both are gone
   // with the tiers, so no user is told anything when the old complimentary dates
   // pass.
   // Fire-and-forget — the profile response shouldn't wait on this.
   void runSmartNotifications(userId);
-  const { data, error } = await supabase
-    .from('users')
-    // SC-200: embed the city so the client gets a real city_name (the codebase's
-    // established join idiom; see search/community controllers). Flattened below.
-    .select(`${PUBLIC_FIELDS}, city:cities!city_id(id, name)`)
-    .eq('id', userId)
-    .maybeSingle();
+
+  // Everything /me returns besides the row itself is independent of it, and was
+  // read one query at a time: ~8 sequential round-trips at ~300 ms from Render
+  // (~2.3 s, on every app launch and profile open). They are read together now,
+  // each still best-effort (a failed stat never fails the profile), and
+  // user_sports is read ONCE — it was read twice, for the coin bonus and for
+  // sport_ids.
+  const safe = <T,>(p: PromiseLike<T>, fallback: T): Promise<T> => Promise.resolve(p).catch(() => fallback);
+  const [
+    { data, error },
+    sportRows,
+    atRows,
+    spRows,
+    [followers_count, following_count],
+    is_admin,
+    officiated_count,
+  ] = await Promise.all([
+    supabase
+      .from('users')
+      // SC-200: embed the city so the client gets a real city_name (the codebase's
+      // established join idiom; see search/community controllers). Flattened below.
+      .select(`${PUBLIC_FIELDS}, city:cities!city_id(id, name)`)
+      .eq('id', userId)
+      .maybeSingle(),
+    // SC-365: the sports you play, so Edit profile can seed its selector. Own
+    // data only — this is getMe. Also the "≥1 sport" test of the completion bonus.
+    safe(supabase.from('user_sports').select('sport_id').eq('user_id', userId)
+      .then(({ data: us }) => (us ?? []).map((r: { sport_id: string }) => r.sport_id)), [] as string[]),
+    // The full account-type set from the join table (the legacy users.account_type
+    // column only holds the primary type).
+    safe(supabase.from('user_account_types').select('account_type').eq('user_id', userId)
+      .then(({ data: rows }) => (rows ?? []).map((r: { account_type: string }) => r.account_type)), [] as string[]),
+    // SC-46/SC-328: account-level total matches across all sports.
+    safe(supabase.from('user_sport_profiles').select('matches_played').eq('user_id', userId)
+      .then(({ data: sp }) => (sp ?? []) as Array<{ matches_played?: number | null }>), []),
+    // SC-49: follower/following counts for the own-profile header.
+    safe(Promise.all([
+      supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('following_id', userId),
+      supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('follower_id', userId),
+    ]).then(([f1, f2]) => [f1.count ?? 0, f2.count ?? 0] as const), [0, 0] as const),
+    // Phase 3: the server says who is an admin (DB flag OR the env whitelist), and
+    // umpires see how many matches they have officiated.
+    isAdminUser(userId),
+    officiatedCount(userId),
+  ]);
+  timer.mark('reads');
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: 'User not found' });
 
@@ -163,94 +204,22 @@ export async function getMe(req: Request, res: Response) {
 
   // Profile-completion bonus — 10 coins, once per user. Idempotent via
   // coin_events unique key. Requires name + photo + city + at least 1 sport.
-  try {
-    const hasName = !!data.name;
-    const hasPhoto = !!data.profile_picture_url;
-    const hasCity = !!data.city_id;
-    if (hasName && hasPhoto && hasCity) {
-      const { count: sportCount } = await supabase
-        .from('user_sports')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', userId);
-      if ((sportCount ?? 0) > 0) {
-        const { awardCoins } = await import('../utils/coins');
-        void awardCoins(userId, 'complete_profile', 10, 'Completed your profile');
-      }
-    }
-  } catch {
-    // swallow
+  if (data.name && data.profile_picture_url && data.city_id && sportRows.length > 0) {
+    void import('../utils/coins')
+      .then(({ awardCoins }) => awardCoins(userId, 'complete_profile', 10, 'Completed your profile'))
+      .catch(() => undefined);
   }
 
-  // Pull the user's full account-type set from the join table so the client
-  // can render & edit the complete list (the legacy users.account_type column
-  // only holds the primary type). Falls back to the legacy column if the join
-  // table is empty (e.g. older accounts created before multi-type support).
-  let accountTypes: string[] = [];
-  try {
-    const { data: atRows } = await supabase
-      .from('user_account_types')
-      .select('account_type')
-      .eq('user_id', userId);
-    accountTypes = (atRows ?? []).map((r: { account_type: string }) => r.account_type);
-  } catch {
-    // swallow — fall back below
-  }
+  // Falls back to the legacy column if the join table is empty (older accounts).
+  let accountTypes = atRows;
   if (accountTypes.length === 0 && data.account_type) {
     // Validate the legacy column before leaking it — older rows can hold the
     // invalid 'fan' value, which we never want to surface to the client (A6-002).
     accountTypes = isValidAccountType(data.account_type) ? [data.account_type] : ['player'];
   }
+  const total_matches = spRows.reduce((s2, p2) => s2 + (p2.matches_played ?? 0), 0);
 
-  // Aggregate header stats (SC-46): total matches across all the user's sports
-  // + their rank in the most-played sport. Best-effort — never fails getMe, and
-  // replaces the hardcoded 0 / — the profile header used to show.
-  // SC-328: account-level total matches across all sports. city_rank removed — it
-  // was a sport-agnostic rank nothing read anymore; per-sport City/Global ranks now
-  // live in getSportProfile.
-  let total_matches = 0;
-  try {
-    const { data: sp } = await supabase
-      .from('user_sport_profiles')
-      .select('matches_played')
-      .eq('user_id', userId);
-    if (sp && sp.length) {
-      total_matches = sp.reduce((s, p: any) => s + (p.matches_played ?? 0), 0);
-    }
-  } catch {
-    // best-effort
-  }
-
-  // Follower/following counts (SC-49) — getMe omitted these, so the own-profile
-  // header FOLLOWERS stat always showed 0. getUserById already returns them for
-  // other profiles; mirror that here. Best-effort.
-  let followers_count = 0;
-  let following_count = 0;
-  try {
-    const [f1, f2] = await Promise.all([
-      supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('following_id', userId),
-      supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('follower_id', userId),
-    ]);
-    followers_count = f1.count ?? 0;
-    following_count = f2.count ?? 0;
-  } catch {
-    // best-effort
-  }
-
-  // SC-365: the sports you play, so Edit profile can seed its selector. Own
-  // data only — this is getMe.
-  let sport_ids: string[] = [];
-  try {
-    const { data: us } = await supabase
-      .from('user_sports').select('sport_id').eq('user_id', userId);
-    sport_ids = (us ?? []).map((r: { sport_id: string }) => r.sport_id);
-  } catch {
-    // best-effort — never fail the profile over it
-  }
-
-  // Phase 3: the server says who is an admin (DB flag OR the env whitelist), and
-  // umpires see how many matches they have officiated.
-  const [is_admin, officiated_count] = await Promise.all([isAdminUser(userId), officiatedCount(userId)]);
-
+  res.setHeader('Server-Timing', timer.header());
   return res.json({
     user: {
       ...data,
@@ -259,7 +228,7 @@ export async function getMe(req: Request, res: Response) {
       total_matches,
       followers_count,
       following_count,
-      sport_ids,
+      sport_ids: sportRows,
       is_admin,
       officiated_count,
     },

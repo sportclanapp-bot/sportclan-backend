@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { allSports, getSport } from './sportCache';
 
 /**
  * Whether a sport is soft-deactivated (out of scope, e.g. kabaddi/athletics).
@@ -12,11 +13,9 @@ import { supabase } from './supabase';
  */
 export async function isSportInactive(sportId?: string | null): Promise<boolean> {
   if (!sportId) return false;
-  const { data } = await supabase
-    .from('sports')
-    .select('*')
-    .eq('id', sportId)
-    .maybeSingle();
+  // From the cached sports table: this ran a query on every sport profile,
+  // leaderboard and match create.
+  const data = await getSport(sportId);
   return data?.is_active === false;
 }
 
@@ -28,9 +27,10 @@ export async function isSportInactive(sportId?: string | null): Promise<boolean>
  * fails, so callers can skip the filter rather than blank the list.
  */
 export async function activeSportIds(): Promise<string[] | null> {
-  const { data, error } = await supabase.from('sports').select('id, is_active');
-  if (error || !data) return null;
-  return data.filter((s: { is_active?: boolean }) => s.is_active !== false).map((s: { id: string }) => s.id);
+  // Cached sports table — this ran a query in front of every match list.
+  const data = await allSports();
+  if (!data) return null;
+  return data.filter((s) => s.is_active !== false).map((s) => s.id);
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

@@ -13,7 +13,8 @@
  *   game     first to 4 points, win by 2 (0 / 15 / 30 / 40 / deuce / advantage)
  *   set      first to 6 games, win by 2; at 6-6 a TIEBREAK decides it 7-6
  *   tiebreak first to 7 points, win by 2
- *   match    first to 2 sets
+ *   match    first to 2 sets (best of 3) — or 1 set, when the match's length
+ *            preset is "1 set" (matchLength.ts); pass setsToWin.
  * A point after the match is decided changes nothing.
  *
  * Input is one event per POINT, carrying the side that won it — which is what
@@ -59,7 +60,7 @@ export function emptyTennis(): TennisScore {
   };
 }
 
-function winSet(s: TennisScore, side: TennisSide, tiebreak?: { A: number; B: number }): TennisScore {
+function winSet(s: TennisScore, side: TennisSide, setsToWin: number, tiebreak?: { A: number; B: number }): TennisScore {
   const set: TennisSet = { A: s.games.A, B: s.games.B };
   if (tiebreak) set.tiebreak = tiebreak;
   const setsWon = { ...s.setsWon, [side]: s.setsWon[side] + 1 };
@@ -69,12 +70,12 @@ function winSet(s: TennisScore, side: TennisSide, tiebreak?: { A: number; B: num
     sets: [...s.sets, set],
     setsWon,
     tiebreak: false,
-    winner: setsWon[side] >= TENNIS_SETS_TO_WIN ? side : null,
+    winner: setsWon[side] >= setsToWin ? side : null,
   };
 }
 
 /** One point to `side`. Pure: returns a new score. */
-export function tennisPoint(s: TennisScore, side: TennisSide): TennisScore {
+export function tennisPoint(s: TennisScore, side: TennisSide, setsToWin: number = TENNIS_SETS_TO_WIN): TennisScore {
   if (s.winner) return s;
   const o = other(side);
   const points = { ...s.points, [side]: s.points[side] + 1 };
@@ -83,7 +84,7 @@ export function tennisPoint(s: TennisScore, side: TennisSide): TennisScore {
     if (points[side] >= TIEBREAK_TO && points[side] - points[o] >= 2) {
       // The tiebreak winner takes the set 7-6.
       const games = { ...s.games, [side]: s.games[side] + 1 };
-      return winSet({ ...s, games }, side, points);
+      return winSet({ ...s, games }, side, setsToWin, points);
     }
     return { ...s, points };
   }
@@ -91,7 +92,7 @@ export function tennisPoint(s: TennisScore, side: TennisSide): TennisScore {
   if (points[side] >= 4 && points[side] - points[o] >= 2) {
     const games = { ...s.games, [side]: s.games[side] + 1 };
     if (games[side] >= GAMES_PER_SET && games[side] - games[o] >= 2) {
-      return winSet({ ...s, games }, side);
+      return winSet({ ...s, games }, side, setsToWin);
     }
     const tiebreak = games.A === GAMES_PER_SET && games.B === GAMES_PER_SET;
     return { ...s, points: { A: 0, B: 0 }, games, tiebreak };
@@ -100,9 +101,9 @@ export function tennisPoint(s: TennisScore, side: TennisSide): TennisScore {
 }
 
 /** Replay a sequence of point winners from the start. */
-export function tennisReplay(sides: TennisSide[]): TennisScore {
+export function tennisReplay(sides: TennisSide[], setsToWin: number = TENNIS_SETS_TO_WIN): TennisScore {
   let s = emptyTennis();
-  for (const side of sides) s = tennisPoint(s, side);
+  for (const side of sides) s = tennisPoint(s, side, setsToWin);
   return s;
 }
 

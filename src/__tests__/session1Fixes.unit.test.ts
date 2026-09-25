@@ -108,3 +108,23 @@ describe('F-05 · a chess result must credit the winning side', () => {
     expect(src).toMatch(/payload\.winner === 'white' \? 'A' : 'B'[\s\S]{0,900}RESULT_PLAYER_WRONG_SIDE/);
   });
 });
+
+describe('Decision B · the server reads the match length preset', () => {
+  test('"decided" follows the preset', () => {
+    const oneGame = { A: { score: 1, sets: [21] }, B: { score: 0, sets: [0] } };
+    expect(bestOfState('badminton', oneGame, 'bo1')?.decided).toBe(true);
+    expect(bestOfState('badminton', oneGame, 'bo3')?.decided).toBe(false);
+    expect(bestOfState('badminton', oneGame, 'badminton')?.decided).toBe(false); // older match: standard
+    expect(bestOfState('tabletennis', {}, 'bo7')?.needed).toBe(4);
+    expect(bestOfState('tennis', { A: { score: 1 }, B: { score: 0 } }, 'bo1')?.decided).toBe(true);
+  });
+  test('recompute, completion and creation all use it', () => {
+    const sc = fs.readFileSync(path.join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
+    expect(sc).toContain('maxSets: bestOfFor(slug, match.format)');
+    expect(sc).toContain("winsNeeded(bestOfFor('tennis', match.format) ?? 3)");
+    const mc = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
+    expect(mc).toContain('bestOfState(normSportSlug(sportRow?.slug), canonical, match.format)');
+    expect(mc).toContain("code: 'BAD_MATCH_LENGTH'");
+    expect(mc).toContain('format: storedFormat,');
+  });
+});

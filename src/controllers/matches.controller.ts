@@ -40,6 +40,7 @@ import { reconcileWinCoins } from '../utils/winCoins';
 import { stepTimer } from '../utils/stepTimer';
 import { leaseRefusal } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
+import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
 
 /** U-13: is `userId` someone who could be in this match's line-up? */
 export async function viewerCanPlay(
@@ -189,6 +190,16 @@ export async function createMatch(req: Request, res: Response) {
       tournamentId: tournament_id || null,
     });
     if (createRefusal) return res.status(createRefusal.status).json({ error: createRefusal.error, code: createRefusal.code });
+    // Decision B: a best-of sport's length preset. One the sport doesn't offer is
+    // refused; anything else (an older app sends the sport slug) is stored as the
+    // sport's standard length, so every best-of match says what it is.
+    const createSport = await getSport(String(sport_id));
+    const lengthSlug = normSportSlug(createSport?.slug);
+    if (!isAcceptableMatchLength(lengthSlug, format)) {
+      return res.status(400).json({ error: 'That match length isn’t offered for this sport.', code: 'BAD_MATCH_LENGTH' });
+    }
+    const storedBestOf = bestOfFor(lengthSlug, format);
+    const storedFormat = storedBestOf !== null ? formatForBestOf(storedBestOf) : format || null;
     // Phase 3 · SINGLES: a one-a-side sport played between two PEOPLE. Validated
     // up front so nothing is written for a bad request. See utils/singles.
     let singlesSides: { aName: string; bName: string; opponentId: string; sportName: string } | null = null;
@@ -248,7 +259,7 @@ export async function createMatch(req: Request, res: Response) {
         scheduled_at: scheduled_at || null,
         venue: cleanVenue,
         city_id: city_id || null,
-        format: format || null,
+        format: storedFormat,
         overs: overs ?? null,
         status: 'scheduled',
         is_open: singles ? false : !!is_open,
@@ -1899,7 +1910,7 @@ export async function completeMatch(req: Request, res: Response) {
       // who was chasing, and a cricket win is described by wickets or by runs
       // depending on the answer. It was missing, so a successful chase reported
       // "won by N runs". See the note at the derivation call below.
-      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice')
+      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice, format')
       .eq('id', id)
       .maybeSingle();
     timer.mark('load');
@@ -1948,7 +1959,7 @@ export async function completeMatch(req: Request, res: Response) {
     // and a best-of-3 badminton match was recorded "won 1-0". A result entered
     // with NO scoring (an organiser recording a result) and walkovers are exempt.
     if (match.status !== 'completed' && !walkover) {
-      const bo = bestOfState(normSportSlug(sportRow?.slug), canonical);
+      const bo = bestOfState(normSportSlug(sportRow?.slug), canonical, match.format);
       if (bo && bo.scored && !bo.decided) {
         return res.status(409).json({
           error: `This match isn’t decided yet — a side needs ${bo.needed} to win it. Keep scoring, or abandon it from the match page.`,

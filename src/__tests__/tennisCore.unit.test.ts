@@ -71,6 +71,12 @@ describe('tennisCore · the one rule', () => {
     expect(tennisGamesPlayed(tennisReplay([...sixAll(), ...tb('A', 7, 0)]))).toBe(13);
   });
 
+  test('a "1 set" match (setsToWin = 1) ends after one set, tiebreak included', () => {
+    expect(tennisReplay(games('A', 'A', 'A', 'A', 'A', 'A'), 1).winner).toBe('A');
+    expect(tennisReplay(games('A', 'A', 'A', 'A', 'A', 'A')).winner).toBeNull(); // best of 3 goes on
+    expect(tennisReplay([...sixAll(), ...tb('B', 7, 5)], 1).winner).toBe('B');
+  });
+
   // When both repos are checked out side by side (the dev machine), the two
   // copies must be byte-identical. Skipped elsewhere (a lone-repo CI checkout).
   const here = path.join(__dirname, '..', CORE_REL);

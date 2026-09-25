@@ -3,7 +3,7 @@ import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { supabase } from '../utils/supabase';
 import { pendingRankedOpponent } from '../utils/singles';
-import { tennisReplay, TENNIS_SETS_TO_WIN, type TennisScore } from '../utils/tennisCore';
+import { tennisReplay, type TennisScore } from '../utils/tennisCore';
 import { scorePush, quarterPush } from '../utils/scorePush';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
@@ -14,6 +14,7 @@ import { isSportInactive } from '../utils/sports';
 import { isKnownEventType } from '../utils/scoringEvents';
 import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
+import { bestOfFor, winsNeeded } from '../utils/matchLength';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
 // every participant in the match. Failures are swallowed — the fan-out must
@@ -449,11 +450,12 @@ export const SET_CONFIG: Record<
  * boards win the match, and whether a canonical summary says someone has.
  * Null for sports that are not best-of (goals, points, runs, chess).
  */
-export function bestOfState(slug: string, summary: Record<string, any> | null | undefined):
+export function bestOfState(slug: string, summary: Record<string, any> | null | undefined, format?: string | null):
   { needed: number; decided: boolean; scored: boolean; leader: 'A' | 'B' | null } | null {
-  const cfg = SET_CONFIG[slug];
-  const needed = slug === 'tennis' ? TENNIS_SETS_TO_WIN : cfg ? Math.floor(cfg.maxSets / 2) + 1 : 0;
-  if (!needed) return null;
+  // Decision B: the match's own length preset (matchLength.ts, shared with the app).
+  const bestOf = bestOfFor(slug, format);
+  if (bestOf === null) return null;
+  const needed = winsNeeded(bestOf);
   const a = Number(summary?.A?.score ?? 0);
   const b = Number(summary?.B?.score ?? 0);
   const scored = a + b > 0
@@ -829,15 +831,20 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
     // T-1/T-2 · per-POINT events through the shared rule (utils/tennisCore, the
     // same file the app scores with): points → games → sets, with a real 6-6
     // tiebreak. The server used to count every point as a GAME.
+    // Decision B: "1 set" or "best of 3" — the match's preset.
     tennisState = tennisReplay(
       events.filter((e) => e.event_type === 'score').map((e) => sideOf(e.payload || {})),
+      winsNeeded(bestOfFor('tennis', match.format) ?? 3),
     );
     A.score = tennisState.setsWon.A; B.score = tennisState.setsWon.B;       // sets won
     A.sets = tennisState.sets.map((x) => x.A); B.sets = tennisState.sets.map((x) => x.B); // games per set
     A.games = tennisState.games.A; B.games = tennisState.games.B;           // current set
     A.points = tennisState.points.A; B.points = tennisState.points.B;       // current game / tiebreak
   } else if (SET_CONFIG[slug]) {
-    const r = rollupSets(SET_CONFIG[slug], events, sideOf);
+    // Decision B: best-of from the match's preset (the deciding set is still the
+    // last possible one, so a best-of-3 volleyball match plays its 3rd to 15).
+    const cfg = { ...SET_CONFIG[slug]!, maxSets: bestOfFor(slug, match.format) ?? SET_CONFIG[slug]!.maxSets };
+    const r = rollupSets(cfg, events, sideOf);
     A.score = r.setsA; B.score = r.setsB;
     A.sets = r.setScoresA; B.sets = r.setScoresB;
     A.points = r.curA; B.points = r.curB; // current in-progress set/board

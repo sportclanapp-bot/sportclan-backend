@@ -1288,23 +1288,25 @@ export async function getRival(req: Request, res: Response) {
 // left→right without client-side reversal.
 export async function getRatingHistory(req: Request, res: Response) {
   const { id } = req.params;
-  // SC-106: hide the rating history of a soft-deleted or blocked target.
-  if (await targetUserHidden(id, req.userId)) {
-    return res.status(404).json({ error: 'User not found' });
-  }
   const rawSportId = req.query.sport_id as string | undefined;
   if (!rawSportId) return res.status(400).json({ error: 'sport_id is required' });
-  const sportId = (await resolveSportId(rawSportId)) ?? rawSportId;
-  // SC-335: never surface per-sport data for an out-of-scope sport (no kabaddi/athletics).
-  if (await isSportInactive(sportId)) return res.status(404).json({ error: 'Sport not available' });
-
-  const { data, error } = await supabase
-    .from('rating_history')
-    .select('old_rating, new_rating, delta, created_at')
-    .eq('user_id', id)
-    .eq('sport_id', sportId)
-    .order('created_at', { ascending: false })
-    .limit(10);
+  const sportId = (await resolveSportId(rawSportId)) ?? rawSportId; // cached
+  // The visibility check and the read together; nothing is returned if hidden.
+  const [hidden, inactive, { data, error }] = await Promise.all([
+    // SC-106: hide the rating history of a soft-deleted or blocked target.
+    targetUserHidden(id, req.userId),
+    // SC-335: never surface per-sport data for an out-of-scope sport (no kabaddi/athletics).
+    isSportInactive(sportId),
+    supabase
+      .from('rating_history')
+      .select('old_rating, new_rating, delta, created_at')
+      .eq('user_id', id)
+      .eq('sport_id', sportId)
+      .order('created_at', { ascending: false })
+      .limit(10),
+  ]);
+  if (hidden) return res.status(404).json({ error: 'User not found' });
+  if (inactive) return res.status(404).json({ error: 'Sport not available' });
   if (error) return res.status(500).json({ error: error.message });
 
   // Oldest → newest.

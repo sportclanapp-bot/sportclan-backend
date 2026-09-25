@@ -30,24 +30,26 @@ export async function listNotifications(req: Request, res: Response) {
   // had NO offset param at all, so a user with >100 notifications could never
   // page past their newest 100 (and the FE, asking 50, saw only 50).
   const p = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
-  const { data, error, count } = await supabase
-    .from('notifications')
-    .select('id, type, title, body, data, read, created_at', { count: 'exact' })
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .range(p.from, p.to);
+  // The page and the unread count, together (they were read one after the other).
+  const [{ data, error, count }, unreadRes] = await Promise.all([
+    supabase
+      .from('notifications')
+      .select('id, type, title, body, data, read, created_at', { count: 'exact' })
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .range(p.from, p.to),
+    // Unread is a SEPARATE whole-inbox count (unaffected by the page window) so the
+    // bell badge stays accurate no matter which page the list is scrolled to.
+    supabase
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('read', false),
+  ]);
   // SC-41: an offset landing past the end returns PGRST103 — treat it as an
   // empty final page rather than a 500.
   if (error && !isRangeError(error)) return res.status(500).json({ error: error.message });
   const rows = error ? [] : (data || []);
-
-  // Unread is a SEPARATE whole-inbox count (unaffected by the page window) so the
-  // bell badge stays accurate no matter which page the list is scrolled to.
-  const unreadRes = await supabase
-    .from('notifications')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .eq('read', false);
 
   return res.json({
     notifications: rows,

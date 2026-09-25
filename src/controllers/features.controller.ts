@@ -718,6 +718,10 @@ export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
     .from('matches')
     .select('id, team_a_name, venue, city_id')
     .eq('is_open', true)
+    // F-08: a full pickup stays is_open (migration 095) — only nudge towards one
+    // with a slot, that hasn't started.
+    .gt('players_needed', 0)
+    .eq('status', 'scheduled')
     .gte('scheduled_at', today.toISOString())
     .lt('scheduled_at', tomorrow.toISOString())
     .not('city_id', 'is', null);

@@ -733,7 +733,12 @@ export async function joinOpenMatch(req: Request, res: Response) {
     // SC-279: an 'approval' match can't be instant-joined — the creator gates it.
     // Tell the FE to use the request flow. Read is cheap and before any mutation.
     const { data: policyRow } = await supabase
-      .from('matches').select('join_policy').eq('id', id).maybeSingle();
+      .from('matches').select('join_policy, status').eq('id', id).maybeSingle();
+    // F-08: only a scheduled match takes joiners — a live or abandoned one did.
+    // (Migration 095 refuses it under the lock as well; this answers first.)
+    if (policyRow && policyRow.status !== 'scheduled') {
+      return res.status(409).json({ error: 'This match has already started or finished.', code: 'MATCH_NOT_JOINABLE' });
+    }
     if (policyRow?.join_policy === 'approval') {
       return res.status(409).json({
         error: 'This match requires the creator’s approval. Request to join instead.',
@@ -789,7 +794,9 @@ export async function joinOpenMatch(req: Request, res: Response) {
       case 'already_joined':
         return res.json({ success: true, alreadyJoined: true, players_needed: playersNeeded });
       case 'full':
-        return res.status(409).json({ error: 'Match is full' });
+        return res.status(409).json({ error: 'Match is full', code: 'MATCH_FULL' });
+      case 'started':
+        return res.status(409).json({ error: 'This match has already started or finished.', code: 'MATCH_NOT_JOINABLE' });
       case 'not_open':
         return res.status(400).json({ error: 'Match is not open' });
       case 'not_found':

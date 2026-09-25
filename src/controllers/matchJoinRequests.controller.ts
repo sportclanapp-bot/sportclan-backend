@@ -223,6 +223,7 @@ export async function decideMatchJoinRequest(req: Request, res: Response) {
         case 'full':
           return res.status(409).json({ error: 'This match is now full.', code: 'MATCH_FULL' });
         case 'not_open':
+        case 'started': // F-08 · migration 095
           return res.status(409).json({ error: 'This match has already started or is closed.', code: 'MATCH_NOT_JOINABLE' });
         case 'not_found':
           return res.status(404).json({ error: 'Match not found' });

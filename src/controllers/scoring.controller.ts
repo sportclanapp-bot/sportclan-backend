@@ -17,6 +17,7 @@ import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, winsNeeded } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
 import { allOutBySide } from '../utils/cricketRules';
+import { isValidChessReason } from '../utils/chessRules';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
 // every participant in the match. Failures are swallowed — the fan-out must
@@ -249,6 +250,14 @@ export async function createEvent(req: Request, res: Response) {
       } catch {
         // best-effort — don't block scoring on the status flip
       }
+    }
+
+    // A3: a chess result's reason must be one of the shared list (chessRules —
+    // the same list the app offers, incl. insufficient material / 50-move rule).
+    if (event_type === 'result' && payload && typeof payload === 'object'
+      && (payload.winner === 'white' || payload.winner === 'black' || payload.winner === 'draw')
+      && !isValidChessReason(payload.winner, payload.reason)) {
+      return res.status(400).json({ error: 'That isn’t a way this result can happen.', code: 'BAD_CHESS_REASON' });
     }
 
     // F-05 (confirmed live, session 1): a chess result names the player who won.

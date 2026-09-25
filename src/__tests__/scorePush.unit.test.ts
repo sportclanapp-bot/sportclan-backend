@@ -19,7 +19,7 @@ test('badminton: the point that ends a game quotes THAT game, winner first', () 
 
 test('volleyball calls it a set, carrom a board', () => {
   expect(scorePush({ slug: 'volleyball', side: 'A', teamName: 'X', summary: bad({ sets: [25], points: 0 }, { sets: [20], points: 0 }) })!.body).toBe('X wins set 1 · 25–20');
-  expect(scorePush({ slug: 'carrom', side: 'A', teamName: 'X', summary: bad({ sets: [25], points: 0 }, { sets: [12], points: 0 }) })!.body).toBe('X wins board 1 · 25–12');
+  expect(scorePush({ slug: 'carrom', side: 'A', teamName: 'X', summary: bad({ sets: [25], points: 0 }, { sets: [12], points: 0 }) })!.body).toBe('X wins game 1 · 25–12');
 });
 
 test('tennis: a game inside a set sends nothing; a set end quotes the set and its tiebreak', () => {

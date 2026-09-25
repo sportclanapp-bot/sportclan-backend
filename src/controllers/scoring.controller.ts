@@ -15,6 +15,7 @@ import { isKnownEventType } from '../utils/scoringEvents';
 import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, winsNeeded } from '../utils/matchLength';
+import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
 // every participant in the match. Failures are swallowed — the fan-out must
@@ -199,7 +200,20 @@ export async function createEvent(req: Request, res: Response) {
       if (payload.team_side != null && payload.team_side !== 'A' && payload.team_side !== 'B') {
         return res.status(400).json({ error: 'team_side must be "A" or "B"' });
       }
-      if (outOfRange(payload.value, 1, 3)) {
+      // A5: a carrom BOARD result carries what the board was worth (pieces left
+      // 0–9, +3 queen) — the only score event worth more than 3 (or 0).
+      const isBoard = payload.kind === 'board';
+      if (isBoard) {
+        if (outOfRange(payload.pieces_left, 0, CARROM_MAX_PIECES)) {
+          return res.status(400).json({ error: `pieces_left must be an integer between 0 and ${CARROM_MAX_PIECES}` });
+        }
+        if (payload.queen != null && typeof payload.queen !== 'boolean') {
+          return res.status(400).json({ error: 'queen must be true or false' });
+        }
+        if (outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_POINTS)) {
+          return res.status(400).json({ error: 'value is out of range for a board' });
+        }
+      } else if (outOfRange(payload.value, 1, 3)) {
         return res.status(400).json({ error: 'value must be an integer between 1 and 3' });
       }
       if (outOfRange(payload.runs, 0, 7)) {
@@ -768,6 +782,7 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
   const A: Record<string, any> = { score: 0 };
   const B: Record<string, any> = { score: 0 };
   let tennisState: TennisScore | null = null;
+  let carromBoardsPlayed: number | null = null; // A5: boards played in the carrom game in play
   const sides: Record<'A' | 'B', Record<string, any>> = { A, B };
   const sideOf = (p: any): 'A' | 'B' => ((p?.team_side as 'A' | 'B') === 'B' ? 'B' : 'A');
   let chessResult: string | null = null; // SC-47
@@ -840,6 +855,24 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
     A.sets = tennisState.sets.map((x) => x.A); B.sets = tennisState.sets.map((x) => x.B); // games per set
     A.games = tennisState.games.A; B.games = tennisState.games.B;           // current set
     A.points = tennisState.points.A; B.points = tennisState.points.B;       // current game / tiebreak
+  } else if (slug === 'carrom' && events.some((e) => e.event_type === 'score' && (e.payload as any)?.kind === 'board')) {
+    // A5 · real carrom rules through the shared carromCore (the file the app
+    // scores with): boards → games to 25 → best of 1 or 3 games. A carrom match
+    // scored before this (+1 piece events, no board events) keeps the old rollup
+    // below, so its record reads as it always did.
+    const c = carromReplay(
+      events
+        .filter((e) => e.event_type === 'score' && (e.payload as any)?.kind === 'board')
+        .map((e) => {
+          const p: any = e.payload || {};
+          return { winner: sideOf(p), piecesLeft: carromPieces(p.pieces_left), queen: p.queen === true };
+        }),
+      winsNeeded(bestOfFor('carrom', match.format) ?? 3),
+    );
+    A.score = c.gamesWon.A; B.score = c.gamesWon.B;                        // games won
+    A.sets = c.games.map((g) => g.A); B.sets = c.games.map((g) => g.B);    // each game's final score
+    A.points = c.points.A; B.points = c.points.B;                          // the game in play
+    carromBoardsPlayed = c.boards;
   } else if (SET_CONFIG[slug]) {
     // Decision B: best-of from the match's preset (the deciding set is still the
     // last possible one, so a best-of-3 volleyball match plays its 3rd to 15).
@@ -936,6 +969,7 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
   // goals/points/rally-points. Side totals (A/B) above are untouched, so results
   // and the A7-002 results surface don't change.
   summary.players = aggregatePlayers(slug, events as any[]);
+  if (carromBoardsPlayed !== null) summary.boards_played = carromBoardsPlayed;
   if (tennisState) {
     // The tiebreak in play, and each completed set's tiebreak points (or null),
     // so a hub card or result can say "7–6 (7–5)".

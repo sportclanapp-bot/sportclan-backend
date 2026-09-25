@@ -52,7 +52,8 @@ export function scorePush(args: {
     // completed game exists — this event was its last point.
     const gameEnded = n > prevN && (A.points ?? 0) === 0 && (B.points ?? 0) === 0;
     if (!gameEnded) return null;
-    const word = slug === 'volleyball' ? 'set' : slug === 'carrom' ? 'board' : 'game';
+    // A5: a carrom 'set' in the summary is now a GAME to 25 (boards are inside it).
+    const word = slug === 'volleyball' ? 'set' : 'game';
     return { title: `${word[0]!.toUpperCase()}${word.slice(1)} to ${teamName}`, body: `${teamName} wins ${word} ${n} · ${mine(setsA[n - 1] ?? 0, setsB[n - 1] ?? 0)}` };
   }
 

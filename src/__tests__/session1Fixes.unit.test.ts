@@ -84,9 +84,9 @@ describe('F-01 · a scored best-of match must be decided to complete', () => {
 
 describe('F-04 · a board/game/set push only for the event that ended one', () => {
   const decided = { A: { score: 2, sets: [25, 25], points: 0 }, B: { score: 0, sets: [0, 0], points: 0 } };
-  test('the event that ends board 2 pushes', () => {
+  test('the event that ends game 2 pushes', () => {
     const prev = { A: { score: 1, sets: [25], points: 24 }, B: { score: 0, sets: [0], points: 0 } };
-    expect(scorePush({ slug: 'carrom', summary: decided, side: 'A', teamName: 'A', prevSummary: prev })?.body).toContain('wins board 2');
+    expect(scorePush({ slug: 'carrom', summary: decided, side: 'A', teamName: 'A', prevSummary: prev })?.body).toContain('wins game 2');
   });
   test('a tap after the match was decided does not re-push', () => {
     expect(scorePush({ slug: 'carrom', summary: decided, side: 'A', teamName: 'A', prevSummary: decided })).toBeNull();
@@ -126,5 +126,20 @@ describe('Decision B · the server reads the match length preset', () => {
     expect(mc).toContain('bestOfState(normSportSlug(sportRow?.slug), canonical, match.format)');
     expect(mc).toContain("code: 'BAD_MATCH_LENGTH'");
     expect(mc).toContain('format: storedFormat,');
+  });
+});
+
+describe('A5 · carrom on the server', () => {
+  const sc = fs.readFileSync(path.join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
+  test('a board event may carry 0–12 points and 0–9 pieces; other scores stay 1–3', () => {
+    expect(sc).toContain("const isBoard = payload.kind === 'board';");
+    expect(sc).toContain('outOfRange(payload.pieces_left, 0, CARROM_MAX_PIECES)');
+    expect(sc).toContain('outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_POINTS)');
+  });
+  test('board events are replayed through the shared core, by the match preset', () => {
+    expect(sc).toMatch(/slug === 'carrom' && events\.some[\s\S]{0,900}carromReplay\([\s\S]{0,400}winsNeeded\(bestOfFor\('carrom', match\.format\) \?\? 3\)/);
+  });
+  test('carrom game pushes say "game"', () => {
+    expect(scorePush({ slug: 'carrom', side: 'A', teamName: 'X', summary: { A: { sets: [27], points: 0 }, B: { sets: [12], points: 0 } } })!.body).toBe('X wins game 1 · 27–12');
   });
 });

@@ -32,7 +32,7 @@ import { validateSportForCreate, activeSportIds } from '../utils/sports';
 import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems, LIMITS, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner } from './tournaments.controller';
-import { recomputeSummary, writeCricketInningsStats } from './scoring.controller';
+import { recomputeSummary, writeCricketInningsStats, bestOfState } from './scoring.controller';
 import { awardBadgesSafe } from './badges.controller';
 import { isSinglesSport, winnerSideOf, challengeText, pendingRankedOpponent, isSinglesShape } from '../utils/singles';
 import { isBlockedBetween } from '../utils/blocks';
@@ -61,6 +61,79 @@ export async function viewerCanPlay(
 }
 
 // POST /matches — create. FREE for all (Change #6).
+/**
+ * F-02 (confirmed live, session 1): the ranked-singles acceptance gate ran only
+ * on score events, so a ranked match could be completed — Elo and all — set
+ * live, or turned into a three-player match before the opponent ever accepted.
+ * One check, used on every route that starts, changes or finishes the match.
+ */
+async function opponentNotAcceptedRefusal(match: {
+  id: string; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_b_name?: string | null;
+}): Promise<{ error: string; code: string } | null> {
+  if (!match.is_ranked || match.team_a_id || match.team_b_id) return null;
+  const { pending, opponentName } = await pendingRankedOpponent(match);
+  return pending
+    ? { error: `${opponentName ?? 'Your opponent'} hasn't accepted this ranked match yet. It can start once they do.`, code: 'OPPONENT_NOT_ACCEPTED' }
+    : null;
+}
+
+/** A little clock skew is allowed: "now" on the phone can be a minute behind. */
+const PAST_GRACE_MS = 5 * 60_000;
+
+/**
+ * Creation rules the form enforced but the server did not (confirmed live in
+ * session 1): an empty venue, a time in the past, ranked + open, a team from
+ * another sport, and a match attached to a tournament the caller does not run.
+ * Returns the refusal, or null. Exported for tests.
+ */
+export async function createMatchRefusal(args: {
+  userId: string;
+  sportId: string;
+  venue: string | null;
+  scheduledAt: unknown;
+  isRanked: boolean;
+  isOpen: boolean;
+  teamIds: string[];
+  tournamentId: string | null;
+}): Promise<{ status: number; error: string; code: string } | null> {
+  if (!args.venue) return { status: 400, error: 'Add a ground / venue.', code: 'VENUE_REQUIRED' };
+  if (args.scheduledAt != null && args.scheduledAt !== '') {
+    const t = Date.parse(String(args.scheduledAt));
+    if (Number.isNaN(t)) return { status: 400, error: 'Pick a valid date and time.', code: 'BAD_SCHEDULED_AT' };
+    if (t < Date.now() - PAST_GRACE_MS) return { status: 400, error: 'Match time can’t be in the past.', code: 'SCHEDULED_IN_PAST' };
+  }
+  if (args.isRanked && args.isOpen) {
+    // Joiners are placed with no line-up choice and ranked needs a real one.
+    return { status: 400, error: 'A ranked match can’t be open to other players.', code: 'RANKED_OPEN' };
+  }
+  const [teams, tournament] = await Promise.all([
+    args.teamIds.length
+      ? Promise.resolve(supabase.from('teams').select('id, sport_id').in('id', args.teamIds)).then((r) => r.data ?? [])
+      : Promise.resolve([] as Array<{ id: string; sport_id: string }>),
+    args.tournamentId
+      ? Promise.resolve(supabase.from('tournaments').select('id, sport_id').eq('id', args.tournamentId).maybeSingle()).then((r) => r.data)
+      : Promise.resolve(null),
+  ]);
+  for (const id of args.teamIds) {
+    const t = (teams as Array<{ id: string; sport_id: string }>).find((x) => x.id === id);
+    if (!t) return { status: 400, error: 'That team could not be found.', code: 'TEAM_NOT_FOUND' };
+    if (t.sport_id !== args.sportId) {
+      return { status: 400, error: 'That team plays a different sport — pick a team for this sport.', code: 'TEAM_WRONG_SPORT' };
+    }
+  }
+  if (args.tournamentId) {
+    const tr = tournament as { id: string; sport_id: string } | null;
+    if (!tr) return { status: 400, error: 'That tournament could not be found.', code: 'TOURNAMENT_NOT_FOUND' };
+    if (!(await isTournamentOrganiser(tr.id, args.userId))) {
+      return { status: 403, error: 'Only the tournament’s organisers can add matches to it.', code: 'NOT_TOURNAMENT_ORGANISER' };
+    }
+    if (tr.sport_id !== args.sportId) {
+      return { status: 400, error: 'That tournament is for a different sport.', code: 'TOURNAMENT_WRONG_SPORT' };
+    }
+  }
+  return null;
+}
+
 export async function createMatch(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -101,6 +174,21 @@ export async function createMatch(req: Request, res: Response) {
     // Validate the sport (unknown/malformed/deactivated → clean 400, not a 500).
     const sportErr = await validateSportForCreate(sport_id);
     if (sportErr) return res.status(400).json({ error: sportErr });
+    // Session 1 (MATCH_CREATE_TEST_PLAN I-01/I-03/I-15/I-19/I-22): the form
+    // refused these, the server stored them. The server is the authority, so it
+    // refuses them too. Checked after the sport so an inactive sport still
+    // answers as one.
+    const createRefusal = await createMatchRefusal({
+      userId,
+      sportId: String(sport_id),
+      venue: cleanVenue,
+      scheduledAt: scheduled_at,
+      isRanked: !!is_ranked,
+      isOpen: !singles && !!is_open,
+      teamIds: [team_a_id, team_b_id].filter(Boolean) as string[],
+      tournamentId: tournament_id || null,
+    });
+    if (createRefusal) return res.status(createRefusal.status).json({ error: createRefusal.error, code: createRefusal.code });
     // Phase 3 · SINGLES: a one-a-side sport played between two PEOPLE. Validated
     // up front so nothing is written for a bad request. See utils/singles.
     let singlesSides: { aName: string; bName: string; opponentId: string; sportName: string } | null = null;
@@ -1262,7 +1350,7 @@ export async function updateMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id, status, team_a_id, team_b_id, tournament_id')
+      .select('created_by, umpire_id, status, team_a_id, team_b_id, tournament_id, is_ranked, team_b_name')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1325,6 +1413,12 @@ export async function updateMatch(req: Request, res: Response) {
     if (isTerminalMatchStatus(match.status) && FROZEN_ON_TERMINAL.some((k) => k in update)) {
       return res.status(409).json({ error: 'This match is already finished — its result and status are locked.' });
     }
+    // F-02: starting a ranked singles match by editing its status is still
+    // starting it — the opponent has to have accepted.
+    if ('status' in update && update.status !== 'scheduled' && update.status !== 'cancelled') {
+      const refusal = await opponentNotAcceptedRefusal({ id, ...(match as object) } as never);
+      if (refusal) return res.status(409).json(refusal);
+    }
     // SC-245: don't let an edit PATCH a valid A-vs-B match into self-vs-self.
     // Compare the EFFECTIVE pair after applying the patch (a side left out of the
     // body keeps its current value), so setting only team_b_id = team_a_id is
@@ -1369,7 +1463,7 @@ export async function addParticipants(req: Request, res: Response) {
     }
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id, status, tournament_id')
+      .select('created_by, umpire_id, status, tournament_id, is_ranked, team_a_id, team_b_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1380,6 +1474,15 @@ export async function addParticipants(req: Request, res: Response) {
     // to a completed/abandoned/cancelled match.
     if (isTerminalMatchStatus(match.status)) {
       return res.status(409).json({ error: 'This match is already finished.' });
+    }
+    // F-02: a ranked singles match has exactly one player a side. Adding a third
+    // made it no longer "singles-shaped", which silently switched the acceptance
+    // gate off (confirmed live). Its line-up is seeded at creation and final.
+    if (match.is_ranked && !match.team_a_id && !match.team_b_id) {
+      const { data: cur } = await supabase.from('match_participants').select('user_id, team_side').eq('match_id', id);
+      if (isSinglesShape(match, cur ?? [])) {
+        return res.status(409).json({ error: 'A ranked singles match has one player a side — its line-up can’t change.', code: 'SINGLES_LINEUP_FIXED' });
+      }
     }
     // SC-110: every participant must be placed on a valid side.
     for (const p of participants as any[]) {
@@ -1833,6 +1936,25 @@ export async function completeMatch(req: Request, res: Response) {
     ]);
     if (!verdict.ok) {
       return res.status(409).json(leaseRefusal(verdict));
+    }
+    // F-02: completing is the most final way to start a match — Elo was applied
+    // to an opponent who never accepted (confirmed live).
+    if (match.status !== 'completed') {
+      const refusal = await opponentNotAcceptedRefusal(match);
+      if (refusal) return res.status(409).json(refusal);
+    }
+    // F-01 (confirmed live): a best-of match that has been scored can only end
+    // once a side has won it. The app offered End at 1-0 in games (and at 0-0),
+    // and a best-of-3 badminton match was recorded "won 1-0". A result entered
+    // with NO scoring (an organiser recording a result) and walkovers are exempt.
+    if (match.status !== 'completed' && !walkover) {
+      const bo = bestOfState(normSportSlug(sportRow?.slug), canonical);
+      if (bo && bo.scored && !bo.decided) {
+        return res.status(409).json({
+          error: `This match isn’t decided yet — a side needs ${bo.needed} to win it. Keep scoring, or abandon it from the match page.`,
+          code: 'MATCH_NOT_DECIDED',
+        });
+      }
     }
     timer.mark('reads');
     if (match.status === 'completed') {

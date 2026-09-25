@@ -30,8 +30,16 @@ export function scorePush(args: {
   side: 'A' | 'B';
   teamName: string;
   kind?: string;
+  /**
+   * F-04 (confirmed live): the summary BEFORE this event. A point after the
+   * match was decided changes nothing server-side, so the "a game just ended"
+   * test kept matching the last finished game and re-sent "wins board 2" for
+   * every extra tap. A game/set push now needs this event to have finished one.
+   */
+  prevSummary?: { A?: SideLine; B?: SideLine } | null;
 }): { title: string; body: string } | null {
   const { slug, summary, side, teamName, kind } = args;
+  const prevN = Math.max(args.prevSummary?.A?.sets?.length ?? 0, args.prevSummary?.B?.sets?.length ?? 0);
   const A = summary.A ?? {};
   const B = summary.B ?? {};
   const setsA = A.sets ?? [];
@@ -42,14 +50,14 @@ export function scorePush(args: {
   if (RALLY.has(slug)) {
     // A game just ended exactly when the live points are back at 0-0 and a
     // completed game exists — this event was its last point.
-    const gameEnded = n > 0 && (A.points ?? 0) === 0 && (B.points ?? 0) === 0;
+    const gameEnded = n > prevN && (A.points ?? 0) === 0 && (B.points ?? 0) === 0;
     if (!gameEnded) return null;
     const word = slug === 'volleyball' ? 'set' : slug === 'carrom' ? 'board' : 'game';
     return { title: `${word[0]!.toUpperCase()}${word.slice(1)} to ${teamName}`, body: `${teamName} wins ${word} ${n} · ${mine(setsA[n - 1] ?? 0, setsB[n - 1] ?? 0)}` };
   }
 
   if (slug === 'tennis') {
-    const setEnded = n > 0 && (A.games ?? 0) === 0 && (B.games ?? 0) === 0 && (A.points ?? 0) === 0 && (B.points ?? 0) === 0;
+    const setEnded = n > prevN && (A.games ?? 0) === 0 && (B.games ?? 0) === 0 && (A.points ?? 0) === 0 && (B.points ?? 0) === 0;
     if (!setEnded) return null;
     const tb = summary.set_tiebreaks?.[n - 1];
     const games = mine(setsA[n - 1] ?? 0, setsB[n - 1] ?? 0);

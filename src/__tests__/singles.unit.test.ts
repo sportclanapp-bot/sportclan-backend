@@ -11,7 +11,7 @@ const code = (rel: string) =>
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
 const fn = (src: string, name: string) => {
-  const start = src.indexOf(`export async function ${name}`);
+  const start = src.indexOf(`export async function ${name}(`); // "(" so createMatch ≠ createMatchRefusal
   const next = src.indexOf('\nexport ', start + 10);
   return src.slice(start, next === -1 ? undefined : next);
 };

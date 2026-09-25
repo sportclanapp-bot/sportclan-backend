@@ -19,13 +19,15 @@ describe('SC-441 · decideWinnerSide', () => {
     expect(decideWinnerSide({ aScore: 4, bScore: 6 })).toBe('B');
   });
 
-  test('level scores are a tie, even with an explicit winner supplied', () => {
-    // THE 0-0 BUG: a supplied winner_team_id used to set the winner before the
-    // tie was considered, so the tie branch never ran and the margin came out
-    // as zero — "WINNER T70450 · won by 0 runs" on 0/0 vs 0/0.
+  test('level scores with no named winner are a tie', () => {
     expect(decideWinnerSide({ aScore: 0, bScore: 0 })).toBeNull();
-    expect(decideWinnerSide({ aScore: 0, bScore: 0, explicitWinner: 'A' })).toBeNull();
-    expect(decideWinnerSide({ aScore: 7, bScore: 7, explicitWinner: 'B' })).toBeNull();
+    expect(decideWinnerSide({ aScore: 7, bScore: 7 })).toBeNull();
+  });
+
+  test('F-03: a named winner stands even on level or absent scores', () => {
+    // It used to be dropped, so Elo/W-L counted a win the result called "Tied".
+    expect(decideWinnerSide({ aScore: 0, bScore: 0, explicitWinner: 'A' })).toBe('A');
+    expect(decideWinnerSide({ aScore: 7, bScore: 7, explicitWinner: 'B' })).toBe('B');
   });
 
   test('an explicit winner overrides the scores when they are not level', () => {
@@ -100,11 +102,13 @@ describe('SC-441 · cricket margins', () => {
     expect(r.text).not.toMatch(/won by 0/);
   });
 
-  test('and an explicit winner cannot un-tie it', () => {
+  test('a named winner on 0/0 is a win with no margin — never "won by 0 runs"', () => {
     const r = deriveResultText({
       ...base, aScore: 0, bScore: 0, explicitWinner: 'A',
     });
-    expect(r.text).toBe('Tied');
+    expect(r.winnerSide).toBe('A');
+    expect(r.text).toMatch(/ won$/);
+    expect(r.text).not.toMatch(/won by 0/);
   });
 });
 

@@ -60,8 +60,15 @@ export function decideWinnerSide(input: {
   explicitWinner?: Side | null;
 }): Side | null {
   const { aScore, bScore, explicitWinner } = input;
-  if (aScore === bScore) return null;
+  // F-03 (confirmed live, session 1): a NAMED winner is the result even when the
+  // scores are level or absent — a result entered without a score, or a singles
+  // match completed at 0-0 with its winner. Ignoring it stored "Tied"/draw while
+  // Elo, W/L and the bracket had already counted the named winner, so the record
+  // and the result disagreed (and a later void reversed a draw, not the win).
+  // The margin is what SC-441 guarded against ("won by 0 runs"); deriveResultText
+  // leaves the margin out when the scores are level.
   if (explicitWinner === 'A' || explicitWinner === 'B') return explicitWinner;
+  if (aScore === bScore) return null;
   return aScore > bScore ? 'A' : 'B';
 }
 
@@ -101,6 +108,8 @@ export function deriveResultText(input: ResultInput): {
   }
 
   const winnerName = winnerSide === 'A' ? teamAName : teamBName;
+  // Level (or no) score with a named winner: say who won, with no margin.
+  if (aScore === bScore) return { text: `${winnerName} won`, winnerSide };
   const hi = Math.max(aScore, bScore);
   const lo = Math.min(aScore, bScore);
   const diff = hi - lo;

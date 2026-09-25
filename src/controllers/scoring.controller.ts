@@ -3,7 +3,7 @@ import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { supabase } from '../utils/supabase';
 import { pendingRankedOpponent } from '../utils/singles';
-import { tennisReplay, type TennisScore } from '../utils/tennisCore';
+import { tennisReplay, TENNIS_SETS_TO_WIN, type TennisScore } from '../utils/tennisCore';
 import { scorePush, quarterPush } from '../utils/scorePush';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
@@ -235,6 +235,25 @@ export async function createEvent(req: Request, res: Response) {
       }
     }
 
+    // F-05 (confirmed live, session 1): a chess result names the player who won.
+    // The app sent the WHITE player's id for "Black wins" (it always dispatched
+    // results as side A), so the loser was credited and became Player of the
+    // Match. A registered player named on a result must be on the winning side.
+    if (event_type === 'result' && payload && typeof payload === 'object'
+      && (payload.winner === 'white' || payload.winner === 'black')
+      && typeof payload.player_id === 'string' && !isGuestId(payload.player_id)) {
+      const wantSide = payload.winner === 'white' ? 'A' : 'B';
+      const { data: part } = await supabase
+        .from('match_participants').select('team_side')
+        .eq('match_id', matchId).eq('user_id', payload.player_id).maybeSingle();
+      if (part && (part as { team_side?: string }).team_side !== wantSide) {
+        return res.status(400).json({
+          error: `That player is on the other side — ${payload.winner === 'white' ? 'White' : 'Black'}'s player won.`,
+          code: 'RESULT_PLAYER_WRONG_SIDE',
+        });
+      }
+    }
+
     // Guest players (manual entry for casual matches) + untrusted-name hygiene.
     // Ranked matches are real-users-only (ELO/leaderboards) — reject guest ids
     // there as defence-in-depth (the app also hides guest mode for ranked).
@@ -341,7 +360,10 @@ export async function createEvent(req: Request, res: Response) {
           // V-5: sports scored in games/sets push when a game (tennis: a set)
           // ends, quoting it — not on every rally, and never "scores! 0-0".
           const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
-          const push = scorePush({ slug, summary, side: side === 'B' ? 'B' : 'A', teamName: teamName(side), kind: payload?.kind as string | undefined });
+          const push = scorePush({
+            slug, summary, side: side === 'B' ? 'B' : 'A', teamName: teamName(side), kind: payload?.kind as string | undefined,
+            prevSummary: (match.score_summary ?? null) as never, // before this event (F-04)
+          });
           if (!push) return res.json({ event });
           const { title, body } = push;
           void fanoutScoreUpdate(matchId, title, body, userId);
@@ -408,7 +430,7 @@ export async function listEvents(req: Request, res: Response) {
 // cap = hard ceiling that ends a set without a 2-lead (badminton 30); maxSets =
 // best-of; finalTarget = different target for the deciding set (volleyball 15);
 // winBy2 = needs a 2-point lead (false for carrom boards).
-const SET_CONFIG: Record<
+export const SET_CONFIG: Record<
   string,
   { target: number; cap?: number; maxSets: number; finalTarget?: number; winBy2: boolean }
 > = {
@@ -421,6 +443,25 @@ const SET_CONFIG: Record<
   // game/board, and tennis events are POINTS. It has its own branch in
   // recomputeSummary, replayed through the shared tennisCore.
 };
+
+/**
+ * F-01 (confirmed live, session 1): for the best-of sports, how many sets/games/
+ * boards win the match, and whether a canonical summary says someone has.
+ * Null for sports that are not best-of (goals, points, runs, chess).
+ */
+export function bestOfState(slug: string, summary: Record<string, any> | null | undefined):
+  { needed: number; decided: boolean; scored: boolean; leader: 'A' | 'B' | null } | null {
+  const cfg = SET_CONFIG[slug];
+  const needed = slug === 'tennis' ? TENNIS_SETS_TO_WIN : cfg ? Math.floor(cfg.maxSets / 2) + 1 : 0;
+  if (!needed) return null;
+  const a = Number(summary?.A?.score ?? 0);
+  const b = Number(summary?.B?.score ?? 0);
+  const scored = a + b > 0
+    || (summary?.A?.sets?.length ?? 0) > 0 || (summary?.B?.sets?.length ?? 0) > 0
+    || Number(summary?.A?.points ?? 0) + Number(summary?.B?.points ?? 0) > 0
+    || Number(summary?.A?.games ?? 0) + Number(summary?.B?.games ?? 0) > 0;
+  return { needed, decided: Math.max(a, b) >= needed, scored, leader: a > b ? 'A' : b > a ? 'B' : null };
+}
 
 function setWon(
   a: number, b: number, target: number, cap: number | undefined, winBy2: boolean,

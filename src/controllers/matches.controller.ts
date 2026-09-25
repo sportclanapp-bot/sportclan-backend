@@ -137,6 +137,32 @@ export async function createMatchRefusal(args: {
   return null;
 }
 
+/**
+ * F-19 (Session 2): the create body's flags and counts are typed, not coerced.
+ * `!!"false"` is true, so a string "false" made a casual match ranked (and was
+ * then refused as "Ranked matches require two registered teams"); a negative
+ * players_needed was stored, and a fractional one failed the insert with a 500.
+ * Absent (or null) is fine: each keeps its default. Exported for tests.
+ */
+export const PLAYERS_NEEDED_MAX = 30;
+export function createFieldRefusal(body: {
+  is_ranked?: unknown;
+  is_open?: unknown;
+  players_needed?: unknown;
+}): { status: number; error: string; code: string } | null {
+  for (const key of ['is_ranked', 'is_open'] as const) {
+    const v = body[key];
+    if (v != null && typeof v !== 'boolean') {
+      return { status: 400, error: `${key} must be true or false.`, code: 'BAD_FLAG' };
+    }
+  }
+  const n = body.players_needed;
+  if (n != null && (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n > PLAYERS_NEEDED_MAX)) {
+    return { status: 400, error: `Players needed must be a whole number from 0 to ${PLAYERS_NEEDED_MAX}.`, code: 'BAD_PLAYERS_NEEDED' };
+  }
+  return null;
+}
+
 export async function createMatch(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -171,6 +197,8 @@ export async function createMatch(req: Request, res: Response) {
     }
     const cleanVenue = cleanVenueOrErr;
     if (!sport_id) return res.status(400).json({ error: 'sport_id is required' });
+    const fieldRefusal = createFieldRefusal({ is_ranked, is_open, players_needed });
+    if (fieldRefusal) return res.status(fieldRefusal.status).json({ error: fieldRefusal.error, code: fieldRefusal.code });
     // SC-279: per-match join policy. 'open' (default) = instant join_open_match;
     // 'approval' routes joins through match_join_requests (creator approves).
     const joinPolicy = join_policy === 'approval' ? 'approval' : 'open';

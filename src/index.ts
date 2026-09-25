@@ -62,6 +62,7 @@ import {
   runReEngagement,
   runWeeklyDigest,
 } from './controllers/features.controller';
+import { dbTimingMiddleware } from './utils/dbTiming';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -84,6 +85,8 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // controller's own 10MB check could return its friendly "Image too large (max
 // 10MB)". 14mb covers base64 of a full 10MB image (13.34MB) so the controller is
 // what actually enforces the limit, with the message the user should see.
+// Per-request db timing on Server-Timing — first, so the whole request is inside it.
+app.use(dbTimingMiddleware);
 app.use(express.json({ limit: '14mb' }));
 // SC-403: make snake_case/camelCase query params interchangeable, so a filter
 // spelled the other way is applied rather than silently dropped (which returned

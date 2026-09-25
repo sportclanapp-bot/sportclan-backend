@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { timedFetch } from './dbTiming';
 
 let _client: SupabaseClient | null = null;
 
@@ -12,6 +13,8 @@ function build(): SupabaseClient {
   }
   return createClient(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    // Per-request db call/round counts on Server-Timing (utils/dbTiming).
+    global: { fetch: timedFetch() },
   });
 }
 

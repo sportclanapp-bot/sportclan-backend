@@ -37,6 +37,7 @@ import { awardBadgesSafe } from './badges.controller';
 import { isSinglesSport, winnerSideOf, challengeText, pendingRankedOpponent, isSinglesShape } from '../utils/singles';
 import { isBlockedBetween } from '../utils/blocks';
 import { reconcileWinCoins } from '../utils/winCoins';
+import { stepTimer } from '../utils/stepTimer';
 
 /** U-13: is `userId` someone who could be in this match's line-up? */
 export async function viewerCanPlay(
@@ -1727,6 +1728,7 @@ export async function completeMatch(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
+    const timer = stepTimer();
     const { winner_team_id, winner_side, walkover, walkover_reason, is_draw, idempotent } = req.body || {};
 
     // SC-376: let the recorder submit the SCORE alongside the result.
@@ -1757,6 +1759,7 @@ export async function completeMatch(req: Request, res: Response) {
       .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice')
       .eq('id', id)
       .maybeSingle();
+    timer.mark('load');
     if (!match) return res.status(404).json({ error: 'Match not found' });
     // Authorization before status (SC-33): a non-owner must get 403, not learn
     // the match state via a 400.
@@ -1783,6 +1786,7 @@ export async function completeMatch(req: Request, res: Response) {
         return res.status(409).json({ error: 'Someone else took over scoring this match.', code: 'LEASE_LOST' });
       }
     }
+    timer.mark('auth_lease');
     if (match.status === 'completed') {
       // SC-421: the scoring outbox delivers this AT LEAST ONCE, and a completion
       // that timed out after the server had already finalised the match would
@@ -1876,6 +1880,7 @@ export async function completeMatch(req: Request, res: Response) {
       }
     }
 
+    timer.mark('guards');
     // Get participants grouped by team side
     const { data: participants } = await supabase
       .from('match_participants')
@@ -1914,6 +1919,7 @@ export async function completeMatch(req: Request, res: Response) {
     // SC-254: a walkover skips ALL attribution — no ELO/mp/W-L (allPlayerIds stays
     // empty, so the win-coins/streaks block and rating_change notifications below
     // are naturally skipped too). A forfeit is not a played game.
+    timer.mark('participants');
     const corePayloadProfiles: Array<Record<string, any>> = [];
     if (match.is_ranked && !walkover && participants && participants.length > 0) {
       const teamA = participants.filter((p) => p.team_side === 'A').map((p) => p.user_id);
@@ -1981,6 +1987,7 @@ export async function completeMatch(req: Request, res: Response) {
       }
     }
 
+    timer.mark('elo');
     // ── SC-283: CASUAL participation attribution (matches_played + W/L/D count
     // for casual too — the field is matches_played, not ranked_matches_played;
     // the person DID play). Rating/coins stay RANKED-ONLY (below).
@@ -2022,6 +2029,7 @@ export async function completeMatch(req: Request, res: Response) {
       }
     }
 
+    timer.mark('casual');
     // ── ATOMIC CORE (finalize_match, migration 051): profiles + rating_history +
     // status→completed in ONE transaction. Any failure → full rollback (match stays
     // not-completed, retryable); the in-txn status CAS blocks the double-apply.
@@ -2066,6 +2074,7 @@ export async function completeMatch(req: Request, res: Response) {
       updatedMatch = out?.match ?? null;
     }
 
+    timer.mark('finalize');
     // SC-283: casual isn't rated — remove the delta-0 rating_history rows
     // finalize_match wrote for a casual match, so casual never pollutes the
     // rating trajectory or the ranked analytics (SC-275 reads rating_history as
@@ -2076,6 +2085,7 @@ export async function completeMatch(req: Request, res: Response) {
       if (rhDelErr) console.warn('[SC-283] casual rating_history cleanup failed:', rhDelErr.message); // eslint-disable-line no-console
     }
 
+    timer.mark('rh_cleanup');
     // ── Post-core best-effort (never blocks completion; all idempotent) ──
     // (walkover leaves allPlayerIds empty, so this is skipped either way — the
     // explicit !walkover keeps the "no coins/streaks on a forfeit" intent local.)
@@ -2124,6 +2134,7 @@ export async function completeMatch(req: Request, res: Response) {
       }
     }
 
+    timer.mark('coins_streaks');
     // Recompute the canonical summary from the event log, then derive the winner
     // BY SIDE and a human result string from the canonical per-side `score`.
     // The old code read seeded keys (ss.team_a_score/…) that the live scorer
@@ -2237,6 +2248,7 @@ export async function completeMatch(req: Request, res: Response) {
       await supabase.from('matches').update(patch).eq('id', id);
     } catch { /* best effort */ }
 
+    timer.mark('result');
     // A5-004 — derive per-player innings_stats from the attributed event log so
     // career batting/bowling stats are real (not the scorer-aggregated fallback).
     // Best-effort + idempotent; no-ops for non-cricket / unattributed matches.
@@ -2246,6 +2258,7 @@ export async function completeMatch(req: Request, res: Response) {
       console.error('innings_stats write failed:', statErr instanceof Error ? statErr.message : statErr);
     }
 
+    timer.mark('innings');
     // FEATURE 1 — Player of the Match. Compute + persist mvp_user_id now that
     // the match is completed and all scoring events exist. Best-effort: a
     // failure here must never block completion. Only matches with real
@@ -2256,6 +2269,7 @@ export async function completeMatch(req: Request, res: Response) {
       console.error('MVP calculation failed:', mvpErr instanceof Error ? mvpErr.message : mvpErr);
     }
 
+    timer.mark('mvp');
     // Resolve sport name for nicer notification copy — falls back to ID.
     let sportName = 'rating';
     try {
@@ -2334,6 +2348,7 @@ export async function completeMatch(req: Request, res: Response) {
       void awardBadgesSafe(uid as string);
     }
 
+    timer.mark('notify');
     // If this is a tournament bracket match, propagate the winner into the next
     // round (and auto-complete the tournament if it was the final). Best-effort;
     // the winner_team_id was finalised above (incl. side-derived backfill).
@@ -2345,6 +2360,9 @@ export async function completeMatch(req: Request, res: Response) {
       }
     }
 
+    timer.mark('tournament');
+    res.setHeader('Server-Timing', timer.header());
+    console.log(`[complete-timing] match=${id} total=${timer.total()}ms ${timer.header()}`); // eslint-disable-line no-console
     return res.json({
       match: updatedMatch,
       ratings: ratingHistoryRows.map((r) => ({

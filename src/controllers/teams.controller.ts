@@ -214,38 +214,44 @@ export async function getTeam(req: Request, res: Response) {
   try {
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
-    // SC-200: embed the city so the team hero can show a real location.
-    const { data: team, error } = await supabase
-      .from('teams')
-      .select('*, city:cities!city_id(id, name)')
-      .eq('id', id)
-      .maybeSingle();
+    // Everything here depends only on the team id, and was read in sequence
+    // (~5 round-trips, ~1.9 s). One round now; nothing is returned for a
+    // private team the viewer is not in.
+    const [
+      { data: team, error },
+      { data: membership },
+      { data: members },
+      record,
+      { count: memberTotal },
+    ] = await Promise.all([
+      // SC-200: embed the city so the team hero can show a real location.
+      supabase.from('teams').select('*, city:cities!city_id(id, name)').eq('id', id).maybeSingle(),
+      supabase.from('team_members').select('id').eq('team_id', id).eq('user_id', userId).maybeSingle(),
+      // SC-79: `!inner` + filter hides soft-deleted members from the roster
+      // (belt-and-suspenders alongside the delete-time captaincy transfer).
+      excludeDeletedEmbed(supabase
+        .from('team_members')
+        .select('id, role, jersey_number, joined_at, user:user_id!inner (id, name, username, profile_picture_url)')
+        .eq('team_id', id), 'user'),
+      // SC-293: the team's W/L record (same computeTeamRecord Insights uses).
+      computeTeamRecord(id),
+      // SC-371: ask the database for the member count (see below).
+      supabase.from('team_members').select('id', { count: 'exact', head: true }).eq('team_id', id),
+    ]);
     if (error || !team) return res.status(404).json({ error: 'Team not found' });
     // Flatten embedded city → flat city_name string; drop the nested object.
     (team as any).city_name = (team as any).city?.name ?? null;
     delete (team as any).city;
     // SC-107: a private team is only readable by its members.
-    if (team.is_public === false) {
-      const { data: membership } = await supabase
-        .from('team_members')
-        .select('id')
-        .eq('team_id', id)
-        .eq('user_id', userId)
-        .maybeSingle();
-      if (!membership) return res.status(403).json({ error: 'This team is private' });
+    if (team.is_public === false && !membership) {
+      return res.status(403).json({ error: 'This team is private' });
     }
-    // SC-79: `!inner` + filter hides soft-deleted members from the roster
-    // (belt-and-suspenders alongside the delete-time captaincy transfer).
-    const { data: members } = await excludeDeletedEmbed(supabase
-      .from('team_members')
-      .select('id, role, jersey_number, joined_at, user:user_id!inner (id, name, username, profile_picture_url)')
-      .eq('team_id', id), 'user');
     // SC-293: the team's W/L record — FREE (basic info; the team-detail header
     // showed "— matches / — won" for a team that had actually played, disagreeing
     // with the premium Team Insights). Same computeTeamRecord Insights uses, so
     // header and Insights can't drift. (There is no global TEAM rank — the FE
     // keeps an honest dash for that tile rather than fabricate one.)
-    (team as { record?: unknown }).record = await computeTeamRecord(id);
+    (team as { record?: unknown }).record = record;
     // SC-359: capacity is part of the team's public shape so the UI can show
     // "12/50" and disable Join at the cap instead of letting a user tap into a
     // guaranteed failure.
@@ -253,10 +259,6 @@ export async function getTeam(req: Request, res: Response) {
     // only ever right because the 50-member cap happens to sit under PostgREST's
     // default page size. That is a coincidence, not a count — one raised cap or
     // one added page and the number silently under-reports. Ask the database.
-    const { count: memberTotal } = await supabase
-      .from('team_members')
-      .select('id', { count: 'exact', head: true })
-      .eq('team_id', id);
     const realMemberCount = memberTotal ?? (members || []).length;
     (team as { member_count?: number }).member_count = realMemberCount;
     (team as { max_members?: number }).max_members = TEAM_MAX_MEMBERS;

@@ -1536,6 +1536,18 @@ export async function updateMatch(req: Request, res: Response) {
 }
 
 // POST /matches/:id/participants — bulk add
+/** F-29 · the first player a line-up batch puts on both sides, or null. */
+export function lineupSideConflict(participants: Array<{ user_id?: unknown; team_side?: unknown } | null | undefined>): string | null {
+  const side = new Map<string, unknown>();
+  for (const p of participants) {
+    if (!p || typeof p.user_id !== 'string') continue;
+    const seen = side.get(p.user_id);
+    if (seen !== undefined && seen !== p.team_side) return p.user_id;
+    side.set(p.user_id, p.team_side);
+  }
+  return null;
+}
+
 export async function addParticipants(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1577,9 +1589,16 @@ export async function addParticipants(req: Request, res: Response) {
         return res.status(400).json({ error: 'team_side must be A or B' });
       }
     }
+    // F-29: one player, one side. A batch placing the same player on both sides
+    // used to be "deduped" (last wins), so the line-up stored was not the one
+    // the scorer saw. It is refused; an exact repeat is still just deduped.
+    const onBoth = lineupSideConflict(participants as any[]);
+    if (onBoth) {
+      return res.status(400).json({ error: 'A player can’t be on both sides.', code: 'PLAYER_ON_BOTH_SIDES', user_id: onBoth });
+    }
     // SC-53: dedupe by user_id (last wins) — a batch containing the same user
-    // twice (e.g. a player listed on both sides) would otherwise make Postgres'
-    // ON CONFLICT upsert fail with "cannot affect row a second time" → 500.
+    // twice would otherwise make Postgres' ON CONFLICT upsert fail with "cannot
+    // affect row a second time" → 500.
     const isCricketLineup = normSportSlug((await getSport(match.sport_id as string))?.slug) === 'cricket';
     const byUser = new Map<string, any>();
     for (const p of participants as any[]) {
@@ -1647,7 +1666,6 @@ export async function selfAssignUmpire(req: Request, res: Response) {
         error: match.umpire_id === userId ? 'You are already officiating this match.' : 'Match already has an umpire',
       });
     }
-
     const { data, error } = await supabase
       .from('matches')
       .update({ umpire_id: userId, updated_at: new Date().toISOString() })

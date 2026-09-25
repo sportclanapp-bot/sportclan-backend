@@ -1725,6 +1725,10 @@ export async function cancelMatch(req: Request, res: Response) {
 
 // POST /matches/:id/complete — finalize match, calculate ELO, update profiles.
 // Body: { winner_team_id?: string } — omit for draw.
+/** Completion timing is logged only past these (Server-Timing always carries it). */
+const SLOW_COMPLETE_MS = 2000;
+const SLOW_AFTER_MS = 5000;
+
 export async function completeMatch(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -2382,10 +2386,16 @@ export async function completeMatch(req: Request, res: Response) {
       }
 
       after.mark('side_effects');
-      console.log(`[complete-after] match=${id} ${after.header()}`); // eslint-disable-line no-console
+      if (after.total() > SLOW_AFTER_MS) {
+        console.warn(`[complete-after] slow match=${id} ${after.header()}`); // eslint-disable-line no-console
+      }
     };
     res.setHeader('Server-Timing', timer.header());
-    console.log(`[complete-timing] match=${id} total=${timer.total()}ms ${timer.header()}`); // eslint-disable-line no-console
+    // Quiet unless slow: completion answers in ~1.3 s now. Server-Timing carries
+    // the steps on every response regardless.
+    if (timer.total() > SLOW_COMPLETE_MS) {
+      console.warn(`[complete-timing] slow match=${id} total=${timer.total()}ms ${timer.header()}`); // eslint-disable-line no-console
+    }
     res.json({
       match: updatedMatch,
       ratings: ratingHistoryRows.map((r) => ({

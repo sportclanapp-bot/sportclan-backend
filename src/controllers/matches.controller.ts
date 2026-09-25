@@ -42,6 +42,7 @@ import { leaseRefusal } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
 import { allOutBySide, cricketFormatOf, isOfferedOvers } from '../utils/cricketRules';
+import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
 /** U-13: is `userId` someone who could be in this match's line-up? */
 export async function viewerCanPlay(
@@ -2035,6 +2036,23 @@ export async function completeMatch(req: Request, res: Response) {
     // groups_knockout GROUP matches may legitimately draw — a tie is a valid
     // 1-point-each league result, and standings already handle it.
     const isBracketMatch = await isKnockoutBracketMatch(match);
+    // A2: a knockout football/hockey match level on goals is decided by a
+    // shootout (shared shootoutRules). Allowed only there, only when level, only
+    // with a valid score, and the named winner must be the shootout's winner.
+    const shootout = (req.body?.shootout ?? null) as { A?: unknown; B?: unknown } | null;
+    const shootoutScore = shootout ? { A: Number(shootout.A), B: Number(shootout.B) } : null;
+    if (shootout) {
+      const level = Number(canonical?.A?.score ?? 0) === Number(canonical?.B?.score ?? 0);
+      if (!shootoutApplies(normSportSlug(sportRow?.slug), isBracketMatch) || !level) {
+        return res.status(400).json({ error: 'A shootout decides only a level knockout football or hockey match.', code: 'SHOOTOUT_NOT_ALLOWED' });
+      }
+      if (!validShootout(shootout.A, shootout.B)) {
+        return res.status(400).json({ error: 'A shootout score is two different whole numbers.', code: 'BAD_SHOOTOUT' });
+      }
+      if (shootoutWinner(shootoutScore!.A, shootoutScore!.B) !== winnerSide) {
+        return res.status(400).json({ error: 'The winner has to be the side that won the shootout.', code: 'SHOOTOUT_WINNER_MISMATCH' });
+      }
+    }
     if (isBracketMatch && !winner_team_id) {
       return res.status(400).json({
         error: 'Bracket matches need a decisive winner — pick the winning team (a bracket can\'t advance on a tie).',
@@ -2346,6 +2364,17 @@ export async function completeMatch(req: Request, res: Response) {
       ss.result = resultText;
       ss.winner_side = derivedSide;
       resultForNotice = resultText;
+      // A2: "Lions won 2–2 (4–3 pens)", and the shootout kept with the score.
+      if (shootoutScore && derivedSide) {
+        ss.shootout = shootoutScore;
+        ss.result = shootoutResultText({
+          sport: slug,
+          winnerName: derivedSide === 'A' ? aName : bName,
+          goals: { A: aScore, B: bScore },
+          shootout: shootoutScore,
+        });
+        resultForNotice = ss.result;
+      }
       // SC-254: mark a walkover so it's distinguishable from a genuine 0-0 played
       // result, and override the score-derived text ("… won by 0 runs") with the
       // forfeit label. winner_team_id is always present on a walkover → winnerSide

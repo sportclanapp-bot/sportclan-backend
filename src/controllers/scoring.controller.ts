@@ -1026,7 +1026,8 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
   // `declared` is NOT in this list and must not be: it comes from a declaration
   // EVENT and is rebuilt correctly above, so preserving it would pin a stale
   // value against a legitimate recompute.
-  for (const k of ['toss_winner_side', 'result', 'winner_side', 'walkover', 'walkover_reason'] as const) {
+  // A2: a knockout match's shootout is set at completion, like the result.
+  for (const k of ['toss_winner_side', 'result', 'winner_side', 'walkover', 'walkover_reason', 'shootout'] as const) {
     if (existing[k] != null && summary[k] == null) summary[k] = existing[k];
   }
 

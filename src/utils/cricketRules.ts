@@ -87,3 +87,61 @@ export function dlsOutcome(
   if (r === t - 1) return { winner: null, runs: 0 };
   return { winner: 'defender', runs: t - 1 - r };
 }
+
+/**
+ * Decisions 2026-09-26 (MATCH_CREATE_TEST_5) · ending a match that is not over.
+ *
+ * End pressed with the chase unfinished used to award it to the side with more
+ * runs, "won by 16 runs" with 23 balls and every wicket left. Now the scorer
+ * must choose, and the server refuses an End that doesn't say:
+ *   chase under way   award it to the defending side, decide it by DLS, or no result
+ *   first innings     award it to either side (a concession), or no result
+ * "No result" is an abandonment (it counts for nobody); the other two complete
+ * the match. A match whose chase is over needs no choice.
+ */
+export type UnfinishedEnd = 'award' | 'dls' | 'no_result';
+export type CricketStage = 'first_innings' | 'chase' | 'over';
+
+export interface InningsFacts {
+  runs: number;
+  wickets: number;
+  balls: number;
+  declared?: boolean;
+}
+
+/** Is an innings finished — out of overs, all out, or declared? */
+export function inningsFinished(inn: InningsFacts, overs: number | null | undefined, allOut: number): boolean {
+  return inn.declared === true || inn.balls >= inningsOvers(overs) * 6 || inn.wickets >= allOut;
+}
+
+/** Where a match stands. The chase target is the DLS one when set. */
+export function cricketStage(args: {
+  first: InningsFacts;
+  chase: InningsFacts;
+  overs: number | null | undefined;
+  firstAllOut: number;
+  chaseAllOut: number;
+  dlsTarget?: number | null;
+}): CricketStage {
+  if (!inningsFinished(args.first, args.overs, args.firstAllOut)) return 'first_innings';
+  const dls = Math.floor(Number(args.dlsTarget));
+  const target = Number.isFinite(dls) && dls > 0 ? dls : args.first.runs + 1;
+  const over = args.chase.runs >= target
+    || args.chase.wickets >= args.chaseAllOut
+    || args.chase.balls >= inningsOvers(args.overs) * 6;
+  return over ? 'over' : 'chase';
+}
+
+/** The ends a scorer may pick at this stage; none once the match is over. */
+export function unfinishedEnds(stage: CricketStage): UnfinishedEnd[] {
+  if (stage === 'chase') return ['award', 'dls', 'no_result'];
+  if (stage === 'first_innings') return ['award', 'no_result'];
+  return [];
+}
+
+/** May this side be awarded the match? In a chase, only the defending side. */
+export function awardAllowed(stage: CricketStage, winner: 'A' | 'B' | null | undefined, defendingSide: 'A' | 'B'): boolean {
+  if (winner !== 'A' && winner !== 'B') return false;
+  if (stage === 'chase') return winner === defendingSide;
+  return stage === 'first_innings';
+}

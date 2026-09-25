@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
-import { dlsWinner, deriveResultText } from '../utils/matchResult';
+import { dlsWinner, deriveResultText, chasingSide } from '../utils/matchResult';
 import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease, isStale, STALE_AFTER_MS } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { getMatchLiveStatus } from '../utils/liveStatus';
@@ -41,7 +41,7 @@ import { stepTimer } from '../utils/stepTimer';
 import { leaseRefusal } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
-import { allOutBySide, cricketFormatOf, isOfferedOvers } from '../utils/cricketRules';
+import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, type UnfinishedEnd } from '../utils/cricketRules';
 import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
 // U-13: moved to utils/viewerCanPlay (F-24: availability answers use it too).
@@ -2019,7 +2019,7 @@ export async function completeMatch(req: Request, res: Response) {
       // who was chasing, and a cricket win is described by wickets or by runs
       // depending on the answer. It was missing, so a successful chase reported
       // "won by N runs". See the note at the derivation call below.
-      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice, format')
+      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice, format, overs')
       .eq('id', id)
       .maybeSingle();
     timer.mark('load');
@@ -2175,7 +2175,11 @@ export async function completeMatch(req: Request, res: Response) {
     // F-15: a DLS revised target decides a rain-shortened chase. A named winner
     // (the app used to name the side with more runs) must agree with it, or the
     // record, Elo and the result sentence would disagree.
-    if (!walkover && normSportSlug(sportRow?.slug) === 'cricket' && (canonical?.dls_applied || (match.score_summary as any)?.dls_applied)) {
+    // Decisions 2026-09-26: an award is the scorer's choice for an unfinished
+    // match, so the DLS target does not overrule it (a "decide by DLS" end does
+    // come through here and must agree with the target).
+    const unfinishedEnd = req.body?.unfinished as UnfinishedEnd | undefined;
+    if (!walkover && unfinishedEnd !== 'award' && normSportSlug(sportRow?.slug) === 'cricket' && (canonical?.dls_applied || (match.score_summary as any)?.dls_applied)) {
       const cs: any = { ...(match.score_summary as object ?? {}), ...(canonical ?? {}) };
       const d = dlsWinner({
         aScore: Number(cs?.A?.runs ?? 0),
@@ -2191,6 +2195,56 @@ export async function completeMatch(req: Request, res: Response) {
           error: who ? `By the DLS target, ${who} won this match.` : 'By the DLS target, this match is tied.',
           code: 'DLS_WINNER_MISMATCH',
         });
+      }
+    }
+    // Decisions 2026-09-26 (MATCH_CREATE_TEST_5): a cricket match that has
+    // started and is not over can't just be "ended" — End used to give it to the
+    // side with more runs ("won by 16 runs" with 23 balls and every wicket left).
+    // The scorer picks: award it (in a chase, to the defending side; in the first
+    // innings, to either side), decide it by DLS (a chase with a target set), or
+    // no result (the abandon endpoint, not this one). Same rule as the app
+    // (cricketRules.cricketStage). A result posted with its own score (the
+    // tournament desk) and walkovers are exempt.
+    let awarded = false;
+    if (!walkover && !submittedSummary && normSportSlug(sportRow?.slug) === 'cricket') {
+      const cs: any = { ...(match.score_summary as object ?? {}), ...(canonical ?? {}) };
+      const facts = (x: any) => ({ runs: Number(x?.runs ?? 0), wickets: Number(x?.wickets ?? 0), balls: Number(x?.balls ?? 0), declared: x?.declared === true });
+      const a = facts(cs?.A);
+      const b = facts(cs?.B);
+      if (a.balls + b.balls + a.runs + b.runs + a.wickets + b.wickets > 0) {
+        const chaser = chasingSide(cs?.toss_winner_side ?? null, match.toss_choice ?? null, cs?.first_batting_side ?? null);
+        const firstSide: 'A' | 'B' = chaser === 'A' ? 'B' : 'A';
+        const allOut = allOutBySide(partsRes.data ?? []);
+        const dlsTarget = cs?.dls_applied ? Number(cs?.dls_target ?? 0) || null : null;
+        const stage = cricketStage({
+          first: firstSide === 'A' ? a : b,
+          chase: firstSide === 'A' ? b : a,
+          overs: match.overs ?? null,
+          firstAllOut: allOut[firstSide],
+          chaseAllOut: allOut[firstSide === 'A' ? 'B' : 'A'],
+          dlsTarget,
+        });
+        if (stage !== 'over') {
+          if (unfinishedEnd !== 'award' && unfinishedEnd !== 'dls') {
+            return res.status(400).json({
+              error: stage === 'chase'
+                ? 'The chase isn’t over. Award the match to the defending side, decide it by DLS, or record no result.'
+                : 'The first innings isn’t over. Award the match to a side, or record no result.',
+              code: 'MATCH_NOT_OVER',
+              stage,
+            });
+          }
+          if (unfinishedEnd === 'dls' && (stage !== 'chase' || !dlsTarget)) {
+            return res.status(400).json({ error: 'Set a DLS target first — the DLS calculator on the scoring pad.', code: 'DLS_TARGET_REQUIRED' });
+          }
+          if (unfinishedEnd === 'award' && !awardAllowed(stage, winnerSide, firstSide)) {
+            return res.status(400).json({
+              error: stage === 'chase' ? 'An unfinished chase can only be awarded to the side defending the total.' : 'Name the side the match is awarded to.',
+              code: 'AWARD_WRONG_SIDE',
+            });
+          }
+          awarded = unfinishedEnd === 'award';
+        }
       }
     }
     // F-17: a chess game ends with a result. With none recorded (no result
@@ -2507,6 +2561,13 @@ export async function completeMatch(req: Request, res: Response) {
           goals: { A: aScore, B: bScore },
           shootout: shootoutScore,
         });
+        resultForNotice = ss.result;
+      }
+      // Decision 2026-09-26: an awarded result names the winner with no margin —
+      // the chase never finished, so a runs gap is a number nobody earned.
+      if (awarded && derivedSide) {
+        ss.awarded = true;
+        ss.result = `${derivedSide === 'A' ? aName : bName} won (awarded)`;
         resultForNotice = ss.result;
       }
       // SC-254: mark a walkover so it's distinguishable from a genuine 0-0 played

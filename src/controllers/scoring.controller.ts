@@ -373,9 +373,15 @@ export async function createEvent(req: Request, res: Response) {
           s === 'A' ? (fresh?.team_a_name || 'Team A') : (fresh?.team_b_name || 'Team B');
 
         if (event_type === 'wicket') {
+          // F-15: the app sends batsman_id / batsman_name. This read batter_name,
+          // which nothing sends, so every wicket push said "Batter out". The
+          // batter's runs come from the rollup the summary already carries.
+          const batId = (payload?.batsman_id as string) || (payload?.player_id as string) || '';
+          const line = batId ? summary?.players?.[batId] : null;
           const playerName =
-            (payload?.batter_name as string) || (payload?.player_name as string) || 'Batter';
-          const runs = payload?.batter_runs ?? payload?.runs_scored ?? '';
+            (payload?.batsman_name as string) || (payload?.batter_name as string) ||
+            (payload?.player_name as string) || (line?.name as string) || 'Batter';
+          const runs = payload?.batter_runs ?? payload?.runs_scored ?? (typeof line?.runs === 'number' ? line.runs : '');
           const inning: any = summary[side] || {};
           const scoreStr = `${inning.runs ?? 0}/${inning.wickets ?? 0}`;
           const title = 'Wicket!';
@@ -388,8 +394,13 @@ export async function createEvent(req: Request, res: Response) {
           // V-5: sports scored in games/sets push when a game (tennis: a set)
           // ends, quoting it — not on every rally, and never "scores! 0-0".
           const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
+          // F-15: an own goal is scored FOR the other side; team_side is the side
+          // that conceded it. The push said the conceding team "scores!".
+          const ownGoal = payload?.kind === 'own_goal';
+          const forSide: 'A' | 'B' = ownGoal ? (side === 'B' ? 'A' : 'B') : side === 'B' ? 'B' : 'A';
           const push = scorePush({
-            slug, summary, side: side === 'B' ? 'B' : 'A', teamName: teamName(side), kind: payload?.kind as string | undefined,
+            slug, summary, side: forSide, teamName: teamName(forSide), kind: payload?.kind as string | undefined,
+            concedingName: ownGoal ? teamName(side) : undefined,
             prevSummary: (match.score_summary ?? null) as never, // before this event (F-04)
           });
           if (!push) return res.json({ event });
@@ -562,6 +573,8 @@ export interface CricketPlayerLine {
    */
   dismissal_fielder?: string; dismissal_bowler?: string;
   bowl_balls: number; bowl_runs: number; bowl_wickets: number;
+  /** F-15: overs of six legal balls with nothing charged to this bowler (maidens were always 0). */
+  bowl_maidens: number;
   /**
    * Fielding credit. These have existed as columns on innings_stats since the
    * table was created and were written as a literal 0 for every player of every
@@ -578,7 +591,7 @@ export function aggregateCricketPlayers(
     if (!players[id]) {
       players[id] = {
         side, runs: 0, balls: 0, fours: 0, sixes: 0, out: false,
-        bowl_balls: 0, bowl_runs: 0, bowl_wickets: 0,
+        bowl_balls: 0, bowl_runs: 0, bowl_wickets: 0, bowl_maidens: 0,
         catches: 0, runouts: 0, stumpings: 0,
       };
     }
@@ -586,6 +599,26 @@ export function aggregateCricketPlayers(
     // straight from the rollup (fixes SC-52) and names guest players too.
     if (name && !players[id]!.name) players[id]!.name = name;
     return players[id]!;
+  };
+  // F-15 · maidens. The over in progress per batting side: its legal balls, its
+  // bowler (undefined until the first delivery; a change mid-over spoils it),
+  // and the runs charged to the bowler (bat runs, wides, no-balls — not byes or
+  // leg-byes). Needs the events in order, which both callers that persist it
+  // (recompute and writeCricketInningsStats) read by created_at.
+  const overs: Record<'A' | 'B', { legal: number; bowler?: string | null; charged: number; clean: boolean }> = {
+    A: { legal: 0, charged: 0, clean: true },
+    B: { legal: 0, charged: 0, clean: true },
+  };
+  const delivery = (side: 'A' | 'B', bowlId: string | undefined, legal: boolean, charged: number) => {
+    const o = overs[side];
+    if (o.bowler === undefined) o.bowler = bowlId ?? null;
+    if ((bowlId ?? null) !== o.bowler) o.clean = false;
+    o.charged += charged;
+    if (!legal) return;
+    o.legal += 1;
+    if (o.legal < 6) return;
+    if (o.clean && o.bowler && o.charged === 0 && players[o.bowler]) players[o.bowler]!.bowl_maidens += 1;
+    overs[side] = { legal: 0, charged: 0, clean: true };
   };
   for (const e of events) {
     const p: any = e.payload || {};
@@ -595,6 +628,12 @@ export function aggregateCricketPlayers(
     const bowlId: string | undefined = p.bowler_id;
     const batName: string | undefined = p.batsman_name || p.player_name;
     const bowlName: string | undefined = p.bowler_name;
+    if (bowlId && (e.event_type === 'ball' || e.event_type === 'extra' || e.event_type === 'wicket')) ensure(bowlId, bowlSide, bowlName);
+    if (e.event_type === 'ball') delivery(batSide, bowlId, !p.is_extra, Number(p.runs ?? 0));
+    else if (e.event_type === 'extra') {
+      const legalExtra = p.type === 'B' || p.type === 'Lb';
+      delivery(batSide, bowlId, legalExtra, legalExtra ? 0 : Number(p.runs ?? 0));
+    } else if (e.event_type === 'wicket' && !p.is_extra) delivery(batSide, bowlId, true, 0);
     if (e.event_type === 'ball') {
       const runs = Number(p.runs ?? 0);
       if (batId) {
@@ -816,6 +855,7 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
   let chessClockWhite: number | null = null; // seconds remaining after White's last move
   let chessClockBlack: number | null = null;
 
+  let cricketFirstBat: 'A' | 'B' | null = null;
   if (slug === 'cricket') {
     for (const s of ['A', 'B'] as const) Object.assign(sides[s], { runs: 0, balls: 0, wickets: 0 });
     // A6: a side is all out one short of its line-up (shared cricketRules); a
@@ -825,6 +865,11 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
     for (const e of events) {
       const p: any = e.payload || {};
       const inn = sides[sideOf(p)];
+      // F-15: who batted first, from play — the side on the first delivery. The
+      // result reads it when no toss was recorded, to tell a chase from a defence.
+      if (cricketFirstBat === null && (e.event_type === 'ball' || e.event_type === 'extra' || e.event_type === 'wicket')) {
+        cricketFirstBat = sideOf(p);
+      }
       if (e.event_type === 'ball') { inn.runs += Number(p.runs ?? 0); if (!p.is_extra) inn.balls += 1; }
       else if (e.event_type === 'extra') {
         inn.runs += Number(p.runs ?? 0);
@@ -949,6 +994,7 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
   }
 
   const summary: Record<string, any> = { ...existing, A, B };
+  if (slug === 'cricket') summary.first_batting_side = cricketFirstBat;
   if (slug === 'chess') {
     summary.result = chessResult ?? 'No result yet';
     summary.winner_side = chessWinner;
@@ -1090,7 +1136,7 @@ export async function writeCricketInningsStats(matchId: string): Promise<void> {
     bowling_overs: ballsToOvers(line.bowl_balls),
     bowling_runs: line.bowl_runs,
     bowling_wickets: line.bowl_wickets,
-    bowling_maidens: 0,
+    bowling_maidens: line.bowl_maidens,
     catches: line.catches,
     runouts: line.runouts,
     stumpings: line.stumpings,

@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
-import { deriveResultText } from '../utils/matchResult';
+import { dlsWinner, deriveResultText } from '../utils/matchResult';
 import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease, isStale, STALE_AFTER_MS } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { getMatchLiveStatus } from '../utils/liveStatus';
@@ -2141,6 +2141,27 @@ export async function completeMatch(req: Request, res: Response) {
     // here is e.g. an organiser "record result" that left the winner blank.
     // `=== false` (not `!allows_draw`) so it fails OPEN if the column is ever
     // absent — never wrongly blocks a legitimate tie.
+    // F-15: a DLS revised target decides a rain-shortened chase. A named winner
+    // (the app used to name the side with more runs) must agree with it, or the
+    // record, Elo and the result sentence would disagree.
+    if (!walkover && normSportSlug(sportRow?.slug) === 'cricket' && (canonical?.dls_applied || (match.score_summary as any)?.dls_applied)) {
+      const cs: any = { ...(match.score_summary as object ?? {}), ...(canonical ?? {}) };
+      const d = dlsWinner({
+        aScore: Number(cs?.A?.runs ?? 0),
+        bScore: Number(cs?.B?.runs ?? 0),
+        tossWinnerSide: cs?.toss_winner_side ?? null,
+        tossChoice: match.toss_choice ?? null,
+        firstBattingSide: cs?.first_batting_side ?? null,
+        dlsTarget: Number(cs?.dls_target ?? 0) || null,
+      });
+      if (d && d.winnerSide !== (winnerSide ?? null)) {
+        const who = d.winnerSide ? (d.winnerSide === 'A' ? match.team_a_name ?? 'Team A' : match.team_b_name ?? 'Team B') : null;
+        return res.status(400).json({
+          error: who ? `By the DLS target, ${who} won this match.` : 'By the DLS target, this match is tied.',
+          code: 'DLS_WINNER_MISMATCH',
+        });
+      }
+    }
     // F-17: a chess game ends with a result. With none recorded (no result
     // event, no winner named, no explicit draw) the completion used to go
     // through and store a draw nobody had entered. Walkovers are exempt.
@@ -2438,6 +2459,9 @@ export async function completeMatch(req: Request, res: Response) {
         // last, and the only one a type could have caught for free.
         tossChoice: match.toss_choice ?? null,
         explicitWinner,
+        // F-15: who chased without a toss, and a DLS revised target.
+        firstBattingSide: (ss?.first_batting_side as 'A' | 'B' | undefined) ?? null,
+        dlsTarget: ss?.dls_applied ? Number(ss?.dls_target ?? 0) || null : null,
       });
 
       ss.result = resultText;

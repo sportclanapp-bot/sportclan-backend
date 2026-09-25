@@ -65,3 +65,25 @@ export function cricketFormatOf(format: string | null | undefined): CricketForma
 export function isOfferedOvers(format: CricketFormat, overs: number | null | undefined): boolean {
   return overs == null || CRICKET_OVERS[format].options.includes(Number(overs));
 }
+
+/**
+ * F-15 · a chase decided by a DLS revised target (the target the chasing side
+ * needs to WIN, as the DLS calculator returns it). It was stored and never
+ * read, so a rain-shortened chase was still judged on the full first innings.
+ *   runs ≥ target        → the chasing side wins (by the wickets in hand)
+ *   runs = target − 1    → a tie
+ *   fewer                → the side that batted first wins, by
+ *                          target − 1 − runs ("won by N runs (DLS)")
+ * Null when there is no usable target.
+ */
+export function dlsOutcome(
+  chasingRuns: number,
+  dlsTarget: number | null | undefined,
+): { winner: 'chaser' | 'defender' | null; runs: number } | null {
+  const t = Math.floor(Number(dlsTarget));
+  if (!Number.isFinite(t) || t <= 0) return null;
+  const r = Math.max(0, Math.floor(Number(chasingRuns) || 0));
+  if (r >= t) return { winner: 'chaser', runs: 0 };
+  if (r === t - 1) return { winner: null, runs: 0 };
+  return { winner: 'defender', runs: t - 1 - r };
+}

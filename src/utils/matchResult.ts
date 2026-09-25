@@ -20,6 +20,8 @@
  * A tie is "Tied", never "won by 0 runs" — see decideWinnerSide.
  */
 
+import { dlsOutcome } from './cricketRules';
+
 export type Side = 'A' | 'B';
 
 export interface ResultInput {
@@ -41,6 +43,14 @@ export interface ResultInput {
   tossChoice?: string | null;
   /** An explicitly supplied winner, e.g. a walkover or an umpire decision. */
   explicitWinner?: Side | null;
+  /**
+   * F-15 · cricket: the side on the first delivery (score_summary
+   * .first_batting_side). Tells who chased when no toss was recorded — "by
+   * wickets" used to need a toss, so a chase without one read "won by N runs".
+   */
+  firstBattingSide?: Side | null;
+  /** F-15 · cricket: a DLS revised target for the chasing side (score_summary.dls_target). */
+  dlsTarget?: number | null;
 }
 
 const SET_SPORTS = new Set(['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball']);
@@ -81,8 +91,15 @@ export function decideWinnerSide(input: {
  * The toss winner who elected to BAT bats first, so the other side chases; if
  * they elected to BOWL, the toss winner chases.
  */
-export function chasingSide(tossWinnerSide?: Side | null, tossChoice?: string | null): Side | null {
-  if (tossWinnerSide !== 'A' && tossWinnerSide !== 'B') return null;
+export function chasingSide(
+  tossWinnerSide?: Side | null,
+  tossChoice?: string | null,
+  firstBattingSide?: Side | null,
+): Side | null {
+  // F-15: no toss recorded — the side that did NOT bat first chased.
+  const fromPlay = firstBattingSide === 'A' ? 'B' : firstBattingSide === 'B' ? 'A' : null;
+  if (tossWinnerSide !== 'A' && tossWinnerSide !== 'B') return fromPlay;
+  if (tossChoice !== 'bat' && tossChoice !== 'bowl') return fromPlay;
   if (tossChoice !== 'bat' && tossChoice !== 'bowl') return null;
   if (tossChoice === 'bat') return tossWinnerSide === 'A' ? 'B' : 'A';
   return tossWinnerSide;
@@ -102,6 +119,8 @@ export function deriveResultText(input: ResultInput): {
   winnerSide: Side | null;
 } {
   const { sport, teamAName, teamBName, aScore, bScore } = input;
+  const dls = sport === 'cricket' ? dlsResult(input) : null;
+  if (dls) return dls;
   const winnerSide = decideWinnerSide(input);
 
   if (!winnerSide) {
@@ -120,19 +139,44 @@ export function deriveResultText(input: ResultInput): {
   if (sport === 'chess') return { text: `${winnerName} won`, winnerSide };
 
   if (sport === 'cricket') {
-    const chased = chasingSide(input.tossWinnerSide, input.tossChoice);
+    const chased = chasingSide(input.tossWinnerSide, input.tossChoice, input.firstBattingSide);
     if (chased !== null && chased === winnerSide) {
-      const lost = (winnerSide === 'A' ? input.aWickets : input.bWickets) ?? 0;
-      const allOut = (winnerSide === 'A' ? input.aAllOut : input.bAllOut) ?? 10;
-      const remaining = Math.max(0, allOut - lost);
-      return {
-        text: `${winnerName} won by ${remaining} wicket${remaining === 1 ? '' : 's'}`,
-        winnerSide,
-      };
+      return { text: `${winnerName} won by ${wicketsInHand(input, winnerSide)}`, winnerSide };
     }
     return { text: `${winnerName} won by ${diff} run${diff === 1 ? '' : 's'}`, winnerSide };
   }
 
   // Set sports report sets won; everything else reports goals/points/boards.
   return { text: `${winnerName} won ${hi}-${lo}`, winnerSide };
+}
+
+function wicketsInHand(input: ResultInput, side: Side): string {
+  const lost = (side === 'A' ? input.aWickets : input.bWickets) ?? 0;
+  const allOut = (side === 'A' ? input.aAllOut : input.bAllOut) ?? 10;
+  const remaining = Math.max(0, allOut - lost);
+  return `${remaining} wicket${remaining === 1 ? '' : 's'}`;
+}
+
+/**
+ * F-15 · the DLS winner of a cricket match, or null when DLS doesn't apply (no
+ * target, or nobody can say who chased). Exported so completion can check the
+ * named winner against it.
+ */
+export function dlsWinner(input: Pick<ResultInput, 'aScore' | 'bScore' | 'tossWinnerSide' | 'tossChoice' | 'firstBattingSide' | 'dlsTarget'>):
+  { winnerSide: Side | null; runs: number; chaser: Side } | null {
+  const chaser = chasingSide(input.tossWinnerSide, input.tossChoice, input.firstBattingSide);
+  if (!chaser) return null;
+  const o = dlsOutcome(chaser === 'A' ? input.aScore : input.bScore, input.dlsTarget);
+  if (!o) return null;
+  const defender: Side = chaser === 'A' ? 'B' : 'A';
+  return { winnerSide: o.winner === 'chaser' ? chaser : o.winner === 'defender' ? defender : null, runs: o.runs, chaser };
+}
+
+function dlsResult(input: ResultInput): { text: string; winnerSide: Side | null } | null {
+  const d = dlsWinner(input);
+  if (!d) return null;
+  if (!d.winnerSide) return { text: 'Tied (DLS)', winnerSide: null };
+  const name = d.winnerSide === 'A' ? input.teamAName : input.teamBName;
+  if (d.winnerSide === d.chaser) return { text: `${name} won by ${wicketsInHand(input, d.winnerSide)} (DLS)`, winnerSide: d.winnerSide };
+  return { text: `${name} won by ${d.runs} run${d.runs === 1 ? '' : 's'} (DLS)`, winnerSide: d.winnerSide };
 }

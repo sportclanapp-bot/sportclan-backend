@@ -39,6 +39,8 @@ export function scorePush(args: {
    * every extra tap. A game/set push now needs this event to have finished one.
    */
   prevSummary?: { A?: SideLine; B?: SideLine } | null;
+  /** F-15: an own goal — `side`/`teamName` are the side it counts FOR; this is who put it in. */
+  concedingName?: string;
 }): { title: string; body: string } | null {
   const { slug, summary, side, teamName, kind } = args;
   const prevN = Math.max(args.prevSummary?.A?.sets?.length ?? 0, args.prevSummary?.B?.sets?.length ?? 0);
@@ -72,6 +74,9 @@ export function scorePush(args: {
 
   // Goals: every one is the moment.
   const val = (s: SideLine) => (s ? s.score ?? s.goals ?? s.points ?? 0 : 0);
+  if (kind === 'own_goal') {
+    return { title: 'GOAL!', body: `${teamName} scores! ${val(summary.A)}-${val(summary.B)} (own goal by ${args.concedingName ?? 'the other side'})` };
+  }
   return { title: kind === 'goal' ? 'GOAL!' : 'Score!', body: `${teamName} scores! ${val(summary.A)}-${val(summary.B)}` };
 }
 

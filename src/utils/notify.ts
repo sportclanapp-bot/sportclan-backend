@@ -5,6 +5,7 @@ import { supabase } from './supabase';
 import { sendPushToTokens } from './expoPush';
 import { blockedUserIds } from './blocks';
 import { deletedIdSet } from './activeUser';
+import { getSport, normSportSlug } from './sportCache';
 
 // Soft-deleted lookup in bounded chunks — deletedIdSet does one `.in()`, which a
 // very large fan-out would overflow (the SC-4/SC-10 `.in()`-at-scale class).
@@ -184,9 +185,34 @@ export async function sendPushToUsers(
   }
 }
 
+/**
+ * Every notification about a match carries its sport, so the app can show that
+ * sport's icon — it showed 🏏 for every match notification, basketball included.
+ * Added here once rather than at each of the many call sites. The match → sport
+ * lookup is cached briefly: a score fan-out would otherwise repeat it per push.
+ */
+const matchSportCache = new Map<string, { slug: string | null; at: number }>();
+export async function withSport(data: Record<string, string> | undefined): Promise<Record<string, string>> {
+  const d = { ...(data ?? {}) };
+  const matchId = d.matchId || null;
+  if (!matchId || d.sport) return d;
+  try {
+    const hit = matchSportCache.get(matchId);
+    let slug = hit && Date.now() - hit.at < 10 * 60 * 1000 ? hit.slug : undefined;
+    if (slug === undefined) {
+      const { data: m } = await supabase.from('matches').select('sport_id').eq('id', matchId).maybeSingle();
+      slug = normSportSlug((await getSport((m as { sport_id?: string } | null)?.sport_id))?.slug) || null;
+      matchSportCache.set(matchId, { slug, at: Date.now() });
+    }
+    if (slug) d.sport = slug;
+  } catch { /* an icon is not worth failing a notification over */ }
+  return d;
+}
+
 // Send to one user — inserts a row and pushes.
 export async function notifyUser(args: NotifyArgs): Promise<void> {
   try {
+    args = { ...args, data: await withSport(args.data) };
     const allowed = await allowedRecipients([args.userId], args.type);
     if (allowed.length === 0) return; // user opted out of this category
     await supabase.from('notifications').insert({
@@ -245,6 +271,7 @@ export async function notifyUsers(
     }
     const uniqueIds = await allowedRecipients(ids, payload.type);
     if (uniqueIds.length === 0) return;
+    payload = { ...payload, data: await withSport(payload.data) };
 
     const rows = uniqueIds.map((userId) => ({
       user_id: userId,

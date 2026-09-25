@@ -1654,7 +1654,7 @@ export async function selfAssignUmpire(req: Request, res: Response) {
 
     const { data: match } = await supabase
       .from('matches')
-      .select('id, umpire_id, created_by, status, team_a_name, team_b_name')
+      .select('id, umpire_id, created_by, status, team_a_name, team_b_name, is_ranked, team_a_id, team_b_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1666,6 +1666,19 @@ export async function selfAssignUmpire(req: Request, res: Response) {
         error: match.umpire_id === userId ? 'You are already officiating this match.' : 'Match already has an umpire',
       });
     }
+    // F-33 (decision 2026-09-25): a ranked match's umpire is neutral. Someone in
+    // its line-up or on either team could make themselves its umpire — and so a
+    // scorer of their own ranked result. A casual match may still use a player.
+    if (match.is_ranked) {
+      const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', id);
+      if (await viewerCanPlay(match, userId, (parts ?? []).map((p: { user_id: string }) => p.user_id))) {
+        return res.status(409).json({
+          error: 'You play in this ranked match, so you can’t be its umpire.',
+          code: 'UMPIRE_IS_PLAYER',
+        });
+      }
+    }
+
     const { data, error } = await supabase
       .from('matches')
       .update({ umpire_id: userId, updated_at: new Date().toISOString() })

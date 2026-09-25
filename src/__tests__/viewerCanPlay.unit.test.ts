@@ -51,5 +51,6 @@ test('getMatch sends it', () => {
   const fs = require('fs') as typeof import('fs');
   const path = require('path') as typeof import('path');
   const src = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'matches.controller.ts'), 'utf8');
-  expect(src).toContain('matchWithRating.viewer_can_play = await viewerCanPlay(match, userId, participantIds);');
+  expect(src).toContain('viewerCanPlay(match, userId, participantIds),');
+  expect(src).toContain('matchWithRating.viewer_can_play = viewerCan;');
 });

@@ -47,3 +47,19 @@ describe('GET /matches/:id/mvp computes on demand', () => {
     expect(fn).toMatch(/status === 'completed' && !match\.mvp_user_id[\s\S]{0,80}!mvpTried\.has\(id\)[\s\S]{0,200}calculateAndSetMVP\(id\)/);
   });
 });
+
+describe('GET /matches/:id', () => {
+  const g = src.slice(src.indexOf('export async function getMatch(req'), src.indexOf('\nexport ', src.indexOf('export async function getMatch(req') + 10));
+  test('reads everything after the row together (was ~11 sequential round-trips, ~3.3 s)', () => {
+    const all = g.indexOf('await Promise.all([');
+    expect(all).toBeGreaterThan(0);
+    for (const q of ["from('match_participants')", "from('match_events')", "from('match_ratings')", 'getMatchLiveStatus(', 'getLease(id)', "from('match_followers')", 'canOfficiateMatch(match, userId)']) {
+      expect(g.indexOf(q)).toBeGreaterThan(all);
+      expect(g.indexOf(q)).toBeLessThan(g.indexOf("timer.mark('reads')"));
+    }
+  });
+  test('each hint stays best-effort', () => {
+    expect(g).toMatch(/getMatchLiveStatus\([^)]*\)\s*\.catch\(\(\) => null\)/);
+    expect(g).toMatch(/getLease\(id\)[\s\S]{0,120}\(\) => \(\{ ok: false as const \}\)/);
+  });
+});

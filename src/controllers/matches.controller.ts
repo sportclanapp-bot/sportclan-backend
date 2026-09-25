@@ -1145,37 +1145,53 @@ export async function getMatch(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
+    const timer = stepTimer();
     const { data: match, error } = await supabase.from('matches').select('*').eq('id', id).maybeSingle();
     if (error || !match) return res.status(404).json({ error: 'Match not found' });
-    const { data: participants } = await supabase
-      .from('match_participants')
-      .select('id, team_side, role, jersey_number, batting_order, user:user_id (id, name, username, profile_picture_url)')
-      .eq('match_id', id);
-    const { count } = await supabase
-      .from('match_events')
-      .select('id', { count: 'exact', head: true })
-      .eq('match_id', id);
-
-    // Compute the average match-quality rating from match_ratings on read.
-    // Cheap — there are only a handful of ratings per match.
-    const { data: ratings } = await supabase
-      .from('match_ratings')
-      .select('match_quality')
-      .eq('match_id', id);
-    // SC-428: what a VIEWER needs to judge whether a frozen scoreboard is a quiet
-    // match or a scorer who has lost signal. Best-effort — never blocks the match.
-    let liveStatus: Awaited<ReturnType<typeof getMatchLiveStatus>> | null = null;
-    try {
-      liveStatus = await getMatchLiveStatus(match as { id: string; status?: string | null; created_by?: string | null; umpire_id?: string | null });
-    } catch { /* the match payload matters more than the freshness hint */ }
+    timer.mark('load');
+    // Everything below depends only on the match row, and each read was awaited
+    // in turn: ~11 round-trips at ~300 ms from Render, ~3.3 s for every Match
+    // Detail and result screen. They go together now; each hint stays
+    // best-effort exactly as before.
+    const [
+      { data: participants },
+      { count },
+      // Average match-quality rating from match_ratings on read — a handful per match.
+      { data: ratings },
+      // SC-428: what a VIEWER needs to judge whether a frozen scoreboard is a quiet
+      // match or a scorer who has lost signal. Best-effort — never blocks the match.
+      liveStatus,
+      // SC-430: who is scoring, so the pad can say "X is scoring on another phone"
+      // rather than handing a second device a usable scoring surface.
+      scoringLease,
+      [{ count: followerCount }, { data: myFollow }],
+      canOfficiate,
+      tournamentFormat,
+    ] = await Promise.all([
+      supabase
+        .from('match_participants')
+        .select('id, team_side, role, jersey_number, batting_order, user:user_id (id, name, username, profile_picture_url)')
+        .eq('match_id', id),
+      supabase.from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id),
+      supabase.from('match_ratings').select('match_quality').eq('match_id', id),
+      getMatchLiveStatus(match as { id: string; status?: string | null; created_by?: string | null; umpire_id?: string | null })
+        .catch(() => null), // the match payload matters more than the freshness hint
+      getLease(id).then((l) => leaseWithHolder(l)).then((v) => ({ ok: true as const, v }), () => ({ ok: false as const })),
+      Promise.all([
+        supabase.from('match_followers').select('id', { count: 'exact', head: true }).eq('match_id', id),
+        supabase.from('match_followers').select('id').eq('match_id', id).eq('user_id', userId).maybeSingle(),
+      ]),
+      canOfficiateMatch(match, userId),
+      match.tournament_id
+        ? supabase.from('tournaments').select('format').eq('id', match.tournament_id).maybeSingle()
+          .then(({ data: tf }) => (tf as any)?.format ?? null)
+        : Promise.resolve(undefined),
+    ]);
+    timer.mark('reads');
 
     const matchWithRating: any = { ...match };
     if (liveStatus) matchWithRating.live_status = liveStatus;
-    // SC-430: who is scoring, so the pad can say "X is scoring on another phone"
-    // rather than handing a second device a usable scoring surface.
-    try {
-      matchWithRating.scoring_lease = await leaseWithHolder(await getLease(id));
-    } catch { /* the match payload matters more than the lease hint */ }
+    if (scoringLease.ok) matchWithRating.scoring_lease = scoringLease.v;
     if (ratings && ratings.length > 0) {
       const sum = ratings.reduce((acc, r: any) => acc + (r.match_quality ?? 0), 0);
       matchWithRating.avg_rating = Math.round((sum / ratings.length) * 10) / 10;
@@ -1184,10 +1200,6 @@ export async function getMatch(req: Request, res: Response) {
 
     // Follow state (SC-A1) — is the caller following this match, and how many
     // followers does it have.
-    const [{ count: followerCount }, { data: myFollow }] = await Promise.all([
-      supabase.from('match_followers').select('id', { count: 'exact', head: true }).eq('match_id', id),
-      supabase.from('match_followers').select('id').eq('match_id', id).eq('user_id', userId).maybeSingle(),
-    ]);
     matchWithRating.follower_count = followerCount ?? 0;
     matchWithRating.is_following = !!myFollow;
 
@@ -1198,7 +1210,7 @@ export async function getMatch(req: Request, res: Response) {
     // is umpire||organiser (via isTournamentOrganiser), which the FE couldn't
     // compute from created_by alone — that gap under-showed Score to co-organisers
     // and over-showed it (→403) to a fixture creator later removed as organiser.
-    matchWithRating.can_officiate = await canOfficiateMatch(match, userId);
+    matchWithRating.can_officiate = canOfficiate;
 
     // U-13: could this viewer actually be in the line-up? Only then is "Are you
     // playing?" a question worth asking them. It was shown to everyone — the
@@ -1208,23 +1220,24 @@ export async function getMatch(req: Request, res: Response) {
       const u = (p as { user?: { id?: string } | Array<{ id?: string }> | null }).user;
       return (Array.isArray(u) ? u[0]?.id : u?.id) ?? '';
     }).filter(Boolean);
-    matchWithRating.viewer_can_play = await viewerCanPlay(match, userId, participantIds);
+    // These three need the line-up or the row, and touch different fields.
+    const [viewerCan] = await Promise.all([
+      viewerCanPlay(match, userId, participantIds),
+      // Chess: attach both players' real ELO for this sport (ranked 1v1). Null for
+      // guests/casual — never faked.
+      attachChessElo([matchWithRating]),
+      attachTeamNames([matchWithRating]), // SC-366: real team names on detail too
+    ]);
+    matchWithRating.viewer_can_play = viewerCan;
 
     // SC-259: expose the parent tournament's FORMAT so the client can tell a real
     // knockout bracket match (needs a decisive winner / walkover advancing-team)
     // from a round_robin/league match (round=1 but NOT a bracket — may draw /
     // plainly abandon). Mirrors the server's isKnockoutBracketMatch discriminator;
     // `round` alone can't distinguish them. Null for casual (no tournament).
-    if (match.tournament_id) {
-      const { data: tf } = await supabase
-        .from('tournaments').select('format').eq('id', match.tournament_id).maybeSingle();
-      matchWithRating.tournament_format = (tf as any)?.format ?? null;
-    }
-
-    // Chess: attach both players' real ELO for this sport (ranked 1v1). Null for
-    // guests/casual — never faked.
-    await attachChessElo([matchWithRating]);
-    await attachTeamNames([matchWithRating]); // SC-366: real team names on detail too
+    if (match.tournament_id) matchWithRating.tournament_format = tournamentFormat;
+    timer.mark('attach');
+    res.setHeader('Server-Timing', timer.header());
 
     return res.json({ match: matchWithRating, participants: participants || [], events_count: count || 0 });
   } catch (e) {

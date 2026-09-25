@@ -140,12 +140,21 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
     }
   }
 
+  // F-23: an unattributed point used to be credited to the SCORER (created_by)
+  // whenever the scorer was in the line-up — so the umpire-player of a casual
+  // match, or the challenger scoring a singles match, collected every point
+  // with the picker skipped (and every tennis ace and double fault). A point
+  // belongs to the side that won it: when that side has exactly one player
+  // (singles), it is theirs; otherwise nobody can say whose it was.
+  const onlyPlayerOf = new Map<string, string | null>();
+  for (const p of participants ?? []) {
+    const side = p.team_side as string;
+    onlyPlayerOf.set(side, onlyPlayerOf.has(side) ? null : p.user_id);
+  }
   for (const ev of events ?? []) {
     if (slug === 'cricket') break; // handled by the rollup above
     const p: Record<string, unknown> = (ev.payload ?? {}) as Record<string, unknown>;
-    // Attribute to the actual player when the scorer credited one; fall back to
-    // created_by for legacy/unattributed events.
-    const uid = (p.player_id as string) || ev.created_by;
+    const uid = (p.player_id as string) || onlyPlayerOf.get(String(p.team_side ?? '')) || null;
     if (!uid || !scores.has(uid)) continue;
     const cur = scores.get(uid) ?? 0;
 

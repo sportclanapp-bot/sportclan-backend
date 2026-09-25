@@ -14,6 +14,7 @@ import { istDay } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
 import { stepTimer } from '../utils/stepTimer';
+import { getSport } from '../utils/sportCache';
 
 // SELF-only fields — the full row for /users/me + own-profile writes. Contains
 // contact + wallet + account internals; NEVER serialize this to another viewer.
@@ -1063,12 +1064,14 @@ export async function discoverPlayers(req: Request, res: Response) {
 // (isBlockedBetween is the single-query form of getUserById's inline .or()).
 // Returns true (and the caller should 404) when the target must be hidden.
 async function targetUserHidden(targetId: string, viewerId?: string): Promise<boolean> {
-  const { data } = await excludeDeleted(
-    supabase.from('users').select('id').eq('id', targetId),
-  ).maybeSingle();
+  // Both checks together — one round-trip, not two, in front of every profile
+  // sub-resource (sport profile, heatmap, recap, rating history…).
+  const [{ data }, blocked] = await Promise.all([
+    excludeDeleted(supabase.from('users').select('id').eq('id', targetId)).maybeSingle(),
+    viewerId && viewerId !== targetId ? isBlockedBetween(viewerId, targetId) : Promise.resolve(false),
+  ]);
   if (!data) return true;
-  if (viewerId && viewerId !== targetId && (await isBlockedBetween(viewerId, targetId))) return true;
-  return false;
+  return blocked;
 }
 
 export async function getActivityHeatmap(req: Request, res: Response) {
@@ -1326,22 +1329,36 @@ const SPORT_PROFILE_SELECT =
 
 export async function getSportProfile(req: Request, res: Response) {
   const { id, sportId: rawSportId } = req.params;
-  // SC-106: hide the sport profile of a soft-deleted or blocked target.
-  if (await targetUserHidden(id, req.userId)) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-  // Accept either a slug ('cricket') or a UUID; the app passes slugs.
+  // Accept either a slug ('cricket') or a UUID; the app passes slugs. (Cached.)
   const sportId = (await resolveSportId(rawSportId)) ?? rawSportId;
-  // SC-335: never surface a per-sport profile for an out-of-scope sport — no crafted
-  // request can pull a Kabaddi/Athletics tab or stat.
-  if (await isSportInactive(sportId)) return res.status(404).json({ error: 'Sport not available' });
-
-  const { data: profile } = await supabase
-    .from('user_sport_profiles')
-    .select(SPORT_PROFILE_SELECT)
+  // ~6 sequential round-trips (~2.3 s) before. The visibility check, the
+  // profile row, the user's city and their match list do not depend on each
+  // other: one round. Nothing read here is returned when the target is hidden.
+  const cityP = Promise.resolve(supabase.from('users').select('city_id').eq('id', id).maybeSingle());
+  // SC-424: through an !inner join on matches so a VOIDED match drops out here,
+  // once, for every per-sport branch below (see statsTask).
+  const partsP = Promise.resolve(supabase
+    .from('match_participants')
+    .select('match_id, match:matches!inner(id, voided_at)')
     .eq('user_id', id)
-    .eq('sport_id', sportId)
-    .maybeSingle();
+    .is('match.voided_at', null));
+  cityP.catch(() => undefined);
+  partsP.catch(() => undefined);
+  const [hidden, inactive, { data: profile }] = await Promise.all([
+    // SC-106: hide the sport profile of a soft-deleted or blocked target.
+    targetUserHidden(id, req.userId),
+    // SC-335: never surface a per-sport profile for an out-of-scope sport — no
+    // crafted request can pull a Kabaddi/Athletics tab or stat. (Cached.)
+    isSportInactive(sportId),
+    supabase
+      .from('user_sport_profiles')
+      .select(SPORT_PROFILE_SELECT)
+      .eq('user_id', id)
+      .eq('sport_id', sportId)
+      .maybeSingle(),
+  ]);
+  if (hidden) return res.status(404).json({ error: 'User not found' });
+  if (inactive) return res.status(404).json({ error: 'Sport not available' });
 
   if (!profile) {
     return res.json({
@@ -1390,7 +1407,7 @@ export async function getSportProfile(req: Request, res: Response) {
               .neq('user_id', id)
               .or(aboveOrder)
           : Promise.resolve({ count: null as number | null }),
-        supabase.from('users').select('city_id').eq('id', id).maybeSingle(),
+        cityP,
       ]);
       // Global (SC-328): >=1-match + tie-break across all cities; null for no match.
       globalRank = mp >= 1 ? (globalRes.count ?? 0) + 1 : null;
@@ -1419,7 +1436,7 @@ export async function getSportProfile(req: Request, res: Response) {
   // fails or no events exist we just omit sportStats.
   const statsTask = (async () => {
     try {
-    const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', sportId).maybeSingle();
+    const sportRow = await getSport(sportId);
     // SC-343: normalize the slug (hyphen/underscore/whitespace/case) before the
     // per-sport branch checks — the DB slug is 'table-tennis' but the checks below
     // (e.g. the 'tabletennis' array) use the compact form. Without this, Table
@@ -1433,11 +1450,7 @@ export async function getSportProfile(req: Request, res: Response) {
     // points) were aggregated over EVERY match the user had ever been a
     // participant in, with no exclusion of any kind — so a voided match, and
     // indeed a still-live one, contributed to a lifetime stat.
-    const { data: parts } = await supabase
-      .from('match_participants')
-      .select('match_id, match:matches!inner(id, voided_at)')
-      .eq('user_id', id)
-      .is('match.voided_at', null);
+    const { data: parts } = await partsP;
     const matchIds = (parts ?? []).map((mp: any) => mp.match_id);
 
     if (slug === 'cricket') {

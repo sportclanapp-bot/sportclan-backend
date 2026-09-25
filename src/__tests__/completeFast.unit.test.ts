@@ -14,11 +14,14 @@ const afterFn = body.slice(body.indexOf('const afterResponse = async'), respondA
 
 describe('completeMatch', () => {
   test('builds the summary once, not twice', () => {
-    expect(body.match(/recomputeSummary\(id\)/g)).toHaveLength(1);
+    expect(body.match(/recomputeSummary\(id/g)).toHaveLength(1);
   });
 
   test('reads lease, participants, sport and summary together', () => {
-    expect(before).toMatch(/Promise\.all\(\[\s*checkLease\(id, userId, deviceIdOf\(req\)\),\s*supabase\.from\('match_participants'\)/);
+    // started before the match row is even loaded, awaited together after it
+    expect(before.indexOf('const leaseP = checkLease(id, userId, deviceIdOf(req))')).toBeLessThan(before.indexOf(".from('matches')"));
+    expect(before).toContain("recomputeSummary(id, { persist: false })");
+    expect(before).toMatch(/Promise\.all\(\[\s*leaseP,\s*partsP,/);
     expect(before).toContain('getSport(match.sport_id as string)');
   });
 

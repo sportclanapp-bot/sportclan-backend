@@ -1752,6 +1752,18 @@ export async function completeMatch(req: Request, res: Response) {
         ? (req.body.score_summary as Record<string, any>)
         : null;
 
+    // Everything that does not need the match row starts NOW, beside it: the
+    // lease, the line-up and the canonical summary (built, not yet written —
+    // the result patch below writes it). Nothing here is returned to a caller
+    // who then fails authorisation.
+    const leaseP = checkLease(id, userId, deviceIdOf(req));
+    const partsP = Promise.resolve(supabase.from('match_participants').select('user_id, team_side').eq('match_id', id));
+    const canonicalP = recomputeSummary(id, { persist: false }).catch(() => null);
+    // Marked handled so an early return (404/403) can never leave a rejection
+    // unobserved — that would crash the process. Awaited below, a failure still
+    // lands in this handler's catch.
+    leaseP.catch(() => undefined);
+    partsP.catch(() => undefined);
     const { data: match } = await supabase
       .from('matches')
       // SC-442: toss_choice is REQUIRED here — deriveResultText needs it to know
@@ -1783,16 +1795,15 @@ export async function completeMatch(req: Request, res: Response) {
     // 409 with LEASE_LOST so the outbox halts the queue and asks the human rather
     // than dropping or silently merging anything.
     // Completion was ~10 s: ~25 sequential round-trips at ~300 ms each from
-    // Render. These four reads are independent, so they go together. The
-    // canonical summary is built ONCE here and reused for the casual W/L and the
-    // result sentence (it used to be rebuilt twice); events cannot change under
-    // a completion, and recomputeSummary is idempotent.
-    const terminal = match.status === 'completed' || isTerminalMatchStatus(match.status);
+    // Render. The four reads started above land here together. The canonical
+    // summary is built ONCE and reused for the casual W/L and the result
+    // sentence (it used to be rebuilt twice, and written each time); events
+    // cannot change under a completion.
     const [verdict, partsRes, sportRow, canonical] = await Promise.all([
-      checkLease(id, userId, deviceIdOf(req)),
-      supabase.from('match_participants').select('user_id, team_side').eq('match_id', id),
+      leaseP,
+      partsP,
       getSport(match.sport_id as string),
-      terminal ? Promise.resolve(null) : recomputeSummary(id).catch(() => null),
+      canonicalP,
     ]);
     if (!verdict.ok) {
       return res.status(409).json(leaseRefusal(verdict));

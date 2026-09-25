@@ -696,7 +696,11 @@ export function aggregatePlayers(slug: string, events: { event_type: string; pay
 // events (rather than incremental updates) means the stored summary can never
 // drift out of sync with the events. Used after every scored event, after an
 // undo, and at completion. Replaces the old cricket-only recompute.
-export async function recomputeSummary(matchId: string): Promise<Record<string, any> | null> {
+/**
+ * `persist: false` builds the summary without writing it — for completion,
+ * whose result patch writes this same summary (plus the result) one step later.
+ */
+export async function recomputeSummary(matchId: string, opts: { persist?: boolean } = {}): Promise<Record<string, any> | null> {
   // The match and its events are independent reads — fetched together, and the
   // sport comes from the process cache: this runs on EVERY scoring event and at
   // completion, and each sequential round-trip costs ~300 ms from Render.
@@ -900,10 +904,12 @@ export async function recomputeSummary(matchId: string): Promise<Record<string, 
       ? { [chessWinnerId]: { side: chessWinner, name: chessWinnerName ?? undefined, points: 1 } }
       : {};
   }
-  await supabase
-    .from('matches')
-    .update({ score_summary: summary, updated_at: new Date().toISOString() })
-    .eq('id', matchId);
+  if (opts.persist !== false) {
+    await supabase
+      .from('matches')
+      .update({ score_summary: summary, updated_at: new Date().toISOString() })
+      .eq('id', matchId);
+  }
   // SC-442 (M1/B2-b) · carry the TOSS across the recompute.
   //
   // matches.controller sets score_summary.toss_winner_side when the toss is

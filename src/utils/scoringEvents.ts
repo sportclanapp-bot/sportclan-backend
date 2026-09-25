@@ -43,6 +43,21 @@ export const KNOWN_EVENT_TYPES = [
   'point',
   'sub',
   'timeout',
+  // What the app's rulesets send besides the above, and which this list had
+  // missed, so each was refused with 400 UNKNOWN_EVENT_TYPE and HALTED the
+  // scorer's outbox (found in user-flow test 4):
+  //   period_change  basketball NEXT QUARTER, football/hockey half / period —
+  //                  read by the basketball quarter push; no rollup sums it
+  //   card           football/hockey yellow/red — no rollup sums it
+  //   result         chess result {winner} — read by the chess summary
+  //   note           an action with no score (e.g. a tennis "let") — inert:
+  //                  every rollup and the MVP filter by type
+  // None carries runs or points any aggregator counts, so SC-408's 24-vs-40
+  // split cannot come back through them.
+  'period_change',
+  'card',
+  'result',
+  'note',
 ] as const;
 
 export type KnownEventType = (typeof KNOWN_EVENT_TYPES)[number];

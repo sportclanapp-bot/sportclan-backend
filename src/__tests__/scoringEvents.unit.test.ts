@@ -25,6 +25,14 @@ describe('isKnownEventType', () => {
     }
   });
 
+  it('accepts EVERY event type the app sends — a refused one halts the scorer', () => {
+    // The app's ScoringEventType values its rulesets and screens actually emit
+    // (app: src/api/scoring.ts; __tests__/eventTypesKnown.test.ts pins the same
+    // list from that side). period_change/card/result/note used to be refused.
+    const APP_SENDS = ['ball', 'wicket', 'extra', 'declaration', 'score', 'serve_swap', 'period_change', 'card', 'result', 'move', 'note'];
+    for (const t of APP_SENDS) expect(isKnownEventType(t)).toBe(true);
+  });
+
   it('rejects non-strings rather than throwing', () => {
     for (const v of [null, undefined, 42, {}, []]) {
       expect(isKnownEventType(v)).toBe(false);

@@ -154,23 +154,27 @@ export async function getLeaderboard(req: Request, res: Response) {
       return qb as T;
     };
 
-    // Total count (head-only; the same exact-count pattern the admin tiles use).
-    const { count: total } = await scoped(
-      supabase.from('user_sport_profiles').select('user_id', { count: 'exact', head: true }),
-    );
-
-    // The page itself, tie-broken in the DB (SC-5).
-    const { data: rows, error } = await scoped(
-      supabase.from('user_sport_profiles').select('user_id, rating, matches_played, wins'),
-    )
-      .order('rating', { ascending: false })
-      .order('wins', { ascending: false })
-      .order('matches_played', { ascending: false })
-      .order('user_id', { ascending: true })
-      .range(p.from, p.to);
+    // Seven sequential round-trips (~2.6 s) before; two now. Round 1: the total,
+    // the page and the requester's own row. Round 2: everything that needs them.
+    const [{ count: total }, { data: rows, error }, { data: myProf }] = await Promise.all([
+      // Total count (head-only; the same exact-count pattern the admin tiles use).
+      scoped(supabase.from('user_sport_profiles').select('user_id', { count: 'exact', head: true })),
+      // The page itself, tie-broken in the DB (SC-5).
+      scoped(supabase.from('user_sport_profiles').select('user_id, rating, matches_played, wins'))
+        .order('rating', { ascending: false })
+        .order('wins', { ascending: false })
+        .order('matches_played', { ascending: false })
+        .order('user_id', { ascending: true })
+        .range(p.from, p.to),
+      // Requester's own row, for their competition rank below.
+      scoped(supabase.from('user_sport_profiles').select('rating, matches_played, wins'))
+        .eq('user_id', userId)
+        .maybeSingle(),
+    ]);
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
 
     const pageRows = (rows || []) as Row[];
+    const ids = pageRows.map((r) => r.user_id);
     // SC-132: competition rank (ties share the same number, consistent with the
     // `me` field below). The row ORDER keeps the full tie-break (rating→wins→mp→
     // user_id) so pagination stays deterministic — only the displayed rank NUMBER
@@ -179,13 +183,20 @@ export async function getLeaderboard(req: Request, res: Response) {
     // row needs one head-count (its group may have begun on a previous page — this
     // is what makes a boundary-spanning tie share the number), and every later
     // rating group begins at its positional index → rank = offset + i + 1.
-    let firstRank = p.offset + 1;
-    if (pageRows.length > 0) {
-      const { count: aboveFirst } = await scoped(
+    const countAbove = (rating: number) =>
+      Promise.resolve(scoped(
         supabase.from('user_sport_profiles').select('user_id', { count: 'exact', head: true }),
-      ).gt('rating', pageRows[0].rating);
-      firstRank = (aboveFirst ?? p.offset) + 1;
-    }
+      ).gt('rating', rating)).then(({ count }) => count);
+    const [aboveFirst, delAllTime, userMap, myAbove] = await Promise.all([
+      pageRows.length > 0 ? countAbove(pageRows[0].rating) : Promise.resolve(null),
+      // SC-78: drop soft-deleted accounts from the page (rank positions preserved).
+      deletedIdSet(ids),
+      fetchUserMap(ids),
+      // Requester's own rank — competition rank by rating (count of stronger
+      // profiles + 1), computed with a single cheap head-count. No full scan.
+      myProf ? countAbove(myProf.rating) : Promise.resolve(null),
+    ]);
+    const firstRank = pageRows.length > 0 ? (aboveFirst ?? p.offset) + 1 : p.offset + 1;
     const rankByIndex: number[] = [];
     for (let i = 0; i < pageRows.length; i++) {
       rankByIndex[i] =
@@ -195,28 +206,15 @@ export async function getLeaderboard(req: Request, res: Response) {
             ? rankByIndex[i - 1]
             : p.offset + i + 1;
     }
-    // SC-78: drop soft-deleted accounts from the page (rank positions preserved).
-    const delAllTime = await deletedIdSet(pageRows.map((r) => r.user_id));
-    const userMap = await fetchUserMap(pageRows.map((r) => r.user_id));
     const leaderboard = pageRows
       .map((r, i) => ({ r, rank: rankByIndex[i] }))
       .filter((x) => !delAllTime.has(x.r.user_id))
       .map((x) => toEntry(x.r, x.rank, userMap.get(x.r.user_id)));
 
-    // Requester's own rank — competition rank by rating (count of stronger
-    // profiles + 1), computed with a single cheap head-count. No full scan.
     let me: any = null;
-    const { data: myProf } = await scoped(
-      supabase.from('user_sport_profiles').select('rating, matches_played, wins'),
-    )
-      .eq('user_id', userId)
-      .maybeSingle();
     if (myProf) {
-      const { count: above } = await scoped(
-        supabase.from('user_sport_profiles').select('user_id', { count: 'exact', head: true }),
-      ).gt('rating', myProf.rating);
       me = {
-        rank: (above ?? 0) + 1,
+        rank: (myAbove ?? 0) + 1,
         user_id: userId,
         rating: myProf.rating,
         matches_played: myProf.matches_played,

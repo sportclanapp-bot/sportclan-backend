@@ -652,6 +652,18 @@ export function aggregateCricketPlayers(
       const runs = Number(p.runs ?? 0);
       const legal = p.type === 'B' || p.type === 'Lb'; // byes/leg-byes are legal balls
       if (batId && legal) ensure(batId, batSide, batName).balls += 1; // ball faced, runs are extras (not the batter's)
+      // Decision 2026-09-26 (MATCH_CREATE_TEST_5): runs on a no-ball are off the
+      // bat. Stored runs include the 1-run penalty, so NB + N gives the striker N
+      // and a ball faced; the bowler is still charged all of it (below), and it is
+      // still no ball of the over. The app's utils/cricketCredit is the same rule.
+      if (batId && p.type === 'Nb') {
+        const b = ensure(batId, batSide, batName);
+        const offBat = Math.max(0, runs - 1);
+        b.balls += 1;
+        b.runs += offBat;
+        if (offBat === 4) b.fours += 1;
+        if (offBat === 6) b.sixes += 1;
+      }
       if (bowlId) {
         const w = ensure(bowlId, bowlSide, bowlName);
         if (legal) w.bowl_balls += 1; // byes/leg-byes NOT charged to the bowler

@@ -3,7 +3,7 @@
  * nothing. Test 3: 92 pushes per player for one badminton match, one of them
  * "SC434 Fresh QA scores! 0-0" for the point that won a game.
  */
-import { scorePush } from '../utils/scorePush';
+import { scorePush, quarterPush } from '../utils/scorePush';
 
 const bad = (a: { sets: number[]; points: number }, b: { sets: number[]; points: number }) => ({ A: a, B: b });
 
@@ -33,4 +33,19 @@ test('tennis: a game inside a set sends nothing; a set end quotes the set and it
 test('football goals are unchanged: every one is the moment', () => {
   expect(scorePush({ slug: 'football', side: 'A', teamName: 'FC', kind: 'goal', summary: { A: { score: 2 }, B: { score: 1 } } }))
     .toEqual({ title: 'GOAL!', body: 'FC scores! 2-1' });
+});
+
+test('basketball: a basket sends nothing — ~150 of them a game', () => {
+  expect(scorePush({ slug: 'basketball', side: 'A', teamName: 'Hoops', kind: 'three', summary: { A: { points: 45 }, B: { points: 40 } } })).toBeNull();
+});
+
+test('basketball: the end of a quarter does, with the score', () => {
+  expect(quarterPush({ quarter: 2, teamAName: 'Hoops', teamBName: 'Dunkers', summary: { A: { points: 45 }, B: { points: 40 } } }))
+    .toEqual({ title: 'End of Q2', body: 'Hoops 45–40 Dunkers' });
+});
+
+test('the quarter push fires on period_change, for basketball only', () => {
+  const fs = require('fs') as typeof import('fs');
+  const src = fs.readFileSync(require('path').join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
+  expect(src).toMatch(/event_type === 'period_change' && wasNew[\s\S]{0,400}slug === 'basketball'[\s\S]{0,600}quarterPush\(/);
 });

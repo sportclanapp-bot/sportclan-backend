@@ -11,7 +11,14 @@
  *   rally / carrom  a GAME ends   → "QA Flow Test wins game 2 · 23–21"
  *   tennis          a SET ends    → "SC434 Fresh QA wins set 3 · 7–6 (7–5)"
  * A point that ends nothing sends nothing. (The match end has its own
- * match_result notification.) Every other sport keeps the old per-score push.
+ * match_result notification.)
+ *
+ * Basketball: a basket sends nothing either — a game has ~150 of them. The
+ * quarter's end does (`quarterPush`, on the period_change event), and the final
+ * is the match_result notification.
+ *
+ * Football / hockey keep a push per goal and cricket per wicket: those are the
+ * moments, and a match has a handful.
  */
 type SideLine = { score?: number; points?: number; games?: number; sets?: number[]; goals?: number } | undefined;
 
@@ -50,7 +57,28 @@ export function scorePush(args: {
     return { title: `Set to ${teamName}`, body: `${teamName} wins set ${n} · ${games}${tbText}` };
   }
 
-  // Goals and baskets: every score is the moment.
+  if (slug === 'basketball') return null; // per quarter instead — see quarterPush
+
+  // Goals: every one is the moment.
   const val = (s: SideLine) => (s ? s.score ?? s.goals ?? s.points ?? 0 : 0);
   return { title: kind === 'goal' ? 'GOAL!' : 'Score!', body: `${teamName} scores! ${val(summary.A)}-${val(summary.B)}` };
+}
+
+/**
+ * Basketball's end-of-quarter push: "End of Q2 · Lakers 45–40 Celtics".
+ * `quarter` is the quarter that just ended (the count of period_change events).
+ * Q4's end is the match end, which match_result announces — the app ends the
+ * match there rather than sending a fifth period_change.
+ */
+export function quarterPush(args: {
+  quarter: number;
+  summary: { A?: SideLine; B?: SideLine };
+  teamAName: string;
+  teamBName: string;
+}): { title: string; body: string } {
+  const pts = (s: SideLine) => (s ? s.points ?? s.score ?? 0 : 0);
+  return {
+    title: `End of Q${args.quarter}`,
+    body: `${args.teamAName} ${pts(args.summary.A)}–${pts(args.summary.B)} ${args.teamBName}`,
+  };
 }

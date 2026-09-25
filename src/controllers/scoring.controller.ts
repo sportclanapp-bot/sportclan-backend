@@ -4,7 +4,7 @@ import { deviceIdOf } from '../utils/deviceHeader';
 import { supabase } from '../utils/supabase';
 import { pendingRankedOpponent } from '../utils/singles';
 import { tennisReplay, type TennisScore } from '../utils/tennisCore';
-import { scorePush } from '../utils/scorePush';
+import { scorePush, quarterPush } from '../utils/scorePush';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
@@ -349,6 +349,31 @@ export async function createEvent(req: Request, res: Response) {
       }
     } catch {
       // ignore
+    }
+
+    // Basketball pushes once a quarter, not once a basket: the end of a quarter
+    // is a period_change event. Q1–Q3 end here; the final is match_result.
+    if (event_type === 'period_change' && wasNew) {
+      try {
+        const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
+        const slug = String((sportRow as { slug?: string } | null)?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
+        if (slug === 'basketball') {
+          const [{ count }, { data: fresh }] = await Promise.all([
+            supabase.from('match_events').select('id', { count: 'exact', head: true })
+              .eq('match_id', matchId).eq('event_type', 'period_change'),
+            supabase.from('matches').select('score_summary, team_a_name, team_b_name').eq('id', matchId).maybeSingle(),
+          ]);
+          const { title, body } = quarterPush({
+            quarter: count ?? 1,
+            summary: (fresh?.score_summary ?? {}) as never,
+            teamAName: fresh?.team_a_name || 'Team A',
+            teamBName: fresh?.team_b_name || 'Team B',
+          });
+          void fanoutScoreUpdate(matchId, title, body, userId);
+        }
+      } catch {
+        // best-effort, like every push
+      }
     }
 
     return res.json({ event });

@@ -20,6 +20,8 @@
  * Football / hockey keep a push per goal and cricket per wicket: those are the
  * moments, and a match has a handful.
  */
+import { periodLabel } from './basketballRules';
+
 type SideLine = { score?: number; points?: number; games?: number; sets?: number[]; goals?: number } | undefined;
 
 const RALLY = new Set(['badminton', 'tabletennis', 'pickleball', 'volleyball', 'carrom']);
@@ -87,7 +89,7 @@ export function quarterPush(args: {
 }): { title: string; body: string } {
   const pts = (s: SideLine) => (s ? s.points ?? s.score ?? 0 : 0);
   return {
-    title: `End of Q${args.quarter}`,
+    title: `End of ${periodLabel(args.quarter)}`, // A1: Q1–Q4, then OT1, OT2 …
     body: `${args.teamAName} ${pts(args.summary.A)}–${pts(args.summary.B)} ${args.teamBName}`,
   };
 }

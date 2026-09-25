@@ -41,7 +41,42 @@ export const isStale = (lease: Pick<LeaseRow, 'heartbeat_at'>, now = Date.now())
 
 export type LeaseVerdict<T> =
   | { ok: true; lease: T | null }
-  | { ok: false; code: 'LEASE_LOST'; lease: T };
+  | { ok: false; code: 'LEASE_LOST' | 'DEVICE_REQUIRED'; lease: T };
+
+/**
+ * May this (user, device) write, given the lease row? Pure, so the rule is
+ * tested as it runs.
+ *
+ * - no lease at all → yes: a lease stops a SECOND writer, it does not gate the first;
+ * - another person → LEASE_LOST;
+ * - the same person on another device → LEASE_LOST;
+ * - NO device id while a lease exists → DEVICE_REQUIRED. This used to pass on
+ *   identity alone, which made the raw API a backdoor: the holder's own login,
+ *   minus the header, could write around the phone holding the pad (found in
+ *   user-flow test 4). Every current app request carries the id; an older build
+ *   that doesn't gets a 409 saying why, and its outbox holds the points.
+ */
+export function leaseVerdict<T extends Pick<LeaseRow, 'user_id' | 'device_id'>>(
+  lease: T | null,
+  userId: string,
+  deviceId?: string | null,
+): LeaseVerdict<T> {
+  if (!lease) return { ok: true, lease: null };
+  if (lease.user_id !== userId) return { ok: false, code: 'LEASE_LOST', lease };
+  if (!deviceId) return { ok: false, code: 'DEVICE_REQUIRED', lease };
+  if (lease.device_id !== deviceId) return { ok: false, code: 'LEASE_LOST', lease };
+  return { ok: true, lease };
+}
+
+/** The 409 body for a refused verdict — one wording for every write path. */
+export function leaseRefusal(verdict: { code: 'LEASE_LOST' | 'DEVICE_REQUIRED' }): { error: string; code: string } {
+  return verdict.code === 'DEVICE_REQUIRED'
+    ? {
+      error: 'This match is being scored on a phone, and this request did not say which device it came from. Update SportClan and score from the app, or take over scoring there.',
+      code: 'DEVICE_REQUIRED',
+    }
+    : { error: 'Someone else took over scoring this match.', code: 'LEASE_LOST' };
+}
 
 export function makeLease<T extends LeaseRow>(table: string, idColumn: string) {
   async function get(id: string): Promise<T | null> {
@@ -58,12 +93,7 @@ export function makeLease<T extends LeaseRow>(table: string, idColumn: string) {
    * gate the first.
    */
   async function check(id: string, userId: string, deviceId?: string | null): Promise<LeaseVerdict<T>> {
-    const lease = await get(id);
-    if (!lease) return { ok: true, lease: null };
-    if (lease.user_id !== userId) return { ok: false, code: 'LEASE_LOST', lease };
-    // Same person, different handset — the case the lease exists for.
-    if (deviceId && lease.device_id !== deviceId) return { ok: false, code: 'LEASE_LOST', lease };
-    return { ok: true, lease };
+    return leaseVerdict(await get(id), userId, deviceId);
   }
 
   /** Claim, or refresh a claim you already hold. Claiming is NEVER a takeover:

@@ -12,6 +12,7 @@ import { isTerminalMatchStatus } from '../utils/validation';
 import { canOfficiateMatch } from '../utils/tournamentAuth';
 import { isSportInactive } from '../utils/sports';
 import { isKnownEventType } from '../utils/scoringEvents';
+import { leaseRefusal } from '../utils/leaseCore';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
 // every participant in the match. Failures are swallowed — the fan-out must
@@ -70,11 +71,12 @@ export async function authorizeScorer(matchId: string, userId: string, deviceId?
   // asks the human. See utils/scoringLease.
   const verdict = await checkLease(matchId, userId, deviceId);
   if (!verdict.ok) {
+    const refusal = leaseRefusal(verdict);
     return {
       ok: false as const,
       status: 409,
-      error: 'Someone else took over scoring this match.',
-      code: 'LEASE_LOST',
+      error: refusal.error,
+      code: refusal.code,
       lease: verdict.lease,
     };
   }

@@ -9,6 +9,7 @@ import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { isSinglesShape } from '../utils/singles';
 import { notifyUser } from '../utils/notify';
+import { leaseRefusal } from '../utils/leaseCore';
 
 /**
  * Shared gate for match-mutating feature endpoints (DLS, event edit/delete,
@@ -46,7 +47,8 @@ async function loadScorableMatch(
   if (deviceId !== undefined) {
     const verdict = await checkLease(id, userId, deviceId);
     if (!verdict.ok) {
-      return { error: { status: 409, msg: 'Someone else is scoring this match.', code: 'LEASE_LOST' } };
+      const r = leaseRefusal(verdict);
+      return { error: { status: 409, msg: r.error, code: r.code } };
     }
   }
   return {};

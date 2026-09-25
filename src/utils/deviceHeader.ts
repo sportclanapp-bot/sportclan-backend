@@ -5,9 +5,10 @@
  * — including `DELETE /matches/:id/events/:eventId`, which has no body at all —
  * without reshaping six request payloads.
  *
- * Absent is a legitimate answer, not an error: older clients and server-to-server
- * calls have no device. `checkLease` judges those on identity alone rather than
- * locking out a caller for a field it never knew to send.
+ * Absent is fine where nobody holds a lease. Where somebody does, a write with
+ * no device id is refused as DEVICE_REQUIRED (see leaseCore.leaseVerdict): it
+ * used to pass on identity alone, which let a raw API call write around the
+ * phone holding the pad.
  */
 import type { Request } from 'express';
 

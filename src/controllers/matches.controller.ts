@@ -38,6 +38,7 @@ import { isSinglesSport, winnerSideOf, challengeText, pendingRankedOpponent, isS
 import { isBlockedBetween } from '../utils/blocks';
 import { reconcileWinCoins } from '../utils/winCoins';
 import { stepTimer } from '../utils/stepTimer';
+import { leaseRefusal } from '../utils/leaseCore';
 
 /** U-13: is `userId` someone who could be in this match's line-up? */
 export async function viewerCanPlay(
@@ -546,7 +547,7 @@ export async function setMatchTossHandler(req: Request, res: Response) {
   {
     const verdict = await checkLease(id, userId, deviceIdOf(req));
     if (!verdict.ok) {
-      return res.status(409).json({ error: 'Someone else took over scoring this match.', code: 'LEASE_LOST' });
+      return res.status(409).json(leaseRefusal(verdict));
     }
   }
   // SC-42: a finished match is immutable — no toss changes.
@@ -1783,7 +1784,7 @@ export async function completeMatch(req: Request, res: Response) {
     {
       const verdict = await checkLease(id, userId, deviceIdOf(req));
       if (!verdict.ok) {
-        return res.status(409).json({ error: 'Someone else took over scoring this match.', code: 'LEASE_LOST' });
+        return res.status(409).json(leaseRefusal(verdict));
       }
     }
     timer.mark('auth_lease');

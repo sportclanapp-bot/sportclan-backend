@@ -11,6 +11,7 @@
  * and `stale ≠ released` is what reconciles them.
  */
 import { isStale, STALE_AFTER_MS } from '../utils/scoringLease';
+import { leaseVerdict, leaseRefusal } from '../utils/leaseCore';
 
 const NOW = Date.parse('2026-09-21T12:00:00.000Z');
 const heartbeat = (agoMs: number) => ({ heartbeat_at: new Date(NOW - agoMs).toISOString() });
@@ -36,10 +37,8 @@ describe('SC-430 · staleness', () => {
  */
 type Lease = { user_id: string; device_id: string } | null;
 const verdict = (lease: Lease, userId: string, deviceId?: string | null) => {
-  if (!lease) return 'ok';
-  if (lease.user_id !== userId) return 'LEASE_LOST';
-  if (deviceId && lease.device_id !== deviceId) return 'LEASE_LOST';
-  return 'ok';
+  const v = leaseVerdict(lease, userId, deviceId);
+  return v.ok ? 'ok' : v.code;
 };
 
 describe('SC-430 · who may write', () => {
@@ -65,12 +64,23 @@ describe('SC-430 · who may write', () => {
     expect(verdict(null, 'anyone', 'any-device')).toBe('ok');
   });
 
-  it('a caller with no device id is judged on identity alone', () => {
-    // An organiser correcting an event from the match page has no pad and no
-    // device context; locking them out over a header they never sent would be
-    // a worse bug than the one being fixed.
-    expect(verdict(held, 'ravi', null)).toBe('ok');
+  it('no device id while a lease exists is refused — the raw API is not a backdoor', () => {
+    // It used to pass on identity alone, so the holder's own login without the
+    // header could write around the phone holding the pad (user-flow test 4).
+    // Every app request carries the id; the match page included.
+    expect(verdict(held, 'ravi', null)).toBe('DEVICE_REQUIRED');
+    expect(verdict(held, 'ravi', undefined)).toBe('DEVICE_REQUIRED');
     expect(verdict(held, 'asha', null)).toBe('LEASE_LOST');
+    // …and with no lease there is nothing to protect.
+    expect(verdict(null, 'ravi', null)).toBe('ok');
+  });
+
+  it('the refusal says why, so an older app degrades honestly', () => {
+    expect(leaseRefusal({ code: 'DEVICE_REQUIRED' })).toEqual({
+      error: expect.stringContaining('did not say which device'),
+      code: 'DEVICE_REQUIRED',
+    });
+    expect(leaseRefusal({ code: 'LEASE_LOST' }).code).toBe('LEASE_LOST');
   });
 });
 

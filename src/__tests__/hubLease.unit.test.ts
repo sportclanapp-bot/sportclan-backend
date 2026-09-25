@@ -13,6 +13,7 @@
  */
 import { isStale, STALE_AFTER_MS } from '../utils/hubLease';
 import { isStale as scoringIsStale, STALE_AFTER_MS as SCORING_WINDOW } from '../utils/scoringLease';
+import { leaseVerdict } from '../utils/leaseCore';
 
 const NOW = Date.parse('2026-09-21T12:00:00.000Z');
 const heartbeat = (agoMs: number) => ({ heartbeat_at: new Date(NOW - agoMs).toISOString() });
@@ -50,10 +51,8 @@ describe('SC-433 · hub staleness', () => {
  */
 type Row = { user_id: string; device_id: string } | null;
 const verdict = (lease: Row, userId: string, deviceId?: string | null) => {
-  if (!lease) return 'ok';
-  if (lease.user_id !== userId) return 'HUB_LOST';
-  if (deviceId && lease.device_id !== deviceId) return 'HUB_LOST';
-  return 'ok';
+  const v = leaseVerdict(lease, userId, deviceId);
+  return v.ok ? 'ok' : v.code === 'LEASE_LOST' ? 'HUB_LOST' : v.code;
 };
 
 describe('SC-433 · who may run the hub', () => {
@@ -79,7 +78,7 @@ describe('SC-433 · who may run the hub', () => {
     expect(verdict(null, 'anyone', 'any-phone')).toBe('ok');
   });
 
-  it('a caller with no device context is judged on identity alone', () => {
-    expect(verdict(held, 'ravi', null)).toBe('ok');
+  it('no device id while a hub lease exists is refused (same core rule as scoring)', () => {
+    expect(verdict(held, 'ravi', null)).toBe('DEVICE_REQUIRED');
   });
 });

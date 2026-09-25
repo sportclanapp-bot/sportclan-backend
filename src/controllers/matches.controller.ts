@@ -4,7 +4,7 @@ import { deriveResultText } from '../utils/matchResult';
 import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease, isStale, STALE_AFTER_MS } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { getMatchLiveStatus } from '../utils/liveStatus';
-import { istDay } from '../utils/appTime';
+import { istDay, istWhen } from '../utils/appTime';
 import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers, matchAudienceIds, matchFollowerIds } from '../utils/notify';
@@ -372,7 +372,7 @@ export async function createMatch(req: Request, res: Response) {
         challengerName: singlesSides.aName,
         sportName: singlesSides.sportName,
         ranked: !!is_ranked,
-        when: null,
+        when: istWhen(data.scheduled_at as string | null), // F-22: the challenge never said when
       });
       void notifyUsers([singlesSides.opponentId], {
         type: 'match_challenge',

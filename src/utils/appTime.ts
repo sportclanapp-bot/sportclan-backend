@@ -40,3 +40,19 @@ export function istMonthStartIso(d: Date = new Date()): string {
   const { y, m } = istParts(d);
   return new Date(Date.UTC(y, m, 1) - IST_OFFSET_MS).toISOString();
 }
+
+/**
+ * F-22: a match time for a notification, in India time — "Sat 27 Sep · 6:30 pm".
+ * Null for a missing or unparseable time (the sentence then leaves it out).
+ */
+export function istWhen(iso: string | null | undefined): string | null {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(t)) return null;
+  const ist = new Date(t + 330 * 60_000); // IST is UTC+5:30, no daylight saving
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const h = ist.getUTCHours();
+  const m = String(ist.getUTCMinutes()).padStart(2, '0');
+  const clock = `${h % 12 === 0 ? 12 : h % 12}:${m} ${h < 12 ? 'am' : 'pm'}`;
+  return `${DAYS[ist.getUTCDay()]} ${ist.getUTCDate()} ${MONTHS[ist.getUTCMonth()]} · ${clock}`;
+}

@@ -13,6 +13,7 @@ import { canOfficiateMatch } from '../utils/tournamentAuth';
 import { isSportInactive } from '../utils/sports';
 import { isKnownEventType } from '../utils/scoringEvents';
 import { leaseRefusal } from '../utils/leaseCore';
+import { getSport, normSportSlug } from '../utils/sportCache';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
 // every participant in the match. Failures are swallowed — the fan-out must
@@ -339,8 +340,7 @@ export async function createEvent(req: Request, res: Response) {
         } else {
           // V-5: sports scored in games/sets push when a game (tennis: a set)
           // ends, quoting it — not on every rally, and never "scores! 0-0".
-          const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
-          const slug = String((sportRow as { slug?: string } | null)?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
+          const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
           const push = scorePush({ slug, summary, side: side === 'B' ? 'B' : 'A', teamName: teamName(side), kind: payload?.kind as string | undefined });
           if (!push) return res.json({ event });
           const { title, body } = push;
@@ -355,8 +355,7 @@ export async function createEvent(req: Request, res: Response) {
     // is a period_change event. Q1–Q3 end here; the final is match_result.
     if (event_type === 'period_change' && wasNew) {
       try {
-        const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
-        const slug = String((sportRow as { slug?: string } | null)?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
+        const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
         if (slug === 'basketball') {
           const [{ count }, { data: fresh }] = await Promise.all([
             supabase.from('match_events').select('id', { count: 'exact', head: true })
@@ -698,19 +697,21 @@ export function aggregatePlayers(slug: string, events: { event_type: string; pay
 // drift out of sync with the events. Used after every scored event, after an
 // undo, and at completion. Replaces the old cricket-only recompute.
 export async function recomputeSummary(matchId: string): Promise<Record<string, any> | null> {
-  const { data: match } = await supabase
-    .from('matches').select('sport_id, score_summary, format').eq('id', matchId).maybeSingle();
+  // The match and its events are independent reads — fetched together, and the
+  // sport comes from the process cache: this runs on EVERY scoring event and at
+  // completion, and each sequential round-trip costs ~300 ms from Render.
+  const [{ data: match }, { data: events }] = await Promise.all([
+    supabase.from('matches').select('sport_id, score_summary, format').eq('id', matchId).maybeSingle(),
+    supabase.from('match_events').select('event_type, payload, clock_seconds, period').eq('match_id', matchId)
+      .order('created_at', { ascending: true }),
+  ]);
   if (!match) return null;
-  const { data: sportRow } = await supabase
-    .from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
+  const sportRow = await getSport(match.sport_id as string);
   // Normalise the slug so hyphenated/underscored slugs (e.g. 'table-tennis')
   // match the single-token keys in SET_CONFIG / the family checks below.
   // Previously 'table-tennis' fell through to the generic point tally instead
   // of set scoring — the same class of gap as SC-15 (tennis).
-  const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
-  const { data: events } = await supabase
-    .from('match_events').select('event_type, payload, clock_seconds, period').eq('match_id', matchId)
-    .order('created_at', { ascending: true });
+  const slug = normSportSlug(sportRow?.slug);
 
   const existing = (match.score_summary as Record<string, any>) || {};
   // Never wipe a pre-existing summary (e.g. seeded/legacy data) when there are

@@ -39,6 +39,7 @@ import { isBlockedBetween } from '../utils/blocks';
 import { reconcileWinCoins } from '../utils/winCoins';
 import { stepTimer } from '../utils/stepTimer';
 import { leaseRefusal } from '../utils/leaseCore';
+import { getSport, normSportSlug } from '../utils/sportCache';
 
 /** U-13: is `userId` someone who could be in this match's line-up? */
 export async function viewerCanPlay(
@@ -1781,13 +1782,22 @@ export async function completeMatch(req: Request, res: Response) {
     // SC-430: one scorer per match — ending the match is a scoring write like any other.
     // 409 with LEASE_LOST so the outbox halts the queue and asks the human rather
     // than dropping or silently merging anything.
-    {
-      const verdict = await checkLease(id, userId, deviceIdOf(req));
-      if (!verdict.ok) {
-        return res.status(409).json(leaseRefusal(verdict));
-      }
+    // Completion was ~10 s: ~25 sequential round-trips at ~300 ms each from
+    // Render. These four reads are independent, so they go together. The
+    // canonical summary is built ONCE here and reused for the casual W/L and the
+    // result sentence (it used to be rebuilt twice); events cannot change under
+    // a completion, and recomputeSummary is idempotent.
+    const terminal = match.status === 'completed' || isTerminalMatchStatus(match.status);
+    const [verdict, partsRes, sportRow, canonical] = await Promise.all([
+      checkLease(id, userId, deviceIdOf(req)),
+      supabase.from('match_participants').select('user_id, team_side').eq('match_id', id),
+      getSport(match.sport_id as string),
+      terminal ? Promise.resolve(null) : recomputeSummary(id).catch(() => null),
+    ]);
+    if (!verdict.ok) {
+      return res.status(409).json(leaseRefusal(verdict));
     }
-    timer.mark('auth_lease');
+    timer.mark('reads');
     if (match.status === 'completed') {
       // SC-421: the scoring outbox delivers this AT LEAST ONCE, and a completion
       // that timed out after the server had already finalised the match would
@@ -1867,9 +1877,7 @@ export async function completeMatch(req: Request, res: Response) {
     // `=== false` (not `!allows_draw`) so it fails OPEN if the column is ever
     // absent — never wrongly blocks a legitimate tie.
     if (!winnerSide) {
-      const { data: sportRow } = await supabase
-        .from('sports').select('allows_draw').eq('id', match.sport_id).maybeSingle();
-      if ((sportRow as { allows_draw?: boolean } | null)?.allows_draw === false) {
+      if (sportRow?.allows_draw === false) {
         // F-24: the old wording was "This sport can't end level", which a scorer
         // read at 2–1 in points — nothing was level. The condition is not "the
         // scores are equal", it is "no winner has been decided yet", and saying
@@ -1882,11 +1890,8 @@ export async function completeMatch(req: Request, res: Response) {
     }
 
     timer.mark('guards');
-    // Get participants grouped by team side
-    const { data: participants } = await supabase
-      .from('match_participants')
-      .select('user_id, team_side')
-      .eq('match_id', id);
+    // Participants grouped by team side (read above, with the lease).
+    const participants = partsRes.data;
     const now = new Date().toISOString();
     const ratingHistoryRows: Array<{ user_id: string; sport_id: string; match_id: string; old_rating: number; new_rating: number; delta: number }> = [];
     let allPlayerIds: string[] = [];
@@ -1920,7 +1925,6 @@ export async function completeMatch(req: Request, res: Response) {
     // SC-254: a walkover skips ALL attribution — no ELO/mp/W-L (allPlayerIds stays
     // empty, so the win-coins/streaks block and rating_change notifications below
     // are naturally skipped too). A forfeit is not a played game.
-    timer.mark('participants');
     const corePayloadProfiles: Array<Record<string, any>> = [];
     if (match.is_ranked && !walkover && participants && participants.length > 0) {
       const teamA = participants.filter((p) => p.team_side === 'A').map((p) => p.user_id);
@@ -2010,7 +2014,7 @@ export async function completeMatch(req: Request, res: Response) {
       // result is score-derived (computed early; recomputeSummary is idempotent).
       let casualWinnerSide: 'A' | 'B' | null = null;
       try {
-        const ss = (await recomputeSummary(id)) as Record<string, any> | null;
+        const ss = canonical as Record<string, any> | null;
         const aS = Number(ss?.A?.score ?? ss?.A?.runs ?? 0);
         const bS = Number(ss?.B?.score ?? ss?.B?.runs ?? 0);
         casualWinnerSide = aS > bS ? 'A' : bS > aS ? 'B' : null;
@@ -2080,62 +2084,13 @@ export async function completeMatch(req: Request, res: Response) {
     // finalize_match wrote for a casual match, so casual never pollutes the
     // rating trajectory or the ranked analytics (SC-275 reads rating_history as
     // the ranked-match universe). Scoped by match_id — a casual match has no
-    // legit rating_history, so this only removes our own delta-0 rows.
-    if (casualAttribution) {
-      const { error: rhDelErr } = await supabase.from('rating_history').delete().eq('match_id', id);
-      if (rhDelErr) console.warn('[SC-283] casual rating_history cleanup failed:', rhDelErr.message); // eslint-disable-line no-console
-    }
-
-    timer.mark('rh_cleanup');
-    // ── Post-core best-effort (never blocks completion; all idempotent) ──
-    // (walkover leaves allPlayerIds empty, so this is skipped either way — the
-    // explicit !walkover keeps the "no coins/streaks on a forfeit" intent local.)
-    // SC-283: WIN-COINS stay RANKED-ONLY — coins are the economy anchor (they buy
-    // gifts), a casual win must never mint currency.
-    if (match.is_ranked && !walkover && allPlayerIds.length > 0) {
-      // Award 5 coins to winners — idempotent per (user,match) via coin_events.
-      if (winnerSide) {
-        const winnerIds = (participants ?? []).filter((p) => p.team_side === winnerSide).map((p) => p.user_id);
-        for (const uid of winnerIds) void awardCoins(uid, `win_match_${id}`, 5, 'Won a match');
-      }
-    }
-
-    // SC-283: Activity streaks are PARTICIPATION (activity, not skill) — they move
-    // for casual (>=2 participants) AND ranked. allPlayerIds carries the >=2 casual
-    // guard already, and is empty for a solo/phantom match → no-op. Best-effort.
-    if (!walkover && allPlayerIds.length > 0) {
-      try {
-        // SC-392: the IST day, not the UTC one. toISOString() slices a UTC
-        // date, so a match completed between 00:00 and 05:30 IST stamped
-        // last_match_date as YESTERDAY — which either breaks a live streak or
-        // lets the same IST day count twice. Same class as the heatmap fix.
-        const todayStr = istDay();
-        const { data: currentUsers } = await supabase
-          .from('users')
-          .select('id, streak_count, last_match_date')
-          .in('id', allPlayerIds);
-        for (const u of currentUsers || []) {
-          const last = u.last_match_date as string | null;
-          let nextStreak = 1;
-          if (last === todayStr) {
-            nextStreak = u.streak_count ?? 1;
-          } else if (last) {
-            const lastMs = new Date(last + 'T00:00:00Z').getTime();
-            const todayMs = new Date(todayStr + 'T00:00:00Z').getTime();
-            const diffDays = Math.round((todayMs - lastMs) / 86400000);
-            nextStreak = diffDays === 1 ? (u.streak_count ?? 0) + 1 : 1;
-          }
-          await supabase
-            .from('users')
-            .update({ streak_count: nextStreak, last_match_date: todayStr })
-            .eq('id', u.id);
-        }
-      } catch {
-        // swallow — streaks are a nice-to-have
-      }
-    }
-
-    timer.mark('coins_streaks');
+    // legit rating_history, so this only removes our own delta-0 rows. Runs
+    // beside the result patch below, before the response: it keeps data clean.
+    const rhCleanup = casualAttribution
+      ? Promise.resolve(supabase.from('rating_history').delete().eq('match_id', id)).then(({ error: rhDelErr }) => {
+        if (rhDelErr) console.warn('[SC-283] casual rating_history cleanup failed:', rhDelErr.message); // eslint-disable-line no-console
+      })
+      : Promise.resolve();
     // Recompute the canonical summary from the event log, then derive the winner
     // BY SIDE and a human result string from the canonical per-side `score`.
     // The old code read seeded keys (ss.team_a_score/…) that the live scorer
@@ -2144,15 +2099,14 @@ export async function completeMatch(req: Request, res: Response) {
     // recorded even with a clear winner (L-001/L-002). winner_side fixes both.
     let resultForNotice: string | null = null;
     try {
-      const { data: sportRow } = await supabase.from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
       // SC-343: normalize (Table Tennis is 'table-tennis' in the DB but the
       // setSports list uses 'tabletennis'). Currently harmless — the set-sports and
       // generic branches emit identical text — but normalizing keeps it correct if
       // that copy ever diverges.
-      const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
+      const slug = normSportSlug(sportRow?.slug);
       // SC-441 (M1): the local setSports list moved into utils/matchResult with
       // the rest of the derivation, so there is one list rather than two.
-      const ss = ((await recomputeSummary(id)) ?? updatedMatch?.score_summary ?? {}) as Record<string, any>;
+      const ss = { ...((canonical ?? updatedMatch?.score_summary ?? {}) as Record<string, any>) };
       // SC-376: fold in a score submitted with the result. Merged BEFORE the
       // result text is derived below, so "won by N runs" reflects the numbers
       // actually recorded. recomputeSummary returns the stored summary
@@ -2249,110 +2203,13 @@ export async function completeMatch(req: Request, res: Response) {
       await supabase.from('matches').update(patch).eq('id', id);
     } catch { /* best effort */ }
 
+    await rhCleanup.catch(() => undefined);
     timer.mark('result');
-    // A5-004 — derive per-player innings_stats from the attributed event log so
-    // career batting/bowling stats are real (not the scorer-aggregated fallback).
-    // Best-effort + idempotent; no-ops for non-cricket / unattributed matches.
-    try {
-      await writeCricketInningsStats(id);
-    } catch (statErr) {
-      console.error('innings_stats write failed:', statErr instanceof Error ? statErr.message : statErr);
-    }
-
-    timer.mark('innings');
-    // FEATURE 1 — Player of the Match. Compute + persist mvp_user_id now that
-    // the match is completed and all scoring events exist. Best-effort: a
-    // failure here must never block completion. Only matches with real
-    // participants + scored events yield an MVP (casual name-only matches won't).
-    try {
-      await calculateAndSetMVP(id);
-    } catch (mvpErr) {
-      console.error('MVP calculation failed:', mvpErr instanceof Error ? mvpErr.message : mvpErr);
-    }
-
-    timer.mark('mvp');
-    // Resolve sport name for nicer notification copy — falls back to ID.
-    let sportName = 'rating';
-    try {
-      const { data: sport } = await supabase
-        .from('sports')
-        .select('name')
-        .eq('id', match.sport_id)
-        .maybeSingle();
-      if (sport?.name) sportName = sport.name;
-    } catch {
-      // fall through
-    }
-
-    // PRD 12.1: notify each player of their rating delta.
-    for (const row of ratingHistoryRows) {
-      const sign = row.delta >= 0 ? '+' : '';
-      void notifyUser({
-        userId: row.user_id,
-        type: 'rating_change',
-        title: `${sportName} rating updated`,
-        body: `Your ${sportName} rating changed: ${row.old_rating} \u2192 ${row.new_rating} (${sign}${row.delta})`,
-        data: { sportId: match.sport_id, screen: 'SportProfile' },
-      });
-    }
-
-    // U-32: tell the people it happened to. Nobody was told a match had finished
-    // or who won; the line-up and both teams' rosters (the same audience a void
-    // reaches) now get the stored result sentence — and so do its followers
-    // (W-5), who were told every set but not who won. Not the person who ended it.
-    if (!walkover) {
-      try {
-        const [players, followers] = await Promise.all([
-          matchAudienceIds(id, match.team_a_id, match.team_b_id),
-          matchFollowerIds(id),
-        ]);
-        const audience = Array.from(new Set([...players, ...followers]));
-        if (audience.length > 0) {
-          void notifyUsers(audience, {
-            type: 'match_result',
-            title: 'Match result',
-            body: resultForNotice ?? `${match.team_a_name ?? 'Your match'} is complete.`,
-            data: { matchId: id, screen: 'MatchDetail' },
-          }, { actorId: userId });
-        }
-      } catch { /* best-effort */ }
-    }
-
-    // PRD Section 4: if the match had an assigned umpire, prompt all
-    // participants to rate them.
-    if (match.umpire_id) {
-      const matchLabel = (match.team_a_name && match.team_b_name)
-        ? `${match.team_a_name} vs ${match.team_b_name}`
-        : 'your match';
-      // SC-249: derive the recipients from the actual match_participants rows,
-      // NOT allPlayerIds — allPlayerIds is only populated inside the ranked-ELO
-      // branch above, so a CASUAL umpired match had zero recipients and never
-      // prompted anyone to rate the umpire. The participants list is fetched
-      // regardless of is_ranked, so this fires for casual + ranked alike.
-      const participantIds = Array.from(
-        new Set((participants ?? []).map((p) => p.user_id).filter(Boolean)),
-      ).filter((uid) => uid !== match.umpire_id);
-      if (participantIds.length > 0) {
-        void notifyUsers(participantIds, {
-          type: 'umpire_rating_prompt',
-          title: 'Rate your umpire',
-          body: `Rate your umpire for ${matchLabel}`,
-          data: { umpireId: match.umpire_id, matchId: id, screen: 'UmpireRatings' },
-        });
-      }
-    }
-
-    // SC-316: award milestone badges (First Match, Veteran, Legend, Winner,
-    // Champion…) to every participant now that matches_played/wins have moved.
-    // Best-effort per user — a badge failure never blocks completion.
-    for (const uid of Array.from(new Set((participants ?? []).map((p) => p.user_id).filter(Boolean)))) {
-      void awardBadgesSafe(uid as string);
-    }
-
-    timer.mark('notify');
-    // If this is a tournament bracket match, propagate the winner into the next
-    // round (and auto-complete the tournament if it was the final). Best-effort;
-    // the winner_team_id was finalised above (incl. side-derived backfill).
+    // A tournament bracket match propagates its winner into the next round (and
+    // auto-completes the tournament if it was the final). Best-effort; the
+    // winner_team_id was finalised above (incl. side-derived backfill). Kept
+    // BEFORE the response: the organiser's bracket view reads it straight away,
+    // and it costs nothing for a match outside a tournament.
     if (match.tournament_id) {
       try {
         await advanceTournamentWinner(id);
@@ -2360,11 +2217,165 @@ export async function completeMatch(req: Request, res: Response) {
         console.error('bracket advancement failed:', advErr instanceof Error ? advErr.message : advErr);
       }
     }
-
     timer.mark('tournament');
+
+    // ── After the response ── everything below is best-effort and idempotent,
+    // and none of it changes what the result screen shows (MVP is computed on
+    // demand by GET /matches/:id/mvp if this has not got there yet). It used to
+    // hold the scorer's phone for ~5 s.
+    const afterResponse = async () => {
+      const after = stepTimer();
+      // ── Post-core best-effort (never blocks completion; all idempotent) ──
+      // (walkover leaves allPlayerIds empty, so this is skipped either way — the
+      // explicit !walkover keeps the "no coins/streaks on a forfeit" intent local.)
+      // SC-283: WIN-COINS stay RANKED-ONLY — coins are the economy anchor (they buy
+      // gifts), a casual win must never mint currency.
+      if (match.is_ranked && !walkover && allPlayerIds.length > 0) {
+        // Award 5 coins to winners — idempotent per (user,match) via coin_events.
+        if (winnerSide) {
+          const winnerIds = (participants ?? []).filter((p) => p.team_side === winnerSide).map((p) => p.user_id);
+          for (const uid of winnerIds) void awardCoins(uid, `win_match_${id}`, 5, 'Won a match');
+        }
+      }
+
+      // SC-283: Activity streaks are PARTICIPATION (activity, not skill) — they move
+      // for casual (>=2 participants) AND ranked. allPlayerIds carries the >=2 casual
+      // guard already, and is empty for a solo/phantom match → no-op. Best-effort.
+      if (!walkover && allPlayerIds.length > 0) {
+        try {
+          // SC-392: the IST day, not the UTC one. toISOString() slices a UTC
+          // date, so a match completed between 00:00 and 05:30 IST stamped
+          // last_match_date as YESTERDAY — which either breaks a live streak or
+          // lets the same IST day count twice. Same class as the heatmap fix.
+          const todayStr = istDay();
+          const { data: currentUsers } = await supabase
+            .from('users')
+            .select('id, streak_count, last_match_date')
+            .in('id', allPlayerIds);
+          for (const u of currentUsers || []) {
+            const last = u.last_match_date as string | null;
+            let nextStreak = 1;
+            if (last === todayStr) {
+              nextStreak = u.streak_count ?? 1;
+            } else if (last) {
+              const lastMs = new Date(last + 'T00:00:00Z').getTime();
+              const todayMs = new Date(todayStr + 'T00:00:00Z').getTime();
+              const diffDays = Math.round((todayMs - lastMs) / 86400000);
+              nextStreak = diffDays === 1 ? (u.streak_count ?? 0) + 1 : 1;
+            }
+            await supabase
+              .from('users')
+              .update({ streak_count: nextStreak, last_match_date: todayStr })
+              .eq('id', u.id);
+          }
+        } catch {
+          // swallow — streaks are a nice-to-have
+        }
+      }
+
+      // A5-004 — derive per-player innings_stats from the attributed event log so
+      // career batting/bowling stats are real (not the scorer-aggregated fallback).
+      // Best-effort + idempotent; no-ops for non-cricket / unattributed matches.
+      try {
+        await writeCricketInningsStats(id);
+      } catch (statErr) {
+        console.error('innings_stats write failed:', statErr instanceof Error ? statErr.message : statErr);
+      }
+
+      // FEATURE 1 — Player of the Match. Compute + persist mvp_user_id now that
+      // the match is completed and all scoring events exist. Best-effort: a
+      // failure here must never block completion. Only matches with real
+      // participants + scored events yield an MVP (casual name-only matches won't).
+      try {
+        await calculateAndSetMVP(id);
+      } catch (mvpErr) {
+        console.error('MVP calculation failed:', mvpErr instanceof Error ? mvpErr.message : mvpErr);
+      }
+
+      // Resolve sport name for nicer notification copy — falls back to ID.
+      let sportName = 'rating';
+      try {
+        const { data: sport } = await supabase
+          .from('sports')
+          .select('name')
+          .eq('id', match.sport_id)
+          .maybeSingle();
+        if (sport?.name) sportName = sport.name;
+      } catch {
+        // fall through
+      }
+
+      // PRD 12.1: notify each player of their rating delta.
+      for (const row of ratingHistoryRows) {
+        const sign = row.delta >= 0 ? '+' : '';
+        void notifyUser({
+          userId: row.user_id,
+          type: 'rating_change',
+          title: `${sportName} rating updated`,
+          body: `Your ${sportName} rating changed: ${row.old_rating} \u2192 ${row.new_rating} (${sign}${row.delta})`,
+          data: { sportId: match.sport_id, screen: 'SportProfile' },
+        });
+      }
+
+      // U-32: tell the people it happened to. Nobody was told a match had finished
+      // or who won; the line-up and both teams' rosters (the same audience a void
+      // reaches) now get the stored result sentence — and so do its followers
+      // (W-5), who were told every set but not who won. Not the person who ended it.
+      if (!walkover) {
+        try {
+          const [players, followers] = await Promise.all([
+            matchAudienceIds(id, match.team_a_id, match.team_b_id),
+            matchFollowerIds(id),
+          ]);
+          const audience = Array.from(new Set([...players, ...followers]));
+          if (audience.length > 0) {
+            void notifyUsers(audience, {
+              type: 'match_result',
+              title: 'Match result',
+              body: resultForNotice ?? `${match.team_a_name ?? 'Your match'} is complete.`,
+              data: { matchId: id, screen: 'MatchDetail' },
+            }, { actorId: userId });
+          }
+        } catch { /* best-effort */ }
+      }
+
+      // PRD Section 4: if the match had an assigned umpire, prompt all
+      // participants to rate them.
+      if (match.umpire_id) {
+        const matchLabel = (match.team_a_name && match.team_b_name)
+          ? `${match.team_a_name} vs ${match.team_b_name}`
+          : 'your match';
+        // SC-249: derive the recipients from the actual match_participants rows,
+        // NOT allPlayerIds — allPlayerIds is only populated inside the ranked-ELO
+        // branch above, so a CASUAL umpired match had zero recipients and never
+        // prompted anyone to rate the umpire. The participants list is fetched
+        // regardless of is_ranked, so this fires for casual + ranked alike.
+        const participantIds = Array.from(
+          new Set((participants ?? []).map((p) => p.user_id).filter(Boolean)),
+        ).filter((uid) => uid !== match.umpire_id);
+        if (participantIds.length > 0) {
+          void notifyUsers(participantIds, {
+            type: 'umpire_rating_prompt',
+            title: 'Rate your umpire',
+            body: `Rate your umpire for ${matchLabel}`,
+            data: { umpireId: match.umpire_id, matchId: id, screen: 'UmpireRatings' },
+          });
+        }
+      }
+
+      // SC-316: award milestone badges (First Match, Veteran, Legend, Winner,
+      // Champion…) to every participant now that matches_played/wins have moved.
+      // Best-effort per user — a badge failure never blocks completion.
+      for (const uid of Array.from(new Set((participants ?? []).map((p) => p.user_id).filter(Boolean)))) {
+        void awardBadgesSafe(uid as string);
+      }
+
+      after.mark('side_effects');
+      console.log(`[complete-after] match=${id} ${after.header()}`); // eslint-disable-line no-console
+    };
     res.setHeader('Server-Timing', timer.header());
     console.log(`[complete-timing] match=${id} total=${timer.total()}ms ${timer.header()}`); // eslint-disable-line no-console
-    return res.json({
+    res.json({
       match: updatedMatch,
       ratings: ratingHistoryRows.map((r) => ({
         user_id: r.user_id,
@@ -2373,6 +2384,10 @@ export async function completeMatch(req: Request, res: Response) {
         delta: r.delta,
       })),
     });
+    void afterResponse().catch((err) => {
+      console.error('[complete-after] failed:', err instanceof Error ? err.message : err); // eslint-disable-line no-console
+    });
+    return undefined;
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

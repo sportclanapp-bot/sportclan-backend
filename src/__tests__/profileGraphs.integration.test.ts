@@ -12,6 +12,10 @@
  * one cricket match → single point), z19empty.qa (zero matches → empty).
  */
 import https from 'https';
+import { useLiveLock } from './liveLock';
+
+// Shares state with other live suites — take turns (see liveLock.ts).
+useLiveLock('qa-pair');
 
 const BASE = process.env.SC_BASE || 'https://sportclan-backend.onrender.com';
 const AARAV = '5a9eaac3-dea0-4419-906c-911c5af9f38b';

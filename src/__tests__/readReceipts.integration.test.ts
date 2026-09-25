@@ -14,6 +14,10 @@
  * Fixtures: z326agra.qa (A / sender) · z19empty.qa (B / recipient).
  */
 import https from 'https';
+import { useLiveLock } from './liveLock';
+
+// Shares state with other live suites — take turns (see liveLock.ts).
+useLiveLock('dm');
 
 const BASE = process.env.SC_BASE || 'https://sportclan-backend.onrender.com';
 

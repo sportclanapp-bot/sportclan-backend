@@ -19,6 +19,10 @@
  *   z19empty.qa — the invitee (B)
  */
 import https from 'https';
+import { useLiveLock } from './liveLock';
+
+// Shares state with other live suites — take turns (see liveLock.ts).
+useLiveLock('qa-pair');
 
 const BASE = process.env.SC_BASE || 'https://sportclan-backend.onrender.com';
 

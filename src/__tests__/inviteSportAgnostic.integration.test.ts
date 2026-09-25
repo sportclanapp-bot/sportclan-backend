@@ -13,6 +13,10 @@
  * Fixtures: z326agra.qa (sender) · z19empty.qa (receiver).
  */
 import https from 'https';
+import { useLiveLock } from './liveLock';
+
+// Shares state with other live suites — take turns (see liveLock.ts).
+useLiveLock('qa-pair');
 
 const BASE = process.env.SC_BASE || 'https://sportclan-backend.onrender.com';
 const SPORT_NAMES = ['Chess', 'Table Tennis', 'Volleyball'];

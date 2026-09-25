@@ -134,6 +134,7 @@ export function createFieldRefusal(body: {
   is_ranked?: unknown;
   is_open?: unknown;
   players_needed?: unknown;
+  city_id?: unknown;
 }): { status: number; error: string; code: string } | null {
   for (const key of ['is_ranked', 'is_open'] as const) {
     const v = body[key];
@@ -145,7 +146,47 @@ export function createFieldRefusal(body: {
   if (n != null && (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n > PLAYERS_NEEDED_MAX)) {
     return { status: 400, error: `Players needed must be a whole number from 0 to ${PLAYERS_NEEDED_MAX}.`, code: 'BAD_PLAYERS_NEEDED' };
   }
+  // A malformed city id failed the insert with a 500 (F-19: "bad UUIDs give 500").
+  const c = body.city_id;
+  if (c != null && c !== '' && (typeof c !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c))) {
+    return { status: 400, error: 'That city could not be found.', code: 'BAD_CITY' };
+  }
   return null;
+}
+
+/**
+ * The two sides' names for a team-mode match (not singles).
+ *   F-14  an open pickup has no fixed teams: a blank side is "Team A" / "Team B"
+ *         (decision 2026-09-25 — the app's own fallback everywhere);
+ *   F-20  any other typed-in side needs a name, and two typed-in sides can't
+ *         share one (only the form checked either);
+ *   F-19  names are trimmed and capped at LIMITS.teamNameMax (defined, unused).
+ * A side with a registered team id keeps whatever name was sent (the team's own
+ * name is attached on read). Exported for tests.
+ */
+export function teamSidesFor(args: {
+  isOpen: boolean;
+  teamAId?: string | null;
+  teamBId?: string | null;
+  teamAName?: unknown;
+  teamBName?: unknown;
+}): { a: string | null; b: string | null } | { status: number; error: string; code: string } {
+  const clean = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  let a = clean(args.teamAName);
+  let b = clean(args.teamBName);
+  if (a.length > LIMITS.teamNameMax || b.length > LIMITS.teamNameMax) {
+    return { status: 400, error: `Team names must be ${LIMITS.teamNameMax} characters or fewer.`, code: 'TEAM_NAME_TOO_LONG' };
+  }
+  if (args.isOpen) {
+    if (!args.teamAId && !a) a = 'Team A';
+    if (!args.teamBId && !b) b = 'Team B';
+  } else if ((!args.teamAId && !a) || (!args.teamBId && !b)) {
+    return { status: 400, error: 'Both team names are required.', code: 'TEAM_NAME_REQUIRED' };
+  }
+  if (!args.teamAId && !args.teamBId && a && a.toLowerCase() === b.toLowerCase()) {
+    return { status: 400, error: 'Team A and Team B can’t have the same name.', code: 'SAME_TEAM_NAME' };
+  }
+  return { a: a || null, b: b || null };
 }
 
 export async function createMatch(req: Request, res: Response) {
@@ -182,7 +223,7 @@ export async function createMatch(req: Request, res: Response) {
     }
     const cleanVenue = cleanVenueOrErr;
     if (!sport_id) return res.status(400).json({ error: 'sport_id is required' });
-    const fieldRefusal = createFieldRefusal({ is_ranked, is_open, players_needed });
+    const fieldRefusal = createFieldRefusal({ is_ranked, is_open, players_needed, city_id });
     if (fieldRefusal) return res.status(fieldRefusal.status).json({ error: fieldRefusal.error, code: fieldRefusal.code });
     // SC-279: per-match join policy. 'open' (default) = instant join_open_match;
     // 'approval' routes joins through match_join_requests (creator approves).
@@ -256,6 +297,10 @@ export async function createMatch(req: Request, res: Response) {
         (u?.name || (u?.username ? `@${u.username}` : '') || 'Player').slice(0, 60);
       singlesSides = { aName: label(me), bName: label(opp), opponentId: opponent_id, sportName: (sportRow as { name?: string }).name ?? 'Singles' };
     }
+    const sides = singles
+      ? null
+      : teamSidesFor({ isOpen: !!is_open, teamAId: team_a_id, teamBId: team_b_id, teamAName: team_a_name, teamBName: team_b_name });
+    if (sides && 'code' in sides) return res.status(sides.status).json({ error: sides.error, code: sides.code });
     // A ranked match counts toward ELO / leaderboards, so each side must be a
     // real registered roster: two REGISTERED teams, or — for singles — two
     // registered players (free-text sides have no one to attribute stats to).
@@ -276,8 +321,8 @@ export async function createMatch(req: Request, res: Response) {
         tournament_id: tournament_id || null,
         team_a_id: team_a_id || null,
         team_b_id: team_b_id || null,
-        team_a_name: singlesSides ? singlesSides.aName : team_a_name || null,
-        team_b_name: singlesSides ? singlesSides.bName : team_b_name || null,
+        team_a_name: singlesSides ? singlesSides.aName : sides?.a ?? null,
+        team_b_name: singlesSides ? singlesSides.bName : sides?.b ?? null,
         scheduled_at: scheduled_at || null,
         venue: cleanVenue,
         city_id: city_id || null,

@@ -35,7 +35,7 @@ describe('createFieldRefusal (F-19)', () => {
   test('createMatch checks the fields before anything is written', () => {
     const src = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
     const body = src.slice(src.indexOf('export async function createMatch('));
-    const check = body.indexOf('createFieldRefusal({ is_ranked, is_open, players_needed })');
+    const check = body.indexOf('createFieldRefusal({ is_ranked, is_open, players_needed, city_id })');
     expect(check).toBeGreaterThan(0);
     expect(check).toBeLessThan(body.indexOf(".from('matches')"));
     expect(check).toBeLessThan(body.indexOf('createMatchRefusal('));

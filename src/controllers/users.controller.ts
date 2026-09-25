@@ -15,6 +15,7 @@ import { parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
 import { stepTimer } from '../utils/stepTimer';
 import { getSport } from '../utils/sportCache';
+import { aggregateGoalPlayers, aggregatePointPlayers, aggregateRallyPlayers } from './scoring.controller';
 
 // SELF-only fields — the full row for /users/me + own-profile writes. Contains
 // contact + wallet + account internals; NEVER serialize this to another viewer.
@@ -1557,21 +1558,29 @@ export async function getSportProfile(req: Request, res: Response) {
           hundreds: 0,
         };
       }
-    } else if (slug === 'football' && matchIds.length > 0) {
-      const { data: events } = await supabase.from('match_events').select('event_type, created_by').in('match_id', matchIds.slice(0, 100));
-      const my = (events ?? []).filter((e: any) => e.created_by === id);
+    } else if ((slug === 'football' || slug === 'hockey') && matchIds.length > 0) {
+      // F-53 (MATCH_CREATE_TEST_5): this counted event types the scorer never
+      // sends ('goal', 'yellow_card') by who ENTERED them, so a player credited
+      // with a goal read 0 and the scorer would have got everyone's. It reads
+      // the same per-player rollup as the scorecard now: the credited player_id.
+      const { data: events } = await supabase.from('match_events').select('event_type, payload').in('match_id', matchIds.slice(0, 100));
+      const ev = (events ?? []) as { event_type: string; payload: any }[];
+      const line = aggregateGoalPlayers(ev)[id];
+      const cards = (kind: string) => ev.filter((e) => e.event_type === 'card' && e.payload?.player_id === id && e.payload?.kind === kind).length;
       sportStats = {
-        goals: my.filter((e) => e.event_type === 'goal').length,
-        assists: my.filter((e) => e.event_type === 'assist').length,
-        yellow_cards: my.filter((e) => e.event_type === 'yellow_card').length,
-        red_cards: my.filter((e) => e.event_type === 'red_card').length,
+        goals: line?.goals ?? 0,
+        assists: line?.assists ?? 0,
+        yellow_cards: cards('yellow'),
+        red_cards: cards('red'),
+        ...(slug === 'hockey' ? { green_cards: cards('green') } : {}),
       };
     } else if (slug === 'basketball' && matchIds.length > 0) {
-      const { data: events } = await supabase.from('match_events').select('event_type, payload, created_by').in('match_id', matchIds.slice(0, 100));
-      const my = (events ?? []).filter((e: any) => e.created_by === id);
+      // F-53: the credited player's points (payload.value), not the scorer's.
+      const { data: events } = await supabase.from('match_events').select('event_type, payload').in('match_id', matchIds.slice(0, 100));
+      const ev = (events ?? []) as { event_type: string; payload: any }[];
       sportStats = {
-        total_points: my.filter((e) => ['basket', 'score'].includes(e.event_type)).reduce((s, e) => s + Number((e.payload as any)?.points ?? 2), 0),
-        fouls: my.filter((e) => e.event_type === 'foul').length,
+        total_points: aggregatePointPlayers(ev)[id]?.points ?? 0,
+        fouls: ev.filter((e) => e.event_type === 'foul' && e.payload?.player_id === id).length,
       };
     } else if (['tennis', 'badminton', 'tabletennis', 'pickleball'].includes(slug) && matchIds.length > 0) {
       // Serve stats from match_participants + point stats from events
@@ -1588,8 +1597,9 @@ export async function getSportProfile(req: Request, res: Response) {
       const bpFaced = (myParts ?? []).reduce((s, p) => s + (p.break_points_faced ?? 0), 0);
 
       // Point events
-      const { data: events } = await supabase.from('match_events').select('event_type, created_by').in('match_id', matchIds.slice(0, 100));
-      const pointsWon = (events ?? []).filter((e: any) => ['score', 'point'].includes(e.event_type) && e.created_by === id).length;
+      // F-53: points credited to this player, not every point this player entered as scorer.
+      const { data: events } = await supabase.from('match_events').select('event_type, payload').in('match_id', matchIds.slice(0, 100));
+      const pointsWon = aggregateRallyPlayers((events ?? []) as { event_type: string; payload: any }[])[id]?.points ?? 0;
 
       sportStats = {
         total_aces: totalAces,

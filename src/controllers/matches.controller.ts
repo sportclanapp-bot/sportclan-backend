@@ -344,6 +344,15 @@ export async function listOpenMatches(req: Request, res: Response) {
     // one you've already JOINED is a silly suggestion. Exclude all three. (Single
     // caller = HomeScreen, verified — safe to filter server-side. Sport/city
     // relevance ranking is a later feature, not this bug.)
+    // The ranking context below (your city, sports, ratings) does not depend on
+    // the candidate list, so it is read in the same round as your joined
+    // matches rather than after the candidate query.
+    const contextP = Promise.all([
+      supabase.from('users').select('city_id').eq('id', userId).maybeSingle(),
+      supabase.from('user_sports').select('sport_id').eq('user_id', userId),
+      supabase.from('user_sport_profiles').select('sport_id, rating').eq('user_id', userId),
+    ]);
+    contextP.catch(() => undefined);
     const { data: joinedRows } = await supabase
       .from('match_participants').select('match_id').eq('user_id', userId);
     const joinedIds = Array.from(new Set((joinedRows ?? []).map((r) => r.match_id as string)));
@@ -399,11 +408,7 @@ export async function listOpenMatches(req: Request, res: Response) {
     // top suggestion however old it is, and the −25 never runs. Ranking a single
     // match is a no-op anyway, so the guard bought nothing and hid a bug.
     {
-      const [meRes, sportsRes, myRatingsRes] = await Promise.all([
-        supabase.from('users').select('city_id').eq('id', userId).maybeSingle(),
-        supabase.from('user_sports').select('sport_id').eq('user_id', userId),
-        supabase.from('user_sport_profiles').select('sport_id, rating').eq('user_id', userId),
-      ]);
+      const [meRes, sportsRes, myRatingsRes] = await contextP;
       const myCityId = (meRes.data?.city_id as string | null) ?? null;
       const mySports = new Set<string>((sportsRes.data ?? []).map((r) => r.sport_id as string));
       const myRating = new Map<string, number>();

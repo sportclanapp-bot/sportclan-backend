@@ -196,16 +196,16 @@ const UNREAD_SCAN_CAP = 500; // the badge is a dot; scanning past this buys noth
 export async function getUnreadCount(req: Request, res: Response) {
   const userId = req.userId!;
 
-  const { data: participations, error: pErr } = await supabase
-    .from('chat_participants')
-    .select('chat_id')
-    .eq('user_id', userId);
+  // Your chats and your block list are independent — one round, not two.
+  const [{ data: participations, error: pErr }, blocked] = await Promise.all([
+    supabase.from('chat_participants').select('chat_id').eq('user_id', userId),
+    blockedUserIds(userId),
+  ]);
   if (pErr) return res.status(500).json({ error: sanitizeError(pErr) });
 
   const chatIds = (participations || []).map((p) => p.chat_id);
   if (chatIds.length === 0) return res.json({ unread: 0, chats: 0, capped: false });
 
-  const blocked = await blockedUserIds(userId);
   let q = supabase
     .from('messages')
     .select('id, chat_id, sender_id')

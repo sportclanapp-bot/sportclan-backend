@@ -873,15 +873,20 @@ export async function listJoinRequests(req: Request, res: Response) {
   try {
     const id = String(req.params.id);
     if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
-    if (!(await isTeamManager(id, userId))) {
+    // The manager check and the read together; nothing is returned unless the
+    // check passes.
+    const [isManager, { data }] = await Promise.all([
+      isTeamManager(id, userId),
+      excludeDeletedEmbed(supabase
+        .from('team_join_requests')
+        .select('id, user_id, status, requested_at, user:user_id!inner (id, name, username, profile_picture_url)')
+        .eq('team_id', id)
+        .eq('status', 'pending')
+        .order('requested_at', { ascending: true }), 'user'),
+    ]);
+    if (!isManager) {
       return res.status(403).json({ error: 'Only the captain or a co-captain can view join requests' });
     }
-    const { data } = await excludeDeletedEmbed(supabase
-      .from('team_join_requests')
-      .select('id, user_id, status, requested_at, user:user_id!inner (id, name, username, profile_picture_url)')
-      .eq('team_id', id)
-      .eq('status', 'pending')
-      .order('requested_at', { ascending: true }), 'user');
     return res.json({ requests: data ?? [] });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

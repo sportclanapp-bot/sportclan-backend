@@ -44,6 +44,7 @@ test('doubles: an unattributed point credits nobody — the scorer never collect
 });
 
 test('a named player is credited, whoever scored it', async () => {
+  db.summary = { winner_side: 'A' }; // F-36: the credited player's side won
   db.parts = [{ user_id: 'scorerA', team_side: 'A' }, { user_id: 'a2', team_side: 'A' }, { user_id: 'b1', team_side: 'B' }];
   db.events = [pt('A', 'scorerA', 'a2'), pt('A', 'scorerA', 'a2')];
   expect(await calculateAndSetMVP('m')).toBe('a2');
@@ -54,4 +55,39 @@ test('football: an unattributed goal with a full squad credits nobody', async ()
   db.parts = [{ user_id: 'scorerA', team_side: 'A' }, { user_id: 'a2', team_side: 'A' }];
   db.events = [{ event_type: 'score', created_by: 'scorerA', payload: { team_side: 'A', kind: 'goal', value: 1 } }];
   expect(await calculateAndSetMVP('m')).toBeNull();
+});
+
+describe('F-36 · game-and-set sports: Player of the Match is on the winning side', () => {
+  // Session 4, R8: A won pickleball 2-1 (11-8, 5-11, 11-9) but B won more points
+  // (28 to 27) and was named Player of the Match. Decision 2026-09-25.
+  const r8 = () => [...Array(27)].map(() => pt('A', 'scorerA')).concat([...Array(28)].map(() => pt('B', 'scorerA')));
+  test.each(['badminton', 'tabletennis', 'pickleball', 'volleyball', 'tennis', 'carrom'])('%s: the winner, even with fewer points', async (sport) => {
+    db.sport = sport;
+    db.summary = { winner_side: 'A' };
+    db.parts = [{ user_id: 'scorerA', team_side: 'A' }, { user_id: 'oppB', team_side: 'B' }];
+    db.events = r8();
+    expect(await calculateAndSetMVP('m')).toBe('scorerA');
+  });
+  test('doubles: the winning side\'s top scorer, not the other side\'s', async () => {
+    db.sport = 'volleyball';
+    db.summary = { winner_side: 'A' };
+    db.parts = [{ user_id: 'a1', team_side: 'A' }, { user_id: 'a2', team_side: 'A' }, { user_id: 'b1', team_side: 'B' }, { user_id: 'b2', team_side: 'B' }];
+    db.events = [pt('B', 'a1', 'b1'), pt('B', 'a1', 'b1'), pt('B', 'a1', 'b1'), pt('A', 'a1', 'a2'), pt('A', 'a1', 'a2'), pt('A', 'a1', 'a1')];
+    expect(await calculateAndSetMVP('m')).toBe('a2');
+  });
+  test('the winning side credited nothing: no Player of the Match rather than the loser', async () => {
+    db.sport = 'tennis';
+    db.summary = { winner_side: 'A' };
+    db.parts = [{ user_id: 'a1', team_side: 'A' }, { user_id: 'a2', team_side: 'A' }, { user_id: 'b1', team_side: 'B' }];
+    db.events = [pt('A', 'a1'), pt('B', 'a1', 'b1')];
+    expect(await calculateAndSetMVP('m')).toBeNull();
+  });
+  test('football keeps its rule (top scorer from either side)', async () => {
+    db.sport = 'football';
+    db.summary = { winner_side: 'A' };
+    db.parts = [{ user_id: 'a1', team_side: 'A' }, { user_id: 'b1', team_side: 'B' }, { user_id: 'b2', team_side: 'B' }];
+    const goal = (side: 'A' | 'B', player: string) => ({ event_type: 'score', created_by: 'a1', payload: { team_side: side, kind: 'goal', value: 1, player_id: player } });
+    db.events = [goal('B', 'b1'), goal('B', 'b1'), goal('A', 'a1')];
+    expect(await calculateAndSetMVP('m')).toBe('b1');
+  });
 });

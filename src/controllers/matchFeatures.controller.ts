@@ -87,6 +87,9 @@ async function notifyChallengerOfAnswer(matchId: string, userId: string, accepte
 // FEATURE 1 — MVP / Player of the Match
 // ────────────────────────────────────────────────────────────────────────────
 
+/** F-36 · sports whose Player of the Match must be on the winning side. */
+export const MVP_FROM_WINNING_SIDE: ReadonlySet<string> = new Set(['badminton', 'tabletennis', 'pickleball', 'volleyball', 'tennis', 'carrom']);
+
 export async function calculateAndSetMVP(matchId: string): Promise<string | null> {
   // Get match + sport + events + participants
   const { data: match } = await supabase
@@ -212,8 +215,14 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   // participants ∪ rollup, so it covers guests too.
   let mvpId: string | null = null;
   let best: { score: number; onWinning: boolean; uid: string } | null = null;
+  // F-36 (decision 2026-09-25): in the game-and-set sports the Player of the
+  // Match comes from the winning side. "Most points" alone made the loser of a
+  // 2-1 singles match its Player of the Match (28 points to 27) under a result
+  // screen naming the other player the winner.
+  const winnersOnly = winnerSide != null && MVP_FROM_WINNING_SIDE.has(slug);
   for (const [uid, score] of scores) {
     if (score <= 0) continue; // no contribution → never MVP
+    if (winnersOnly && sideOf.get(uid) !== winnerSide) continue;
     const onWinning = winnerSide != null && sideOf.get(uid) === winnerSide;
     const better =
       best === null ||

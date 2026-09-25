@@ -330,9 +330,11 @@ export async function createMatch(req: Request, res: Response) {
         overs: storedOvers,
         status: 'scheduled',
         is_open: singles ? false : !!is_open,
-        players_needed: singles ? 0 : players_needed ?? 0,
+        // F-13: slots and a join policy belong to an open pickup only; they were
+        // stored for every match (a closed or singles match "needing 3 players").
+        players_needed: !singles && is_open ? players_needed ?? 0 : 0,
         is_ranked: !!is_ranked,
-        join_policy: joinPolicy,
+        join_policy: !singles && is_open ? joinPolicy : 'open',
         created_by: userId,
       })
       .select('*')
@@ -1548,7 +1550,7 @@ export async function addParticipants(req: Request, res: Response) {
     }
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id, status, tournament_id, is_ranked, team_a_id, team_b_id')
+      .select('created_by, umpire_id, status, tournament_id, is_ranked, team_a_id, team_b_id, sport_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1578,6 +1580,7 @@ export async function addParticipants(req: Request, res: Response) {
     // SC-53: dedupe by user_id (last wins) — a batch containing the same user
     // twice (e.g. a player listed on both sides) would otherwise make Postgres'
     // ON CONFLICT upsert fail with "cannot affect row a second time" → 500.
+    const isCricketLineup = normSportSlug((await getSport(match.sport_id as string))?.slug) === 'cricket';
     const byUser = new Map<string, any>();
     for (const p of participants as any[]) {
       if (p && p.user_id) byUser.set(p.user_id, p);
@@ -1588,7 +1591,8 @@ export async function addParticipants(req: Request, res: Response) {
       team_side: p.team_side,
       role: p.role || null,
       jersey_number: p.jersey_number ?? null,
-      batting_order: p.batting_order ?? null,
+      // F-13: a batting order means something only in cricket.
+      batting_order: isCricketLineup ? p.batting_order ?? null : null,
     }));
     if (rows.length === 0) {
       return res.status(400).json({ error: 'participants array is required' });

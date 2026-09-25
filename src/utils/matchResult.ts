@@ -32,6 +32,9 @@ export interface ResultInput {
   /** Cricket only: wickets lost by each side. */
   aWickets?: number;
   bWickets?: number;
+  /** A6: wickets that end each side's innings (cricketRules.allOutBySide); default 10. */
+  aAllOut?: number;
+  bAllOut?: number;
   /** Which side won the toss, when known (works for free-text teams). */
   tossWinnerSide?: Side | null;
   /** 'bat' | 'bowl' — what the toss winner chose. */
@@ -120,7 +123,8 @@ export function deriveResultText(input: ResultInput): {
     const chased = chasingSide(input.tossWinnerSide, input.tossChoice);
     if (chased !== null && chased === winnerSide) {
       const lost = (winnerSide === 'A' ? input.aWickets : input.bWickets) ?? 0;
-      const remaining = Math.max(0, 10 - lost);
+      const allOut = (winnerSide === 'A' ? input.aAllOut : input.bAllOut) ?? 10;
+      const remaining = Math.max(0, allOut - lost);
       return {
         text: `${winnerName} won by ${remaining} wicket${remaining === 1 ? '' : 's'}`,
         winnerSide,

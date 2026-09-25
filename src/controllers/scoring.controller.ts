@@ -16,6 +16,7 @@ import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, winsNeeded } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
+import { allOutBySide } from '../utils/cricketRules';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
 // every participant in the match. Failures are swallowed — the fan-out must
@@ -805,6 +806,10 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
 
   if (slug === 'cricket') {
     for (const s of ['A', 'B'] as const) Object.assign(sides[s], { runs: 0, balls: 0, wickets: 0 });
+    // A6: a side is all out one short of its line-up (shared cricketRules); a
+    // side with no line-up at 10, as before.
+    const { data: lineup } = await supabase.from('match_participants').select('team_side').eq('match_id', matchId);
+    const allOut = allOutBySide(lineup ?? []);
     for (const e of events) {
       const p: any = e.payload || {};
       const inn = sides[sideOf(p)];
@@ -815,7 +820,7 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
         // no-balls are not. Count the ball accordingly (A5-010/A5-012).
         if (p.type === 'B' || p.type === 'Lb') inn.balls += 1;
       }
-      else if (e.event_type === 'wicket') { inn.wickets = Math.min(10, inn.wickets + 1); if (!p.is_extra) inn.balls += 1; }
+      else if (e.event_type === 'wicket') { inn.wickets = Math.min(allOut[sideOf(p)], inn.wickets + 1); if (!p.is_extra) inn.balls += 1; }
       // A batting side can end its innings early by declaring (before all-out /
       // overs). This is a marker only — it doesn't change runs/balls/wickets or
       // the winner (still total-vs-total); it just lets the scorecard show

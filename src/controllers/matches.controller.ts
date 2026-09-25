@@ -41,6 +41,7 @@ import { stepTimer } from '../utils/stepTimer';
 import { leaseRefusal } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
+import { allOutBySide, cricketFormatOf, isOfferedOvers } from '../utils/cricketRules';
 
 /** U-13: is `userId` someone who could be in this match's line-up? */
 export async function viewerCanPlay(
@@ -199,6 +200,13 @@ export async function createMatch(req: Request, res: Response) {
       return res.status(400).json({ error: 'That match length isn’t offered for this sport.', code: 'BAD_MATCH_LENGTH' });
     }
     const storedBestOf = bestOfFor(lengthSlug, format);
+    // A6: cricket takes overs in every format, from the format's offered list;
+    // no other sport has overs (they were stored for any sport and never read).
+    const isCricketMatch = lengthSlug === 'cricket';
+    if (isCricketMatch && overs != null && !isOfferedOvers(cricketFormatOf(format), Number(overs))) {
+      return res.status(400).json({ error: 'Those overs aren’t offered for this format.', code: 'BAD_OVERS' });
+    }
+    const storedOvers = isCricketMatch && overs != null ? Number(overs) : null;
     const storedFormat = storedBestOf !== null ? formatForBestOf(storedBestOf) : format || null;
     // Phase 3 · SINGLES: a one-a-side sport played between two PEOPLE. Validated
     // up front so nothing is written for a bad request. See utils/singles.
@@ -260,7 +268,7 @@ export async function createMatch(req: Request, res: Response) {
         venue: cleanVenue,
         city_id: city_id || null,
         format: storedFormat,
-        overs: overs ?? null,
+        overs: storedOvers,
         status: 'scheduled',
         is_open: singles ? false : !!is_open,
         players_needed: singles ? 0 : players_needed ?? 0,
@@ -2320,6 +2328,9 @@ export async function completeMatch(req: Request, res: Response) {
         bScore,
         aWickets: Number(ss?.A?.wickets ?? 0),
         bWickets: Number(ss?.B?.wickets ?? 0),
+        // A6: "won by N wickets" counts wickets in hand against the side's line-up.
+        aAllOut: allOutBySide(participants ?? []).A,
+        bAllOut: allOutBySide(participants ?? []).B,
         tossWinnerSide: (ss?.toss_winner_side as 'A' | 'B' | undefined) ?? null,
         // SC-442: read directly, NOT through a cast. This line was
         // `(match as { toss_choice?: string | null }).toss_choice` and the

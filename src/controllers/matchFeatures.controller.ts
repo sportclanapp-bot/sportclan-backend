@@ -8,6 +8,7 @@ import { canOfficiateMatch } from '../utils/tournamentAuth';
 import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { isSinglesShape } from '../utils/singles';
+import { viewerCanPlay } from '../utils/viewerCanPlay';
 import { notifyUser } from '../utils/notify';
 import { leaseRefusal } from '../utils/leaseCore';
 
@@ -309,6 +310,22 @@ export async function setMatchAvailability(req: Request, res: Response) {
     const { status, team_id } = req.body || {};
     if (!status || !['available', 'unavailable', 'maybe'].includes(status)) {
       return res.status(400).json({ error: 'status must be available, unavailable, or maybe' });
+    }
+
+    // F-24: anyone could answer for any match — a spectator could "accept" a
+    // ranked challenge meant for someone else's opponent row, and a finished
+    // match still took answers. Only someone who could be in the line-up (the
+    // U-13 rule: in it, or on either team's roster, never the umpire) may
+    // answer, and only before the match is over.
+    const { data: m } = await supabase
+      .from('matches').select('id, status, team_a_id, team_b_id, umpire_id').eq('id', id).maybeSingle();
+    if (!m) return res.status(404).json({ error: 'Match not found' });
+    if (isTerminalMatchStatus(m.status)) {
+      return res.status(409).json({ error: 'This match is over — there is nothing to answer.', code: 'MATCH_OVER' });
+    }
+    const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', id);
+    if (!(await viewerCanPlay(m, userId, (parts ?? []).map((p) => p.user_id as string)))) {
+      return res.status(403).json({ error: 'Only a player in this match can answer.', code: 'NOT_A_PLAYER' });
     }
 
     // Phase 3: for a singles match this row IS the opponent's answer to the

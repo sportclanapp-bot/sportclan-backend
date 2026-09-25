@@ -44,24 +44,9 @@ import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/ma
 import { allOutBySide, cricketFormatOf, isOfferedOvers } from '../utils/cricketRules';
 import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
-/** U-13: is `userId` someone who could be in this match's line-up? */
-export async function viewerCanPlay(
-  match: { team_a_id?: string | null; team_b_id?: string | null; umpire_id?: string | null },
-  userId: string | undefined,
-  participantIds: string[],
-): Promise<boolean> {
-  if (!userId || match.umpire_id === userId) return false;
-  if (participantIds.includes(userId)) return true;
-  const teamIds = [match.team_a_id, match.team_b_id].filter(Boolean) as string[];
-  if (teamIds.length === 0) return false;
-  const { data } = await supabase
-    .from('team_members')
-    .select('team_id')
-    .eq('user_id', userId)
-    .in('team_id', teamIds)
-    .limit(1);
-  return (data ?? []).length > 0;
-}
+// U-13: moved to utils/viewerCanPlay (F-24: availability answers use it too).
+export { viewerCanPlay } from '../utils/viewerCanPlay';
+import { viewerCanPlay } from '../utils/viewerCanPlay';
 
 // POST /matches — create. FREE for all (Change #6).
 /**
@@ -496,7 +481,7 @@ export async function listOpenMatches(req: Request, res: Response) {
       .from('matches')
       .select('*')
       .eq('is_open', true)
-      .in('status', ['scheduled', 'upcoming'])
+      .eq('status', 'scheduled')
       // SC-441 (M3): never suggest a match whose start time has already passed.
       // There was NO date predicate here at all, so a fixture from two months ago
       // was still being recommended to brand-new users as something to join.
@@ -721,7 +706,7 @@ export async function setMatchTossHandler(req: Request, res: Response) {
     ss.toss_winner_side = tossWinnerSide;
     update.score_summary = ss;
   }
-  if (match.status === 'scheduled' || match.status === 'upcoming') {
+  if (match.status === 'scheduled') {
     update.status = 'live';
   }
 
@@ -1043,7 +1028,7 @@ export async function listMatches(req: Request, res: Response) {
       // grace so a late start is never hidden mid-game, and keeps the match fully
       // readable from history — which is why this rides the same scoping rule
       // rather than being a blanket filter.
-      if (!status || status === 'scheduled' || status === 'upcoming') {
+      if (!status || status === 'scheduled') {
         query = query.gte('scheduled_at', discoveryCutoffIso());
       }
     }
@@ -1136,7 +1121,7 @@ export async function sweepUnplayedScheduledMatches(): Promise<{ abandoned: numb
   const { data: stale, error } = await supabase
     .from('matches')
     .select('id')
-    .in('status', ['scheduled', 'upcoming'])
+    .eq('status', 'scheduled')
     .lt('scheduled_at', cutoff);
   if (error || !stale || stale.length === 0) return { abandoned: 0 };
   await supabase

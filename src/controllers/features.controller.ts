@@ -817,7 +817,7 @@ export async function runMatchReminderSweep(): Promise<{ sent: number }> {
     .select('id, team_a_name, team_b_name, team_a_id, team_b_id, scheduled_at, umpire_id, status')
     .gte('scheduled_at', now.toISOString())
     .lte('scheduled_at', in15.toISOString())
-    .in('status', ['scheduled', 'upcoming', 'live']);
+    .in('status', ['scheduled', 'live']);
   if (!soon || soon.length === 0) return { sent: 0 };
 
   let sent = 0;

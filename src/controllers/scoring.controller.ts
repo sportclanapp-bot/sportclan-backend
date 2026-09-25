@@ -230,25 +230,13 @@ export async function createEvent(req: Request, res: Response) {
     // V-3: a serve swap before the first rally is a pre-match setting (the
     // toss), not play — it neither starts the match nor needs the opponent's yes.
     const startsPlay = event_type !== 'serve_swap';
-    if (startsPlay && (match.status === 'scheduled' || match.status === 'upcoming')) {
+    if (startsPlay && match.status === 'scheduled') {
       const gate = await pendingRankedOpponent(match);
       if (gate.pending) {
         return res.status(409).json({
           error: `${gate.opponentName ?? 'Your opponent'} hasn't accepted this ranked match yet. It can start once they do.`,
           code: 'OPPONENT_NOT_ACCEPTED',
         });
-      }
-    }
-
-    // Catch-all: any scored event means the match is in progress, so promote it
-    // to `live`. The toss handler already does this for the normal flow; this
-    // covers the "skip toss" path where scoring starts without a recorded toss.
-    // Guard so we never downgrade a completed/cancelled match.
-    if (startsPlay && (match.status === 'scheduled' || match.status === 'upcoming')) {
-      try {
-        await supabase.from('matches').update({ status: 'live' }).eq('id', matchId);
-      } catch {
-        // best-effort — don't block scoring on the status flip
       }
     }
 
@@ -315,6 +303,21 @@ export async function createEvent(req: Request, res: Response) {
           error: 'The batter and the bowler cannot be the same player.',
           code: 'SAME_PLAYER_BOTH_ROLES',
         });
+      }
+    }
+
+    // Catch-all: any scored event means the match is in progress, so promote it
+    // to `live`. The toss handler already does this for the normal flow; this
+    // covers the "skip toss" path where scoring starts without a recorded toss.
+    // Guard so we never downgrade a completed/cancelled match.
+    // F-24: only once every check above has passed — a REFUSED event (a chess
+    // result with a bad reason or the wrong player, a guest in a ranked match,
+    // one player batting and bowling) used to start the match anyway.
+    if (startsPlay && match.status === 'scheduled') {
+      try {
+        await supabase.from('matches').update({ status: 'live' }).eq('id', matchId);
+      } catch {
+        // best-effort — don't block scoring on the status flip
       }
     }
 

@@ -97,7 +97,7 @@ describe('SC-442 · the unplayed sweep predicate', () => {
     );
     const fn = src.slice(src.indexOf('export async function sweepUnplayedScheduledMatches'));
     const body = fn.slice(0, fn.indexOf('\n}'));
-    expect(body).toContain("in('status', ['scheduled', 'upcoming'])");
+    expect(body).toContain("eq('status', 'scheduled')");
     expect(body).toContain("lt('scheduled_at', cutoff)");
     expect(body).toContain("update({ status: 'abandoned'");
     // Nothing is deleted — decision D2.

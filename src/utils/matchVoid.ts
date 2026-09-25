@@ -70,7 +70,9 @@ export function notVoided<T extends { is: (c: string, v: null) => T }>(
  * Ask for 'completed' or 'abandoned', or ask for a specific team's or your own
  * matches, and the voided match is still there with its banner.
  */
-export const HIDE_VOIDED_FOR_STATUSES = ['scheduled', 'upcoming', 'live'] as const;
+// F-24: a match is never 'upcoming' (the column allows scheduled, live, completed,
+// cancelled, abandoned); 'upcoming' is a TOURNAMENT status.
+export const HIDE_VOIDED_FOR_STATUSES = ['scheduled', 'live'] as const;
 
 /**
  * Should a match list exclude voided rows?

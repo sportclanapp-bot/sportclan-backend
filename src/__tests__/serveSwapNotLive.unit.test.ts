@@ -11,9 +11,9 @@ const body = src.slice(src.indexOf('export async function createEvent'), src.ind
 
 test('only an event that is play flips a scheduled match to live', () => {
   expect(body).toContain("const startsPlay = event_type !== 'serve_swap';");
-  expect(body).toMatch(/if \(startsPlay && \(match\.status === 'scheduled' \|\| match\.status === 'upcoming'\)\) \{\s*try \{\s*await supabase\.from\('matches'\)\.update\(\{ status: 'live' \}\)/);
+  expect(body).toMatch(/if \(startsPlay && match\.status === 'scheduled'\) \{\s*try \{\s*await supabase\.from\('matches'\)\.update\(\{ status: 'live' \}\)/);
 });
 
 test('...and a pre-match swap is not held back by the ranked acceptance gate', () => {
-  expect(body).toMatch(/if \(startsPlay && \(match\.status === 'scheduled' \|\| match\.status === 'upcoming'\)\) \{\s*const gate = await pendingRankedOpponent/);
+  expect(body).toMatch(/if \(startsPlay && match\.status === 'scheduled'\) \{\s*const gate = await pendingRankedOpponent/);
 });

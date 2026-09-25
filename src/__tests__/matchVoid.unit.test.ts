@@ -119,7 +119,7 @@ describe('SC-424 · walking back what completion materialised', () => {
 // "FEATURED · LIVE" for matches that were voided, VOIDED pill and all.
 describe('SC-441 · shouldHideVoided', () => {
   test('hides voided rows from every pre-completion status', () => {
-    for (const status of ['scheduled', 'upcoming', 'live']) {
+    for (const status of ['scheduled', 'live']) {
       expect(shouldHideVoided({ status })).toBe(true);
     }
   });
@@ -149,6 +149,6 @@ describe('SC-441 · shouldHideVoided', () => {
   test('the hidden-status list is exactly the pre-completion ones', () => {
     // Pinned so adding a new status forces a decision rather than defaulting to
     // "visible", which is how this bug happened in the first place.
-    expect([...HIDE_VOIDED_FOR_STATUSES].sort()).toEqual(['live', 'scheduled', 'upcoming']);
+    expect([...HIDE_VOIDED_FOR_STATUSES].sort()).toEqual(['live', 'scheduled']);
   });
 });

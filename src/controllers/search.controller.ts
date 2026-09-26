@@ -3,6 +3,10 @@ import { supabase } from '../utils/supabase';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds } from '../utils/blocks';
 import { escapeLike, orIlikeContains } from '../utils/likeSearch'; // SC-237
+import { hideTestFor, excludeTest, excludeTestEmbed } from '../utils/testContent'; // B03
+
+/** B03 (V245, D3): drop test rows from a search for a real viewer. */
+const noTest = <Q>(q: Q, hide: boolean): Q => (hide ? excludeTest(q) : q);
 import { parsePagination, Pagination } from '../utils/pagination'; // SC-303
 
 // ─── UNIFIED SEARCH ─────────────────────────────────────────────────────────
@@ -20,36 +24,37 @@ export async function search(req: Request, res: Response) {
   const query = (q as string).trim();
   const activeTab = (tab as string) || 'players';
   const callerId = req.userId;
+  const hide = await hideTestFor(callerId); // B03
 
   switch (activeTab) {
     case 'players':
-      return searchPlayers(res, query, sport_id as string, p, callerId);
+      return searchPlayers(res, query, sport_id as string, p, callerId, hide);
     case 'teams':
-      return searchTeams(res, query, sport_id as string, p);
+      return searchTeams(res, query, sport_id as string, p, hide);
     case 'tournaments':
-      return searchTournaments(res, query, sport_id as string, p);
+      return searchTournaments(res, query, sport_id as string, p, hide);
     case 'umpires':
-      return searchUmpires(res, query, sport_id as string, p, callerId);
+      return searchUmpires(res, query, sport_id as string, p, callerId, hide);
     case 'coaches':
-      return searchByAccountType(res, query, 'coach', p, callerId);
+      return searchByAccountType(res, query, 'coach', p, callerId, hide);
     case 'posts':
-      return searchPosts(res, query, sport_id as string, p, callerId);
+      return searchPosts(res, query, sport_id as string, p, callerId, hide);
     case 'businesses':
-      return searchBusinesses(res, query, p, callerId);
+      return searchBusinesses(res, query, p, callerId, hide);
     case 'associations':
-      return searchByAccountType(res, query, 'association', p, callerId);
+      return searchByAccountType(res, query, 'association', p, callerId, hide);
     case 'clubs':
-      return searchByAccountType(res, query, 'club', p, callerId);
+      return searchByAccountType(res, query, 'club', p, callerId, hide);
     case 'leagues':
-      return searchByAccountType(res, query, 'leagues', p, callerId);
+      return searchByAccountType(res, query, 'leagues', p, callerId, hide);
     case 'other':
-      return searchByAccountType(res, query, 'other', p, callerId);
+      return searchByAccountType(res, query, 'other', p, callerId, hide);
     default:
       return res.status(400).json({ error: 'Invalid tab' });
   }
 }
 
-async function searchPlayers(res: Response, q: string, sportId: string | undefined, p: Pagination, callerId?: string) {
+async function searchPlayers(res: Response, q: string, sportId: string | undefined, p: Pagination, callerId?: string, hide = false) {
   const blocked = await blockedUserIds(callerId); // SC-82
   // SC-238: apply the sport filter (was accepted but ignored). Filter DB-side via
   // an INNER join on user_sports (scalable — no .in()-at-scale pre-fetch, which
@@ -67,7 +72,7 @@ async function searchPlayers(res: Response, q: string, sportId: string | undefin
     // literal, LIKE metachars escaped → literal % / _ matching).
     .or(orIlikeContains(['username', 'name'], q));
   if (sportId) base = base.eq('sports.sport_id', sportId);
-  const { data, error } = await excludeIds(excludeDeleted(base), 'id', blocked) // SC-77 deleted + SC-82 blocked
+  const { data, error } = await excludeIds(excludeDeleted(noTest(base, hide)), 'id', blocked) // SC-77 deleted + SC-82 blocked + B03 test
     // SC-434: a "Premium first" order used to sit here, selling boosted ranking.
     // Search results are now ordered by name alone — what somebody paid is not a
     // reason to find them sooner.
@@ -112,7 +117,7 @@ async function applyDiscoverability<T extends { id: string; discoverability?: st
     .map(({ discoverability, ...rest }) => rest);
 }
 
-async function searchTeams(res: Response, q: string, sportId: string | undefined, p: Pagination) {
+async function searchTeams(res: Response, q: string, sportId: string | undefined, p: Pagination, hide = false) {
   let query = supabase
     .from('teams')
     .select(`
@@ -125,12 +130,12 @@ async function searchTeams(res: Response, q: string, sportId: string | undefined
     .range(p.from, p.to);
 
   if (sportId) query = query.eq('sport_id', sportId);
-  const { data, error } = await query;
+  const { data, error } = await noTest(query, hide);
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ data: data || [], has_more: (data || []).length === p.limit });
 }
 
-async function searchTournaments(res: Response, q: string, sportId: string | undefined, p: Pagination) {
+async function searchTournaments(res: Response, q: string, sportId: string | undefined, p: Pagination, hide = false) {
   let query = supabase
     .from('tournaments')
     .select(`
@@ -144,15 +149,15 @@ async function searchTournaments(res: Response, q: string, sportId: string | und
     .range(p.from, p.to);
 
   if (sportId) query = query.eq('sport_id', sportId);
-  const { data, error } = await query;
+  const { data, error } = await noTest(query, hide);
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ data: data || [], has_more: (data || []).length === p.limit });
 }
 
-async function searchUmpires(res: Response, q: string, sportId: string | undefined, p: Pagination, callerId?: string) {
+async function searchUmpires(res: Response, q: string, sportId: string | undefined, p: Pagination, callerId?: string, hide = false) {
   // SC-434: every umpire, not only the ones who had paid.
   const blocked = await blockedUserIds(callerId); // SC-82
-  const { data, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
+  const { data, error } = await excludeIds(noTest(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked + B03 test
     .from('users')
     .select(`
       id, name, username, profile_picture_url,
@@ -160,7 +165,7 @@ async function searchUmpires(res: Response, q: string, sportId: string | undefin
     `)
     .or(orIlikeContains(['username', 'name'], q))
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
-    .range(p.from, p.to)), 'id', blocked);
+    .range(p.from, p.to)), hide), 'id', blocked);
 
   if (error) return res.status(500).json({ error: error.message });
 
@@ -183,7 +188,7 @@ async function searchUmpires(res: Response, q: string, sportId: string | undefin
   return res.json({ data: filtered, has_more: hasMore });
 }
 
-async function searchPosts(res: Response, q: string, sportId: string | undefined, p: Pagination, callerId?: string) {
+async function searchPosts(res: Response, q: string, sportId: string | undefined, p: Pagination, callerId?: string, hide = false) {
   let query = supabase
     .from('community_posts')
     .select(`
@@ -199,6 +204,8 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
   // finding the post that contains it, because its author left, is the same bug
   // as the feed's. The PERSON tabs below still exclude deleted accounts.
   query = excludeIds(query, 'author_id', await blockedUserIds(callerId)); // SC-81
+  // B03: a test post, or any post by a test account, is hidden from real viewers.
+  if (hide) query = excludeTestEmbed(excludeTest(query), 'author');
 
   if (sportId) query = query.eq('sport_id', sportId);
   const { data, error } = await query;
@@ -212,10 +219,10 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
   return res.json({ data: visible, has_more: (data || []).length === p.limit });
 }
 
-async function searchBusinesses(res: Response, q: string, p: Pagination, callerId?: string) {
+async function searchBusinesses(res: Response, q: string, p: Pagination, callerId?: string, hide = false) {
   // Businesses are Premium users with Business account type
   const blocked = await blockedUserIds(callerId); // SC-82
-  const { data: users, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
+  const { data: users, error } = await excludeIds(noTest(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked + B03 test
     .from('users')
     .select(`
       id, name, username, profile_picture_url,
@@ -223,7 +230,7 @@ async function searchBusinesses(res: Response, q: string, p: Pagination, callerI
     `)
     .or(orIlikeContains(['username', 'name'], q))
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
-    .range(p.from, p.to)), 'id', blocked);
+    .range(p.from, p.to)), hide), 'id', blocked);
 
   if (error) return res.status(500).json({ error: error.message });
 
@@ -249,15 +256,15 @@ async function searchBusinesses(res: Response, q: string, p: Pagination, callerI
 // column that only ever matched a user's primary type (SC-27). Search is
 // intentionally NOT premium-gated — every pro is discoverable here; premium
 // only gates the richer Services directory. Premium just ranks first.
-async function searchByAccountType(res: Response, q: string, accountType: string, p: Pagination, callerId?: string) {
+async function searchByAccountType(res: Response, q: string, accountType: string, p: Pagination, callerId?: string, hide = false) {
   const blocked = await blockedUserIds(callerId); // SC-82
-  const { data: users, error } = await excludeIds(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked
+  const { data: users, error } = await excludeIds(noTest(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked + B03 test
     .from('users')
     .select('id, name, username, profile_picture_url, bio, city:cities!city_id(id, name)')
     .or(orIlikeContains(['username', 'name'], q))
     .order('name', { ascending: true })
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
-    .range(p.from, p.to)), 'id', blocked);
+    .range(p.from, p.to)), hide), 'id', blocked);
   if (error) return res.status(500).json({ error: error.message });
 
   const hasMore = (users || []).length === p.limit; // raw-page based (post-filter shrinks)

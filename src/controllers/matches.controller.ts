@@ -1,3 +1,4 @@
+import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
 import { dlsWinner, deriveResultText, chasingSide } from '../utils/matchResult';
@@ -544,6 +545,7 @@ export async function listOpenMatches(req: Request, res: Response) {
     // SC-335: don't suggest an open match in an out-of-scope sport.
     const activeIds = await activeSportIds();
     if (activeIds) query = query.in('sport_id', activeIds);
+    if (await hideTestFor(userId)) query = excludeTest(query); // B03 (V245, D3)
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     const matches = data ?? [];
@@ -1092,6 +1094,11 @@ export async function listMatches(req: Request, res: Response) {
     // fails (activeIds null) so a hiccup doesn't blank the list.
     const activeIds = await activeSportIds();
     if (activeIds) query = query.in('sport_id', activeIds);
+    // B03 (V245, D3): test fixtures are hidden from a real viewer's discovery
+    // lists (Home, Sport hub, results). Not from history scopes — your own
+    // matches, a team's, a tournament's fixtures — which are already about one
+    // subject the viewer chose.
+    if (!mine && !team_id && !tournament_id && (await hideTestFor(userId))) query = excludeTest(query);
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     const matches = data || [];

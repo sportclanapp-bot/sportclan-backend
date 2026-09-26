@@ -1,3 +1,4 @@
+import { hideTestFor, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCounts';
@@ -13,9 +14,15 @@ export async function getScorerLeaderboard(req: Request, res: Response) {
       .eq('status', 'completed')
       .is('voided_at', null); // SC-424
 
+    // B03 (V245, D3): test scorers don't rank for a real viewer — dropped before
+    // the top 20 is taken, so a real scorer fills the slot.
+    const hideTest = await hideTestFor(req.userId);
+    const testScorers = hideTest
+      ? await testUserIdSet([...new Set((matches ?? []).map((m) => m.created_by as string).filter(Boolean))])
+      : new Set<string>();
     const countMap = new Map<string, number>();
     for (const m of matches ?? []) {
-      if (!m.created_by) continue;
+      if (!m.created_by || testScorers.has(m.created_by as string)) continue;
       countMap.set(m.created_by, (countMap.get(m.created_by) ?? 0) + 1);
     }
 

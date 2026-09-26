@@ -1,3 +1,4 @@
+import { hideTestFor, excludeTest } from '../utils/testContent';
 import { syncTournamentChatMembers, syncAfterSuccess, canOpenTournamentChat } from '../utils/tournamentChat';
 import { isTeamManager } from '../utils/teamAuth';
 import { Request, Response } from 'express';
@@ -274,6 +275,8 @@ export async function listTournaments(req: Request, res: Response) {
     if (city_id) query = query.eq('city_id', city_id);
     if (status) query = query.eq('status', status);
     if (mine === '1') query = query.eq('created_by', userId);
+    // B03 (V245, D3): test tournaments are hidden from real viewers' lists.
+    else if (await hideTestFor(userId)) query = excludeTest(query);
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ tournaments: data || [], ...pageMeta(count, p) });

@@ -1,3 +1,4 @@
+import { hideTestFor, excludeTest, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
@@ -438,12 +439,18 @@ export async function getSeasonRecap(req: Request, res: Response) {
 // GET /leaderboard/player-of-week
 // ────────────────────────────────────────────────────────────────────────────
 
-let potwCache: { data: any; at: number } | null = null;
+// B03 (V245, D3): two variants — what a real viewer sees (test accounts
+// removed) and what a test account sees (everyone) — so a test player can
+// neither leak into nor be missing from the other audience's cached answer.
+const potwCache = new Map<'real' | 'test', { data: any; at: number }>();
 const POTW_TTL = 24 * 60 * 60 * 1000; // 24h
 
 export async function getPlayerOfWeek(req: Request, res: Response) {
-  if (potwCache && Date.now() - potwCache.at < POTW_TTL) {
-    return res.json(potwCache.data);
+  const hide = await hideTestFor(req.userId);
+  const cacheKey = hide ? 'real' : 'test';
+  const cached = potwCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < POTW_TTL) {
+    return res.json(cached.data);
   }
   try {
     const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
@@ -459,8 +466,13 @@ export async function getPlayerOfWeek(req: Request, res: Response) {
       return res.json({ players: [] });
     }
 
+    // B03: test accounts come out BEFORE the per-sport pick, or a sport whose
+    // top scorer is a test account would lose its card instead of showing the
+    // best real player.
+    const testIds = hide ? await testUserIdSet([...new Set(profiles.map((p) => p.user_id as string))]) : new Set<string>();
+
     // Score = wins×3 + matches_played×1 + rating×0.01
-    const scored = profiles.map((p) => ({
+    const scored = profiles.filter((p) => !testIds.has(p.user_id as string)).map((p) => ({
       ...p,
       score: (p.wins ?? 0) * 3 + (p.matches_played ?? 0) * 1 + (p.rating ?? 0) * 0.01,
     }));
@@ -496,7 +508,7 @@ export async function getPlayerOfWeek(req: Request, res: Response) {
       })),
     };
 
-    potwCache = { data: result, at: Date.now() };
+    potwCache.set(cacheKey, { data: result, at: Date.now() });
     return res.json(result);
   } catch {
     return res.status(500).json({ error: 'Could not compute player of the week' });
@@ -527,13 +539,15 @@ export async function getNearbyMatches(req: Request, res: Response) {
     const endOfWeek = new Date(now.getTime() + 7 * 86400000);
     const endOfMonth = new Date(now.getTime() + 30 * 86400000);
 
-    const { data: matches, error } = await supabase
+    let nearbyQ = supabase
       .from('matches')
       .select('id, sport_id, team_a_name, team_b_name, scheduled_at, venue, status, is_open, players_needed')
       .eq('city_id', cityId)
       .in('status', ['scheduled', 'live'])
       .order('scheduled_at', { ascending: true })
       .limit(50);
+    if (await hideTestFor(userId)) nearbyQ = excludeTest(nearbyQ); // B03 (V245, D3)
+    const { data: matches, error } = await nearbyQ;
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
     // SC-335: drop matches in out-of-scope sports (kabaddi/athletics).

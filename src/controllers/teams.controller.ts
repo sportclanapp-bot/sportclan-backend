@@ -1,3 +1,4 @@
+import { hideTestFor, excludeTest } from '../utils/testContent';
 import { syncTournamentChatsForTeam, syncAfterSuccess } from '../utils/tournamentChat';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -194,6 +195,9 @@ export async function listTeams(req: Request, res: Response) {
     if (city_id) query = query.eq('city_id', city_id);
     if (q) query = query.ilike('name', `%${q}%`);
     if (teamIdsFilter) query = query.in('id', teamIdsFilter);
+    // B03 (V245, D3): test teams are hidden from a real viewer's browse lists
+    // (Sport hub Teams, Discover) — not from "my teams".
+    else if (await hideTestFor(userId)) query = excludeTest(query);
 
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });

@@ -1,3 +1,4 @@
+import { hideTestFor, excludeTestEmbed } from '../utils/testContent';
 import { Router, Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { VALID_ACCOUNT_TYPES } from '../constants/accountTypes';
@@ -69,6 +70,9 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
     .range(p.from, p.to);
   // Either direction: they blocked you, or you blocked them (SC-81/82).
   q = excludeIds(q, 'user_id', blocked);
+  // B03 (V090/V245, D3): seeded "Seed test account #…" providers are hidden from
+  // real viewers — in the query, so `count` stays the true total.
+  if (await hideTestFor(req.userId)) q = excludeTestEmbed(q, 'users');
   const { data: rows, error, count } = await q;
   if (error) return res.status(500).json({ error: error.message });
 

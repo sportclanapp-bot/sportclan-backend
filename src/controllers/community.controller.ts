@@ -1,3 +1,4 @@
+import { hideTestFor, excludeTest, excludeTestEmbed } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
@@ -266,6 +267,9 @@ export async function listPosts(req: Request, res: Response) {
 
   // SC-81: hide posts authored by blocked-either-direction users from the feed.
   q = excludeIds(q, 'author_id', await blockedUserIds(req.userId));
+  // B03 (V245, D3): test posts, and posts by test accounts, are hidden from a
+  // real viewer. The embed is already !inner, so the post row drops.
+  if (!viewingOwn && (await hideTestFor(req.userId))) q = excludeTestEmbed(excludeTest(q), 'author');
 
   const result = await q;
 
@@ -326,6 +330,8 @@ export async function getSportStoryCounts(req: Request, res: Response) {
     .not('sport_id', 'is', null)
     .is('scheduled_at', null); // SC-218: don't let unpublished scheduled posts inflate the story count
   query = excludeIds(query, 'author_id', await blockedUserIds(req.userId));
+  // B03 (V245, D3): the story count agrees with the feed it counts.
+  if (await hideTestFor(req.userId)) query = excludeTestEmbed(excludeTest(query), 'author');
   const { data, error } = await query;
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
@@ -963,6 +969,8 @@ export async function listComments(req: Request, res: Response) {
     .order('created_at', { ascending: true })
     .range(lcp.from, lcp.to);
   cq = excludeIds(cq, 'author_id', await blockedUserIds(req.userId));
+  // B03 (V245, D3): comments by test accounts are hidden from real viewers.
+  if (await hideTestFor(req.userId)) cq = excludeTestEmbed(cq, 'author');
   const { data, error, count } = await cq;
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
@@ -1312,10 +1320,12 @@ export async function searchMentions(req: Request, res: Response) {
   // direction (SC-82) so the mention picker never surfaces deleted or blocking
   // users — mirrors the players `search` path.
   const blocked = await blockedUserIds(req.userId);
-  const { data, error } = await excludeIds(excludeDeleted(supabase
+  let mentionQ = excludeDeleted(supabase
     .from('users')
     .select('id, name, username, profile_picture_url')
-    .or(`username.ilike.%${safe}%,name.ilike.%${safe}%`)), 'id', blocked)
+    .or(`username.ilike.%${safe}%,name.ilike.%${safe}%`));
+  if (await hideTestFor(req.userId)) mentionQ = excludeTest(mentionQ); // B03 (V245, D3)
+  const { data, error } = await excludeIds(mentionQ, 'id', blocked)
     .limit(10);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });

@@ -1,3 +1,4 @@
+import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { LIMITS, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
@@ -28,6 +29,8 @@ export async function searchVenues(req: Request, res: Response) {
   if (q && q.trim().length > 0) {
     query = query.ilike('name', `%${q.trim()}%`);
   }
+  // B03 (V091/V245, D3): test venues ("S2 probe ground") are hidden from real viewers.
+  if (await hideTestFor(req.userId)) query = excludeTest(query);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   const rows = data ?? [];

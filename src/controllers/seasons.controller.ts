@@ -1,3 +1,4 @@
+import { hideTestFor } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { notifyUsers } from '../utils/notify';
@@ -51,6 +52,7 @@ export async function getCurrentSeason(req: Request, res: Response) {
     for (const s of sports ?? []) sportNames.set(s.id, { name: s.name, emoji: s.emoji });
   }
 
+  const hideTest = await hideTestFor(userId);
   const sportStats = await Promise.all(
     (profiles ?? []).map(async (p) => {
       const { count: matchesThisSeason } = await supabase
@@ -63,11 +65,14 @@ export async function getCurrentSeason(req: Request, res: Response) {
         .gte('created_at', sinceIso);
 
       // Rank = number of profiles with strictly higher rating + 1.
-      const { count: higher } = await supabase
+      // B03 (V245, D3): test accounts don't count above a real player.
+      let higherQ = supabase
         .from('user_sport_profiles')
-        .select('id', { count: 'exact', head: true })
+        .select(hideTest ? 'id, tu:users!user_id!inner(is_test_seed)' as string : 'id', { count: 'exact', head: true })
         .eq('sport_id', p.sport_id)
         .gt('rating', p.rating);
+      if (hideTest) higherQ = higherQ.eq('tu.is_test_seed', false);
+      const { count: higher } = await higherQ;
 
       const meta = sportNames.get(p.sport_id);
       return {

@@ -1,3 +1,4 @@
+import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { isAdminUser } from '../middleware/admin.middleware';
 import { officiatedCount } from '../utils/officiated';
@@ -999,11 +1000,15 @@ export async function discoverPlayers(req: Request, res: Response) {
 
   // Fetch user details for matched profiles
   const matchedIds = filteredProfiles.map((p) => p.user_id);
-  const { data: users } = await supabase
+  let usersQ = supabase
     .from('users')
     .select('id, name, username, profile_picture_url, city_id, is_available, streak_count, discoverability')
     .in('id', matchedIds)
     .is('deleted_at', null); // SC-77: exclude soft-deleted accounts from discovery
+  // B03 (V245, D3): test accounts drop out of a real viewer's suggestions; the
+  // rows missing from userMap below are already skipped.
+  if (await hideTestFor(userId)) usersQ = excludeTest(usersQ);
+  const { data: users } = await usersQ;
 
   const userMap = new Map<string, any>();
   for (const u of users || []) userMap.set(u.id, u);

@@ -1,3 +1,4 @@
+import { hideTestFor, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { deletedIdSet } from '../utils/activeUser';
@@ -85,6 +86,13 @@ export async function getLeaderboard(req: Request, res: Response) {
     // user_ids in that city, then filtering profiles by membership. Bounded by
     // one city's population — never the whole user base.
     let cityUserIds: string[] | null = null;
+    // B03 (V245, D3): test accounts are not ranked for a real viewer. Filtered
+    // in the query (not after it), so the page, the total and every rank
+    // number agree — dropping rows afterwards would leave gaps in the ranks.
+    const hideTest = await hideTestFor(userId);
+    const TU = hideTest ? ', tu:users!user_id!inner(is_test_seed)' : '';
+    // A plain `string` (not a literal) so the typed select parser doesn't try to read TU.
+    const withTU = (cols: string): string => cols + TU;
     if (scope === 'city') {
       const { data: me } = await supabase.from('users').select('city_id').eq('id', userId).maybeSingle();
       const myCityId = me?.city_id ?? null;
@@ -126,6 +134,12 @@ export async function getLeaderboard(req: Request, res: Response) {
       // SC-78: drop soft-deleted accounts from the ranking entirely.
       const delMonthly = await deletedIdSet(ranked.map((r) => r.user_id));
       if (delMonthly.size > 0) ranked = ranked.filter((r) => !delMonthly.has(r.user_id));
+      // B03: the monthly ranking is built here in JS, so test ids drop out here
+      // too — before the ranks are numbered.
+      if (hideTest) {
+        const testMonthly = await testUserIdSet(ranked.map((r) => r.user_id));
+        if (testMonthly.size > 0) ranked = ranked.filter((r) => !testMonthly.has(r.user_id));
+      }
       ranked.sort(compareRows);
       // SC-132: competition rank (ties share) over the full sorted array; the page
       // slice and `me` both read it, so list + me agree at ties. Order unchanged.
@@ -149,6 +163,7 @@ export async function getLeaderboard(req: Request, res: Response) {
     // ---- ALL-TIME: rank + page in the database, fetch names for the page only. ----
     const scoped = <T>(q: T): T => {
       let qb: any = (q as any).eq('sport_id', sportId).gt('matches_played', 0);
+      if (hideTest) qb = qb.eq('tu.is_test_seed', false); // B03: needs TU in the select
       if (genderCategory) qb = qb.eq('gender_category', genderCategory);
       if (cityUserIds) qb = qb.in('user_id', cityUserIds);
       return qb as T;
@@ -156,24 +171,25 @@ export async function getLeaderboard(req: Request, res: Response) {
 
     // Seven sequential round-trips (~2.6 s) before; two now. Round 1: the total,
     // the page and the requester's own row. Round 2: everything that needs them.
-    const [{ count: total }, { data: rows, error }, { data: myProf }] = await Promise.all([
+    const [{ count: total }, { data: rows, error }, { data: myProfRaw }] = await Promise.all([
       // Total count (head-only; the same exact-count pattern the admin tiles use).
-      scoped(supabase.from('user_sport_profiles').select('user_id', { count: 'exact', head: true })),
+      scoped(supabase.from('user_sport_profiles').select(withTU('user_id'), { count: 'exact', head: true })),
       // The page itself, tie-broken in the DB (SC-5).
-      scoped(supabase.from('user_sport_profiles').select('user_id, rating, matches_played, wins'))
+      scoped(supabase.from('user_sport_profiles').select(withTU('user_id, rating, matches_played, wins')))
         .order('rating', { ascending: false })
         .order('wins', { ascending: false })
         .order('matches_played', { ascending: false })
         .order('user_id', { ascending: true })
         .range(p.from, p.to),
       // Requester's own row, for their competition rank below.
-      scoped(supabase.from('user_sport_profiles').select('rating, matches_played, wins'))
+      scoped(supabase.from('user_sport_profiles').select(withTU('rating, matches_played, wins')))
         .eq('user_id', userId)
         .maybeSingle(),
     ]);
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
+    const myProf = myProfRaw as unknown as Row | null;
 
-    const pageRows = (rows || []) as Row[];
+    const pageRows = (rows || []) as unknown as Row[];
     const ids = pageRows.map((r) => r.user_id);
     // SC-132: competition rank (ties share the same number, consistent with the
     // `me` field below). The row ORDER keeps the full tie-break (rating→wins→mp→
@@ -185,7 +201,7 @@ export async function getLeaderboard(req: Request, res: Response) {
     // rating group begins at its positional index → rank = offset + i + 1.
     const countAbove = (rating: number) =>
       Promise.resolve(scoped(
-        supabase.from('user_sport_profiles').select('user_id', { count: 'exact', head: true }),
+        supabase.from('user_sport_profiles').select(withTU('user_id'), { count: 'exact', head: true }),
       ).gt('rating', rating)).then(({ count }) => count);
     const [aboveFirst, delAllTime, userMap, myAbove] = await Promise.all([
       pageRows.length > 0 ? countAbove(pageRows[0].rating) : Promise.resolve(null),

@@ -1037,6 +1037,19 @@ async function attachTeamNames(matches: any[]): Promise<void> {
 // GET /matches/next · B04 (V006, D1): the one match Home's "Your next match"
 // card shows — the soonest scheduled match you play in (see utils/nextMatch).
 // `overdue` when its start time has passed, so Home can say "start or reschedule".
+/**
+ * V200: "Bowler to Batter, <what happened>" when the event names them; just
+ * "<what happened>" (or "to Batter") when it names fewer.
+ */
+export function ballWho(p: any, what: string): string {
+  const batter = p?.batsman_name || p?.batsmanName || p?.batter || null;
+  const bowler = p?.bowler_name || p?.bowlerName || null;
+  if (bowler && batter) return `${bowler} to ${batter}, ${what}`;
+  if (batter) return `To ${batter}, ${what}`;
+  if (bowler) return `${bowler}, ${what}`;
+  return what;
+}
+
 export async function nextMatch(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1318,12 +1331,16 @@ export async function getCommentary(req: Request, res: Response) {
         } else {
           commentary = `${runs} run${runs === 1 ? '' : 's'}`;
         }
+        // V200 (visual review B08): say who — "Khan to Sharma, SIX!", the way
+        // commentary reads — whenever the ball carries the names.
+        commentary = ballWho(p, commentary);
       } else if (ev.event_type === 'declaration') {
         commentary = `${p.team_side === 'B' ? teamB : teamA} declared`;
       } else if (ev.event_type === 'extra') {
         if (p.type === 'Wd') commentary = 'Wide ball';
         else if (p.type === 'Nb') commentary = 'No ball called';
         else commentary = `Extra: ${p.type ?? ''}`;
+        commentary = ballWho(p, commentary);
       } else if (ev.event_type === 'goal') {
         const team = p.team_name || `Team ${p.team_side ?? ''}`;
         const a = p.score_a ?? '';

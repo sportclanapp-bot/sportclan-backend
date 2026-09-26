@@ -122,7 +122,7 @@ describe('SC-441 · other sports', () => {
 
   test('set sports report the set score', () => {
     expect(deriveResultText({ sport: 'badminton', teamAName: 'A', teamBName: 'B', aScore: 2, bScore: 1 }).text)
-      .toBe('A won 2-1');
+      .toBe('A won 2–1'); // V179: an en dash, like every other score line
   });
 
   test('the set-sport list lives here now, not in the controller', () => {

@@ -147,7 +147,7 @@ export function deriveResultText(input: ResultInput): {
   }
 
   // Set sports report sets won; everything else reports goals/points/boards.
-  return { text: `${winnerName} won ${hi}-${lo}`, winnerSide };
+  return { text: `${winnerName} won ${hi}–${lo}`, winnerSide };
 }
 
 function wicketsInHand(input: ResultInput, side: Side): string {

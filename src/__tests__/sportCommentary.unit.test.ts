@@ -30,6 +30,14 @@ test('periods and penalty corners in words', () => {
   expect(sportCommentary('score', { team_side: 'A', value: 3, player_name: 'QA Device A' }, ctx('basketball'))).toBe('🏀 3-pointer — Smoke Tigers (QA Device A)');
 });
 
+test('chess: numbered moves with the clock, and the result in words', () => {
+  const c = { sport: 'chess', teamA: 'QA Device A', teamB: 'QA Device B', period: 1 };
+  expect(sportCommentary('move', { side: 'A' }, { ...c, move: 1, clockSeconds: 171 })).toBe('♟️ White moved · move 1 · 2:51 left');
+  expect(sportCommentary('move', { side: 'B' }, { ...c, move: 2, clockSeconds: null })).toBe('♟️ Black moved · move 2');
+  expect(sportCommentary('result', { winner: 'black', reason: 'checkmate', player_id: 'x', player_name: 'QA Device B' }, c)).toBe('🏁 Black wins — checkmate (QA Device B)');
+  expect(sportCommentary('result', { winner: 'draw', reason: 'fifty_move' }, c)).toBe('🤝 Draw — 50-move rule');
+});
+
 test('other sports keep their own lines', () => {
   expect(sportCommentary('score', { team_side: 'A' }, ctx('badminton'))).toBeNull();
 });
@@ -40,5 +48,5 @@ test('the endpoint uses it, knows cricket by its slug, and counts balls per inni
   expect(fn).toContain("const isCricket = slug === 'cricket';");
   expect(fn).not.toContain(".includes('cric')");
   expect(fn).toContain('legalBallsBySide[side] += 1;');
-  expect(fn).toContain('sportCommentary(ev.event_type as string, p, { sport: slug, teamA, teamB, period: periods - 1 })');
+  expect(fn).toContain('sport: slug, teamA, teamB, period: periods - 1, move: moves, clockSeconds: (ev as any).clock_seconds ?? null,');
 });

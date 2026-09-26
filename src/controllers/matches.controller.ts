@@ -1231,6 +1231,7 @@ export async function getCommentary(req: Request, res: Response) {
     const teamA = match.team_a_name ?? 'Team A';
     const teamB = match.team_b_name ?? 'Team B';
     let periods = 1;
+    let moves = 0;
     const legalBallsBySide: Record<'A' | 'B', number> = { A: 0, B: 0 };
     const enriched: Array<any> = [];
     for (const ev of events ?? []) {
@@ -1256,7 +1257,10 @@ export async function getCommentary(req: Request, res: Response) {
       let isWicket = false;
       let isBoundary = false;
       if (ev.event_type === 'period_change') periods += 1;
-      const sportLine = isCricket ? null : sportCommentary(ev.event_type as string, p, { sport: slug, teamA, teamB, period: periods - 1 });
+      if (ev.event_type === 'move') moves += 1;
+      const sportLine = isCricket ? null : sportCommentary(ev.event_type as string, p, {
+        sport: slug, teamA, teamB, period: periods - 1, move: moves, clockSeconds: (ev as any).clock_seconds ?? null,
+      });
       if (sportLine) {
         commentary = sportLine;
         if (ev.event_type === 'score' && p.kind === 'goal') isBoundary = true;

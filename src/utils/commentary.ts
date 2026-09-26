@@ -11,7 +11,18 @@ export interface CommentaryContext {
   teamB: string;
   /** Periods seen so far, including this one (quarters / halves). */
   period: number;
+  /** Chess: moves so far, including this one. */
+  move?: number;
+  /** Chess: the mover's clock after the move, in seconds. */
+  clockSeconds?: number | null;
 }
+
+const CHESS_REASON: Record<string, string> = {
+  checkmate: 'checkmate', resignation: 'resignation', timeout: 'timeout',
+  draw_agreement: 'by agreement', stalemate: 'stalemate', repetition: 'repetition',
+  insufficient_material: 'insufficient material', fifty_move: '50-move rule',
+};
+const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 const CARD = { yellow: '🟨 Yellow card', red: '🟥 Red card', green: '🟩 Green card' } as const;
 
@@ -37,6 +48,19 @@ export function sportCommentary(eventType: string, p: Record<string, any>, ctx: 
     return ctx.period <= last ? `End of Q${ctx.period}` : `End of OT${ctx.period - last}`;
   }
   if (goalSport && eventType === 'note' && p.kind === 'pen_corner') return `🏑 Penalty corner — ${team}`;
+  // Chess: "Move  — game in progress" (no number was ever sent) and a raw
+  // result object with a player id in it.
+  if (ctx.sport === 'chess' && eventType === 'move') {
+    const who = p.side === 'B' ? 'Black' : 'White';
+    const left = typeof ctx.clockSeconds === 'number' ? ` · ${clock(ctx.clockSeconds)} left` : '';
+    return `♟️ ${who} moved · move ${ctx.move ?? '?'}${left}`;
+  }
+  if (ctx.sport === 'chess' && eventType === 'result') {
+    const why = typeof p.reason === 'string' ? CHESS_REASON[p.reason] ?? p.reason.replace(/_/g, ' ') : null;
+    if (p.winner === 'draw') return `🤝 Draw${why ? ` — ${why}` : ''}`;
+    const who = p.winner === 'black' ? 'Black' : 'White';
+    return `🏁 ${who} wins${why ? ` — ${why}` : ''}${player ? ` (${player})` : ''}`;
+  }
   if (ctx.sport === 'basketball' && eventType === 'score') {
     const v = Number(p.value ?? 0);
     return `🏀 ${v === 1 ? 'Free throw' : `${v}-pointer`} — ${team}${player ? ` (${player})` : ''}`;

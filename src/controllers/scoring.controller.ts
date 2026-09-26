@@ -729,7 +729,11 @@ export function aggregateCricketPlayers(
 // `player_id` the scorer credits per event (the SportScoringScreen "Credit
 // player" picker). Events without player_id don't contribute — casual/skipped
 // attribution yields an empty map, exactly like cricket.
-export interface GoalPlayerLine { side: 'A' | 'B'; name?: string; goals: number; assists: number }
+export interface GoalPlayerLine {
+  side: 'A' | 'B'; name?: string; goals: number; assists: number;
+  /** 2026-09-26: cards credited to this player (the pad asks who got it; optional). */
+  yellow_cards?: number; red_cards?: number; green_cards?: number;
+}
 export interface PointPlayerLine { side: 'A' | 'B'; name?: string; points: number; assists: number }
 export interface RallyPlayerLine { side: 'A' | 'B'; name?: string; points: number }
 export type PlayerLine = CricketPlayerLine | GoalPlayerLine | PointPlayerLine | RallyPlayerLine;
@@ -771,11 +775,13 @@ export function aggregateGoalPlayers(events: { event_type: string; payload: any 
     if (!id) continue;
     const isGoal = e.event_type === 'score' && p.kind === 'goal';
     const isAssist = e.event_type === 'assist';
-    if (!isGoal && !isAssist) continue;
+    const card = e.event_type === 'card' && (p.kind === 'yellow' || p.kind === 'red' || p.kind === 'green') ? (p.kind as 'yellow' | 'red' | 'green') : null;
+    if (!isGoal && !isAssist && !card) continue;
     const line = (players[id] ??= { side: sideOfPayload(p), goals: 0, assists: 0 });
     if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
     if (isGoal) line.goals += 1;
     if (isAssist) line.assists += 1;
+    if (card) line[`${card}_cards`] = (line[`${card}_cards`] ?? 0) + 1;
   }
   return players;
 }

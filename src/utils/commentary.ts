@@ -61,6 +61,14 @@ export function sportCommentary(eventType: string, p: Record<string, any>, ctx: 
     const who = p.winner === 'black' ? 'Black' : 'White';
     return `🏁 ${who} wins${why ? ` — ${why}` : ''}${player ? ` (${player})` : ''}`;
   }
+  if (eventType === 'serve_swap') return '🔁 Serve changed';
+  if (ctx.sport === 'carrom' && eventType === 'score' && p.kind === 'board') {
+    const v = Number(p.value ?? 0);
+    return `⚪ Board to ${team} · +${v}${player ? ` (${player})` : ''}`;
+  }
+  if (ctx.sport === 'tennis' && eventType === 'score' && (p.kind === 'ace' || p.kind === 'double_fault')) {
+    return p.kind === 'ace' ? `🎾 Ace — point to ${team}` : `Double fault — point to ${team}`;
+  }
   if (ctx.sport === 'basketball' && eventType === 'score') {
     const v = Number(p.value ?? 0);
     return `🏀 ${v === 1 ? 'Free throw' : `${v}-pointer`} — ${team}${player ? ` (${player})` : ''}`;

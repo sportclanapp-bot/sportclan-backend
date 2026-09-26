@@ -1289,6 +1289,8 @@ export async function getCommentary(req: Request, res: Response) {
         } else {
           commentary = `${runs} run${runs === 1 ? '' : 's'}`;
         }
+      } else if (ev.event_type === 'declaration') {
+        commentary = `${p.team_side === 'B' ? teamB : teamA} declared`;
       } else if (ev.event_type === 'extra') {
         if (p.type === 'Wd') commentary = 'Wide ball';
         else if (p.type === 'Nb') commentary = 'No ball called';

@@ -38,8 +38,16 @@ test('chess: numbered moves with the clock, and the result in words', () => {
   expect(sportCommentary('result', { winner: 'draw', reason: 'fifty_move' }, c)).toBe('🤝 Draw — 50-move rule');
 });
 
+test('serve changes, carrom boards and tennis aces in words', () => {
+  expect(sportCommentary('serve_swap', { kind: 'serve_swap' }, ctx('badminton'))).toBe('🔁 Serve changed');
+  expect(sportCommentary('score', { team_side: 'B', kind: 'board', value: 12 }, ctx('carrom'))).toBe('⚪ Board to Smoke Lions · +12');
+  expect(sportCommentary('score', { team_side: 'A', kind: 'ace' }, ctx('tennis'))).toBe('🎾 Ace — point to Smoke Tigers');
+});
+
 test('other sports keep their own lines', () => {
   expect(sportCommentary('score', { team_side: 'A' }, ctx('badminton'))).toBeNull();
+  const mc = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
+  expect(mc).toContain("commentary = `${p.team_side === 'B' ? teamB : teamA} declared`;");
 });
 
 test('the endpoint uses it, knows cricket by its slug, and counts balls per innings', () => {

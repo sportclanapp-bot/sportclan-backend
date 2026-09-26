@@ -53,3 +53,9 @@ describe('V146 · an empty ledger uses the roster', () => {
     expect(code('controllers/teamExpenses.controller.ts')).toMatch(/rows\.length === 0 \? Math\.max\(1, \(await currentRoster\(id!\)\)\.length\) : sum\.memberCount/);
   });
 });
+
+describe('V014 · a leading @ is dropped from searches', () => {
+  it('"@qadev_b" searches for "qadev_b"', () => {
+    expect(code('controllers/search.controller.ts')).toMatch(/const query = \(q as string\)\.trim\(\)\.replace\(\/\^@\+\/, ''\)\.trim\(\);/);
+  });
+});

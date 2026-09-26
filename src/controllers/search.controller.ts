@@ -21,7 +21,11 @@ export async function search(req: Request, res: Response) {
     return res.json({ data: [], has_more: false });
   }
 
-  const query = (q as string).trim();
+  // V014 (visual review): people type handles the way the app shows them —
+  // "@qadev_b" — and got nothing back, while "qadev_b" found the user. A
+  // leading @ is not part of any name or username, so it is dropped.
+  const query = (q as string).trim().replace(/^@+/, '').trim();
+  if (query.length === 0) return res.json({ data: [], has_more: false });
   const activeTab = (tab as string) || 'players';
   const callerId = req.userId;
   const hide = await hideTestFor(callerId); // B03

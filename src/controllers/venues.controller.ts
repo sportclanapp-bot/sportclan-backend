@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { LIMITS, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
 import { parsePagination } from '../utils/pagination';
+import { resolveSportId } from '../utils/sportId';
 
 // GET /venues?city_id=&q=
 // * q present → case-insensitive prefix match on name, ordered by use_count desc
@@ -18,7 +19,9 @@ export async function searchVenues(req: Request, res: Response) {
   });
   let query = supabase
     .from('venues')
-    .select('id, name, city_id, use_count, created_at')
+    // B07 (migration 099): the details the Add venue form collects, and the
+    // city by name — the directory rows show address, surface and city.
+    .select('id, name, city_id, use_count, created_at, address, sport_id, surface, image_url, city:cities!city_id(name)')
     // use_count DESC alone is not a total order — ties (every venue with
     // use_count 1) could shuffle between pages and duplicate/skip rows. id is
     // the tiebreak (the SC-138 rule).
@@ -33,11 +36,43 @@ export async function searchVenues(req: Request, res: Response) {
   if (await hideTestFor(req.userId)) query = excludeTest(query);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  const rows = data ?? [];
+  const rows = (data ?? []).map(({ city, ...v }: any) => ({ ...v, city: city?.name ?? null }));
   return res.json({ venues: rows, has_more: rows.length === limit });
 }
 
-// POST /venues  { name, city_id? }
+/**
+ * B07 (migration 099) · the optional details from the Add venue form, cleaned.
+ * Returns an error string for the first bad one, else the fields to store
+ * (only those given).
+ */
+export async function venueDetails(body: any): Promise<{ error: string } | { fields: Record<string, string> }> {
+  const fields: Record<string, string> = {};
+  const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const address = text(body?.address);
+  if (address) {
+    if (address.length > 200) return { error: 'Address must be 200 characters or fewer.' };
+    fields.address = address;
+  }
+  const surface = text(body?.surface);
+  if (surface) {
+    if (surface.length > 40) return { error: 'Surface must be 40 characters or fewer.' };
+    fields.surface = surface;
+  }
+  const image = text(body?.image_url);
+  if (image) {
+    if (image.length > 500 || !/^https:\/\/\S+$/i.test(image)) return { error: 'The cover photo link is not valid.' };
+    fields.image_url = image;
+  }
+  const sportRaw = text(body?.sport_id);
+  if (sportRaw) {
+    const sportId = await resolveSportId(sportRaw);
+    if (!sportId) return { error: 'Unknown sport.' };
+    fields.sport_id = sportId;
+  }
+  return { fields };
+}
+
+// POST /venues  { name, city_id?, address?, sport_id?, surface?, image_url? }
 // Creates a venue if it doesn't exist (case insensitive), otherwise returns
 // the existing one. createMatch calls this too via upsertVenue below, but
 // exposing it as a REST endpoint lets the autocomplete field freshly create.
@@ -56,9 +91,19 @@ export async function createVenue(req: Request, res: Response) {
     });
   }
   if (!clean) return res.status(400).json({ error: 'name is required' });
+  const details = await venueDetails(req.body);
+  if ('error' in details) return res.status(400).json({ error: details.error, code: 'BAD_VENUE_DETAIL' });
   const row = await upsertVenue(clean, city_id ?? null, userId);
   if (!row) return res.status(500).json({ error: 'Could not save that venue.' });
-  return res.json({ venue: row });
+  // The same venue may already exist (upsert by name + city). Its details are
+  // filled in where empty — never overwritten, since someone else may have
+  // added that venue first.
+  const fill: Record<string, string> = {};
+  for (const [k, v] of Object.entries(details.fields)) if (row[k] == null) fill[k] = v;
+  if (Object.keys(fill).length === 0) return res.json({ venue: row });
+  const { data: updated, error } = await supabase.from('venues').update(fill).eq('id', row.id).select('*').single();
+  if (error || !updated) return res.status(500).json({ error: 'Could not save the venue details.' });
+  return res.json({ venue: updated });
 }
 
 // Shared helper used by createMatch to increment use_count on an existing

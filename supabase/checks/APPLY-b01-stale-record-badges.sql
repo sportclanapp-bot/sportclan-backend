@@ -1,3 +1,7 @@
+-- NOT RUN (decided 27 Sep 2026): test data only — every production row is
+-- dummy/test data and the launch wipe removes it. Kept for reference; the code
+-- now keeps real data correct as it is created and changed.
+
 -- ===========================================================================
 -- APPLY-b01 · remove match/win badges that voided matches no longer earn
 -- Visual review V042, decision D6 (revoke silently; a restore re-awards).

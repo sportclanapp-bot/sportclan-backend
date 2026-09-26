@@ -1734,6 +1734,33 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
   return { id: f.winner_team_id as string, name: (name as string) ?? null };
 }
 
+/**
+ * Decision 27 Sep 2026: voiding a final clears the champion — the tournament
+ * then reads "No champion · the final was voided"; restoring the final crowns
+ * the winner again. Called after a match's voided_at changes. Only a completed
+ * bracket tournament's final matters: championOf already ignores voided
+ * matches, so re-deriving it gives the right answer both ways. League /
+ * round-robin standings are out of scope here (no single final).
+ */
+export async function recrownAfterVoidChange(matchId: string): Promise<void> {
+  try {
+    const { data: m } = await supabase
+      .from('matches').select('tournament_id, next_match_id, group_label').eq('id', matchId).maybeSingle();
+    if (!m?.tournament_id || m.next_match_id || m.group_label) return;
+    const { data: t } = await supabase
+      .from('tournaments').select('status, format, champion_team_id').eq('id', m.tournament_id).maybeSingle();
+    if (!t || t.status !== 'completed') return;
+    if (t.format === 'league' || t.format === 'round_robin') return;
+    const champ = await championOf(m.tournament_id as string);
+    const next = champ?.id ?? null;
+    if (next === (t.champion_team_id ?? null)) return;
+    await supabase.from('tournaments').update({ champion_team_id: next }).eq('id', m.tournament_id);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[tournaments] recrown after void failed', matchId, e instanceof Error ? e.message : e);
+  }
+}
+
 async function crownLeagueChampion(tournamentId: string): Promise<void> {
   if (await hasUnplayedFixtures(tournamentId)) return;
   const { data: entries } = await supabase

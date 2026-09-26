@@ -1,3 +1,7 @@
+-- NOT RUN (decided 27 Sep 2026): test data only — every production row is
+-- dummy/test data and the launch wipe removes it. Kept for reference; the code
+-- now keeps real data correct as it is created and changed.
+
 -- ===========================================================================
 -- APPLY-b06 · give completed tournaments their champion (visual review V104)
 --

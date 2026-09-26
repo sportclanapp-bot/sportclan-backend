@@ -34,7 +34,7 @@ import { sanitizeError } from '../utils/response';
 import { validateSportForCreate, activeSportIds } from '../utils/sports';
 import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems, LIMITS, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
-import { advanceTournamentWinner } from './tournaments.controller';
+import { advanceTournamentWinner, recrownAfterVoidChange } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats, bestOfState } from './scoring.controller';
 import { awardBadgesSafe, revokeRecordBadgesSafe } from './badges.controller';
 import { isSinglesSport, winnerSideOf, challengeText, pendingRankedOpponent, isSinglesShape } from '../utils/singles';
@@ -3016,6 +3016,9 @@ export async function voidMatch(req: Request, res: Response) {
     // Veteran / Winner / Champion. Silent, best-effort.
     for (const d of deltas) void revokeRecordBadgesSafe(d.user_id);
 
+    // Decision 27 Sep 2026: a voided final un-crowns its tournament.
+    if (match.tournament_id) await recrownAfterVoidChange(id);
+
     // SC-442 (M5/D3) · tell both teams. A void changes records, ratings and
     // standings that people have already seen, so the people it changed them for
     // are told — not left to notice. Best-effort and fire-and-forget: a
@@ -3076,6 +3079,9 @@ export async function unvoidMatch(req: Request, res: Response) {
 
     // V042 (D6): a restore re-awards what the void took back.
     for (const d of deltas) void awardBadgesSafe(d.user_id);
+
+    // …and a restored final crowns its winner again.
+    if (match.tournament_id) await recrownAfterVoidChange(id);
 
     // SC-442 (M5/D3) · the same audience that heard about the void hears about
     // the restore. Telling people a match stopped counting and never telling

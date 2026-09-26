@@ -1,3 +1,7 @@
+-- NOT RUN (decided 27 Sep 2026): test data only — every production row is
+-- dummy/test data and the launch wipe removes it. Kept for reference; the code
+-- now keeps real data correct as it is created and changed.
+
 -- ===========================================================================
 -- CHECK-b01 · after APPLY-b01. Read-only. Each block runs on its own.
 -- ===========================================================================

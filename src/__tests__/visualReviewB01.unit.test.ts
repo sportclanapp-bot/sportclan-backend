@@ -23,16 +23,17 @@ const db: { badges: Row[]; user_sport_profiles: Row[]; user_badges: Row[]; failP
 jest.mock('../utils/supabase', () => {
   const from = (table: string) => {
     const filters: Array<(r: Row) => boolean> = [];
-    let del = false;
+    let patch: Row | null = null;
     const q: any = {
       select: () => q,
-      delete: () => { del = true; return q; },
+      update: (p: Row) => { patch = p; return q; },
       eq: (c: string, v: unknown) => { filters.push((r) => r[c] === v); return q; },
       in: (c: string, v: unknown[]) => { filters.push((r) => v.includes(r[c])); return q; },
+      is: (c: string, v: null) => { filters.push((r) => (r[c] ?? null) === v); return q; },
       then: (resolve: (v: unknown) => unknown) => {
         if (table === 'user_sport_profiles' && db.failProfiles) return resolve({ data: null, error: { message: 'boom' } });
         const rows = (db as any)[table].filter((r: Row) => filters.every((f) => f(r)));
-        if (del) (db as any)[table] = (db as any)[table].filter((r: Row) => !rows.includes(r));
+        if (patch) for (const r of rows) Object.assign(r, patch);
         return resolve({ data: rows, error: null });
       },
     };
@@ -56,12 +57,22 @@ beforeEach(() => {
 });
 
 describe('V042 · badges a void no longer earns are taken back', () => {
-  it('removes match and win badges whose threshold the walked-back totals miss', async () => {
+  const active = () => db.user_badges.filter((b) => !b.revoked_at).map((b) => b.badge_id).sort();
+  it('soft-revokes match and win badges whose threshold the walked-back totals miss — no row is deleted', async () => {
     db.user_sport_profiles = [{ user_id: 'u', matches_played: 0, wins: 0 }];
     db.user_badges = ['first_match', 'first_win', 'community_star'].map((b, i) => ({ id: `ub${i}`, user_id: 'u', badge_id: b }));
     const r = await revokeRecordBadgesForUser('u');
     expect(r.revoked).toBe(2);
-    expect(db.user_badges.map((b) => b.badge_id)).toEqual(['community_star']);
+    expect(db.user_badges).toHaveLength(3);
+    expect(active()).toEqual(['community_star']);
+    expect(db.user_badges.find((b) => b.badge_id === 'first_win')).toMatchObject({ revoke_reason: 'match voided' });
+  });
+  it('an already-revoked badge is not revoked again (its revoked_at stays the original)', async () => {
+    db.user_sport_profiles = [{ user_id: 'u', matches_played: 0, wins: 0 }];
+    db.user_badges = [{ id: 'x', user_id: 'u', badge_id: 'first_match', revoked_at: '2026-01-01T00:00:00Z' }];
+    const r = await revokeRecordBadgesForUser('u');
+    expect(r.revoked).toBe(0);
+    expect(db.user_badges[0]!.revoked_at).toBe('2026-01-01T00:00:00Z');
   });
 
   it('keeps the badges that are still earned, summed across sports', async () => {
@@ -71,14 +82,14 @@ describe('V042 · badges a void no longer earns are taken back', () => {
     ];
     db.user_badges = ['first_match', 'first_win', 'ten_matches'].map((b, i) => ({ id: `ub${i}`, user_id: 'u', badge_id: b }));
     await revokeRecordBadgesForUser('u');
-    expect(db.user_badges.map((b) => b.badge_id).sort()).toEqual(['first_match', 'first_win']);
+    expect(active()).toEqual(['first_match', 'first_win']);
   });
 
   it('never touches another user', async () => {
     db.user_sport_profiles = [{ user_id: 'u', matches_played: 0, wins: 0 }];
     db.user_badges = [{ id: 'x', user_id: 'other', badge_id: 'first_match' }];
     await revokeRecordBadgesForUser('u');
-    expect(db.user_badges).toHaveLength(1);
+    expect(db.user_badges[0]!.revoked_at).toBeUndefined();
   });
 
   it('revokes nothing when the totals cannot be read (SC-396 rule)', async () => {
@@ -86,7 +97,21 @@ describe('V042 · badges a void no longer earns are taken back', () => {
     db.user_badges = [{ id: 'x', user_id: 'u', badge_id: 'first_match' }];
     const r = await revokeRecordBadgesForUser('u');
     expect(r.revoked).toBe(0);
-    expect(db.user_badges).toHaveLength(1);
+    expect(db.user_badges[0]!.revoked_at).toBeUndefined();
+  });
+});
+
+describe('V042 · soft revoke everywhere badges are read', () => {
+  const b = code('controllers/badges.controller.ts');
+  it('no badge row is ever deleted', () => {
+    expect(b).not.toMatch(/from\('user_badges'\)[\s\S]{0,120}\.delete\(\)/);
+  });
+  it('the badge grid and count ignore revoked rows', () => {
+    expect(b).toMatch(/\.eq\('user_id', id\)\s*\.is\('revoked_at', null\)/);
+  });
+  it('re-earning clears revoked_at on the existing row', () => {
+    expect(b).toMatch(/update\(\{ revoked_at: null, revoke_reason: null \}\)/);
+    expect(b).toMatch(/const earnedIds = new Set\(\(rows \|\| \[\]\)\.filter\(\(e\) => !e\.revoked_at\)/);
   });
 });
 

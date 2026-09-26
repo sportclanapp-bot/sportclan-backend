@@ -1,3 +1,4 @@
+import { joinChat } from '../utils/chatMembership';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
@@ -1834,7 +1835,7 @@ export async function getMatchChat(req: Request, res: Response) {
     const chatName = `${match.team_a_name ?? 'Team A'} vs ${match.team_b_name ?? 'Team B'} Chat`;
     let chatId: string | null = match.chat_id ?? null;
     if (chatId) {
-      const { data: existing } = await supabase.from('chats').select('id').eq('id', chatId).maybeSingle();
+      const { data: existing } = await supabase.from('chats').select('id').eq('id', chatId).is('deleted_at', null).maybeSingle();
       if (!existing) chatId = null;
     }
     if (!chatId) {
@@ -1850,9 +1851,10 @@ export async function getMatchChat(req: Request, res: Response) {
     }
     // Ensure the caller is a participant.
     const { data: participant } = await supabase
-      .from('chat_participants').select('id').eq('chat_id', chatId).eq('user_id', userId).maybeSingle();
+      .from('chat_participants').select('id').is('left_at', null).eq('chat_id', chatId).eq('user_id', userId).maybeSingle();
     if (!participant) {
-      await supabase.from('chat_participants').insert({ chat_id: chatId, user_id: userId, role: 'member' });
+      // 098: rejoins a member who left (clears left_at) rather than inserting twice.
+      await joinChat(chatId as string, [{ user_id: userId, role: 'member' }]);
     }
     return res.json({ chat_id: chatId, name: chatName, conversationId: chatId });
   } catch {

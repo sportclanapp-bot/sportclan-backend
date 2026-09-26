@@ -6,6 +6,7 @@ import { isBlockedBetween, blockedUserIds, excludeIds } from '../utils/blocks';
 import { deletedIdSet } from '../utils/activeUser';
 import { LIMITS, firstInvalidUrl, ARRAY_LIMITS, tooManyItems, firstDisallowedImageUrl } from '../utils/validation';
 import { parsePagination, pageMeta } from '../utils/pagination';
+import { isActiveMember, leaveChat, joinChat, softDeleteChat } from '../utils/chatMembership';
 
 // ─── SC-241: 1:1 DM block/privacy gate for EXISTING conversations ────────────
 // getOrCreateDM enforces block + message_privacy ONLY when a DM is first created.
@@ -24,6 +25,7 @@ async function dmCounterpartId(chatId: string, userId: string): Promise<string |
   const { data: parts } = await supabase
     .from('chat_participants')
     .select('user_id')
+    .is('left_at', null)
     .eq('chat_id', chatId)
     .neq('user_id', userId);
   const others = (parts ?? []).map((p) => p.user_id as string);
@@ -107,6 +109,7 @@ export async function listChats(req: Request, res: Response) {
   const { data: participations, error: pErr } = await supabase
     .from('chat_participants')
     .select('chat_id')
+    .is('left_at', null)
     .eq('user_id', userId);
 
   if (pErr) return res.status(500).json({ error: sanitizeError(pErr) });
@@ -123,6 +126,7 @@ export async function listChats(req: Request, res: Response) {
     .from('chats')
     .select('*')
     .in('id', chatIds)
+    .is('deleted_at', null) // soft-deleted groups (098) are in no list
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .range(lcp.from, lcp.to);
 
@@ -137,6 +141,7 @@ export async function listChats(req: Request, res: Response) {
           user_id, role,
           user:users!user_id(id, name, username, profile_picture_url)
         `)
+        .is('left_at', null)
         .eq('chat_id', chat.id);
 
       const { data: lastMsg } = await supabase
@@ -198,7 +203,9 @@ export async function getUnreadCount(req: Request, res: Response) {
 
   // Your chats and your block list are independent — one round, not two.
   const [{ data: participations, error: pErr }, blocked] = await Promise.all([
-    supabase.from('chat_participants').select('chat_id').eq('user_id', userId),
+    // 098: current memberships of chats that still exist.
+    supabase.from('chat_participants').select('chat_id, chat:chats!inner(deleted_at)').is('left_at', null)
+      .is('chat.deleted_at', null).eq('user_id', userId),
     blockedUserIds(userId),
   ]);
   if (pErr) return res.status(500).json({ error: sanitizeError(pErr) });
@@ -255,11 +262,13 @@ export async function getOrCreateDM(req: Request, res: Response) {
   const { data: myChats } = await supabase
     .from('chat_participants')
     .select('chat_id')
+    .is('left_at', null)
     .eq('user_id', userId);
 
   const { data: theirChats } = await supabase
     .from('chat_participants')
     .select('chat_id')
+    .is('left_at', null)
     .eq('user_id', other_user_id);
 
   const myIds = new Set((myChats || []).map((c) => c.chat_id));
@@ -272,6 +281,7 @@ export async function getOrCreateDM(req: Request, res: Response) {
       .select('*')
       .in('id', commonIds)
       .eq('is_group', false)
+      .is('deleted_at', null)
       .limit(1)
       .maybeSingle();
 
@@ -415,6 +425,7 @@ export async function updateGroup(req: Request, res: Response) {
   const { data: participant } = await supabase
     .from('chat_participants')
     .select('role')
+    .is('left_at', null)
     .eq('chat_id', id)
     .eq('user_id', userId)
     .single();
@@ -453,6 +464,7 @@ export async function addMember(req: Request, res: Response) {
   const { data: participant } = await supabase
     .from('chat_participants')
     .select('role')
+    .is('left_at', null)
     .eq('chat_id', id)
     .eq('user_id', userId)
     .single();
@@ -465,6 +477,7 @@ export async function addMember(req: Request, res: Response) {
   const { count } = await supabase
     .from('chat_participants')
     .select('id', { count: 'exact', head: true })
+    .is('left_at', null)
     .eq('chat_id', id);
 
   if ((count ?? 0) >= 50) {
@@ -479,18 +492,17 @@ export async function addMember(req: Request, res: Response) {
     const { data: members } = await supabase
       .from('chat_participants')
       .select('user_id')
+      .is('left_at', null)
       .eq('chat_id', id);
     if ((members ?? []).some((m) => blockedWithNew.has(m.user_id))) {
       return res.status(403).json({ error: 'Can’t add this user — a block exists with a group member.', code: 'BLOCKED_FROM_GROUP' });
     }
   }
 
-  const { error } = await supabase
-    .from('chat_participants')
-    .insert({ chat_id: id, user_id, role: 'member' });
-
-  if (error?.code === '23505') return res.json({ success: true }); // already a member
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  // 098: a current member is left alone; someone who left is rejoined on the
+  // same row (left_at cleared) rather than a second row inserted.
+  if (await isActiveMember(id, user_id)) return res.json({ success: true }); // already a member
+  await joinChat(id, [{ user_id, role: 'member' }]);
 
   // System message
   const { data: addedUser } = await supabase
@@ -518,6 +530,7 @@ export async function removeMember(req: Request, res: Response) {
   const { data: participant } = await supabase
     .from('chat_participants')
     .select('role')
+    .is('left_at', null)
     .eq('chat_id', id)
     .eq('user_id', userId)
     .single();
@@ -526,11 +539,8 @@ export async function removeMember(req: Request, res: Response) {
     return res.status(403).json({ error: 'Only admins can remove members' });
   }
 
-  await supabase
-    .from('chat_participants')
-    .delete()
-    .eq('chat_id', id)
-    .eq('user_id', memberId);
+  // 098: removal is a soft leave — the row stays with left_at set.
+  await leaveChat(id, [memberId]);
 
   return res.json({ success: true });
 }
@@ -543,6 +553,7 @@ export async function promoteMember(req: Request, res: Response) {
   const { data: participant } = await supabase
     .from('chat_participants')
     .select('role')
+    .is('left_at', null)
     .eq('chat_id', id)
     .eq('user_id', userId)
     .single();
@@ -555,7 +566,8 @@ export async function promoteMember(req: Request, res: Response) {
     .from('chat_participants')
     .update({ role: 'admin' })
     .eq('chat_id', id)
-    .eq('user_id', memberId);
+    .eq('user_id', memberId)
+    .is('left_at', null); // can't promote someone who left
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.json({ success: true });
@@ -574,6 +586,7 @@ export async function leaveGroup(req: Request, res: Response) {
   const { data: me } = await supabase
     .from('chat_participants')
     .select('role')
+    .is('left_at', null)
     .eq('chat_id', id)
     .eq('user_id', userId)
     .maybeSingle();
@@ -582,6 +595,7 @@ export async function leaveGroup(req: Request, res: Response) {
     const { data: otherAdmins } = await supabase
       .from('chat_participants')
       .select('user_id')
+      .is('left_at', null)
       .eq('chat_id', id)
       .eq('role', 'admin')
       .neq('user_id', userId)
@@ -591,6 +605,7 @@ export async function leaveGroup(req: Request, res: Response) {
       const { data: heir } = await supabase
         .from('chat_participants')
         .select('user_id')
+        .is('left_at', null)
         .eq('chat_id', id)
         .neq('user_id', userId)
         .order('joined_at', { ascending: true })
@@ -606,21 +621,20 @@ export async function leaveGroup(req: Request, res: Response) {
     }
   }
 
-  await supabase
-    .from('chat_participants')
-    .delete()
-    .eq('chat_id', id)
-    .eq('user_id', userId);
+  // 098: leaving is a soft leave (left_at), never a delete.
+  await leaveChat(id, [userId]);
 
-  // SC-301: if that was the LAST participant, delete the now-empty group so it
-  // can't linger as an undeletable orphan (deleteGroup requires created_by, which
-  // a departed creator can no longer satisfy). CASCADE clears participants+messages.
+  // SC-301: if that was the LAST participant, the now-empty group is removed so
+  // it can't linger as an undeletable orphan (deleteGroup requires created_by,
+  // which a departed creator can no longer satisfy). 098: soft — deleted_at is
+  // set; the chat, its participants and messages all stay.
   const { count: remaining } = await supabase
     .from('chat_participants')
     .select('id', { count: 'exact', head: true })
+    .is('left_at', null)
     .eq('chat_id', id);
   if ((remaining ?? 0) === 0) {
-    await supabase.from('chats').delete().eq('id', id);
+    await softDeleteChat(id);
   }
 
   return res.json({ success: true });
@@ -641,7 +655,10 @@ export async function deleteGroup(req: Request, res: Response) {
     return res.status(403).json({ error: 'Only the creator can delete the group' });
   }
 
-  const { error: delErr } = await supabase.from('chats').delete().eq('id', id);
+  // 098: "Delete group" is a soft delete — the group leaves every list and
+  // takes no messages, but nothing is removed.
+  const { error: delErr } = await supabase
+    .from('chats').update({ deleted_at: new Date().toISOString() }).eq('id', id).is('deleted_at', null);
   if (delErr) return res.status(500).json({ error: 'Failed to delete group' });
   return res.json({ success: true });
 }
@@ -654,12 +671,8 @@ export async function getMessages(req: Request, res: Response) {
   const pageSize = Math.min(parseInt(limit as string, 10) || 50, 100);
 
   // Verify participant
-  const { data: participant } = await supabase
-    .from('chat_participants')
-    .select('id')
-    .eq('chat_id', id)
-    .eq('user_id', userId)
-    .maybeSingle();
+  // 098: a current member of a chat that still exists (not left, not deleted).
+  const participant = await isActiveMember(id, userId);
 
   if (!participant) return res.status(403).json({ error: 'Not a member of this chat' });
 
@@ -697,6 +710,7 @@ export async function getMessages(req: Request, res: Response) {
   const { data: typingRows } = await supabase
     .from('chat_participants')
     .select('user_id, typing_until, user:users!user_id(id, name)')
+    .is('left_at', null)
     .eq('chat_id', id)
     .neq('user_id', userId)
     .gt('typing_until', nowIso);
@@ -754,12 +768,8 @@ export async function sendMessage(req: Request, res: Response) {
   }
 
   // Verify participant
-  const { data: participant } = await supabase
-    .from('chat_participants')
-    .select('id')
-    .eq('chat_id', id)
-    .eq('user_id', userId)
-    .maybeSingle();
+  // 098: a current member of a chat that still exists (not left, not deleted).
+  const participant = await isActiveMember(id, userId);
 
   if (!participant) return res.status(403).json({ error: 'Not a member of this chat' });
 
@@ -865,14 +875,10 @@ export async function deleteMessage(req: Request, res: Response) {
 // ─── FORWARD MESSAGE ────────────────────────────────────────────────────────
 // SC-94: reuse the same participant check sendMessage/getMessages use.
 async function isChatParticipant(chatId: string, userId: string): Promise<boolean> {
-  const { data } = await supabase
-    .from('chat_participants')
-    .select('chat_id')
-    .eq('chat_id', chatId)
-    .eq('user_id', userId)
-    .maybeSingle();
-  return !!data;
+  // 098: current member (left_at unset) of a chat that isn't deleted.
+  return isActiveMember(chatId, userId);
 }
+
 
 export async function forwardMessage(req: Request, res: Response) {
   const userId = req.userId!;
@@ -908,6 +914,7 @@ export async function forwardMessage(req: Request, res: Response) {
     const { data: others } = await supabase
       .from('chat_participants')
       .select('user_id')
+      .is('left_at', null)
       .eq('chat_id', chatId)
       .neq('user_id', userId);
     const otherIds = (others ?? []).map((o) => o.user_id as string);
@@ -950,6 +957,7 @@ export async function batchMarkRead(req: Request, res: Response) {
   const { data: myChats } = await supabase
     .from('chat_participants')
     .select('chat_id')
+    .is('left_at', null)
     .eq('user_id', userId);
   let callerChatIds = (myChats ?? []).map((c) => c.chat_id);
   if (callerChatIds.length === 0) return res.json({ success: true, updated: 0 });
@@ -963,6 +971,7 @@ export async function batchMarkRead(req: Request, res: Response) {
     const { data: parts } = await supabase
       .from('chat_participants')
       .select('chat_id, user_id')
+      .is('left_at', null)
       .in('chat_id', callerChatIds)
       .neq('user_id', userId);
     const counts = new Map<string, number>();
@@ -1009,12 +1018,8 @@ export async function markAsRead(req: Request, res: Response) {
   const { id } = req.params;
 
   // Verify participant
-  const { data: participant } = await supabase
-    .from('chat_participants')
-    .select('id')
-    .eq('chat_id', id)
-    .eq('user_id', userId)
-    .maybeSingle();
+  // 098: a current member of a chat that still exists (not left, not deleted).
+  const participant = await isActiveMember(id, userId);
   if (!participant) return res.status(403).json({ error: 'Not a member of this chat' });
 
   // SC-241: a blocked 1:1 party must not emit a read-receipt into the thread.
@@ -1077,12 +1082,8 @@ export function isTypingActive(typingUntil: string | null | undefined, now = Dat
 export async function setTyping(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
-  const { data: participant } = await supabase
-    .from('chat_participants')
-    .select('id')
-    .eq('chat_id', id)
-    .eq('user_id', userId)
-    .maybeSingle();
+  // 098: a current member of a chat that still exists (not left, not deleted).
+  const participant = await isActiveMember(id, userId);
   if (!participant) return res.status(403).json({ error: 'Not a member of this chat' });
   // Don't leak a typing signal into a blocked 1:1 thread (mirrors markAsRead).
   if (await isDmBlocked(id, userId)) {
@@ -1108,6 +1109,7 @@ export async function getGroupMembers(req: Request, res: Response) {
       user_id, role, joined_at,
       user:users!user_id(id, name, username, profile_picture_url)
     `)
+    .is('left_at', null)
     .eq('chat_id', id);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });

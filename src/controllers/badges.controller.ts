@@ -13,6 +13,9 @@ export async function getUserBadges(req: Request, res: Response) {
       badge:badge_id (id, slug, name, description, emoji, category)
     `)
     .eq('user_id', id)
+    // Soft revoke (migration 098): a badge taken back by a void keeps its row
+    // with revoked_at set; it is not earned while that is set.
+    .is('revoked_at', null)
     .order('awarded_at', { ascending: false });
 
   if (error) return res.status(500).json({ error: error.message });
@@ -55,11 +58,15 @@ export async function evaluateBadgesForUser(
     .select('id, slug, category, threshold');
   if (!allBadges || allBadges.length === 0) return { awarded: 0, badges: [] };
 
-  const { data: earned } = await supabase
+  // Soft revoke (migration 098): a revoked row is not earned, but it still
+  // holds the (user_id, badge_id) key — so re-earning it clears revoked_at on
+  // that row instead of inserting a second one.
+  const { data: rows } = await supabase
     .from('user_badges')
-    .select('badge_id')
+    .select('badge_id, revoked_at')
     .eq('user_id', userId);
-  const earnedIds = new Set((earned || []).map((e) => e.badge_id));
+  const earnedIds = new Set((rows || []).filter((e) => !e.revoked_at).map((e) => e.badge_id));
+  const revokedIds = new Set((rows || []).filter((e) => !!e.revoked_at).map((e) => e.badge_id));
 
   const pending = allBadges.filter((b) => !earnedIds.has(b.id));
   if (pending.length === 0) return { awarded: 0, badges: [] };
@@ -168,10 +175,19 @@ export async function evaluateBadgesForUser(
     if (qualifies) newAwards.push({ user_id: userId, badge_id: badge.id });
   }
 
-  if (newAwards.length > 0) {
+  const restores = newAwards.filter((a) => revokedIds.has(a.badge_id)).map((a) => a.badge_id);
+  const inserts = newAwards.filter((a) => !revokedIds.has(a.badge_id));
+  if (restores.length > 0) {
     await supabase
       .from('user_badges')
-      .upsert(newAwards, { onConflict: 'user_id,badge_id', ignoreDuplicates: true });
+      .update({ revoked_at: null, revoke_reason: null })
+      .eq('user_id', userId)
+      .in('badge_id', restores);
+  }
+  if (inserts.length > 0) {
+    await supabase
+      .from('user_badges')
+      .upsert(inserts, { onConflict: 'user_id,badge_id', ignoreDuplicates: true });
   }
 
   return {
@@ -228,14 +244,17 @@ export async function revokeRecordBadgesForUser(userId: string): Promise<{ revok
     .map((b) => b.id);
   if (stale.length === 0) return { revoked: 0 };
 
-  const { data: removed, error: e3 } = await supabase
+  // SOFT revoke (decided 27 Sep 2026 — no hard deletes of user data): the row
+  // stays, marked revoked, and a restore clears the mark.
+  const { data: revoked, error: e3 } = await supabase
     .from('user_badges')
-    .delete()
+    .update({ revoked_at: new Date().toISOString(), revoke_reason: 'match voided' })
     .eq('user_id', userId)
     .in('badge_id', stale)
+    .is('revoked_at', null)
     .select('id');
   if (e3) return { revoked: 0 };
-  return { revoked: removed?.length ?? 0 };
+  return { revoked: revoked?.length ?? 0 };
 }
 
 /** Best-effort revoke for the void path. NEVER throws, like awardBadgesSafe. */

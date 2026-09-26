@@ -1464,7 +1464,7 @@ export async function getTournamentChat(req: Request, res: Response) {
 
     if (chatId) {
       // Verify the chat still exists
-      const { data: existing } = await supabase.from('chats').select('id').eq('id', chatId).maybeSingle();
+      const { data: existing } = await supabase.from('chats').select('id').eq('id', chatId).is('deleted_at', null).maybeSingle();
       if (!existing) chatId = null;
     }
 

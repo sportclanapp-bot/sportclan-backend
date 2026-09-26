@@ -14,15 +14,17 @@ SELECT count(*) AS stale_remaining
 FROM user_badges ub
 JOIN badges b ON b.id = ub.badge_id AND b.category IN ('matches', 'wins')
 LEFT JOIN totals t ON t.user_id = ub.user_id
-WHERE (b.category = 'matches' AND COALESCE(t.m, 0) < b.threshold)
-   OR (b.category = 'wins'    AND COALESCE(t.w, 0) < b.threshold);
+WHERE ub.revoked_at IS NULL
+  AND ((b.category = 'matches' AND COALESCE(t.m, 0) < b.threshold)
+    OR (b.category = 'wins'    AND COALESCE(t.w, 0) < b.threshold));
 
 
 -- ---------------------------------------------------------------------------
 -- BLOCK 2 · The four QA device accounts (baseline: 0 matches, 0 wins).
--- Expected: no matches/wins badge on any of them. Other categories may remain.
+-- Expected: every matches/wins badge shows revoked = true (15 rows); other
+-- categories, if any, show revoked = false. Nothing was deleted.
 -- ---------------------------------------------------------------------------
-SELECT u.username, b.slug, b.category
+SELECT u.username, b.slug, b.category, ub.revoked_at IS NOT NULL AS revoked, ub.revoke_reason
 FROM user_badges ub
 JOIN users u ON u.id = ub.user_id
 JOIN badges b ON b.id = ub.badge_id

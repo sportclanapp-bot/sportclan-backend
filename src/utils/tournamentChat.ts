@@ -18,6 +18,7 @@
  * that makes the chat equal the audience. A missed trigger is then corrected by
  * the next one, and the sync is idempotent.
  */
+import { joinChat, leaveChat } from './chatMembership';
 import type { Response } from 'express';
 import { supabase } from './supabase';
 
@@ -85,21 +86,15 @@ export async function syncTournamentChatMembers(tournamentId: string): Promise<{
     const audience = await tournamentChatAudience(tournamentId);
     if (!audience) return null;
     const { data: current, error } = await supabase
-      .from('chat_participants').select('user_id, role').eq('chat_id', chatId);
+      .from('chat_participants').select('user_id, role').is('left_at', null).eq('chat_id', chatId);
     if (error) return null;
     const plan = planChatSync(audience, (current ?? []) as Array<{ user_id: string; role: string }>);
-    if (plan.add.length > 0) {
-      await supabase.from('chat_participants').upsert(
-        plan.add.map((a) => ({ chat_id: chatId, user_id: a.user_id, role: a.role })),
-        { onConflict: 'chat_id,user_id', ignoreDuplicates: true },
-      );
-    }
+    // 098: joining clears left_at on a returning member's row; nobody is deleted.
+    if (plan.add.length > 0) await joinChat(chatId, plan.add);
     if (plan.promote.length > 0) {
       await supabase.from('chat_participants').update({ role: 'admin' }).eq('chat_id', chatId).in('user_id', plan.promote);
     }
-    if (plan.remove.length > 0) {
-      await supabase.from('chat_participants').delete().eq('chat_id', chatId).in('user_id', plan.remove);
-    }
+    if (plan.remove.length > 0) await leaveChat(chatId, plan.remove); // 098: soft leave
     return { added: plan.add.length, removed: plan.remove.length };
   } catch (e) {
     // eslint-disable-next-line no-console

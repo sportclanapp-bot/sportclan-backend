@@ -51,14 +51,15 @@ function toEntry(p: Row, rank: number, u: any) {
   };
 }
 
-// Stable competition tie-break: rating desc, then wins desc, then
-// matches_played desc, then user_id asc (SC-5). Used for the in-JS monthly path
-// and mirrored by the .order() chain on the DB alltime path.
+// Stable competition tie-break: rating desc, then matches_played desc, then
+// wins desc, then user_id asc (SC-5; D21 put matches played first — the tie
+// break a player can see and understand). Used for the in-JS monthly path and
+// mirrored by the .order() chain on the DB alltime path.
 function compareRows(a: Row, b: Row): number {
   return (
     b.rating - a.rating ||
-    b.wins - a.wins ||
     b.matches_played - a.matches_played ||
+    b.wins - a.wins ||
     (a.user_id < b.user_id ? -1 : a.user_id > b.user_id ? 1 : 0)
   );
 }
@@ -177,8 +178,8 @@ export async function getLeaderboard(req: Request, res: Response) {
       // The page itself, tie-broken in the DB (SC-5).
       scoped(supabase.from('user_sport_profiles').select(withTU('user_id, rating, matches_played, wins')))
         .order('rating', { ascending: false })
+        .order('matches_played', { ascending: false }) // D21: ties by matches played
         .order('wins', { ascending: false })
-        .order('matches_played', { ascending: false })
         .order('user_id', { ascending: true })
         .range(p.from, p.to),
       // Requester's own row, for their competition rank below.

@@ -192,7 +192,9 @@ export async function listTeams(req: Request, res: Response) {
     const p = parsePagination(req.query as Record<string, unknown>);
     let query = supabase
       .from('teams')
-      .select('*', { count: 'exact' })
+      // B05 (V027/V098): city and roster size, so same-named teams can be told
+      // apart and the Sport Hub row says more than "Cricket team".
+      .select('*, city:cities!city_id(id, name), members:team_members(count)', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(p.from, p.to);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
@@ -209,7 +211,9 @@ export async function listTeams(req: Request, res: Response) {
     // the viewer keeps the codes for teams they're actually in.
     const rows = data || [];
     const myIds = await myTeamIds(userId, rows.map((t: any) => t.id));
-    const safe = rows.map((t: any) => {
+    const safe = rows.map(({ members, ...t }: any) => {
+      t.member_count = Array.isArray(members) ? (members[0]?.count ?? 0) : null;
+      t.city_name = t.city?.name ?? null;
       const row = stripJoinCode(t, myIds.has(t.id));
       return myRoleByTeam.has(t.id) ? { ...row, my_role: myRoleByTeam.get(t.id) } : row;
     });

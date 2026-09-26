@@ -127,7 +127,8 @@ async function searchTeams(res: Response, q: string, sportId: string | undefined
     .select(`
       id, name, logo_url, sport_id,
       sport:sports!sport_id(id, name, emoji),
-      city:cities!city_id(id, name)
+      city:cities!city_id(id, name),
+      members:team_members(count)
     `)
     .ilike('name', `%${escapeLike(q)}%`)
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging (no overlap/gaps)
@@ -136,7 +137,12 @@ async function searchTeams(res: Response, q: string, sportId: string | undefined
   if (sportId) query = query.eq('sport_id', sportId);
   const { data, error } = await noTest(query, hide);
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ data: data || [], has_more: (data || []).length === p.limit });
+  // B05 (V027): the roster size, so same-named teams can be told apart.
+  const rows = (data || []).map(({ members, ...t }: any) => ({
+    ...t,
+    member_count: Array.isArray(members) ? (members[0]?.count ?? 0) : null,
+  }));
+  return res.json({ data: rows, has_more: rows.length === p.limit });
 }
 
 async function searchTournaments(res: Response, q: string, sportId: string | undefined, p: Pagination, hide = false) {

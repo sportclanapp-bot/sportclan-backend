@@ -1079,9 +1079,14 @@ export async function listMatches(req: Request, res: Response) {
     // Upcoming lists still order by scheduled_at, because there the kick-off
     // time IS the thing being sorted.
     const finishedFirst = status === 'completed' || status === 'abandoned';
+    // B05 (V097): an UPCOMING list reads soonest first — the next match at the
+    // top. Scheduled lists came back latest-first, so the Sport Hub showed
+    // 3 Oct above 29 Sep. Everything else keeps newest first.
     query = finishedFirst
       ? query.order('updated_at', { ascending: false, nullsFirst: false })
-      : query.order('scheduled_at', { ascending: false, nullsFirst: false });
+      : status === 'scheduled'
+        ? query.order('scheduled_at', { ascending: true, nullsFirst: false })
+        : query.order('scheduled_at', { ascending: false, nullsFirst: false });
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (status) query = query.eq('status', status);
     if (tournament_id) query = query.eq('tournament_id', tournament_id);

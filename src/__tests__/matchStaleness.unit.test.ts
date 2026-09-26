@@ -139,9 +139,10 @@ describe('SC-443 · completed lists order by finish time', () => {
     expect(body).toMatch(/order\('scheduled_at', \{ ascending: false, nullsFirst: false \}\)/);
   });
 
-  test('NULLS LAST is kept on both, so undated rows never lead', () => {
+  test('NULLS LAST is kept on every branch, so undated rows never lead', () => {
+    // finished (updated_at), scheduled (soonest first, B05 · V097), the rest.
     const orders = body.match(/nullsFirst: false/g) ?? [];
-    expect(orders.length).toBe(2);
+    expect(orders.length).toBe(3);
   });
 
   test('the history scopings still bypass the voided filter', () => {

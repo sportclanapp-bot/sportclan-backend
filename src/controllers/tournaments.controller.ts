@@ -268,7 +268,8 @@ export async function listTournaments(req: Request, res: Response) {
     const p = parsePagination(req.query as Record<string, unknown>);
     let query = supabase
       .from('tournaments')
-      .select('*', { count: 'exact' })
+      // D2 (visual review): list cards show "🏆 <champion>" on a completed tournament.
+      .select('*, champion:teams!champion_team_id(id, name)', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(p.from, p.to);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);

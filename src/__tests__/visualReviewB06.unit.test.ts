@@ -45,3 +45,9 @@ describe('V109 · the bracket carries the score and the void', () => {
     expect(b).toMatch(/score_a: ss\.team_a_score \?\? ss\?\.A\?\.score \?\? ss\?\.A\?\.runs \?\? ss\.goals_a \?\? null/);
   });
 });
+
+describe('D2 · the tournament list carries the champion’s name', () => {
+  it('listTournaments embeds the champion team', () => {
+    expect(fnBody('listTournaments')).toMatch(/\.select\('\*, champion:teams!champion_team_id\(id, name\)', \{ count: 'exact' \}\)/);
+  });
+});

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
 import { dlsWinner, deriveResultText, chasingSide } from '../utils/matchResult';
+import { sportCommentary } from '../utils/commentary';
 import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease, isStale, STALE_AFTER_MS } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { getMatchLiveStatus } from '../utils/liveStatus';
@@ -1223,18 +1224,28 @@ export async function getCommentary(req: Request, res: Response) {
       .limit(2000); // SC-117: safety cap (matches scoring.listEvents ceiling)
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
-    const isCricket = !!match.sport_id && String(match.sport_id).toLowerCase().includes('cric');
-    let legalBalls = 0;
+    // The sport by its slug: this compared the sport's UUID with 'cric', which
+    // is never true, so a cricket timeline never got its over.ball labels.
+    const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
+    const isCricket = slug === 'cricket';
+    const teamA = match.team_a_name ?? 'Team A';
+    const teamB = match.team_b_name ?? 'Team B';
+    let periods = 1;
+    const legalBallsBySide: Record<'A' | 'B', number> = { A: 0, B: 0 };
     const enriched: Array<any> = [];
     for (const ev of events ?? []) {
       const p: any = ev.payload ?? {};
 
       // For cricket, compute the over.ball label from a running legal-ball
       // count. Wides and no-balls don't advance the legal count.
+      // Per innings (it ran one count across both), deliveries only, and byes /
+      // leg-byes are legal balls — the same rule as the scorecard.
       let overBallLabel: string | null = null;
-      if (isCricket) {
-        const isLegal = !(p.is_extra || ev.event_type === 'extra' || p.type === 'Wd' || p.type === 'Nb');
-        if (isLegal) legalBalls += 1;
+      if (isCricket && (ev.event_type === 'ball' || ev.event_type === 'extra' || ev.event_type === 'wicket')) {
+        const side: 'A' | 'B' = p.team_side === 'B' ? 'B' : 'A';
+        const isLegal = ev.event_type === 'extra' ? (p.type === 'B' || p.type === 'Lb') : !p.is_extra;
+        if (isLegal) legalBallsBySide[side] += 1;
+        const legalBalls = legalBallsBySide[side];
         const displayBalls = isLegal ? legalBalls : legalBalls + 1;
         const overNum = Math.floor((displayBalls - 1) / 6);
         const ballInOver = ((displayBalls - 1) % 6) + 1;
@@ -1244,7 +1255,13 @@ export async function getCommentary(req: Request, res: Response) {
       let commentary = ev.event_type as string;
       let isWicket = false;
       let isBoundary = false;
-      if (ev.event_type === 'wicket' || (ev.event_type === 'ball' && p.wicket)) {
+      if (ev.event_type === 'period_change') periods += 1;
+      const sportLine = isCricket ? null : sportCommentary(ev.event_type as string, p, { sport: slug, teamA, teamB, period: periods - 1 });
+      if (sportLine) {
+        commentary = sportLine;
+        if (ev.event_type === 'score' && p.kind === 'goal') isBoundary = true;
+        if (ev.event_type === 'card' && p.kind === 'red') isWicket = true;
+      } else if (ev.event_type === 'wicket' || (ev.event_type === 'ball' && p.wicket)) {
         // The app sends batsman_name (this read batsmanName, so every line said
         // "OUT! Batter"), and retired hurt is not a wicket (cricketRules.isDismissal).
         const batter = p.batsman_name || p.batsmanName || p.player_name || p.batter || 'Batter';
@@ -1285,7 +1302,7 @@ export async function getCommentary(req: Request, res: Response) {
         isWicket = true;
       } else if (ev.event_type === 'score' || ev.event_type === 'point') {
         // Generic point-based sports (badminton, TT, pickleball, volleyball)
-        const team = p.team_name || `Team ${p.team_side ?? '?'}`;
+        const team = p.team_name || (p.team_side === 'B' ? teamB : teamA);
         const pts = p.points ?? p.runs ?? 1;
         commentary = `${pts === 1 ? 'Point' : `${pts} points`} to ${team}`;
       } else if (ev.event_type === 'basket') {

@@ -36,8 +36,8 @@ WHERE username IN ('qadev_a_qa', 'qadev_b_qa', 'qadev_c_qa', 'qadev_d_qa', 'dipa
 -- BLOCK 4 · Test-looking content still UNflagged (the review's examples).
 -- Expected: 0 rows, or rows you recognise as real.
 -- ---------------------------------------------------------------------------
-SELECT 'match' AS kind, team_a_name || ' vs ' || team_b_name AS label FROM matches
- WHERE NOT is_test_seed AND (team_a_name ~ '^(RT[0-9]|SC[0-9]|Z[0-9]|TBD)' OR team_b_name ~ '^(RT[0-9]|SC[0-9]|Z[0-9])')
-UNION ALL SELECT 'team', name FROM teams WHERE NOT is_test_seed AND name ~* '^(SC[0-9]|QA |SEEDTEAM|Smoke)'
-UNION ALL SELECT 'post', left(content, 80) FROM community_posts WHERE NOT is_test_seed AND content ~* '(QA|seed|wipe|test post)'
+SELECT 'match' AS kind, COALESCE(team_a_name, '∅') || ' vs ' || COALESCE(team_b_name, '∅') AS label FROM matches
+ WHERE NOT is_test_seed AND (COALESCE(team_a_name, '') ~ '^(RT[0-9]|SC[0-9]|Z[0-9]|TBD)' OR COALESCE(team_b_name, '') ~ '^(RT[0-9]|SC[0-9]|Z[0-9])')
+UNION ALL SELECT 'team', name FROM teams WHERE NOT is_test_seed AND COALESCE(name, '') ~* '^(SC[0-9]|QA |SEEDTEAM|Smoke)'
+UNION ALL SELECT 'post', left(content, 80) FROM community_posts WHERE NOT is_test_seed AND COALESCE(content, '') ~* '(QA|seed|wipe|test post)'
 LIMIT 100;

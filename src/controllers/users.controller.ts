@@ -961,8 +961,13 @@ export async function getProfileCompleteness(req: Request, res: Response) {
 export async function discoverPlayers(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-  const { sport_id, mode, match_type } = req.query as Record<string, string | undefined>;
-  if (!sport_id) return res.status(400).json({ error: 'sport_id is required' });
+  const { sport_id: rawSport, mode, match_type } = req.query as Record<string, string | undefined>;
+  if (!rawSport) return res.status(400).json({ error: 'sport_id is required' });
+  // B03 device check: a slug (?sport_id=cricket) went straight into a uuid
+  // column and came back a 500. Resolve UUID-or-slug like the leaderboard; an
+  // unknown sport is a 400.
+  const sport_id = await resolveSportId(rawSport);
+  if (!sport_id) return res.status(400).json({ error: 'Unknown sport_id' });
 
   // Get requesting user's city and sport profile
   const { data: me } = await supabase

@@ -1,4 +1,4 @@
-import { hideTestFor, testUserIdSet } from '../utils/testContent';
+import { excludeTest, hideTestFor, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCounts';
@@ -7,16 +7,20 @@ import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCoun
 
 export async function getScorerLeaderboard(req: Request, res: Response) {
   try {
+    // B03 (V245, D3): test scorers don't rank for a real viewer — dropped before
+    // the top 20 is taken, so a real scorer fills the slot. B03 device check:
+    // nor do test matches (a real scorer's QA matches counted) — skipped here.
+    const hideTest = await hideTestFor(req.userId);
+
     // Count matches per scorer (created_by on matches)
-    const { data: matches } = await supabase
+    let mq = supabase
       .from('matches')
       .select('created_by')
       .eq('status', 'completed')
       .is('voided_at', null); // SC-424
+    if (hideTest) mq = excludeTest(mq);
+    const { data: matches } = await mq;
 
-    // B03 (V245, D3): test scorers don't rank for a real viewer — dropped before
-    // the top 20 is taken, so a real scorer fills the slot.
-    const hideTest = await hideTestFor(req.userId);
     const testScorers = hideTest
       ? await testUserIdSet([...new Set((matches ?? []).map((m) => m.created_by as string).filter(Boolean))])
       : new Set<string>();

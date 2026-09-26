@@ -474,6 +474,9 @@ export async function register(req: Request, res: Response) {
       account_type: primaryAccountType,
       coin_balance: 0,
       referral_code: referralCode,
+      // V048 (D19): a new account's date of birth is private until they choose
+      // to show it (Settings › Privacy). Existing accounts keep their setting.
+      show_dob: false,
     })
     .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, referral_code, created_at')
     .single();

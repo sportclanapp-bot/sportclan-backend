@@ -16,11 +16,15 @@
 -- Flagged tester accounts keep working: sign-in never reads the flag, and a
 -- flagged viewer sees all content, test content included (hideTestFor).
 --
--- CONTENT is flagged when its creator is a flagged user, plus markers for
--- rows whose creator isn't:
---   M6  matches named like machine ids (RT<6+ digits>…)
+-- CONTENT (decided 27 Sep 2026): EVERYTHING made by any user is flagged —
+-- including what dipak and reviewer made, which the review found to be test
+-- runs too (reviewer: 462 matches on 11 Apr; dipak: 58 tournaments on 11–12
+-- Apr, plus 1 match and 1 venue on 26 Sep). The two ACCOUNTS stay unflagged.
+-- The markers below still catch any row with no creator:
+--   M6  matches named like machine ids (RT<6+ digits>…), or in a flagged tournament
 --   M7  community posts saying "pre-launch wipe" / "Wipe pre-launch" / starting "QA "
---   M8  venues created by a flagged user, or named like "… probe …"
+--   M8  venues named like "… probe …"
+-- A clean store-review demo set for @reviewer is a launch gate (FIX_PLAN.md).
 --
 -- Each block runs on its own. Run 1, 2, 3 (read-only), then 4, 5, then CHECK-b03.
 -- ===========================================================================
@@ -49,22 +53,23 @@ ORDER BY username;
 
 
 -- ---------------------------------------------------------------------------
--- BLOCK 3 · COUNT (read-only): the users block 4 flags, and the content block 5 flags.
+-- BLOCK 3 · COUNT (read-only): the users block 4 flags, and the content block 5
+-- flags — every row with a creator, plus the markers.
 -- ---------------------------------------------------------------------------
 WITH tu AS (
   SELECT id FROM users WHERE COALESCE(username, '') NOT IN ('dipak', 'reviewer')
 )
 SELECT
   (SELECT count(*) FROM tu)                                                                  AS test_users,
-  (SELECT count(*) FROM teams       WHERE created_by IN (SELECT id FROM tu))                 AS teams,
-  (SELECT count(*) FROM tournaments WHERE created_by IN (SELECT id FROM tu))                 AS tournaments,
-  (SELECT count(*) FROM matches     WHERE created_by IN (SELECT id FROM tu)
+  (SELECT count(*) FROM teams       WHERE created_by IS NOT NULL)                            AS teams,
+  (SELECT count(*) FROM tournaments WHERE created_by IS NOT NULL)                            AS tournaments,
+  (SELECT count(*) FROM matches     WHERE created_by IS NOT NULL OR tournament_id IS NOT NULL
                                        OR COALESCE(team_a_name, '') ~ '^RT[0-9]{6,}' OR COALESCE(team_b_name, '') ~ '^RT[0-9]{6,}') AS matches,
-  (SELECT count(*) FROM community_posts WHERE author_id IN (SELECT id FROM tu)
+  (SELECT count(*) FROM community_posts WHERE author_id IS NOT NULL
                                        OR COALESCE(content, '') ILIKE '%pre-launch wipe%' OR COALESCE(content, '') ILIKE '%wipe pre-launch%'
                                        OR COALESCE(content, '') LIKE 'QA %')                 AS posts,
-  (SELECT count(*) FROM chats       WHERE created_by IN (SELECT id FROM tu))                 AS chats,
-  (SELECT count(*) FROM venues      WHERE created_by IN (SELECT id FROM tu) OR COALESCE(name, '') ILIKE '%probe%') AS venues;
+  (SELECT count(*) FROM chats       WHERE created_by IS NOT NULL)                            AS chats,
+  (SELECT count(*) FROM venues      WHERE created_by IS NOT NULL OR COALESCE(name, '') ILIKE '%probe%') AS venues;
 
 
 -- ---------------------------------------------------------------------------
@@ -80,34 +85,34 @@ SELECT count(*) AS users_flagged FROM up;
 
 
 -- ---------------------------------------------------------------------------
--- BLOCK 5 · Flag their content (and the orphan markers). One row of counts.
--- Run after block 4. Re-running is harmless.
+-- BLOCK 5 · Flag the content: every row with a creator, plus the markers.
+-- One row of counts. Run after block 4. Re-running is harmless.
 -- ---------------------------------------------------------------------------
 WITH t AS (
   UPDATE teams SET is_test_seed = true
-  WHERE NOT is_test_seed AND created_by IN (SELECT id FROM users WHERE is_test_seed) RETURNING 1
+  WHERE NOT is_test_seed AND created_by IS NOT NULL RETURNING 1
 ), tn AS (
   UPDATE tournaments SET is_test_seed = true
-  WHERE NOT is_test_seed AND created_by IN (SELECT id FROM users WHERE is_test_seed) RETURNING 1
+  WHERE NOT is_test_seed AND created_by IS NOT NULL RETURNING 1
 ), m AS (
   UPDATE matches SET is_test_seed = true
   WHERE NOT is_test_seed
-    AND (created_by IN (SELECT id FROM users WHERE is_test_seed)
-         OR tournament_id IN (SELECT id FROM tournaments WHERE is_test_seed OR created_by IN (SELECT id FROM users WHERE is_test_seed))
+    AND (created_by IS NOT NULL OR tournament_id IS NOT NULL
          OR COALESCE(team_a_name, '') ~ '^RT[0-9]{6,}' OR COALESCE(team_b_name, '') ~ '^RT[0-9]{6,}')
   RETURNING 1
 ), p AS (
   UPDATE community_posts SET is_test_seed = true
   WHERE NOT is_test_seed
-    AND (author_id IN (SELECT id FROM users WHERE is_test_seed)
-         OR COALESCE(content, '') ILIKE '%pre-launch wipe%' OR COALESCE(content, '') ILIKE '%wipe pre-launch%' OR COALESCE(content, '') LIKE 'QA %')
+    AND (author_id IS NOT NULL
+         OR COALESCE(content, '') ILIKE '%pre-launch wipe%' OR COALESCE(content, '') ILIKE '%wipe pre-launch%'
+         OR COALESCE(content, '') LIKE 'QA %')
   RETURNING 1
 ), c AS (
   UPDATE chats SET is_test_seed = true
-  WHERE NOT is_test_seed AND created_by IN (SELECT id FROM users WHERE is_test_seed) RETURNING 1
+  WHERE NOT is_test_seed AND created_by IS NOT NULL RETURNING 1
 ), v AS (
   UPDATE venues SET is_test_seed = true
-  WHERE NOT is_test_seed AND (created_by IN (SELECT id FROM users WHERE is_test_seed) OR COALESCE(name, '') ILIKE '%probe%') RETURNING 1
+  WHERE NOT is_test_seed AND (created_by IS NOT NULL OR COALESCE(name, '') ILIKE '%probe%') RETURNING 1
 )
 SELECT (SELECT count(*) FROM t) AS teams, (SELECT count(*) FROM tn) AS tournaments,
        (SELECT count(*) FROM m) AS matches, (SELECT count(*) FROM p) AS posts, (SELECT count(*) FROM c) AS chats,

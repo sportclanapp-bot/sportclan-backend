@@ -60,16 +60,28 @@ CREATE INDEX IF NOT EXISTS idx_chats_live ON chats (id) WHERE deleted_at IS NULL
 -- when its tournament is flagged. Real accounts' content is never touched.
 -- Idempotent (CREATE OR REPLACE; triggers dropped and recreated).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION flag_test_content_on_insert() RETURNS trigger AS $$
+-- Columns are read through to_jsonb(NEW), never as NEW.<column>: PL/pgSQL
+-- resolves a NEW.<field> reference against the table the trigger fired on, so
+-- NEW.author_id errors on teams and NEW.created_by on community_posts
+-- ('record "new" has no field …') and would fail every INSERT. A missing key
+-- in the jsonb is just NULL. Tables are schema-qualified (public.) so a temp
+-- table of the same name can't shadow them.
+CREATE OR REPLACE FUNCTION public.flag_test_content_on_insert() RETURNS trigger AS $$
 DECLARE
+  j jsonb := to_jsonb(NEW);
   creator uuid;
+  tourn uuid;
 BEGIN
-  IF NEW.is_test_seed THEN RETURN NEW; END IF;
-  creator := CASE TG_TABLE_NAME WHEN 'community_posts' THEN NEW.author_id ELSE NEW.created_by END;
-  IF creator IS NOT NULL AND EXISTS (SELECT 1 FROM users WHERE id = creator AND is_test_seed) THEN
+  IF (j->>'is_test_seed')::boolean THEN RETURN NEW; END IF;
+  -- community_posts has author_id; the other five have created_by.
+  creator := COALESCE(j->>'created_by', j->>'author_id')::uuid;
+  IF creator IS NOT NULL AND EXISTS (SELECT 1 FROM public.users WHERE id = creator AND is_test_seed) THEN
     NEW.is_test_seed := true;
-  ELSIF TG_TABLE_NAME = 'matches' AND NEW.tournament_id IS NOT NULL
-        AND EXISTS (SELECT 1 FROM tournaments WHERE id = NEW.tournament_id AND is_test_seed) THEN
+    RETURN NEW;
+  END IF;
+  -- Only matches have tournament_id; elsewhere the key is absent → NULL.
+  tourn := (j->>'tournament_id')::uuid;
+  IF tourn IS NOT NULL AND EXISTS (SELECT 1 FROM public.tournaments WHERE id = tourn AND is_test_seed) THEN
     NEW.is_test_seed := true;
   END IF;
   RETURN NEW;
@@ -77,17 +89,17 @@ END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_flag_test_teams ON teams;
-CREATE TRIGGER trg_flag_test_teams BEFORE INSERT ON teams FOR EACH ROW EXECUTE FUNCTION flag_test_content_on_insert();
+CREATE TRIGGER trg_flag_test_teams BEFORE INSERT ON teams FOR EACH ROW EXECUTE FUNCTION public.flag_test_content_on_insert();
 DROP TRIGGER IF EXISTS trg_flag_test_tournaments ON tournaments;
-CREATE TRIGGER trg_flag_test_tournaments BEFORE INSERT ON tournaments FOR EACH ROW EXECUTE FUNCTION flag_test_content_on_insert();
+CREATE TRIGGER trg_flag_test_tournaments BEFORE INSERT ON tournaments FOR EACH ROW EXECUTE FUNCTION public.flag_test_content_on_insert();
 DROP TRIGGER IF EXISTS trg_flag_test_matches ON matches;
-CREATE TRIGGER trg_flag_test_matches BEFORE INSERT ON matches FOR EACH ROW EXECUTE FUNCTION flag_test_content_on_insert();
+CREATE TRIGGER trg_flag_test_matches BEFORE INSERT ON matches FOR EACH ROW EXECUTE FUNCTION public.flag_test_content_on_insert();
 DROP TRIGGER IF EXISTS trg_flag_test_posts ON community_posts;
-CREATE TRIGGER trg_flag_test_posts BEFORE INSERT ON community_posts FOR EACH ROW EXECUTE FUNCTION flag_test_content_on_insert();
+CREATE TRIGGER trg_flag_test_posts BEFORE INSERT ON community_posts FOR EACH ROW EXECUTE FUNCTION public.flag_test_content_on_insert();
 DROP TRIGGER IF EXISTS trg_flag_test_chats ON chats;
-CREATE TRIGGER trg_flag_test_chats BEFORE INSERT ON chats FOR EACH ROW EXECUTE FUNCTION flag_test_content_on_insert();
+CREATE TRIGGER trg_flag_test_chats BEFORE INSERT ON chats FOR EACH ROW EXECUTE FUNCTION public.flag_test_content_on_insert();
 DROP TRIGGER IF EXISTS trg_flag_test_venues ON venues;
-CREATE TRIGGER trg_flag_test_venues BEFORE INSERT ON venues FOR EACH ROW EXECUTE FUNCTION flag_test_content_on_insert();
+CREATE TRIGGER trg_flag_test_venues BEFORE INSERT ON venues FOR EACH ROW EXECUTE FUNCTION public.flag_test_content_on_insert();
 
 
 -- ---------------------------------------------------------------------------

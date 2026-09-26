@@ -47,3 +47,49 @@ BEGIN
   END IF;
   RAISE EXCEPTION 'CHECK-098 FAIL · test=% real=%', f1, f2;
 END $$;
+
+
+-- ---------------------------------------------------------------------------
+-- BLOCK 4 · the trigger on ALL SIX tables, with their real columns, rolled
+-- back. For each table a scratch TEMP copy (LIKE public.<table>, so it has the
+-- production columns and defaults; NOT NULLs relaxed so one column is enough)
+-- gets the trigger, and two rows are inserted: one by a test account
+-- (qadev_a_qa, must be flagged) and one by dipak (must not be). Then a match
+-- by dipak inside a flagged tournament (must be flagged). Every INSERT must
+-- succeed — this is the check that NEW.<missing column> can't break one.
+-- Nothing persists: the block always ends by raising.
+-- Expected: ERROR "CHECK-098 PASS · 6 tables × test/real creator, and a match in a test tournament"
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+  qa uuid := (SELECT id FROM public.users WHERE username = 'qadev_a_qa');
+  me uuid := (SELECT id FROM public.users WHERE username = 'dipak');
+  ft uuid := (SELECT id FROM public.tournaments WHERE is_test_seed LIMIT 1);
+  t text; c text; col record; r_qa boolean; r_me boolean;
+BEGIN
+  IF qa IS NULL OR me IS NULL OR ft IS NULL THEN
+    RAISE EXCEPTION 'CHECK-098 FAIL · setup: qa=% dipak=% flagged tournament=%', qa, me, ft;
+  END IF;
+  FOREACH t IN ARRAY ARRAY['teams', 'tournaments', 'matches', 'community_posts', 'chats', 'venues'] LOOP
+    EXECUTE format('CREATE TEMP TABLE %I (LIKE public.%I INCLUDING DEFAULTS)', 'chk_' || t, t);
+    FOR col IN
+      SELECT attname FROM pg_attribute
+      WHERE attrelid = format('pg_temp.%I', 'chk_' || t)::regclass AND attnum > 0 AND NOT attisdropped AND attnotnull
+    LOOP
+      EXECUTE format('ALTER TABLE pg_temp.%I ALTER COLUMN %I DROP NOT NULL', 'chk_' || t, col.attname);
+    END LOOP;
+    EXECUTE format('CREATE TRIGGER chk BEFORE INSERT ON pg_temp.%I FOR EACH ROW EXECUTE FUNCTION public.flag_test_content_on_insert()', 'chk_' || t);
+    c := CASE WHEN t = 'community_posts' THEN 'author_id' ELSE 'created_by' END;
+    EXECUTE format('INSERT INTO pg_temp.%I (%I) VALUES ($1) RETURNING is_test_seed', 'chk_' || t, c) INTO r_qa USING qa;
+    EXECUTE format('INSERT INTO pg_temp.%I (%I) VALUES ($1) RETURNING is_test_seed', 'chk_' || t, c) INTO r_me USING me;
+    IF NOT r_qa OR r_me THEN
+      RAISE EXCEPTION 'CHECK-098 FAIL · %: test creator flagged=%, real creator flagged=%', t, r_qa, r_me;
+    END IF;
+  END LOOP;
+  EXECUTE 'INSERT INTO pg_temp.chk_matches (created_by, tournament_id) VALUES ($1, $2) RETURNING is_test_seed'
+    INTO r_me USING me, ft;
+  IF NOT r_me THEN
+    RAISE EXCEPTION 'CHECK-098 FAIL · a match in a flagged tournament was not flagged';
+  END IF;
+  RAISE EXCEPTION 'CHECK-098 PASS · 6 tables × test/real creator, and a match in a test tournament';
+END $$;

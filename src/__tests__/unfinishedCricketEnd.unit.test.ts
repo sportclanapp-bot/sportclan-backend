@@ -37,6 +37,6 @@ describe('completeMatch · an unfinished cricket match', () => {
     expect(body.indexOf("code: 'MATCH_NOT_OVER'")).toBeLessThan(body.indexOf("await supabase.from('matches').update(patch).eq('id', id);"));
   });
   test('overs are read with the match', () => {
-    expect(body).toContain("score_summary, toss_choice, format, overs')");
+    expect(body).toMatch(/score_summary, toss_choice, format, overs(, voided_at)?'\)/);
   });
 });

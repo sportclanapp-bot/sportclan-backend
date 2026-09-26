@@ -34,7 +34,7 @@ import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems, LIMITS, normaliseVen
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats, bestOfState } from './scoring.controller';
-import { awardBadgesSafe } from './badges.controller';
+import { awardBadgesSafe, revokeRecordBadgesSafe } from './badges.controller';
 import { isSinglesSport, winnerSideOf, challengeText, pendingRankedOpponent, isSinglesShape } from '../utils/singles';
 import { isBlockedBetween } from '../utils/blocks';
 import { reconcileWinCoins } from '../utils/winCoins';
@@ -2065,7 +2065,7 @@ export async function completeMatch(req: Request, res: Response) {
       // who was chasing, and a cricket win is described by wickets or by runs
       // depending on the answer. It was missing, so a successful chase reported
       // "won by N runs". See the note at the derivation call below.
-      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice, format, overs')
+      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice, format, overs, voided_at')
       .eq('id', id)
       .maybeSingle();
     timer.mark('load');
@@ -2074,6 +2074,14 @@ export async function completeMatch(req: Request, res: Response) {
     // the match state via a 400.
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can complete' : 'Only the creator or umpire can complete' });
+    }
+    // N1 (visual review): a match voided while live could still be completed,
+    // and completion then moved the rating, wrote rating_history, paid the win
+    // coins and awarded badges for a match that counts for nobody. A voided
+    // match is finished with; restore it first. An already-completed one falls
+    // through to the existing replay/400 handling below.
+    if (match.voided_at && match.status !== 'completed') {
+      return res.status(409).json({ error: 'This match was voided. Restore it before recording a result.', code: 'MATCH_VOIDED' });
     }
     // Phase 3: the winning SIDE, from a team id or — for a match with no teams
     // (singles, casual free-text) — from `winner_side`. Everything below that
@@ -2758,12 +2766,19 @@ export async function completeMatch(req: Request, res: Response) {
 
       // PRD 12.1: notify each player of their rating delta.
       for (const row of ratingHistoryRows) {
-        const sign = row.delta >= 0 ? '+' : '';
+        // V008 (visual review): ratings are stored to 2 decimals so void/restore
+        // stays exact, but people see whole numbers everywhere else — the
+        // notification read "1184 → 1184.74 (+0.74)". Round both ends and show
+        // the difference of the rounded values, so the sentence adds up.
+        const shownOld = Math.round(Number(row.old_rating));
+        const shownNew = Math.round(Number(row.new_rating));
+        const shownDelta = shownNew - shownOld;
+        const sign = shownDelta >= 0 ? '+' : '';
         void notifyUser({
           userId: row.user_id,
           type: 'rating_change',
           title: `${sportName} rating updated`,
-          body: `Your ${sportName} rating changed: ${row.old_rating} \u2192 ${row.new_rating} (${sign}${row.delta})`,
+          body: `Your ${sportName} rating changed: ${shownOld} \u2192 ${shownNew} (${sign}${shownDelta})`,
           data: { sportId: match.sport_id, screen: 'SportProfile' },
         });
       }
@@ -2988,6 +3003,10 @@ export async function voidMatch(req: Request, res: Response) {
     // V-6: a voided win pays nothing — take the +5 win coins back (ledger).
     await reconcileWinCoins(id).catch(() => undefined);
 
+    // V042 (D6): the walked-back totals may no longer earn First Match /
+    // Veteran / Winner / Champion. Silent, best-effort.
+    for (const d of deltas) void revokeRecordBadgesSafe(d.user_id);
+
     // SC-442 (M5/D3) · tell both teams. A void changes records, ratings and
     // standings that people have already seen, so the people it changed them for
     // are told — not left to notice. Best-effort and fire-and-forget: a
@@ -3045,6 +3064,9 @@ export async function unvoidMatch(req: Request, res: Response) {
 
     // V-6: a restored win pays again — re-grant the +5 win coins (ledger).
     await reconcileWinCoins(id).catch(() => undefined);
+
+    // V042 (D6): a restore re-awards what the void took back.
+    for (const d of deltas) void awardBadgesSafe(d.user_id);
 
     // SC-442 (M5/D3) · the same audience that heard about the void hears about
     // the restore. Telling people a match stopped counting and never telling

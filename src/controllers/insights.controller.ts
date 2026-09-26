@@ -135,8 +135,11 @@ export async function getUserInsights(req: Request, res: Response) {
     // Rating trend from rating_history
     const { data: ratingHistory } = await supabase
       .from('rating_history')
-      .select('new_rating')
+      // V041 (visual review): voided matches keep their rating_history row (a
+      // restore re-applies it) but must not count here — same filter as advancedStats.
+      .select('new_rating, match:matches!inner(voided_at)')
       .eq('user_id', id)
+      .is('match.voided_at', null)
       .order('created_at', { ascending: false })
       .limit(10);
     const ratingTrend = (ratingHistory ?? []).map((r: any) => r.new_rating).reverse();

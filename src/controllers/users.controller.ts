@@ -54,13 +54,17 @@ async function runSmartNotifications(userId: string): Promise<void> {
     //    the user is a participant and a reminder hasn't been sent yet.
     const { data: parts } = await supabase
       .from('match_participants')
-      .select('match_id, match:matches(id, team_a_name, team_b_name, scheduled_at, status)')
+      .select('match_id, match:matches(id, team_a_name, team_b_name, scheduled_at, status, voided_at)')
       .eq('user_id', userId);
 
     const soonMatches = (parts || []).filter((p) => {
       const m: any = p.match;
       if (!m) return false;
-      if (m.status === 'completed' || m.status === 'cancelled') return false;
+      // V007 (visual review): "starts in 15 minutes!" arrived for a match that
+      // had already been played and voided. Only a match that has NOT started —
+      // scheduled, not voided — can start in 15 minutes. Live, abandoned and
+      // voided matches all used to slip through the old completed/cancelled test.
+      if (m.status !== 'scheduled' || m.voided_at) return false;
       if (!m.scheduled_at) return false;
       const t = new Date(m.scheduled_at).toISOString();
       return t > nowIso && t <= in15m;
@@ -1301,9 +1305,14 @@ export async function getRatingHistory(req: Request, res: Response) {
     isSportInactive(sportId),
     supabase
       .from('rating_history')
-      .select('old_rating, new_rating, delta, created_at')
+      // V041/V211 (visual review): a voided match's row stays in rating_history
+      // on purpose (a restore re-applies it) but it must not be SHOWN — the
+      // card read "1200" with "1216 after 1 rated match" beneath it. Same
+      // inner-join filter as advancedStats (SC-424) and the leaderboard.
+      .select('old_rating, new_rating, delta, created_at, match:matches!inner(id, voided_at)')
       .eq('user_id', id)
       .eq('sport_id', sportId)
+      .is('match.voided_at', null)
       .order('created_at', { ascending: false })
       .limit(10),
   ]);
@@ -1312,7 +1321,8 @@ export async function getRatingHistory(req: Request, res: Response) {
   if (error) return res.status(500).json({ error: error.message });
 
   // Oldest → newest.
-  const ordered = (data ?? []).reverse();
+  // The join only filters; the response keeps its old shape.
+  const ordered = (data ?? []).reverse().map(({ match: _m, ...row }: any) => row);
   return res.json({ history: ordered });
 }
 

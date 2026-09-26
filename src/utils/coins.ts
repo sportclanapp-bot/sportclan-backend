@@ -26,7 +26,31 @@ export async function awardCoins(
   /** V-6: the transaction type; a reversal is 'coins_reversed', not 'earned'. */
   txType: string = 'coins_earned',
 ): Promise<AwardResult> {
-  // Does the event already exist?
+  // V074/V254 (visual review, migration 096): ledger row, balance change and
+  // history row in ONE transaction, a clawback clamped to what the user has.
+  // Before 096 is applied the function doesn't exist (PostgREST PGRST202 /
+  // Postgres 42883) and this falls through to the original three-step path.
+  const { data: atomic, error: atomicErr } = await supabase.rpc('award_coin_event', {
+    p_user_id: userId,
+    p_event_type: eventType,
+    p_coins: coins,
+    p_description: description ?? eventType,
+    p_tx_type: txType,
+  });
+  if (!atomicErr) {
+    const row = (Array.isArray(atomic) ? atomic[0] : atomic) as
+      { awarded?: boolean; new_balance?: number } | null;
+    return { awarded: !!row?.awarded, newBalance: Number(row?.new_balance ?? 0) };
+  }
+  const missing = (atomicErr as any)?.code === 'PGRST202' || (atomicErr as any)?.code === '42883';
+  if (!missing) {
+    // Any other failure: log it and take the original path, which is what ran
+    // before 096 — a transient RPC error must not cost anyone their coins.
+    // eslint-disable-next-line no-console
+    console.warn('[coins] award_coin_event failed, using the legacy path', eventType, atomicErr.message);
+  }
+
+  // Pre-096 path. Does the event already exist?
   const { data: existing } = await supabase
     .from('coin_events')
     .select('id')

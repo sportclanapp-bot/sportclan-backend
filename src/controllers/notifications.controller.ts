@@ -111,13 +111,14 @@ export async function weeklyDigest(req: Request, res: Response) {
   // exactly as the activity heatmap already does it.
   const { data: myParticipations } = await supabase
     .from('match_participants')
-    .select('match_id, match:matches(status, updated_at, scheduled_at)')
+    .select('match_id, match:matches(status, updated_at, scheduled_at, voided_at)')
     .eq('user_id', userId)
     .limit(500);
   const sinceMs = new Date(sinceIso).getTime();
   const matches_played = (myParticipations ?? []).filter((row: any) => {
     const m = row.match;
-    if (!m || m.status !== 'completed') return false;
+    // V041 (visual review): a voided match doesn't count in the digest either.
+    if (!m || m.status !== 'completed' || m.voided_at) return false;
     const ts = m.updated_at ?? m.scheduled_at;
     if (!ts) return false;
     return new Date(ts).getTime() >= sinceMs;
@@ -126,8 +127,9 @@ export async function weeklyDigest(req: Request, res: Response) {
   // Rating delta sum from rating_history.
   const { data: deltas } = await supabase
     .from('rating_history')
-    .select('delta')
+    .select('delta, match:matches!inner(voided_at)')
     .eq('user_id', userId)
+    .is('match.voided_at', null)
     .gte('created_at', sinceIso);
   const rating_change = (deltas || []).reduce((sum, row: any) => sum + (row.delta ?? 0), 0);
 

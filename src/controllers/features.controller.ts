@@ -821,7 +821,10 @@ export async function runMatchReminderSweep(): Promise<{ sent: number }> {
     .select('id, team_a_name, team_b_name, team_a_id, team_b_id, scheduled_at, umpire_id, status')
     .gte('scheduled_at', now.toISOString())
     .lte('scheduled_at', in15.toISOString())
-    .in('status', ['scheduled', 'live']);
+    // V007 (visual review): a match that already started (live), or was voided,
+    // does not "start in 15 minutes". Scheduled and not voided only.
+    .eq('status', 'scheduled')
+    .is('voided_at', null);
   if (!soon || soon.length === 0) return { sent: 0 };
 
   let sent = 0;

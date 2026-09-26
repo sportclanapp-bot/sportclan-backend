@@ -48,7 +48,7 @@ export function planWinCoins(args: {
 export async function reconcileWinCoins(matchId: string): Promise<void> {
   const { data: match } = await supabase
     .from('matches')
-    .select('id, status, is_ranked, voided_at, winner_team_id, team_a_id, team_b_id, score_summary')
+    .select('id, status, is_ranked, voided_at, winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, score_summary')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return;
@@ -77,13 +77,16 @@ export async function reconcileWinCoins(matchId: string): Promise<void> {
   }
   const balances = new Map((users ?? []).map((u) => [u.id as string, Number(u.coin_balance ?? 0)]));
 
+  const label = `${match.team_a_name || 'Team A'} vs ${match.team_b_name || 'Team B'}`;
   for (const { userId, delta } of planWinCoins({ counts, winnerSide, participants, ledger, balances })) {
     const key = `${prefix}_adj_${seen.get(userId) ?? 0}`;
     await awardCoins(
       userId,
       key,
       delta,
-      delta > 0 ? 'Match restored — win coins back' : 'Match voided — win coins returned',
+      // D22 (visual review V074): "returned" read as coins coming TO you, and no
+      // row said which match. Say what happened, and to which match.
+      delta > 0 ? `Win coins back · ${label} (match restored)` : `Win coins taken back · ${label}`,
       delta > 0 ? 'coins_earned' : 'coins_reversed',
     );
   }

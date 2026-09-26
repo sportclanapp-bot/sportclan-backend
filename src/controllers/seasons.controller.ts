@@ -55,9 +55,11 @@ export async function getCurrentSeason(req: Request, res: Response) {
     (profiles ?? []).map(async (p) => {
       const { count: matchesThisSeason } = await supabase
         .from('rating_history')
-        .select('id', { count: 'exact', head: true })
+        // V041 (visual review): a voided match is not a match this season.
+        .select('id, match:matches!inner(voided_at)', { count: 'exact', head: true })
         .eq('user_id', userId)
         .eq('sport_id', p.sport_id)
+        .is('match.voided_at', null)
         .gte('created_at', sinceIso);
 
       // Rank = number of profiles with strictly higher rating + 1.

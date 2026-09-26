@@ -198,6 +198,57 @@ export async function evaluateBadges(req: Request, res: Response) {
   }
 }
 
+// V042 (visual review, decision D6): badges were only ever INSERTED. Voiding a
+// match walks back matches_played / wins, but the First Match / Veteran /
+// Winner / Champion rows it had earned stayed, so a player with 0 matches showed
+// "4/21 earned". This is the other half of evaluateBadgesForUser, for the only
+// two categories a void can move: a matches/wins badge whose threshold the
+// profile totals no longer meet is removed. Silent, by decision — no
+// notification. Restoring the match re-awards through awardBadgesSafe.
+//
+// Aborts on any read error (the SC-396 rule): revoking on a failed read would
+// take away badges that are still earned.
+export async function revokeRecordBadgesForUser(userId: string): Promise<{ revoked: number }> {
+  const { data: recordBadges, error: e1 } = await supabase
+    .from('badges')
+    .select('id, category, threshold')
+    .in('category', ['matches', 'wins']);
+  if (e1 || !recordBadges || recordBadges.length === 0) return { revoked: 0 };
+
+  const { data: sp, error: e2 } = await supabase
+    .from('user_sport_profiles')
+    .select('matches_played, wins')
+    .eq('user_id', userId);
+  if (e2) return { revoked: 0 };
+  const totalMatches = (sp || []).reduce((s, p) => s + (p.matches_played ?? 0), 0);
+  const totalWins = (sp || []).reduce((s, p) => s + (p.wins ?? 0), 0);
+
+  const stale = recordBadges
+    .filter((b) => (b.category === 'matches' ? totalMatches : totalWins) < b.threshold)
+    .map((b) => b.id);
+  if (stale.length === 0) return { revoked: 0 };
+
+  const { data: removed, error: e3 } = await supabase
+    .from('user_badges')
+    .delete()
+    .eq('user_id', userId)
+    .in('badge_id', stale)
+    .select('id');
+  if (e3) return { revoked: 0 };
+  return { revoked: removed?.length ?? 0 };
+}
+
+/** Best-effort revoke for the void path. NEVER throws, like awardBadgesSafe. */
+export async function revokeRecordBadgesSafe(userId: string): Promise<void> {
+  if (!userId) return;
+  try {
+    await revokeRecordBadgesForUser(userId);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[badges] revoke failed for', userId, e instanceof Error ? e.message : e);
+  }
+}
+
 // SC-316: best-effort award for the fan-out hooks (match completion, post
 // creation, follow, gift, tournament entry). NEVER throws — a badge failure
 // must not fail the action that triggered it.

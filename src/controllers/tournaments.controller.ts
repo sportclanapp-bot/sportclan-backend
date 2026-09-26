@@ -698,6 +698,19 @@ export async function updateTournament(req: Request, res: Response) {
     // edit (details/schedule/venue/window) is operational → any organiser
     // (creator or co-org). An admin editing a non-status field is NOT authorized
     // (narrow override set) and gets 403.
+    // N3 (visual review): a finished tournament stays finished. There was no
+    // transition rule, so any organiser could PATCH a completed or cancelled
+    // tournament back to live — undoing the champion and the "locked in"
+    // standings the Complete confirmation promised.
+    if ((tournament.status === 'completed' || tournament.status === 'cancelled')
+        && req.body?.status !== undefined && req.body.status !== tournament.status) {
+      return res.status(409).json({
+        error: tournament.status === 'completed'
+          ? 'This tournament is finished and can’t be reopened.'
+          : 'This tournament was cancelled and can’t be reopened.',
+        code: 'TOURNAMENT_FINISHED',
+      });
+    }
     const isTerminalStatusChange = req.body?.status === 'cancelled' || req.body?.status === 'completed';
     let carveoutViaAdmin = false;
     if (isTerminalStatusChange) {
@@ -781,6 +794,14 @@ export async function updateTournament(req: Request, res: Response) {
         code: 'TOURNAMENT_INCOMPLETE',
       });
     }
+    // V104 (visual review): the manual Complete path only changed the status,
+    // so a tournament finished that way had no champion to show. Crown it the
+    // same way the automatic paths do.
+    let crownedChampion: { id: string; name: string | null } | null = null;
+    if (update.status === 'completed' && tournament.status !== 'completed') {
+      crownedChampion = await championOf(id);
+      if (crownedChampion) update.champion_team_id = crownedChampion.id;
+    }
     update.updated_at = new Date().toISOString();
     const { data, error } = await supabase
       .from('tournaments')
@@ -789,6 +810,9 @@ export async function updateTournament(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    if (crownedChampion) {
+      void notifyTournamentChampion(id, crownedChampion.id, crownedChampion.name, tournament.name ?? null);
+    }
 
     // Attribution: this cancel/complete was authorized ONLY by is_admin (not the
     // creator) → write the audit row. A creator/co-org doing it is NOT logged.
@@ -1185,10 +1209,15 @@ export async function getBracket(req: Request, res: Response) {
           team_b_id: m.team_b_id,
           team_a_name: m.team_a_name,
           team_b_name: m.team_b_name,
-          score_a: ss.team_a_score ?? ss?.A?.score ?? null,
-          score_b: ss.team_b_score ?? ss?.B?.score ?? null,
+          // V109 (visual review): the final's card showed no score. Cricket keeps
+          // runs, football goals — read the same shapes the result screen does.
+          score_a: ss.team_a_score ?? ss?.A?.score ?? ss?.A?.runs ?? ss.goals_a ?? null,
+          score_b: ss.team_b_score ?? ss?.B?.score ?? ss?.B?.runs ?? ss.goals_b ?? null,
           winner_team_id: m.winner_team_id,
           status: m.status,
+          // V109/SC-428: fetched above but dropped here, so a voided final never
+          // showed as VOID in the bracket.
+          voided_at: (m as any).voided_at ?? null,
           scheduled_at: m.scheduled_at,
           // SC-264: forward the scheduled slot so the bracket / fixture list can
           // render "date · time · Ground N". The SELECT already fetched these; the
@@ -1663,6 +1692,47 @@ async function hasUnplayedFixtures(tournamentId: string): Promise<boolean> {
 // crowns the leader (the old crown branch's `if (!winnerId) return` stranded it).
 // Idempotent via the .eq('status','live') CAS + read-back (SC-253 pattern) →
 // notify exactly once.
+/**
+ * V104 · who won this tournament, by the same rules the automatic crowning
+ * uses: the standings leader for round robin / league, otherwise the winner of
+ * the final (the bracket match with no next match and no group). Null when
+ * there is no decided, unvoided final.
+ */
+export async function championOf(tournamentId: string): Promise<{ id: string; name: string | null } | null> {
+  const { data: t } = await supabase
+    .from('tournaments').select('format, tiebreaker_rules').eq('id', tournamentId).maybeSingle();
+  const fmt = (t as any)?.format;
+  if (fmt === 'round_robin' || fmt === 'league') {
+    const { data: entries } = await supabase
+      .from('tournament_entries').select('team_id, team:teams!team_id(id, name)')
+      .eq('tournament_id', tournamentId).eq('status', 'approved');
+    const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id as string).filter(Boolean)));
+    if (teamIds.length === 0) return null;
+    const { data: matches } = await supabase
+      .from('matches').select('team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
+      .eq('tournament_id', tournamentId).is('voided_at', null);
+    const leader = rankTeams(teamIds, (matches ?? []) as any[], ((t as any)?.tiebreaker_rules ?? []) as any[])[0];
+    if (!leader) return null;
+    const e = (entries ?? []).find((x) => x.team_id === leader);
+    return { id: leader, name: ((e?.team as any)?.name as string) ?? null };
+  }
+  const { data: finals } = await supabase
+    .from('matches')
+    .select('winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, round')
+    .eq('tournament_id', tournamentId)
+    .is('next_match_id', null)
+    .is('group_label', null)
+    .eq('status', 'completed')
+    .is('voided_at', null)
+    .not('winner_team_id', 'is', null)
+    .order('round', { ascending: false })
+    .limit(1);
+  const f = finals?.[0];
+  if (!f?.winner_team_id) return null;
+  const name = f.winner_team_id === f.team_a_id ? f.team_a_name : f.winner_team_id === f.team_b_id ? f.team_b_name : null;
+  return { id: f.winner_team_id as string, name: (name as string) ?? null };
+}
+
 async function crownLeagueChampion(tournamentId: string): Promise<void> {
   if (await hasUnplayedFixtures(tournamentId)) return;
   const { data: entries } = await supabase

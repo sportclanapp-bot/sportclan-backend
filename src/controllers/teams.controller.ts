@@ -1,3 +1,4 @@
+import { syncTournamentChatsForTeam, syncAfterSuccess } from '../utils/tournamentChat';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
@@ -282,6 +283,8 @@ export async function addTeamMember(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
+    // B02 (V022, D7): a roster change moves people in or out of tournament chats.
+    syncAfterSuccess(res, () => syncTournamentChatsForTeam(String(req.params.id)));
     const id = String(req.params.id);
     const { user_id, role, jersey_number } = req.body || {};
     if (!user_id) return res.status(400).json({ error: 'user_id is required' });
@@ -355,6 +358,8 @@ export async function removeTeamMember(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
+    // B02 (V022, D7): a roster change moves people in or out of tournament chats.
+    syncAfterSuccess(res, () => syncTournamentChatsForTeam(String(req.params.id)));
     const id = String(req.params.id);
     const targetUserId = String(req.params.userId);
     // SC-244: guard malformed ids before they hit uuid-typed filters (else 500).
@@ -752,6 +757,8 @@ export async function joinTeamByCode(req: Request, res: Response) {
       return res.status(409).json({ error: 'Already a member of this team' });
     }
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // B02 (V022, D7): joining puts you in your team's tournament chats.
+    void syncTournamentChatsForTeam(team.id as string);
     return res.json({ team, member });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
@@ -898,6 +905,8 @@ export async function decideJoinRequest(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
+    // B02 (V022, D7): a roster change moves people in or out of tournament chats.
+    syncAfterSuccess(res, () => syncTournamentChatsForTeam(String(req.params.id)));
     const id = String(req.params.id);
     const targetUserId = String(req.params.userId);
     const { status } = req.body || {};

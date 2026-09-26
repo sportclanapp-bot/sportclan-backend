@@ -1,3 +1,4 @@
+import { syncTournamentChatMembers, syncAfterSuccess, canOpenTournamentChat } from '../utils/tournamentChat';
 import { isTeamManager } from '../utils/teamAuth';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -377,6 +378,8 @@ export async function directAddTeam(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
+    // B02 (V022, D7): the chat follows the entries and organisers.
+    syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
     const { id } = req.params;
     const { team_id } = req.body || {};
     if (!team_id) return res.status(400).json({ error: 'team_id is required' });
@@ -445,6 +448,8 @@ export async function createEntry(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
+    // B02 (V022, D7): the chat follows the entries and organisers.
+    syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
     const { id } = req.params;
     const { team_id } = req.body || {};
     if (!team_id) return res.status(400).json({ error: 'team_id is required' });
@@ -573,6 +578,8 @@ export async function updateEntry(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
+    // B02 (V022, D7): the chat follows the entries and organisers.
+    syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
     const { id, entryId } = req.params;
     const { status, seed, group_label } = req.body || {};
     if (status && !['pending', 'approved', 'rejected', 'withdrawn'].includes(status)) {
@@ -985,6 +992,8 @@ export async function addTournamentOrganiser(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
+    // B02 (V022, D7): the chat follows the entries and organisers.
+    syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
     const { id } = req.params;
     const { user_id } = req.body || {};
     if (!user_id || !isUuid(user_id)) return res.status(400).json({ error: 'A valid user_id is required.' });
@@ -1042,6 +1051,8 @@ export async function removeTournamentOrganiser(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
+    // B02 (V022, D7): the chat follows the entries and organisers.
+    syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
     const { id, userId: targetId } = req.params;
     const { data: t } = await supabase.from('tournaments').select('created_by, name').eq('id', id).maybeSingle();
     if (!t) return res.status(404).json({ error: 'Tournament not found' });
@@ -1068,6 +1079,8 @@ export async function reassignTournamentOrganiser(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
+    // B02 (V022, D7): the chat follows the entries and organisers.
+    syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
     const { id } = req.params;
     const { user_id } = req.body || {};
     if (!user_id || !isUuid(user_id)) return res.status(400).json({ error: 'A valid user_id is required.' });
@@ -1433,16 +1446,17 @@ export async function getTournamentChat(req: Request, res: Response) {
       await supabase.from('tournaments').update({ sport_metadata: { ...meta, _chat_id: chatId } }).eq('id', id);
     }
 
-    // Ensure the requesting user is a participant (add them if not)
-    const { data: participant } = await supabase
-      .from('chat_participants')
-      .select('id')
-      .eq('chat_id', chatId)
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (!participant) {
-      await supabase.from('chat_participants').insert({ chat_id: chatId, user_id: userId, role: 'member' });
+    // N2 (visual review): this used to add ANY caller as a member, so anyone
+    // with a tournament id could read its chat. Only the organisers and the
+    // players of approved teams may open it (decision D7); for them, the sync
+    // makes sure they — and everyone else who belongs — are in it.
+    if (!(await canOpenTournamentChat(id, userId))) {
+      return res.status(403).json({
+        error: 'Only this tournament’s organisers and players can open its chat.',
+        code: 'NOT_IN_TOURNAMENT',
+      });
     }
+    await syncTournamentChatMembers(id);
 
     return res.json({ chat_id: chatId, name: `${tournament.name} Chat`, conversationId: chatId });
   } catch {

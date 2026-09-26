@@ -25,10 +25,11 @@ ORDER BY created_at LIMIT 200;
 
 
 -- ---------------------------------------------------------------------------
--- BLOCK 3 · The four device accounts are flagged. Expected: 4 rows, all true.
+-- BLOCK 3 · The four device accounts are flagged, and the two real accounts
+-- are not. Expected: 6 rows — qadev_* true, dipak false, reviewer false.
 -- ---------------------------------------------------------------------------
 SELECT username, is_test_seed FROM users
-WHERE username IN ('qadev_a_qa', 'qadev_b_qa', 'qadev_c_qa', 'qadev_d_qa') ORDER BY username;
+WHERE username IN ('qadev_a_qa', 'qadev_b_qa', 'qadev_c_qa', 'qadev_d_qa', 'dipak', 'reviewer') ORDER BY username;
 
 
 -- ---------------------------------------------------------------------------

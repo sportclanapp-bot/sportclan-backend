@@ -27,6 +27,7 @@ import {
   setMatchTossHandler,
   getCommentary,
   matchHistory,
+  nextMatch,
 } from '../controllers/matches.controller';
 import { getNearbyMatches } from '../controllers/features.controller';
 import { uploadHandoff } from '../controllers/qrHandoff.controller';
@@ -50,6 +51,8 @@ router.post('/', authenticateToken, createMatch);
 router.get('/', authenticateToken, listMatches);
 // /open and /nearby must come before /:id so they aren't captured as a match id.
 router.get('/open', authenticateToken, listOpenMatches);
+// B04 (D1): Home's "Your next match" — before '/:id', or 'next' is read as an id.
+router.get('/next', authenticateToken, nextMatch);
 // Phase 3: played + officiated, before '/:id' so 'history' is not read as an id.
 router.get('/history', authenticateToken, matchHistory);
 router.get('/nearby', authenticateToken, getNearbyMatches);

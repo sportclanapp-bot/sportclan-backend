@@ -445,6 +445,30 @@ export async function getSeasonRecap(req: Request, res: Response) {
 const potwCache = new Map<'real' | 'test', { data: any; at: number }>();
 const POTW_TTL = 24 * 60 * 60 * 1000; // 24h
 
+/**
+ * Completed, unvoided matches finished since `since`, keyed "user:sport".
+ * null when the read fails, so the strip still shows (without the count)
+ * rather than going blank.
+ */
+async function matchesThisWeek(userIds: string[], since: string): Promise<Map<string, number> | null> {
+  if (userIds.length === 0) return new Map();
+  const { data, error } = await supabase
+    .from('match_participants')
+    .select('user_id, match:matches!inner(sport_id, status, voided_at, completed_at)')
+    .in('user_id', userIds)
+    .eq('match.status', 'completed')
+    .is('match.voided_at', null)
+    .gte('match.completed_at', since);
+  if (error) return null;
+  const out = new Map<string, number>();
+  for (const r of (data ?? []) as unknown as Array<{ user_id: string; match: { sport_id: string } | null }>) {
+    if (!r.match) continue;
+    const k = `${r.user_id}:${r.match.sport_id}`;
+    out.set(k, (out.get(k) ?? 0) + 1);
+  }
+  return out;
+}
+
 export async function getPlayerOfWeek(req: Request, res: Response) {
   const hide = await hideTestFor(req.userId);
   const cacheKey = hide ? 'real' : 'test';
@@ -478,11 +502,19 @@ export async function getPlayerOfWeek(req: Request, res: Response) {
     }));
     scored.sort((a, b) => b.score - a.score);
 
+    // B04 (V001, D1): the card says "3 matches this week", so count them — the
+    // profile's matches_played is all-time. Completed, unvoided matches that
+    // finished in the last 7 days, per player and sport, from the line-ups
+    // (the same rows that give match credit). A candidate with none this week
+    // (last_match_at can move on a void) is not shown.
+    const weekly = await matchesThisWeek([...new Set(scored.map((p) => p.user_id as string))], weekAgo);
+
     // Top per sport
     const seen = new Set<string>();
     const top: typeof scored = [];
     for (const p of scored) {
       if (seen.has(p.sport_id)) continue;
+      if (weekly && !weekly.get(`${p.user_id}:${p.sport_id}`)) continue;
       seen.add(p.sport_id);
       top.push(p);
     }
@@ -504,6 +536,7 @@ export async function getPlayerOfWeek(req: Request, res: Response) {
         rating: p.rating,
         wins: p.wins,
         matches_played: p.matches_played,
+        matches_this_week: weekly?.get(`${p.user_id}:${p.sport_id}`) ?? null,
         score: Math.round(p.score),
       })),
     };

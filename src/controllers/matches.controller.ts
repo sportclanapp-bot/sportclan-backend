@@ -1,4 +1,5 @@
 import { joinChat } from '../utils/chatMembership';
+import { myScheduledMatches, pickNextMatch } from '../utils/nextMatch';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
@@ -1030,6 +1031,21 @@ async function attachTeamNames(matches: any[]): Promise<void> {
   for (const m of matches) {
     if (!m.team_a_name && m.team_a_id) m.team_a_name = byId.get(m.team_a_id) ?? m.team_a_name;
     if (!m.team_b_name && m.team_b_id) m.team_b_name = byId.get(m.team_b_id) ?? m.team_b_name;
+  }
+}
+
+// GET /matches/next · B04 (V006, D1): the one match Home's "Your next match"
+// card shows — the soonest scheduled match you play in (see utils/nextMatch).
+// `overdue` when its start time has passed, so Home can say "start or reschedule".
+export async function nextMatch(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { match, overdue } = pickNextMatch(await myScheduledMatches(userId));
+    if (match) await attachTeamNames([match]);
+    return res.json({ match, overdue });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
 

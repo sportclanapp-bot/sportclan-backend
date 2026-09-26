@@ -1038,6 +1038,15 @@ async function attachTeamNames(matches: any[]): Promise<void> {
 // GET /matches/next · B04 (V006, D1): the one match Home's "Your next match"
 // card shows — the soonest scheduled match you play in (see utils/nextMatch).
 // `overdue` when its start time has passed, so Home can say "start or reschedule".
+/** V216: "Lions vs Tigers no longer counts. Priya voided it: “rain stopped play”." */
+export function voidNoticeBody(label: string, voiderName: string | null, reason: string): string {
+  const who = voiderName?.trim() || 'The organiser';
+  const why = reason.trim();
+  return why
+    ? `${label} no longer counts. ${who} voided it: “${why}”.`
+    : `${label} no longer counts. ${who} voided it.`;
+}
+
 /**
  * V200: "Bowler to Batter, <what happened>" when the event names them; just
  * "<what happened>" (or "to Batter") when it names fewer.
@@ -3067,10 +3076,15 @@ export async function voidMatch(req: Request, res: Response) {
       const audience = await matchAudienceIds(id, match.team_a_id, match.team_b_id);
       const others = audience.filter((u) => u !== userId);
       if (others.length > 0) {
+        // V216 (visual review B13): "Reason: S5 teardown" read like a system
+        // log. The reason is meant to be read (SC-424 makes it required so the
+        // people affected learn why), so it stays — as the voider's own words,
+        // with their name, the way a person would pass on a message.
+        const { data: voider } = await supabase.from('users').select('name').eq('id', userId).maybeSingle();
         void notifyUsers(others, {
           type: 'match_voided',
           title: 'Match voided',
-          body: `${matchLabel(updated)} was voided and no longer counts. Reason: ${reason}`,
+          body: voidNoticeBody(matchLabel(updated), (voider as { name?: string } | null)?.name ?? null, reason),
           data: { matchId: id, screen: 'MatchDetail' },
         });
       }

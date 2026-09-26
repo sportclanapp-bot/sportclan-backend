@@ -449,6 +449,21 @@ const RESERVED_USERNAMES = new Set([
 /** RFC-shaped enough to catch real typos without rejecting valid addresses. */
 const EMAIL_RE = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
 
+/** B13: why a notification_preferences value is refused, or null when it's fine. */
+export function notificationPrefsProblem(v: unknown): string | null {
+  if (v == null || typeof v !== 'object' || Array.isArray(v)) return 'Notification settings must be an object.';
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (k === 'muted_teams') {
+      if (!Array.isArray(val) || val.length > 200 || !val.every((t) => typeof t === 'string' && /^[0-9a-f-]{36}$/i.test(t))) {
+        return 'muted_teams must be a list of team ids.';
+      }
+    } else if (typeof val !== 'boolean') {
+      return `Notification setting "${k}" must be on or off.`;
+    }
+  }
+  return null;
+}
+
 export async function updateMe(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -470,6 +485,12 @@ export async function updateMe(req: Request, res: Response) {
         code: 'INVALID_VISIBILITY',
       });
     }
+  }
+  // B13: notification_preferences had no shape check at all. Category switches
+  // are booleans; muted_teams (D18) is a bounded list of team ids.
+  if ('notification_preferences' in patch) {
+    const problem = notificationPrefsProblem(patch.notification_preferences);
+    if (problem) return res.status(400).json({ error: problem, code: 'INVALID_NOTIFICATION_PREFS' });
   }
   // Length caps (no cap existed before): bio + display name.
   if (typeof patch.bio === 'string' && patch.bio.length > LIMITS.bioMax) {

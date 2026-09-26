@@ -31,6 +31,10 @@ export interface NotifyArgs {
 // (subscription, payment, admin, security) are intentionally absent so they
 // ALWAYS send regardless of preferences.
 const PREF_CATEGORY: Record<string, string> = {
+  // B13 (D18, decided 27 Sep 2026): chat — new messages (push only) and
+  // @mentions in a chat, behind the "Chat messages" switch.
+  chat_message: 'chat',
+  mention_in_chat: 'chat',
   // Matches
   match_reminder: 'matches',
   match_start: 'matches',
@@ -117,9 +121,16 @@ const PREF_CATEGORY: Record<string, string> = {
 // Opt-out model: a category is allowed unless the user has explicitly set it
 // to `false`. Unmapped types (account-critical) are always allowed. Returns the
 // subset of userIds who should receive a notification of this type.
-export async function allowedRecipients(userIds: string[], type: string): Promise<string[]> {
+export async function allowedRecipients(
+  userIds: string[],
+  type: string,
+  data?: Record<string, string>,
+): Promise<string[]> {
   const category = PREF_CATEGORY[type];
   if (!category || userIds.length === 0) return userIds; // ungated
+  // B13 (V066, D18): a muted team's MATCH updates are skipped. Only the gated
+  // 'matches' category — a cancellation or an abandon (ungated) still arrives.
+  const teamIds = category === 'matches' ? await teamsOfNotification(data) : [];
   try {
     const { data } = await supabase
       .from('users')
@@ -130,11 +141,38 @@ export async function allowedRecipients(userIds: string[], type: string): Promis
     return userIds.filter((id) => {
       const prefs = prefById.get(id);
       // Missing row or missing/true value → allowed; only an explicit false opts out.
-      return !prefs || prefs[category] !== false;
+      if (prefs && prefs[category] === false) return false;
+      return !mutedFor(prefs, teamIds);
     });
   } catch {
     // On any lookup error, fail open — never silently drop a notification.
     return userIds;
+  }
+}
+
+/** True when the prefs mute any of these teams. */
+export function mutedFor(prefs: Record<string, unknown> | undefined, teamIds: string[]): boolean {
+  const muted = Array.isArray(prefs?.muted_teams) ? (prefs!.muted_teams as unknown[]) : [];
+  return teamIds.some((t) => muted.includes(t));
+}
+
+/** The teams a notification is about: data.teamId, or the match's two teams. */
+const matchTeamsCache = new Map<string, { ids: string[]; at: number }>();
+async function teamsOfNotification(data?: Record<string, string>): Promise<string[]> {
+  if (!data) return [];
+  if (data.teamId) return [data.teamId];
+  const matchId = data.matchId;
+  if (!matchId) return [];
+  const hit = matchTeamsCache.get(matchId);
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.ids;
+  try {
+    const { data: m } = await supabase.from('matches').select('team_a_id, team_b_id').eq('id', matchId).maybeSingle();
+    const row = m as { team_a_id?: string | null; team_b_id?: string | null } | null;
+    const ids = [row?.team_a_id, row?.team_b_id].filter((x): x is string => !!x);
+    matchTeamsCache.set(matchId, { ids, at: Date.now() });
+    return ids;
+  } catch {
+    return [];
   }
 }
 
@@ -213,7 +251,7 @@ export async function withSport(data: Record<string, string> | undefined): Promi
 export async function notifyUser(args: NotifyArgs): Promise<void> {
   try {
     args = { ...args, data: await withSport(args.data) };
-    const allowed = await allowedRecipients([args.userId], args.type);
+    const allowed = await allowedRecipients([args.userId], args.type, args.data);
     if (allowed.length === 0) return; // user opted out of this category
     await supabase.from('notifications').insert({
       user_id: args.userId,
@@ -269,7 +307,7 @@ export async function notifyUsers(
       const deleted = await deletedInChunks(ids); // SC-136: no rows for deleted accounts
       if (deleted.size > 0) ids = ids.filter((id) => !deleted.has(id));
     }
-    const uniqueIds = await allowedRecipients(ids, payload.type);
+    const uniqueIds = await allowedRecipients(ids, payload.type, payload.data);
     if (uniqueIds.length === 0) return;
     payload = { ...payload, data: await withSport(payload.data) };
 

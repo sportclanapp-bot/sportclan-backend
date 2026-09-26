@@ -22,6 +22,9 @@ export async function savePushToken(req: Request, res: Response) {
 }
 
 // GET /notifications  — paginated list for current user
+/** V009: how many notifications are read to count the filters. */
+export const TYPE_COUNT_CAP = 1000; // PostgREST's default max rows per request
+
 export async function listNotifications(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -31,7 +34,7 @@ export async function listNotifications(req: Request, res: Response) {
   // page past their newest 100 (and the FE, asking 50, saw only 50).
   const p = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   // The page and the unread count, together (they were read one after the other).
-  const [{ data, error, count }, unreadRes] = await Promise.all([
+  const [{ data, error, count }, unreadRes, typesRes] = await Promise.all([
     supabase
       .from('notifications')
       .select('id, type, title, body, data, read, created_at', { count: 'exact' })
@@ -45,15 +48,31 @@ export async function listNotifications(req: Request, res: Response) {
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId)
       .eq('read', false),
+    // V009 (visual review B13): the filter chips counted only the page held
+    // (so every busy chip read "50"). The type of every notification, for the
+    // whole inbox, lets the app count each filter truly. Bounded; beyond it the
+    // app shows "N+".
+    supabase
+      .from('notifications')
+      .select('type')
+      .eq('user_id', userId)
+      .range(0, TYPE_COUNT_CAP - 1),
   ]);
   // SC-41: an offset landing past the end returns PGRST103 — treat it as an
   // empty final page rather than a 500.
   if (error && !isRangeError(error)) return res.status(500).json({ error: error.message });
   const rows = error ? [] : (data || []);
 
+  const typeCounts: Record<string, number> = {};
+  for (const r of (typesRes.data ?? []) as Array<{ type: string | null }>) {
+    const t = r.type ?? 'other';
+    typeCounts[t] = (typeCounts[t] ?? 0) + 1;
+  }
   return res.json({
     notifications: rows,
     unread: unreadRes.count ?? 0,
+    type_counts: typesRes.error ? null : typeCounts,
+    type_counts_complete: !typesRes.error && (count ?? 0) <= TYPE_COUNT_CAP,
     ...pageMeta(count ?? 0, p),
   });
 }

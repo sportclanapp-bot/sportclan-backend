@@ -59,9 +59,11 @@ describe('D7 · every trigger re-syncs', () => {
     const i = teams.indexOf(`export async function ${fn}(`);
     expect(teams.slice(i, i + 600)).toContain('syncAfterSuccess(res, () => syncTournamentChatsForTeam(String(req.params.id)))');
   });
-  it('teams · joinTeamByCode', () => {
-    const i = teams.indexOf('export async function joinTeamByCode(');
+  it('teams · every instant join (by code, and D8 from the team page) goes through joinOpenTeam, which syncs', () => {
+    const i = teams.indexOf('async function joinOpenTeam(');
     expect(teams.slice(i, teams.indexOf('export async function', i + 10))).toContain('void syncTournamentChatsForTeam(team.id as string)');
+    const j = teams.indexOf('export async function joinTeamByCode(');
+    expect(teams.slice(j, teams.indexOf('export async function', j + 10))).toContain('await joinOpenTeam(');
   });
   it('a sync after a failed read changes nothing (no removals on missing data)', () => {
     const u = code('utils/tournamentChat.ts');

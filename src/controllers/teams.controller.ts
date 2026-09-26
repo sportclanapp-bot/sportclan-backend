@@ -175,11 +175,15 @@ export async function listTeams(req: Request, res: Response) {
     const { sport_id, city_id, mine, q } = req.query as Record<string, string | undefined>;
 
     let teamIdsFilter: string[] | null = null;
+    // V056 (visual review): "My teams" rows showed the join code but not the
+    // viewer's role. The membership rows are read here anyway.
+    const myRoleByTeam = new Map<string, string>();
     if (mine === '1') {
       const { data: memberships } = await supabase
         .from('team_members')
-        .select('team_id')
+        .select('team_id, role')
         .eq('user_id', userId);
+      for (const m of memberships || []) myRoleByTeam.set(m.team_id as string, m.role as string);
       teamIdsFilter = (memberships || []).map((m: any) => m.team_id);
       if (teamIdsFilter.length === 0) return res.json({ teams: [] });
     }
@@ -205,7 +209,10 @@ export async function listTeams(req: Request, res: Response) {
     // the viewer keeps the codes for teams they're actually in.
     const rows = data || [];
     const myIds = await myTeamIds(userId, rows.map((t: any) => t.id));
-    const safe = rows.map((t: any) => stripJoinCode(t, myIds.has(t.id)));
+    const safe = rows.map((t: any) => {
+      const row = stripJoinCode(t, myIds.has(t.id));
+      return myRoleByTeam.has(t.id) ? { ...row, my_role: myRoleByTeam.get(t.id) } : row;
+    });
     return res.json({ teams: safe, ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -268,6 +275,14 @@ export async function getTeam(req: Request, res: Response) {
     (team as { member_count?: number }).member_count = realMemberCount;
     (team as { max_members?: number }).max_members = TEAM_MAX_MEMBERS;
     (team as { is_full?: boolean }).is_full = realMemberCount >= TEAM_MAX_MEMBERS;
+    // D10 (visual review V148): disbandTeam refuses a team with any match or
+    // tournament entry. Saying so up front lets the app show Disband disabled
+    // with the reason, instead of a red button that fails on the second tap.
+    const [{ count: matchCount }, { count: entryCount }] = await Promise.all([
+      supabase.from('matches').select('id', { count: 'exact', head: true }).or(`team_a_id.eq.${id},team_b_id.eq.${id}`),
+      supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('team_id', id),
+    ]);
+    (team as { can_disband?: boolean }).can_disband = (matchCount ?? 0) === 0 && (entryCount ?? 0) === 0;
     const viewerIsMember = !!userId && (members || []).some(
       (m: any) => (m.user?.id ?? m.user_id) === userId,
     );
@@ -700,6 +715,58 @@ async function clearJoinRequestNotifications(teamId: string, requesterId: string
     .eq('data->>requesterId', requesterId);
 }
 
+/**
+ * The instant join shared by join-by-code on an 'open' team and — decision D8
+ * (visual review V136/V153) — the team page's "Join team" on a public, open
+ * team. Every gate the code path had applies to both: already a member, the
+ * removed-user ban and capacity (joinGate), and blocks with any member.
+ */
+async function joinOpenTeam(team: { id: string; name: string }, userId: string): Promise<{ status: number; body: unknown }> {
+  const reply = (status: number, body: unknown) => ({ status, body });
+    // Check not already a member
+    const { data: existing } = await supabase
+      .from('team_members')
+      .select('id')
+      .eq('team_id', team.id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (existing) return reply(400, { error: 'Already a member of this team' });
+
+    // SC-359: removed-user + capacity gates, shared by every join path.
+    const gate = await joinGate(team.id, userId);
+    if (gate) return reply(gate.status, gate.body);
+
+    // Block gate: the team chat is shared with every member, so a user blocked
+    // (either direction) with ANY current member can't join — otherwise a block
+    // is bypassed into a private shared space. Reuses blocks.ts.
+    const blocked = await blockedUserIds(userId);
+    if (blocked.size > 0) {
+      const { data: members } = await supabase
+        .from('team_members').select('user_id').eq('team_id', team.id);
+      if ((members ?? []).some((m) => blocked.has(m.user_id as string))) {
+        return reply(403, { error: 'You can’t join this team.', code: 'BLOCKED_FROM_TEAM' });
+      }
+    }
+
+    const { data: member, error } = await supabase
+      .from('team_members')
+      .insert({ team_id: team.id, user_id: userId, role: 'player' })
+      .select('*')
+      .single();
+    // SC-64: a same-user concurrent join races past the pre-check above and both
+    // inserts hit UNIQUE(team_id,user_id). The unique violation (23505) means the
+    // caller is already a member — map it to a clean 409, never a raw 500. (The
+    // SC-44 backstop only scrubs the 5xx *message*; it can't know a 500 here was
+    // really an idempotent already-member condition, so we special-case it.)
+    if ((error as { code?: string } | null)?.code === '23505') {
+      return reply(409, { error: 'Already a member of this team' });
+    }
+    if (error) return reply(500, { error: sanitizeError(error) });
+    // B02 (V022, D7): joining puts you in your team's tournament chats.
+    void syncTournamentChatsForTeam(team.id as string);
+    return reply(200, { team, member });
+}
+
 // POST /teams/join  { join_code }
 export async function joinTeamByCode(req: Request, res: Response) {
   const userId = req.userId;
@@ -722,48 +789,8 @@ export async function joinTeamByCode(req: Request, res: Response) {
     }
 
     // 'open' policy → instant join (unchanged — the WhatsApp-code common case).
-    // Check not already a member
-    const { data: existing } = await supabase
-      .from('team_members')
-      .select('id')
-      .eq('team_id', team.id)
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (existing) return res.status(400).json({ error: 'Already a member of this team' });
-
-    // SC-359: removed-user + capacity gates, shared by every join path.
-    const gate = await joinGate(team.id, userId);
-    if (gate) return res.status(gate.status).json(gate.body);
-
-    // Block gate: the team chat is shared with every member, so a user blocked
-    // (either direction) with ANY current member can't join — otherwise a block
-    // is bypassed into a private shared space. Reuses blocks.ts.
-    const blocked = await blockedUserIds(userId);
-    if (blocked.size > 0) {
-      const { data: members } = await supabase
-        .from('team_members').select('user_id').eq('team_id', team.id);
-      if ((members ?? []).some((m) => blocked.has(m.user_id as string))) {
-        return res.status(403).json({ error: 'You can’t join this team.', code: 'BLOCKED_FROM_TEAM' });
-      }
-    }
-
-    const { data: member, error } = await supabase
-      .from('team_members')
-      .insert({ team_id: team.id, user_id: userId, role: 'player' })
-      .select('*')
-      .single();
-    // SC-64: a same-user concurrent join races past the pre-check above and both
-    // inserts hit UNIQUE(team_id,user_id). The unique violation (23505) means the
-    // caller is already a member — map it to a clean 409, never a raw 500. (The
-    // SC-44 backstop only scrubs the 5xx *message*; it can't know a 500 here was
-    // really an idempotent already-member condition, so we special-case it.)
-    if ((error as { code?: string } | null)?.code === '23505') {
-      return res.status(409).json({ error: 'Already a member of this team' });
-    }
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
-    // B02 (V022, D7): joining puts you in your team's tournament chats.
-    void syncTournamentChatsForTeam(team.id as string);
-    return res.json({ team, member });
+    const r = await joinOpenTeam(team as { id: string; name: string }, userId);
+    return res.status(r.status).json(r.body);
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -865,10 +892,18 @@ export async function requestToJoin(req: Request, res: Response) {
     const id = String(req.params.id);
     if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
     const { data: team } = await supabase
-      .from('teams').select('id, name, is_public').eq('id', id).maybeSingle();
+      .from('teams').select('id, name, is_public, join_policy').eq('id', id).maybeSingle();
     if (!team) return res.status(404).json({ error: 'Team not found' });
     if (team.is_public === false) {
       return res.status(403).json({ error: 'This team is private. Use its join code to request to join.' });
+    }
+    // D8 (visual review V136/V153): Edit team promises "Approval required: off —
+    // anyone joins instantly", but the team page still filed a request that a
+    // captain had to approve. A public team with approval off now takes the join
+    // straight away, through the same gates as the code path.
+    if ((team as { join_policy?: string }).join_policy === 'open') {
+      const joined = await joinOpenTeam(team as { id: string; name: string }, userId);
+      return res.status(joined.status).json(joined.status === 200 ? { ...(joined.body as object), joined: true } : joined.body);
     }
     const r = await createJoinRequest(team.id, userId, team.name);
     return res.status(r.status).json(r.body);

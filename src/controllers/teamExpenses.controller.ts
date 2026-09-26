@@ -528,10 +528,15 @@ export async function getExpenseSummary(req: Request, res: Response) {
       participants: Array.isArray(e.split_among) ? e.split_among : [],
     }));
     const sum = summariseLedger(rows);
+    // V146 (visual review): with no expenses the split count fell back to
+    // max(1, 0) — "1 member · even split" on a two-member team. An empty ledger
+    // has no captured split; the next expense WILL be split between today's
+    // roster, so that is the honest number to show.
+    const memberCount = rows.length === 0 ? Math.max(1, (await currentRoster(id!)).length) : sum.memberCount;
 
     return res.json({
       total: toRupees(sum.totalPaise),
-      memberCount: sum.memberCount,
+      memberCount,
       perMember: toRupees(sum.perMemberPaise),
       remainder: toRupees(sum.remainderPaise),
       splitExact: sum.splitExact,

@@ -16,20 +16,21 @@ UNION ALL SELECT 'venues', count(*) FILTER (WHERE is_test_seed), count(*) FROM v
 
 
 -- ---------------------------------------------------------------------------
--- BLOCK 2 · Real people left UNflagged (what a normal user will still see).
--- Review: expected to be your real accounts and genuine users only.
+-- BLOCK 2 · Users left UNflagged. Expected: exactly 2 rows, dipak and reviewer.
 -- ---------------------------------------------------------------------------
 SELECT username, name, email, created_at
-FROM users WHERE NOT is_test_seed AND deleted_at IS NULL
+FROM users WHERE NOT is_test_seed
 ORDER BY created_at LIMIT 200;
 
 
 -- ---------------------------------------------------------------------------
--- BLOCK 3 · The four device accounts are flagged, and the two real accounts
--- are not. Expected: 6 rows — qadev_* true, dipak false, reviewer false.
+-- BLOCK 3 · The tester accounts are flagged and the two real accounts are not.
+-- Expected: 9 rows — the 7 testers true, dipak false, reviewer false.
 -- ---------------------------------------------------------------------------
 SELECT username, is_test_seed FROM users
-WHERE username IN ('qadev_a_qa', 'qadev_b_qa', 'qadev_c_qa', 'qadev_d_qa', 'dipak', 'reviewer') ORDER BY username;
+WHERE username IN ('qadev_a_qa', 'qadev_b_qa', 'qadev_c_qa', 'qadev_d_qa', 'qaflow922_qa', 'sc434fresh_qa',
+                   'scadmin970_qa', 'dipak', 'reviewer')
+ORDER BY is_test_seed DESC, username;
 
 
 -- ---------------------------------------------------------------------------

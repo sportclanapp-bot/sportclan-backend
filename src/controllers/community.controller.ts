@@ -9,6 +9,7 @@ import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
 import { notifyUsers } from '../utils/notify';
+import { taggableBy } from '../utils/tagPrivacy';
 
 /** Short display name for a user id, for notification bodies. Best-effort. */
 async function displayName(userId: string): Promise<string> {
@@ -632,10 +633,12 @@ export async function createPost(req: Request, res: Response) {
     const mentionIds = Array.isArray(mentions)
       ? mentions.filter((m: unknown): m is string => typeof m === 'string')
       : [];
-    if (newPostId && mentionIds.length > 0) {
+    // B15 (V069): only people whose "Who can tag you" allows this author.
+    const taggable = await taggableBy(userId, mentionIds);
+    if (newPostId && taggable.length > 0) {
       const authorName = await displayName(userId);
       void notifyUsers(
-        mentionIds,
+        taggable,
         {
           type: 'mention',
           title: 'You were mentioned',

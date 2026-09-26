@@ -8,6 +8,7 @@ import { LIMITS, firstInvalidUrl, ARRAY_LIMITS, tooManyItems, firstDisallowedIma
 import { parsePagination, pageMeta } from '../utils/pagination';
 import { isActiveMember, leaveChat, joinChat, softDeleteChat } from '../utils/chatMembership';
 import { pushChatMessage } from '../utils/chatPush';
+import { taggableBy } from '../utils/tagPrivacy';
 
 // ─── SC-241: 1:1 DM block/privacy gate for EXISTING conversations ────────────
 // getOrCreateDM enforces block + message_privacy ONLY when a DM is first created.
@@ -814,8 +815,11 @@ export async function sendMessage(req: Request, res: Response) {
         .from('users')
         .select('id, username')
         .in('username', usernames);
+      // B15 (V069): only people whose "Who can tag you" allows this author.
+      const allowed = new Set(await taggableBy(userId, (mentioned ?? []).map((u) => u.id)));
       for (const u of mentioned ?? []) {
         if (u.id === userId) continue; // don't notify self
+        if (!allowed.has(u.id)) continue;
         // Unchanged by B13 (decided 27 Sep 2026): a chat @mention keeps its own
         // path — always delivered, not behind the "Chat messages" switch.
         supabase.from('notifications').insert({

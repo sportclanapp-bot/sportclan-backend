@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { revokeSessionsNow } from '../utils/sessionRevocation';
 import { generateAccessTokenAt } from '../utils/jwt';
+import { sessionLabel } from '../utils/sessionDevice';
 
 // POST /account/delete — FINAL delete: immediate PII scrub + login lockout,
 // hard-purged after a 30-day retention window.
@@ -280,10 +281,13 @@ export async function getSessions(req: Request, res: Response) {
   // exist, fall back to the minimal id/token/created_at set.
   let rows: any[] = [];
   {
+    // B15 (D17, migration 100): the device columns. Signed-out sessions
+    // (revoked) are not "active" and are no longer listed.
     const rich = await supabase
       .from('refresh_tokens')
-      .select('id, token, created_at, user_agent, device_name, device_info, last_used_at')
+      .select('id, token, created_at, device_name, device_os, app_version, last_used_at')
       .eq('user_id', userId)
+      .eq('revoked', false)
       .order('created_at', { ascending: false });
     if (!rich.error) {
       rows = rich.data ?? [];
@@ -292,6 +296,7 @@ export async function getSessions(req: Request, res: Response) {
         .from('refresh_tokens')
         .select('id, token, created_at')
         .eq('user_id', userId)
+        .eq('revoked', false)
         .order('created_at', { ascending: false });
       if (fallback.error) return res.status(500).json({ error: fallback.error.message });
       rows = fallback.data ?? [];
@@ -304,9 +309,7 @@ export async function getSessions(req: Request, res: Response) {
   const deduped: any[] = [];
   for (const row of rows) {
     const deviceKey: string =
-      (row.device_info && String(row.device_info)) ||
-      (row.device_name && String(row.device_name)) ||
-      (row.user_agent && String(row.user_agent)) ||
+      (row.device_name && `${row.device_name}|${row.device_os ?? ''}`) ||
       // Fallback: use the last 8 chars of the token. Unique enough per
       // device since tokens are 100+ chars and rotate frequently.
       `tok_${String(row.token ?? '').slice(-8) || row.id}`;
@@ -318,9 +321,9 @@ export async function getSessions(req: Request, res: Response) {
 
   const sessions = deduped.map((row) => ({
     id: row.id,
-    device_name:
-      row.device_info ?? row.device_name ?? row.user_agent ?? 'Mobile device',
-    device_os: null,
+    device_name: sessionLabel(row),
+    device_os: row.device_os ?? null,
+    app_version: row.app_version ?? null,
     ip_address: null,
     location: null,
     is_current: currentRefreshToken ? row.token === currentRefreshToken : false,

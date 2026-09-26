@@ -35,7 +35,7 @@ export async function getStats(_req: Request, res: Response) {
     const oneWeekAgoIso = new Date(Date.now() - 7 * 86400000).toISOString();
 
     // Run all counts in parallel; tolerate individual failures.
-    const [users, posts, matches, tournaments, reports] = await Promise.all([
+    const [users, posts, matches, tournaments, reports, newUsers] = await Promise.all([
       safeCount(supabase.from('users').select('id', { count: 'exact', head: true })),
       safeCount(
         supabase
@@ -61,6 +61,14 @@ export async function getStats(_req: Request, res: Response) {
           .select('id', { count: 'exact', head: true })
           .eq('resolved', false),
       ),
+      // B15: the tile that showed "premium" (there are no tiers) now counts
+      // sign-ups in the last week.
+      safeCount(
+        supabase
+          .from('users')
+          .select('id', { count: 'exact', head: true })
+          .gte('created_at', oneWeekAgoIso),
+      ),
     ]);
 
     return res.json({
@@ -70,6 +78,7 @@ export async function getStats(_req: Request, res: Response) {
       // explicit null so an older admin build renders its em-dash rather than
       // "undefined".
       premium_count: null,
+      new_users_this_week: newUsers,
       posts_this_week: posts,
       matches_this_week: matches,
       active_tournaments: tournaments,

@@ -12,6 +12,7 @@ import {
 import { setOtp, getOtp, deleteOtp } from '../utils/otpStore';
 import { normalizeAccountTypes } from '../constants/accountTypes';
 import { awardCoins } from '../utils/coins';
+import { insertRefreshToken } from '../utils/sessionDevice';
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
 
@@ -524,7 +525,7 @@ export async function register(req: Request, res: Response) {
   }
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
-  await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
+  await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
   return res.json({ user, accessToken, refreshToken, isNewUser: true });
 }
 
@@ -573,7 +574,7 @@ export async function otpLogin(req: Request, res: Response) {
   await deleteOtp(p);
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
-  await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
+  await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
   return res.json({ user, accessToken, refreshToken, isNewUser: false });
 }
 
@@ -607,7 +608,7 @@ export async function login(req: Request, res: Response) {
   }
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
-  await supabase.from('refresh_tokens').insert({ user_id: user.id, token: refreshToken });
+  await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
   const { password_hash: _ph, ...safe } = user;
   return res.json({ user: safe, accessToken, refreshToken });
 }
@@ -632,6 +633,11 @@ export async function refresh(req: Request, res: Response) {
     if (await isDeleted(payload.userId)) {
       return res.status(403).json({ error: 'This account has been deleted.' });
     }
+    // B15 (D17): "last active" on Active sessions. Best-effort; a missing
+    // column (before migration 100) must not fail a refresh.
+    void Promise.resolve(
+      supabase.from('refresh_tokens').update({ last_used_at: new Date().toISOString() }).eq('id', row.id),
+    ).catch(() => undefined);
     const accessToken = generateAccessToken(payload.userId);
     return res.json({ accessToken });
   } catch {

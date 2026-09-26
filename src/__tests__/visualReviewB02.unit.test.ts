@@ -69,3 +69,11 @@ describe('D7 · every trigger re-syncs', () => {
     expect(u).toMatch(/if \(!audience\) return null;/);
   });
 });
+
+describe('N2 · the tournament tells the app whether this viewer may open the chat', () => {
+  it('getTournament returns can_open_chat', () => {
+    const t = code('controllers/tournaments.controller.ts');
+    expect(t).toMatch(/const can_open_chat = req\.userId \? await canOpenTournamentChat\(String\(tournament\.id\), req\.userId\) : false;/);
+    expect(t).toMatch(/res\.json\(\{ tournament, entries: entries \|\| \[\], can_open_chat \}\)/);
+  });
+});

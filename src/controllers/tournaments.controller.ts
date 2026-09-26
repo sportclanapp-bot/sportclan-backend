@@ -308,7 +308,10 @@ export async function getTournament(req: Request, res: Response) {
       .select('id', { count: 'exact', head: true })
       .eq('tournament_id', id);
     (tournament as { fixtures_count?: number }).fixtures_count = fixturesCount ?? 0;
-    return res.json({ tournament, entries: entries || [] });
+    // B02 (N2): whether THIS viewer may open the tournament chat, so the app can
+    // hide a button that would only answer 403. Signed-out viewers can't.
+    const can_open_chat = req.userId ? await canOpenTournamentChat(String(tournament.id), req.userId) : false;
+    return res.json({ tournament, entries: entries || [], can_open_chat });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

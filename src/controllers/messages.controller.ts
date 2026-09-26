@@ -8,7 +8,6 @@ import { LIMITS, firstInvalidUrl, ARRAY_LIMITS, tooManyItems, firstDisallowedIma
 import { parsePagination, pageMeta } from '../utils/pagination';
 import { isActiveMember, leaveChat, joinChat, softDeleteChat } from '../utils/chatMembership';
 import { pushChatMessage } from '../utils/chatPush';
-import { notifyUser } from '../utils/notify';
 
 // ─── SC-241: 1:1 DM block/privacy gate for EXISTING conversations ────────────
 // getOrCreateDM enforces block + message_privacy ONLY when a DM is first created.
@@ -817,15 +816,18 @@ export async function sendMessage(req: Request, res: Response) {
         .in('username', usernames);
       for (const u of mentioned ?? []) {
         if (u.id === userId) continue; // don't notify self
-        // B13 (D18): through notifyUser, so "Chat messages" off silences it too.
-        // notifyUser is best-effort and never throws (SC-112).
-        void notifyUser({
-          userId: u.id,
+        // Unchanged by B13 (decided 27 Sep 2026): a chat @mention keeps its own
+        // path — always delivered, not behind the "Chat messages" switch.
+        supabase.from('notifications').insert({
+          user_id: u.id,
           type: 'mention_in_chat',
           title: 'You were mentioned',
           body: `${data?.sender?.name ?? 'Someone'} mentioned you in a chat`,
-          data: { chatId: id, messageId: String(data?.id ?? '') },
-        });
+          data: { chatId: id, messageId: data?.id },
+        }).then(
+          ({ error }) => { if (error) console.warn('[mention-notify] insert failed:', error.message); },
+          (e) => console.warn('[mention-notify] threw:', e instanceof Error ? e.message : e),
+        ); // SC-112: best-effort, non-blocking — but log a failure instead of dropping it silently
       }
     }
   }

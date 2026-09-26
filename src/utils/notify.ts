@@ -31,10 +31,10 @@ export interface NotifyArgs {
 // (subscription, payment, admin, security) are intentionally absent so they
 // ALWAYS send regardless of preferences.
 const PREF_CATEGORY: Record<string, string> = {
-  // B13 (D18, decided 27 Sep 2026): chat — new messages (push only) and
-  // @mentions in a chat, behind the "Chat messages" switch.
+  // B13 (D18, decided 27 Sep 2026): new chat messages (push only) behind the
+  // "Chat messages" switch. mention_in_chat is deliberately NOT here: a chat
+  // @mention keeps its own path and always arrives.
   chat_message: 'chat',
-  mention_in_chat: 'chat',
   // Matches
   match_reminder: 'matches',
   match_start: 'matches',
@@ -124,13 +124,13 @@ const PREF_CATEGORY: Record<string, string> = {
 export async function allowedRecipients(
   userIds: string[],
   type: string,
-  data?: Record<string, string>,
+  ctx?: Record<string, string>,
 ): Promise<string[]> {
   const category = PREF_CATEGORY[type];
   if (!category || userIds.length === 0) return userIds; // ungated
   // B13 (V066, D18): a muted team's MATCH updates are skipped. Only the gated
   // 'matches' category — a cancellation or an abandon (ungated) still arrives.
-  const teamIds = category === 'matches' ? await teamsOfNotification(data) : [];
+  const teamIds = category === 'matches' ? await teamsOfNotification(ctx) : [];
   try {
     const { data } = await supabase
       .from('users')
@@ -142,12 +142,19 @@ export async function allowedRecipients(
       const prefs = prefById.get(id);
       // Missing row or missing/true value → allowed; only an explicit false opts out.
       if (prefs && prefs[category] === false) return false;
+      // B13 follow-up: a muted chat (notification_preferences.muted_chats).
+      if (category === 'chat' && ctx?.chatId && mutedChat(prefs, ctx.chatId)) return false;
       return !mutedFor(prefs, teamIds);
     });
   } catch {
     // On any lookup error, fail open — never silently drop a notification.
     return userIds;
   }
+}
+
+/** True when the prefs mute this chat. */
+export function mutedChat(prefs: Record<string, unknown> | undefined, chatId: string): boolean {
+  return Array.isArray(prefs?.muted_chats) && (prefs!.muted_chats as unknown[]).includes(chatId);
 }
 
 /** True when the prefs mute any of these teams. */

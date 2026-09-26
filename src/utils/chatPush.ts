@@ -15,6 +15,7 @@ import { supabase } from './supabase';
 import { allowedRecipients, sendPushToUsers } from './notify';
 import { blockedUserIds } from './blocks';
 import { deletedIdSet } from './activeUser';
+import { testUserIdSet } from './testContent';
 
 export const QUIET_MS = 2 * 60 * 1000;
 const lastPush = new Map<string, number>(); // `${chatId}:${userId}` → ms
@@ -42,23 +43,50 @@ export function chatPushText(o: { isGroup: boolean; chatName: string | null; sen
     : { title: o.senderName, body: preview };
 }
 
+/**
+ * Who a chat message may push to — every rule in one place, so each is tested:
+ * never the sender; nobody who left (the caller passes current members only);
+ * nobody blocked either way; no deleted account; a test account's message never
+ * reaches a real account (B03 — the test flag); then the Chat messages switch
+ * and per-chat mute (`prefs`).
+ */
+export async function pushRecipients(
+  o: { senderId: string; memberIds: string[]; blocked: Set<string>; deleted: Set<string>; flagged: Set<string> },
+  prefs: (ids: string[]) => Promise<string[]>,
+): Promise<string[]> {
+  const senderIsTest = o.flagged.has(o.senderId);
+  const ids = o.memberIds.filter((u) =>
+    u !== o.senderId
+    && !o.blocked.has(u)
+    && !o.deleted.has(u)
+    && (!senderIsTest || o.flagged.has(u)));
+  return ids.length ? prefs(ids) : [];
+}
+
 export async function pushChatMessage(chatId: string, senderId: string, senderName: string, text: string): Promise<void> {
   try {
     const [{ data: chat }, { data: members }] = await Promise.all([
-      supabase.from('chats').select('type, name').eq('id', chatId).maybeSingle(),
+      supabase.from('chats').select('type, name, deleted_at').eq('id', chatId).maybeSingle(),
+      // Current members only — someone who left (left_at set) gets nothing.
       supabase.from('chat_participants').select('user_id').eq('chat_id', chatId).is('left_at', null),
     ]);
-    let ids = (members ?? []).map((m: { user_id: string }) => m.user_id).filter((u) => u !== senderId);
-    if (ids.length === 0) return;
-    const blocked = await blockedUserIds(senderId);
-    const deleted = await deletedIdSet(ids);
-    ids = ids.filter((u) => !blocked.has(u) && !deleted.has(u));
-    ids = await allowedRecipients(ids, 'chat_message');
-    ids = dueForPush(chatId, ids);
+    // A deleted chat pushes nothing (sendMessage already refuses one; this
+    // holds even if called from elsewhere).
+    if (!chat || (chat as { deleted_at?: string | null }).deleted_at) return;
+    const memberIds = (members ?? []).map((m: { user_id: string }) => m.user_id);
+    const [blocked, deleted, flagged] = await Promise.all([
+      blockedUserIds(senderId), // either direction (utils/blocks.ts)
+      deletedIdSet(memberIds),
+      testUserIdSet([senderId, ...memberIds]),
+    ]);
+    const ids = await pushRecipients({ senderId, memberIds, blocked, deleted, flagged }, (x) =>
+      allowedRecipients(x, 'chat_message', { chatId }));
+    const due = dueForPush(chatId, ids);
+    if (due.length === 0) return;
     if (ids.length === 0) return;
     const c = chat as { type?: string; name?: string | null } | null;
     const { title, body } = chatPushText({ isGroup: c?.type !== 'dm', chatName: c?.name ?? null, senderName, text });
-    await sendPushToUsers(ids.map((userId) => ({
+    await sendPushToUsers(due.map((userId) => ({
       userId, type: 'chat_message', title, body, data: { chatId, screen: 'ChatRoom' },
     })));
   } catch (err) {

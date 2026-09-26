@@ -51,6 +51,7 @@ import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } fr
 // U-13: moved to utils/viewerCanPlay (F-24: availability answers use it too).
 export { viewerCanPlay } from '../utils/viewerCanPlay';
 import { viewerCanPlay } from '../utils/viewerCanPlay';
+import { possessive } from '../utils/possessive';
 
 // POST /matches — create. FREE for all (Change #6).
 /**
@@ -1336,7 +1337,7 @@ export async function getCommentary(req: Request, res: Response) {
         commentary = ballWho(p, commentary);
       } else if (ev.event_type === 'declaration') {
         // V194 (B09): limited-overs cricket ends an innings, it doesn't declare.
-        commentary = `${p.team_side === 'B' ? teamB : teamA}'s innings ended`;
+        commentary = `${possessive(p.team_side === 'B' ? teamB : teamA)} innings ended`;
       } else if (ev.event_type === 'extra') {
         if (p.type === 'Wd') commentary = 'Wide ball';
         else if (p.type === 'Nb') commentary = 'No ball called';

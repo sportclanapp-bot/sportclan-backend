@@ -58,6 +58,7 @@ import {
 import { isTournamentOrganiser, authorizeCarveout, logAdminAction } from '../utils/tournamentAuth';
 import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
+import { possessive } from '../utils/possessive';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -980,7 +981,7 @@ async function notifyTournamentUpdated(
     {
       type: 'tournament_updated',
       title: 'Tournament updated',
-      body: `${tournamentName ?? 'A tournament'}'s schedule or venue changed — check the new details.`,
+      body: `${tournamentName ? possessive(tournamentName) : 'A tournament’s'} schedule or venue changed — check the new details.`,
       data: { tournamentId },
     },
     { actorId },

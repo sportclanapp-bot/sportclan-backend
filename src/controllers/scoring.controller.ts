@@ -16,7 +16,7 @@ import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, winsNeeded } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
-import { allOutBySide } from '../utils/cricketRules';
+import { allOutBySide, isDismissal } from '../utils/cricketRules';
 import { isValidChessReason } from '../utils/chessRules';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
@@ -384,11 +384,14 @@ export async function createEvent(req: Request, res: Response) {
           const runs = payload?.batter_runs ?? payload?.runs_scored ?? (typeof line?.runs === 'number' ? line.runs : '');
           const inning: any = summary[side] || {};
           const scoreStr = `${inning.runs ?? 0}/${inning.wickets ?? 0}`;
-          const title = 'Wicket!';
+          // Retired hurt is not a wicket — say what happened.
+          const hurt = !isDismissal(payload?.wicket_type ?? payload?.type);
+          const title = hurt ? 'Retired hurt' : 'Wicket!';
+          const verb = hurt ? 'retired hurt on' : 'out for';
           const body =
             runs !== ''
-              ? `${playerName} out for ${runs} | ${teamName(side)} ${scoreStr}`
-              : `${playerName} out | ${teamName(side)} ${scoreStr}`;
+              ? `${playerName} ${verb} ${runs} | ${teamName(side)} ${scoreStr}`
+              : `${playerName} ${hurt ? 'retired hurt' : 'out'} | ${teamName(side)} ${scoreStr}`;
           void fanoutScoreUpdate(matchId, title, body, userId);
         } else {
           // V-5: sports scored in games/sets push when a game (tennis: a set)
@@ -620,6 +623,12 @@ export function aggregateCricketPlayers(
     if (o.clean && o.bowler && o.charged === 0 && players[o.bowler]) players[o.bowler]!.bowl_maidens += 1;
     overs[side] = { legal: 0, charged: 0, clean: true };
   };
+  // A retired-hurt batter who bats again is back in: the "retired hurt" note
+  // goes (they end not out, or out by whatever gets them later).
+  const resumed = (id: string | undefined) => {
+    const b = id ? players[id] : undefined;
+    if (b && !b.out && b.dismissal === 'retired_hurt') delete b.dismissal;
+  };
   for (const e of events) {
     const p: any = e.payload || {};
     const batSide: 'A' | 'B' = p.team_side === 'B' ? 'B' : 'A';
@@ -634,6 +643,7 @@ export function aggregateCricketPlayers(
       const legalExtra = p.type === 'B' || p.type === 'Lb';
       delivery(batSide, bowlId, legalExtra, legalExtra ? 0 : Number(p.runs ?? 0));
     } else if (e.event_type === 'wicket' && !p.is_extra) delivery(batSide, bowlId, true, 0);
+    if (e.event_type === 'ball' || e.event_type === 'extra' || (e.event_type === 'wicket' && isDismissal(p.wicket_type || p.type))) resumed(batId);
     if (e.event_type === 'ball') {
       const runs = Number(p.runs ?? 0);
       if (batId) {
@@ -680,16 +690,25 @@ export function aggregateCricketPlayers(
       if (batId) {
         const b = ensure(batId, batSide, batName);
         if (!p.is_extra) b.balls += 1;
-        b.out = true;
-        b.dismissal = p.wicket_type || p.type || 'out';
-        if (fielderName) b.dismissal_fielder = fielderName;
-        if (bowlName) b.dismissal_bowler = bowlName;
+        if (!isDismissal(wt)) {
+          // Retired hurt: off the field, NOT out — "retired hurt" on the
+          // scorecard until they bat again (see resumed() above).
+          b.out = false;
+          b.dismissal = 'retired_hurt';
+          delete b.dismissal_fielder;
+          delete b.dismissal_bowler;
+        } else {
+          b.out = true;
+          b.dismissal = p.wicket_type || p.type || 'out';
+          if (fielderName) b.dismissal_fielder = fielderName;
+          if (bowlName && wt !== 'retiredout') b.dismissal_bowler = bowlName;
+        }
       }
       if (bowlId) {
         const w = ensure(bowlId, bowlSide, bowlName);
         if (!p.is_extra) w.bowl_balls += 1;
-        // Run-outs / retirements aren't credited to the bowler.
-        if (wt !== 'runout' && wt !== 'retired' && wt !== 'retiredhurt') w.bowl_wickets += 1;
+        // Run-outs / retirements (hurt or out) aren't credited to the bowler.
+        if (wt !== 'runout' && wt !== 'retired' && wt !== 'retiredhurt' && wt !== 'retiredout') w.bowl_wickets += 1;
       }
       // The fielder is on the BOWLING side — crediting them to the batting side
       // would put a catch in the batting card, which is how a fielding stat gets
@@ -889,7 +908,9 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
         // no-balls are not. Count the ball accordingly (A5-010/A5-012).
         if (p.type === 'B' || p.type === 'Lb') inn.balls += 1;
       }
-      else if (e.event_type === 'wicket') { inn.wickets = Math.min(allOut[sideOf(p)], inn.wickets + 1); if (!p.is_extra) inn.balls += 1; }
+      // Retired hurt is not a wicket (cricketRules.isDismissal): the batter
+      // leaves and may return; the side is not a wicket down.
+      else if (e.event_type === 'wicket') { if (isDismissal(p.wicket_type ?? p.type)) inn.wickets = Math.min(allOut[sideOf(p)], inn.wickets + 1); if (!p.is_extra) inn.balls += 1; }
       // A batting side can end its innings early by declaring (before all-out /
       // overs). This is a marker only — it doesn't change runs/balls/wickets or
       // the winner (still total-vs-total); it just lets the scorecard show

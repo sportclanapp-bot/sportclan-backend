@@ -145,3 +145,15 @@ export function awardAllowed(stage: CricketStage, winner: 'A' | 'B' | null | und
   if (stage === 'chase') return winner === defendingSide;
   return stage === 'first_innings';
 }
+
+/**
+ * Retired hurt is not a dismissal (2026-09-26, after MATCH_CREATE_TEST_5). The
+ * batter leaves, a new batter comes in, and the retired batter may come back
+ * later in the innings; on the scorecard they are "retired hurt", not out. It
+ * does not count toward all out, the bowler's wickets, or "won by N wickets".
+ * Retired OUT is a dismissal (a wicket, credited to no bowler).
+ * Every other wicket kind — and an old wicket with no kind — is a dismissal.
+ */
+export function isDismissal(wicketType: unknown): boolean {
+  return String(wicketType ?? '').toLowerCase().replace(/[^a-z]/g, '') !== 'retiredhurt';
+}

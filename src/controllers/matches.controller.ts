@@ -41,7 +41,7 @@ import { stepTimer } from '../utils/stepTimer';
 import { leaseRefusal } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
-import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, type UnfinishedEnd } from '../utils/cricketRules';
+import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isDismissal, type UnfinishedEnd } from '../utils/cricketRules';
 import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
 // U-13: moved to utils/viewerCanPlay (F-24: availability answers use it too).
@@ -1185,6 +1185,22 @@ export async function sweepUnplayedScheduledMatches(): Promise<{ abandoned: numb
   return { abandoned: stale.length };
 }
 
+/** The manner of a dismissal for the timeline — "c Sharma b Khan", "run out (Patel)". */
+export function wicketWords(kind: unknown, fielder?: unknown, bowler?: unknown): string {
+  const f = typeof fielder === 'string' && fielder.trim() ? fielder.trim() : null;
+  const b = typeof bowler === 'string' && bowler.trim() ? bowler.trim() : null;
+  switch (String(kind ?? '').toLowerCase().replace(/[^a-z]/g, '')) {
+    case 'bowled': return b ? `b ${b}` : 'bowled';
+    case 'caught': return f && b ? `c ${f} b ${b}` : b ? `c & b ${b}` : 'caught';
+    case 'lbw': return b ? `lbw b ${b}` : 'lbw';
+    case 'runout': return f ? `run out (${f})` : 'run out';
+    case 'stumped': return f && b ? `st ${f} b ${b}` : 'stumped';
+    case 'hitwicket': return b ? `hit wicket b ${b}` : 'hit wicket';
+    case 'retiredout': return 'retired out';
+    default: return '';
+  }
+}
+
 // GET /matches/:id/commentary — returns match_events formatted into
 // human-readable commentary lines. Cheap — reads only the events table.
 export async function getCommentary(req: Request, res: Response) {
@@ -1229,9 +1245,16 @@ export async function getCommentary(req: Request, res: Response) {
       let isWicket = false;
       let isBoundary = false;
       if (ev.event_type === 'wicket' || (ev.event_type === 'ball' && p.wicket)) {
-        isWicket = true;
-        const batter = p.batsmanName || p.player_name || p.batter || 'Batter';
-        commentary = `OUT! ${batter}${p.runs != null ? ` — ${p.runs} runs` : ''}`;
+        // The app sends batsman_name (this read batsmanName, so every line said
+        // "OUT! Batter"), and retired hurt is not a wicket (cricketRules.isDismissal).
+        const batter = p.batsman_name || p.batsmanName || p.player_name || p.batter || 'Batter';
+        if (ev.event_type === 'wicket' && !isDismissal(p.wicket_type ?? p.type)) {
+          commentary = `\uD83E\uDE79 Retired hurt — ${batter}`;
+        } else {
+          isWicket = true;
+          const how = wicketWords(p.wicket_type ?? p.type, p.fielder_name, p.bowler_name);
+          commentary = `OUT! ${batter}${how ? ` — ${how}` : ''}${p.runs != null ? ` — ${p.runs} runs` : ''}`;
+        }
       } else if (ev.event_type === 'ball') {
         const runs = Number(p.runs ?? 0);
         if (runs === 4) {

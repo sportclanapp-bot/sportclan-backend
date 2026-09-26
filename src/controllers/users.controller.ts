@@ -15,6 +15,7 @@ import { parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
 import { stepTimer } from '../utils/stepTimer';
 import { getSport } from '../utils/sportCache';
+import { isDismissal } from '../utils/cricketRules';
 import { aggregateGoalPlayers, aggregatePointPlayers, aggregateRallyPlayers } from './scoring.controller';
 
 // SELF-only fields — the full row for /users/me + own-profile writes. Contains
@@ -1545,7 +1546,8 @@ export async function getSportProfile(req: Request, res: Response) {
             if (r === 6) s6++;
             perMatch.set(e.match_id, (perMatch.get(e.match_id) ?? 0) + r);
           }
-          if (e.event_type === 'wicket' || pay.wicket) { wkts++; dismissals++; }
+          // Retired hurt is not a dismissal (cricketRules.isDismissal).
+          if ((e.event_type === 'wicket' && isDismissal(pay.wicket_type ?? pay.type)) || (e.event_type !== 'wicket' && pay.wicket)) { wkts++; dismissals++; }
         }
         const hs2 = perMatch.size > 0 ? Math.max(...perMatch.values()) : 0;
         sportStats = {

@@ -1335,7 +1335,8 @@ export async function getCommentary(req: Request, res: Response) {
         // commentary reads — whenever the ball carries the names.
         commentary = ballWho(p, commentary);
       } else if (ev.event_type === 'declaration') {
-        commentary = `${p.team_side === 'B' ? teamB : teamA} declared`;
+        // V194 (B09): limited-overs cricket ends an innings, it doesn't declare.
+        commentary = `${p.team_side === 'B' ? teamB : teamA}'s innings ended`;
       } else if (ev.event_type === 'extra') {
         if (p.type === 'Wd') commentary = 'Wide ball';
         else if (p.type === 'Nb') commentary = 'No ball called';

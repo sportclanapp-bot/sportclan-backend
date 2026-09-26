@@ -47,7 +47,8 @@ test('serve changes, carrom boards and tennis aces in words', () => {
 test('other sports keep their own lines', () => {
   expect(sportCommentary('score', { team_side: 'A' }, ctx('badminton'))).toBeNull();
   const mc = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
-  expect(mc).toContain("commentary = `${p.team_side === 'B' ? teamB : teamA} declared`;");
+  // V194 (B09): limited-overs wording.
+  expect(mc).toContain("commentary = `${p.team_side === 'B' ? teamB : teamA}'s innings ended`;");
 });
 
 test('the endpoint uses it, knows cricket by its slug, and counts balls per innings', () => {

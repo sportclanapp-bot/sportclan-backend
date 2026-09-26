@@ -18,16 +18,18 @@ export type ChessResult = 'white' | 'black' | 'draw';
 
 export const CHESS_RESULT_REASONS: Record<'decisive' | 'draw', Array<{ id: string; label: string }>> = {
   decisive: [
-    { id: 'checkmate', label: '♚ Checkmate' },
-    { id: 'resignation', label: '🏳 Resignation' },
-    { id: 'timeout', label: '⏱ Timeout' },
+    // V203: one style — words only. The sheet mixed 🤝, a plain "½", 🔁, ♟
+    // and keycap digits.
+    { id: 'checkmate', label: 'Checkmate' },
+    { id: 'resignation', label: 'Resignation' },
+    { id: 'timeout', label: 'Timeout' },
   ],
   draw: [
-    { id: 'draw_agreement', label: '🤝 By agreement' },
-    { id: 'stalemate', label: '½ Stalemate' },
-    { id: 'repetition', label: '🔁 Repetition' },
-    { id: 'insufficient_material', label: '♟ Insufficient material' },
-    { id: 'fifty_move', label: '5️⃣0️⃣ 50-move rule' },
+    { id: 'draw_agreement', label: 'By agreement' },
+    { id: 'stalemate', label: 'Stalemate' },
+    { id: 'repetition', label: 'Repetition' },
+    { id: 'insufficient_material', label: 'Insufficient material' },
+    { id: 'fifty_move', label: '50-move rule' },
   ],
 };
 

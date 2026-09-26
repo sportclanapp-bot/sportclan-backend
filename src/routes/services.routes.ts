@@ -54,10 +54,13 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
   // total: filtering the page in JS afterwards is how a directory ends up
   // reporting "24 coaches" and rendering 22 (the SC-28 class).
   const blocked = await blockedUserIds(req.userId);
+  // B16 (V089): a row says where the provider is and which sports — and the
+  // list can be narrowed to one city (?city_id=).
+  const cityId = typeof req.query.city_id === 'string' && /^[0-9a-f-]{36}$/i.test(req.query.city_id) ? req.query.city_id : null;
   let q = supabase
     .from('user_account_types')
     .select(
-      'user_id, users:user_id!inner(id, name, username, profile_picture_url, bio, city_id)',
+      'user_id, users:user_id!inner(id, name, username, profile_picture_url, bio, city_id, city:cities!city_id(name), sports:user_sports(sport:sports(slug, name)))',
       { count: 'exact' },
     )
     .eq('account_type', type)
@@ -73,11 +76,38 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
   // B03 (V090/V245, D3): seeded "Seed test account #…" providers are hidden from
   // real viewers — in the query, so `count` stays the true total.
   if (await hideTestFor(req.userId)) q = excludeTestEmbed(q, 'users');
+  if (cityId) q = q.eq('users.city_id', cityId);
   const { data: rows, error, count } = await q;
   if (error) return res.status(500).json({ error: error.message });
 
-  const providers = (rows || []).map((r: any) => r.users).filter(Boolean);
+  const providers = (rows || []).map((r: any) => r.users).filter(Boolean).map(({ city, sports, ...u }: any) => ({
+    ...u,
+    city_name: city?.name ?? null,
+    sports: (sports ?? []).map((s: any) => s.sport?.slug).filter(Boolean),
+  }));
   return res.json({ providers, ...pageMeta(count, p) });
+});
+
+// GET /services/counts — B16 (V079, D20): how many providers each category
+// has, with the SAME filters as the list (not deleted, not blocked either way,
+// no test accounts for a real viewer), so a count never promises a row the list
+// won't show.
+router.get('/counts', authenticateToken, async (req: Request, res: Response) => {
+  const blocked = await blockedUserIds(req.userId);
+  const hide = await hideTestFor(req.userId);
+  const types = [...SERVICE_TYPES];
+  const results = await Promise.all(types.map(async (type) => {
+    let q = supabase
+      .from('user_account_types')
+      .select('user_id, users:user_id!inner(id)', { count: 'exact', head: true })
+      .eq('account_type', type)
+      .is('users.deleted_at', null);
+    q = excludeIds(q, 'user_id', blocked);
+    if (hide) q = excludeTestEmbed(q, 'users');
+    const { count, error } = await q;
+    return [type, error ? null : (count ?? 0)] as const;
+  }));
+  return res.json({ counts: Object.fromEntries(results) });
 });
 
 export default router;

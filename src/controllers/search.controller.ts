@@ -8,6 +8,7 @@ import { hideTestFor, excludeTest, excludeTestEmbed } from '../utils/testContent
 /** B03 (V245, D3): drop test rows from a search for a real viewer. */
 const noTest = <Q>(q: Q, hide: boolean): Q => (hide ? excludeTest(q) : q);
 import { parsePagination, Pagination } from '../utils/pagination'; // SC-303
+import { OFFICIATING_TYPES } from '../constants/accountTypes';
 
 // ─── UNIFIED SEARCH ─────────────────────────────────────────────────────────
 export async function search(req: Request, res: Response) {
@@ -190,7 +191,7 @@ async function searchUmpires(res: Response, q: string, sportId: string | undefin
     .from('user_account_types')
     .select('user_id, account_type')
     .in('user_id', userIds)
-    .in('account_type', ['umpire', 'referee']);
+    .in('account_type', [...OFFICIATING_TYPES]);
 
   const umpireIds = new Set((accountTypes || []).map((a) => a.user_id));
   const filtered = (data || []).filter((u) => umpireIds.has(u.id));

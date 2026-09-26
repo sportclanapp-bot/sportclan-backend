@@ -7,7 +7,17 @@
 export const VALID_ACCOUNT_TYPES = [
   'player', 'umpire', 'coach', 'commentator', 'organiser',
   'business', 'association', 'club', 'leagues', 'other',
+  // B16 (V080, D20): officials of the other sports — badminton, tennis,
+  // table-tennis and pickleball umpires, volleyball referees, chess arbiters.
+  'official',
 ] as const;
+
+/**
+ * B16: the roles that may officiate a match (self-assign as umpire, be found in
+ * the umpire search). 'referee' is legacy (no longer a canonical type) and kept
+ * so old rows still work.
+ */
+export const OFFICIATING_TYPES = ['umpire', 'referee', 'official'] as const;
 
 export type AccountType = (typeof VALID_ACCOUNT_TYPES)[number];
 

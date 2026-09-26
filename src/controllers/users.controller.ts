@@ -1771,7 +1771,9 @@ export async function getReviews(req: Request, res: Response) {
 const REVIEW_UNGATED_TYPES = new Set([
   'coach', 'commentator', 'business', 'association', 'club', 'leagues', 'other',
 ]);
-const REVIEW_GATED_TYPES = new Set(['umpire', 'organiser']);
+// B16: an official (other sports) is gated like an umpire — reviewed only by
+// someone who played a match they officiated.
+const REVIEW_GATED_TYPES = new Set(['umpire', 'official', 'organiser']);
 
 /** The reviewed user's account types (multi-type; legacy singular fallback). */
 async function reviewedUserTypes(reviewedId: string): Promise<string[]> {
@@ -1841,7 +1843,7 @@ export async function submitReview(req: Request, res: Response) {
     } else if (hasGated) {
       // Umpire / organiser — must have a real in-app relationship.
       let eligible = false;
-      if (types.includes('umpire')) eligible = await playedUnderUmpire(userId, id);
+      if (types.includes('umpire') || types.includes('official')) eligible = await playedUnderUmpire(userId, id);
       if (!eligible && types.includes('organiser')) {
         eligible = await playedInTournamentOrganisedBy(userId, id);
       }

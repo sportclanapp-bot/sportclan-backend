@@ -52,6 +52,7 @@ import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } fr
 export { viewerCanPlay } from '../utils/viewerCanPlay';
 import { viewerCanPlay } from '../utils/viewerCanPlay';
 import { possessive } from '../utils/possessive';
+import { OFFICIATING_TYPES } from '../constants/accountTypes';
 
 // POST /matches — create. FREE for all (Change #6).
 /**
@@ -1747,10 +1748,10 @@ export async function selfAssignUmpire(req: Request, res: Response) {
       .from('user_account_types')
       .select('account_type')
       .eq('user_id', userId)
-      .in('account_type', ['umpire', 'referee']);
+      .in('account_type', [...OFFICIATING_TYPES]);
     if (!roles || roles.length === 0) {
       return res.status(403).json({
-        error: 'Only umpire / referee accounts can officiate matches. Add the Umpire role in Edit profile.',
+        error: 'Only umpires, referees and officials can officiate matches. Add the role in Edit profile.',
         code: 'NOT_AN_UMPIRE',
       });
     }

@@ -21,7 +21,7 @@ export async function searchVenues(req: Request, res: Response) {
     .from('venues')
     // B07 (migration 099): the details the Add venue form collects, and the
     // city by name — the directory rows show address, surface and city.
-    .select('id, name, city_id, use_count, created_at, address, sport_id, surface, image_url, city:cities!city_id(name)')
+    .select('id, name, city_id, use_count, created_at, address, sport_id, surface, image_url, city:cities!city_id(name), sport:sports!sport_id(slug)')
     // use_count DESC alone is not a total order — ties (every venue with
     // use_count 1) could shuffle between pages and duplicate/skip rows. id is
     // the tiebreak (the SC-138 rule).
@@ -36,7 +36,8 @@ export async function searchVenues(req: Request, res: Response) {
   if (await hideTestFor(req.userId)) query = excludeTest(query);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  const rows = (data ?? []).map(({ city, ...v }: any) => ({ ...v, city: city?.name ?? null }));
+  // B16 (V091): the sport by slug, so the row can show its icon.
+  const rows = (data ?? []).map(({ city, sport, ...v }: any) => ({ ...v, city: city?.name ?? null, sport_slug: sport?.slug ?? null }));
   return res.json({ venues: rows, has_more: rows.length === limit });
 }
 

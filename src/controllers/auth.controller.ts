@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import axios from 'axios';
 import { supabase } from '../utils/supabase';
 import { isValidIndianPhone, canonicalisePhone, phoneVariants } from '../utils/phone';
+import { testCodeFor, maskPhone } from '../utils/otpTestNumbers';
 import { resolveSportId } from '../utils/sportId';
 import {
   generateAccessToken,
@@ -245,7 +246,10 @@ export async function sendOtp(req: Request, res: Response) {
     // fall through and send — see above
   }
 
-  const code = generateOtp();
+  // OTP test-number allowlist (utils/otpTestNumbers): a listed number gets the
+  // fixed test code and no SMS; every other number is unchanged.
+  const testCode = testCodeFor(p);
+  const code = testCode ?? generateOtp();
 
   // SC-398: storing the code is the step that used to throw when Upstash was
   // unconfigured, and sendOtp had no try/catch — so an unset env var turned the
@@ -271,6 +275,11 @@ export async function sendOtp(req: Request, res: Response) {
   // the app shows, and Resend stays available so the user can try again. That is
   // the honest trade for not paying for a channel we do not want.
   const usedChannel: OtpChannel = channel;
+  if (testCode) {
+    // eslint-disable-next-line no-console
+    console.info(`[otp-test] ${maskPhone(p)} purpose=${purpose}: test code stored, no SMS sent`);
+    return res.json({ success: true, message: 'OTP sent', channel: usedChannel });
+  }
   const sent = await sendOtpViaChannel(p, code, channel);
   if (!sent) {
     return res.status(503).json({

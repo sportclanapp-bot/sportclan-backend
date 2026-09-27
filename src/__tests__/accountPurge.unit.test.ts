@@ -112,8 +112,9 @@ describe('the job itself', () => {
     expect(core).toContain('continue;');
   });
 
-  it('holds accounts for 30 days', () => {
-    expect(src).toContain('const PURGE_AFTER_MS = 30 * 86400000;');
+  it('holds accounts for 30 days — one constant shared with sign-up and Change phone', () => {
+    expect(src).toContain('const PURGE_AFTER_MS = NUMBER_HOLD_MS;');
+    expect(fs.readFileSync(path.join(__dirname, '..', 'utils', 'deletedNumber.ts'), 'utf8')).toContain('export const NUMBER_HOLD_MS = 30 * 86400000;');
   });
 });
 

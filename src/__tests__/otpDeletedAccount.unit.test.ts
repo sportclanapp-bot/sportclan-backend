@@ -25,42 +25,37 @@ const sendOtpBody = (() => {
   return src.slice(start, next === -1 ? undefined : next);
 })();
 
+const helper = fs.readFileSync(path.join(__dirname, '..', 'utils', 'deletedNumber.ts'), 'utf8');
+
 describe('SC-441 · sendOtp refuses a deleted account before sending', () => {
-  test('it checks deleted_at at all', () => {
-    expect(sendOtpBody).toContain('deleted_at');
-    expect(sendOtpBody).toContain('ACCOUNT_DELETED');
+  test('it checks deleted_at at all (through the shared helper)', () => {
+    expect(sendOtpBody).toContain('deletedNumberState(p)');
+    expect(helper).toContain("not('deleted_at', 'is', null)");
+    expect(sendOtpBody).toContain('deletedResponse(heldUntil)');
+    expect(helper).toContain("code: 'ACCOUNT_DELETED'");
   });
 
   test('the check comes BEFORE the code is generated and sent', () => {
-    const check = sendOtpBody.indexOf('deleted_at');
+    const check = sendOtpBody.indexOf('deletedNumberState(p)');
     const generate = sendOtpBody.indexOf('generateOtp()');
     const send = sendOtpBody.indexOf('sendOtpViaChannel(');
     expect(check).toBeGreaterThan(-1);
     expect(generate).toBeGreaterThan(-1);
     expect(send).toBeGreaterThan(-1);
-    // The money is spent at sendOtpViaChannel. Refusing after it would be the
-    // bug we are fixing.
     expect(check).toBeLessThan(generate);
     expect(check).toBeLessThan(send);
   });
 
   test('it matches the number the same way the rest of auth does', () => {
-    // Not a bare .eq('phone', p) — a number can be stored in several shapes, and
-    // missing a variant would let a deleted account through.
-    expect(sendOtpBody).toContain('phoneVariants(p)');
+    expect(helper).toContain('phoneVariants(p)');
   });
 
   test('it fails OPEN, so a database hiccup cannot block everyone from logging in', () => {
-    const check = sendOtpBody.indexOf('deleted_at');
-    const tail = sendOtpBody.slice(check);
-    expect(tail).toMatch(/catch\s*\{/);
+    const check = sendOtpBody.indexOf('deletedNumberState(p)');
+    expect(sendOtpBody.slice(check)).toMatch(/catch\s*\{/);
   });
 
-  test('the refusal reuses the wording the verify paths already use', () => {
-    expect(sendOtpBody).toContain('This account has been deleted.');
-    // Pinned so the two never drift into saying different things about the same
-    // account state.
-    const occurrences = src.split('This account has been deleted.').length - 1;
-    expect(occurrences).toBeGreaterThanOrEqual(4); // 3 verify paths + sendOtp
+  test('one refusal wording for every path', () => {
+    expect(helper).toContain("error: 'This account has been deleted.'");
   });
 });

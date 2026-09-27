@@ -4,6 +4,7 @@ import axios from 'axios';
 import { supabase } from '../utils/supabase';
 import { isValidIndianPhone, canonicalisePhone, phoneVariants } from '../utils/phone';
 import { testCodeFor, maskPhone } from '../utils/otpTestNumbers';
+import { deletedNumberState, deletedResponse, holdUntil, releaseNumber } from '../utils/deletedNumber';
 import { resolveSportId } from '../utils/sportId';
 import {
   generateAccessToken,
@@ -232,16 +233,12 @@ export async function sendOtp(req: Request, res: Response) {
   // verify, and the alternative is charging for messages nobody can ever use.
   // Failing open on a query error is deliberate — a database hiccup must not
   // block login for everyone.
+  // Decided 28 Sep: the refusal lasts 30 days from deletion and says when the
+  // number is free again; after that the number sends like any other (the old
+  // row is released at sign-up / Change phone, or by the hourly purge).
   try {
-    const { data: deletedRows } = await supabase
-      .from('users')
-      .select('deleted_at')
-      .in('phone', phoneVariants(p))
-      .not('deleted_at', 'is', null)
-      .limit(1);
-    if (deletedRows && deletedRows.length > 0) {
-      return res.status(403).json({ error: 'This account has been deleted.', code: 'ACCOUNT_DELETED' });
-    }
+    const { heldUntil } = await deletedNumberState(p);
+    if (heldUntil) return res.status(403).json(deletedResponse(heldUntil));
   } catch {
     // fall through and send — see above
   }
@@ -411,11 +408,12 @@ export async function register(req: Request, res: Response) {
   const existingPhone = (existingRows ?? [])[0];
   if (existingPhone) {
     if ((existingPhone as { deleted_at?: string | null }).deleted_at) {
-      const { error: freeErr } = await supabase
-        .from('users')
-        .update({ phone: `deleted:${existingPhone.id}` })
-        .eq('id', existingPhone.id);
-      if (freeErr) return res.status(500).json({ error: 'Could not free the number for re-registration' });
+      // Decided 28 Sep: only after the 30 days — until then the number is held
+      // (and sendOtp won't have sent a code, but the rule lives here too).
+      const held = holdUntil((existingPhone as { deleted_at?: string | null }).deleted_at);
+      if (held) return res.status(403).json(deletedResponse(held));
+      const freed = await releaseNumber((existingRows ?? []).filter((r: any) => r.deleted_at).map((r: any) => r.id));
+      if (!freed) return res.status(500).json({ error: 'Could not free the number for re-registration' });
     } else {
       return res.status(400).json({
         code: 'PHONE_ALREADY_REGISTERED',
@@ -562,7 +560,7 @@ export async function otpLogin(req: Request, res: Response) {
 
   const { data: user, error } = await supabase
     .from('users')
-    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, is_admin, created_at')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, is_admin, created_at, deleted_at')
     // SC-386: look up EVERY form. Deliberately permissive — an account still
     // stored the legacy way must keep logging in, both in the window before
     // migration 083 runs and afterwards if a value could not be canonicalised.
@@ -570,15 +568,19 @@ export async function otpLogin(req: Request, res: Response) {
     .limit(1)
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
-  if (!user) {
+  // Decided 28 Sep: a deleted account past its 30 days no longer owns the
+  // number — this person is new, and goes to sign-up like anyone else.
+  const deletedAt = (user as { deleted_at?: string | null } | null)?.deleted_at ?? null;
+  if (!user || (deletedAt && !holdUntil(deletedAt))) {
     return res.status(404).json({ error: 'Phone not registered', needsRegistration: true });
   }
   if (await isSuspended(user.id)) {
     return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
   }
-  if (await isDeleted(user.id)) {
-    return res.status(403).json({ error: 'This account has been deleted.', code: 'ACCOUNT_DELETED' });
+  if (deletedAt || (await isDeleted(user.id))) {
+    return res.status(403).json(deletedResponse(holdUntil(deletedAt)));
   }
+  delete (user as { deleted_at?: unknown }).deleted_at;
 
   await deleteOtp(p);
   const accessToken = generateAccessToken(user.id);
@@ -719,6 +721,13 @@ export async function changePhone(req: Request, res: Response) {
     if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
       return res.status(400).json({ error: 'OTP not verified or expired' });
     }
+  }
+  // Decided 28 Sep: a deleted account's number is held for 30 days, then free —
+  // an expired row still carrying it (purge not run yet) is released here.
+  const del = await deletedNumberState(p);
+  if (del.heldUntil) return res.status(403).json(deletedResponse(del.heldUntil));
+  if (del.expiredIds.length && !(await releaseNumber(del.expiredIds))) {
+    return res.status(500).json({ error: 'Could not free the number' });
   }
   const { data: existing } = await supabase
     .from('users')

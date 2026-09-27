@@ -1,4 +1,5 @@
 import { disbandedTeamIds } from '../utils/teamVisibility';
+import { NUMBER_HOLD_MS } from '../utils/deletedNumber';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { revokeSessionsNow } from '../utils/sessionRevocation';
@@ -167,8 +168,8 @@ export async function deleteAccount(req: Request, res: Response) {
 // it is recorded in FIX_PLAN.md.
 // ---------------------------------------------------------------------------
 
-/** The 30-day retention window, in ms. */
-const PURGE_AFTER_MS = 30 * 86400000;
+/** The 30-day retention window, in ms — the same hold sign-up and Change phone honour (utils/deletedNumber). */
+const PURGE_AFTER_MS = NUMBER_HOLD_MS;
 
 /**
  * What a purged row keeps: nothing that identifies a person.

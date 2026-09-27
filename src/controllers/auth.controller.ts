@@ -577,7 +577,7 @@ export async function otpLogin(req: Request, res: Response) {
     return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
   }
   if (await isDeleted(user.id)) {
-    return res.status(403).json({ error: 'This account has been deleted.' });
+    return res.status(403).json({ error: 'This account has been deleted.', code: 'ACCOUNT_DELETED' });
   }
 
   await deleteOtp(p);
@@ -613,7 +613,7 @@ export async function login(req: Request, res: Response) {
     return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
   }
   if (await isDeleted(user.id)) {
-    return res.status(403).json({ error: 'This account has been deleted.' });
+    return res.status(403).json({ error: 'This account has been deleted.', code: 'ACCOUNT_DELETED' });
   }
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
@@ -640,7 +640,7 @@ export async function refresh(req: Request, res: Response) {
       return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
     }
     if (await isDeleted(payload.userId)) {
-      return res.status(403).json({ error: 'This account has been deleted.' });
+      return res.status(403).json({ error: 'This account has been deleted.', code: 'ACCOUNT_DELETED' });
     }
     // B15 (D17): "last active" on Active sessions. Best-effort; a missing
     // column (before migration 100) must not fail a refresh.

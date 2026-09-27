@@ -76,6 +76,7 @@ async function notifyInviteReceived(
 }
 
 const INVITE_COLS = 'id, sender_id, receiver_id, sport_id, message, status, created_at';
+export const INVITE_MESSAGE_MAX = 200;
 
 export async function createInvite(req: Request, res: Response) {
   const userId = req.userId;
@@ -91,6 +92,26 @@ export async function createInvite(req: Request, res: Response) {
   // surfacing as a 500. A crash is not a guard — validate the shape first.
   if (!isUuid(receiver_id) || !isUuid(sport_id)) {
     return res.status(400).json({ error: 'receiver_id and sport_id must be valid ids', code: 'INVALID_ID' });
+  }
+  // Phase 3 B05-F10: the message is a short string (the app caps it at 200); an
+  // object was stored and pushed as "[object Object]", and 3000 chars went out.
+  if (message != null && typeof message !== 'string') {
+    return res.status(400).json({ error: 'The message must be text.', code: 'BAD_MESSAGE' });
+  }
+  const cleanMessage = typeof message === 'string' ? message.trim() : '';
+  if (cleanMessage.length > INVITE_MESSAGE_MAX) {
+    return res.status(400).json({ error: `Keep the message under ${INVITE_MESSAGE_MAX} characters.`, code: 'MESSAGE_TOO_LONG' });
+  }
+  // An unknown receiver or sport failed the insert with a 500.
+  const [{ data: receiver }, { data: sportRow }] = await Promise.all([
+    supabase.from('users').select('id, deleted_at').eq('id', receiver_id).maybeSingle(),
+    supabase.from('sports').select('id, is_active').eq('id', sport_id).maybeSingle(),
+  ]);
+  if (!receiver || (receiver as { deleted_at?: string | null }).deleted_at) {
+    return res.status(404).json({ error: 'That player could not be found.', code: 'RECEIVER_NOT_FOUND' });
+  }
+  if (!sportRow || (sportRow as { is_active?: boolean | null }).is_active === false) {
+    return res.status(400).json({ error: 'That sport isn’t available.', code: 'BAD_SPORT' });
   }
 
   // Block check — neither side may be blocking the other.
@@ -127,7 +148,7 @@ export async function createInvite(req: Request, res: Response) {
     // target the same id, so uq_invites_pending is never violated.
     const { data, error } = await supabase
       .from('invites')
-      .update({ status: 'pending', responded_at: null, message: message || null, created_at: nowIso })
+      .update({ status: 'pending', responded_at: null, message: cleanMessage || null, created_at: nowIso })
       .eq('id', decision.id)
       .select(INVITE_COLS)
       .single();
@@ -136,7 +157,7 @@ export async function createInvite(req: Request, res: Response) {
   } else {
     const { data, error } = await supabase
       .from('invites')
-      .insert({ sender_id: userId, receiver_id, sport_id, message: message || null })
+      .insert({ sender_id: userId, receiver_id, sport_id, message: cleanMessage || null })
       .select(INVITE_COLS)
       .single();
     if (error) {
@@ -154,7 +175,7 @@ export async function createInvite(req: Request, res: Response) {
     invite = data;
   }
 
-  try { await notifyInviteReceived(invite.id, userId, receiver_id, sport_id, message || null); } catch { /* best-effort */ }
+  try { await notifyInviteReceived(invite.id, userId, receiver_id, sport_id, cleanMessage || null); } catch { /* best-effort */ }
   return res.json({ invite });
 }
 
@@ -262,14 +283,22 @@ export async function respondToInvite(req: Request, res: Response) {
   if (isInviteExpired(existing, Date.now())) {
     return res.status(400).json({ error: 'This invite has expired.', code: 'INVITE_EXPIRED' });
   }
+  // Phase 3 B05-F9: an invite is answered once. Accept → decline → accept all
+  // returned 200 and notified the sender each time.
+  if (existing.status !== 'pending') {
+    return res.status(409).json({ error: 'You already answered this invite.', code: 'INVITE_RESOLVED' });
+  }
   const { data, error } = await supabase
     .from('invites')
     .update({ status, responded_at: new Date().toISOString() })
     .eq('id', id)
     .eq('receiver_id', userId)
+    .eq('status', 'pending')
     .select('id, status, sender_id, sport_id')
-    .single();
-  if (error || !data) return res.status(404).json({ error: error?.message || 'Invite not found' });
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  // Lost a race with another answer from the same person.
+  if (!data) return res.status(409).json({ error: 'You already answered this invite.', code: 'INVITE_RESOLVED' });
 
   // Notify the SENDER that their invite was accepted/declined (block-respecting,
   // best-effort — never fail the response).

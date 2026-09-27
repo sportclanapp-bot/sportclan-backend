@@ -33,12 +33,16 @@ export interface ParticipantLite {
   team_side: string | null;
 }
 
-/** No teams, exactly one participant on each side. */
+/**
+ * No teams, exactly one participant on each side — and not an open pickup
+ * (Phase 3 B05-F6: an open match with one joiner a side is a pickup game, not
+ * a challenge; `is_open` is honoured when the caller selected it).
+ */
 export function isSinglesShape(
-  match: { team_a_id?: string | null; team_b_id?: string | null },
+  match: { team_a_id?: string | null; team_b_id?: string | null; is_open?: boolean | null },
   participants: ParticipantLite[] | null | undefined,
 ): boolean {
-  if (match.team_a_id || match.team_b_id) return false;
+  if (match.team_a_id || match.team_b_id || match.is_open) return false;
   const ps = participants ?? [];
   return ps.filter((p) => p.team_side === 'A').length === 1 && ps.filter((p) => p.team_side === 'B').length === 1;
 }

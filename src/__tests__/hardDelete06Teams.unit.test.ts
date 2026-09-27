@@ -118,7 +118,9 @@ describe('a disbanded team does not show', () => {
     expect(fnBody(T, 'getTeam')).toMatch(/deleted_at\) \{\s*return res\.status\(410\)\.json\(\{\s*\.\.\.TEAM_DISBANDED,[\s\S]*?former_member: !!membership/);
   });
   test('pickers: a new match, a tournament entry (captain, by code, organiser adding) refuse it', () => {
-    expect(fnBody('controllers/matches.controller.ts', 'createMatchRefusal')).toMatch(/t\.deleted_at\) return \{ status: 410, error: 'This team was disbanded\.', code: 'TEAM_DISBANDED' \}/);
+    // Phase 3 B05: the team checks moved into teamIdsRefusal, shared by create and edit.
+    expect(fnBody('controllers/matches.controller.ts', 'createMatchRefusal')).toMatch(/teamIdsRefusal\(args\.teamIds, args\.sportId\)/);
+    expect(fnBody('controllers/matches.controller.ts', 'teamIdsRefusal')).toMatch(/t\.deleted_at\) return \{ status: 410, error: 'This team was disbanded\.', code: 'TEAM_DISBANDED' \}/);
     for (const fn of ['createEntry', 'joinByCode', 'directAddTeam']) {
       expect([fn, /isTeamDisbanded\(team_id\)\) return res\.status\(410\)\.json\(TEAM_DISBANDED\)/.test(fnBody('controllers/tournaments.controller.ts', fn))]).toEqual([fn, true]);
     }

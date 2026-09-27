@@ -15,6 +15,7 @@ import { isSinglesShape } from '../utils/singles';
 import { viewerCanPlay } from '../utils/viewerCanPlay';
 import { notifyUser } from '../utils/notify';
 import { leaseRefusal } from '../utils/leaseCore';
+import { isUuid } from '../utils/uuid';
 
 /**
  * Shared gate for match-mutating feature endpoints (DLS, event edit/delete,
@@ -67,7 +68,7 @@ async function loadScorableMatch(
 async function notifyChallengerOfAnswer(matchId: string, userId: string, accepted: boolean): Promise<void> {
   try {
     const [{ data: match }, { data: parts }] = await Promise.all([
-      supabase.from('matches').select('id, created_by, team_a_id, team_b_id, team_b_name, is_ranked, status').eq('id', matchId).maybeSingle(),
+      supabase.from('matches').select('id, created_by, team_a_id, team_b_id, team_b_name, is_ranked, status, is_open').eq('id', matchId).maybeSingle(),
       supabase.from('match_participants').select('user_id, team_side').eq('match_id', matchId),
     ]);
     if (!match || isTerminalMatchStatus(match.status)) return;
@@ -530,6 +531,39 @@ export async function deleteMatchEvent(req: Request, res: Response) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+export const INNINGS_STATS_MAX_ROWS = 50;
+/** Caps for one innings line; a count must be a whole number from 0 to its cap. */
+const INNINGS_CAPS: Record<string, number> = {
+  runs: 500, balls_faced: 600, fours: 150, sixes: 150,
+  bowling_runs: 500, bowling_wickets: 10, bowling_maidens: 50,
+  catches: 10, runouts: 10, stumpings: 10,
+};
+/** Phase 3 B05-F15 · one innings-stats row's shape. Exported for tests. */
+export function inningsRowRefusal(rows: unknown[]): { error: string; code: string } | null {
+  for (const raw of rows) {
+    const s = (raw ?? {}) as Record<string, unknown>;
+    if (!isUuid(s.user_id)) return { error: 'Each row needs a player.', code: 'BAD_PLAYER' };
+    if (s.innings_number != null && s.innings_number !== 1 && s.innings_number !== 2) {
+      return { error: 'innings_number is 1 or 2.', code: 'BAD_INNINGS' };
+    }
+    for (const [k, cap] of Object.entries(INNINGS_CAPS)) {
+      const v = s[k];
+      if (v != null && (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > cap)) {
+        return { error: `${k} must be a whole number from 0 to ${cap}.`, code: 'BAD_STAT' };
+      }
+    }
+    const o = s.bowling_overs;
+    if (o != null && (typeof o !== 'number' || !Number.isFinite(o) || o < 0 || o > 50)) {
+      return { error: 'bowling_overs must be from 0 to 50.', code: 'BAD_STAT' };
+    }
+    if (s.dismissal_type != null && (typeof s.dismissal_type !== 'string' || s.dismissal_type.length > 30)) {
+      return { error: 'dismissal_type must be short text.', code: 'BAD_STAT' };
+    }
+    if (s.team_id != null && !isUuid(s.team_id)) return { error: 'team_id must be an id.', code: 'BAD_STAT' };
+  }
+  return null;
+}
+
 // INNINGS STATS — per-innings cricket batting/bowling/fielding
 // POST /matches/:id/innings-stats
 // ────────────────────────────────────────────────────────────────────────────
@@ -543,8 +577,22 @@ export async function upsertInningsStats(req: Request, res: Response) {
     if (!Array.isArray(stats) || stats.length === 0) {
       return res.status(400).json({ error: 'stats array required' });
     }
+    if (stats.length > INNINGS_STATS_MAX_ROWS) {
+      return res.status(400).json({ error: `Too many rows (max ${INNINGS_STATS_MAX_ROWS})` });
+    }
     const gate = await loadScorableMatch(id, userId, deviceIdOf(req));
     if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg, ...(gate.error.code ? { code: gate.error.code } : {}) });
+    // Phase 3 B05-F15: these rows feed career stats, so each is checked — any
+    // user, any innings and junk counts ('abc' failed with a 500) were written.
+    {
+      const refusal = inningsRowRefusal(stats);
+      if (refusal) return res.status(400).json(refusal);
+      const { data: lineup } = await supabase.from('match_participants').select('user_id').eq('match_id', id);
+      const inLineup = new Set(((lineup ?? []) as Array<{ user_id: string }>).map((p) => p.user_id));
+      if (stats.some((s: { user_id: string }) => !inLineup.has(s.user_id))) {
+        return res.status(400).json({ error: 'Every player must be in this match’s line-up.', code: 'NOT_IN_LINEUP' });
+      }
+    }
 
     const rows = stats.map((s: any) => ({
       match_id: id,

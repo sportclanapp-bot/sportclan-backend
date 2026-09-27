@@ -39,6 +39,7 @@ import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner, recrownAfterVoidChange } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats, bestOfState } from './scoring.controller';
 import { awardBadgesSafe, revokeRecordBadgesSafe } from './badges.controller';
+import { isUuid } from '../utils/uuid';
 import { isSinglesSport, winnerSideOf, challengeText, pendingRankedOpponent, isSinglesShape } from '../utils/singles';
 import { isBlockedBetween } from '../utils/blocks';
 import { reconcileWinCoins } from '../utils/winCoins';
@@ -74,6 +75,62 @@ async function opponentNotAcceptedRefusal(match: {
 
 /** A little clock skew is allowed: "now" on the phone can be a minute behind. */
 const PAST_GRACE_MS = 5 * 60_000;
+/** How far ahead a match can be scheduled (the app's date picker stops here too). */
+export const MAX_SCHEDULE_AHEAD_MS = 366 * 86_400_000;
+export const FORMAT_MAX = 20;
+
+/**
+ * Phase 3 B05-F17: `format` is checked, not stored as sent. Cricket is `T<overs>`
+ * (matching `overs` when both are given), `box` or `pair`; `20` and `{x:1}` were
+ * stored before. Other sports: a short string (best-of presets are checked by
+ * isAcceptableMatchLength). Absent is fine. Exported for tests.
+ */
+export function formatRefusal(
+  sportSlug: string | null | undefined,
+  format: unknown,
+  overs: unknown,
+): { status: number; error: string; code: string } | null {
+  if (format == null || format === '') return null;
+  if (typeof format !== 'string' || format.trim().length > FORMAT_MAX) {
+    return { status: 400, error: 'That match format isn’t valid.', code: 'BAD_FORMAT' };
+  }
+  if (sportSlug !== 'cricket') return null;
+  const f = format.trim().toLowerCase();
+  if (f === 'box' || f === 'pair' || f === 'cricket') return null; // 'cricket': an older app sent the slug
+  const m = /^t(\d{1,3})$/.exec(f);
+  if (!m) return { status: 400, error: 'That cricket format isn’t offered.', code: 'BAD_FORMAT' };
+  if (overs != null && Number(m[1]) !== Number(overs)) {
+    return { status: 400, error: 'The format and the overs don’t match.', code: 'FORMAT_OVERS_MISMATCH' };
+  }
+  return null;
+}
+
+/** The match time: a real date, not in the past, within the next year. */
+export function scheduleRefusal(scheduledAt: unknown): { status: number; error: string; code: string } | null {
+  if (scheduledAt == null || scheduledAt === '') return null;
+  const t = typeof scheduledAt === 'string' || typeof scheduledAt === 'number' ? Date.parse(String(scheduledAt)) : NaN;
+  if (Number.isNaN(t)) return { status: 400, error: 'Pick a valid date and time.', code: 'BAD_SCHEDULED_AT' };
+  if (t < Date.now() - PAST_GRACE_MS) return { status: 400, error: 'Match time can’t be in the past.', code: 'SCHEDULED_IN_PAST' };
+  // Phase 3 B05-F17: 9999-12-31 was accepted, and Home's "next match" carried it forever.
+  if (t > Date.now() + MAX_SCHEDULE_AHEAD_MS) return { status: 400, error: 'Pick a date within the next year.', code: 'SCHEDULED_TOO_FAR' };
+  return null;
+}
+
+/** Each team id: a real, live team of this sport. */
+async function teamIdsRefusal(teamIds: unknown[], sportId: string): Promise<{ status: number; error: string; code: string } | null> {
+  if (!teamIds.length) return null;
+  const { data } = await supabase.from('teams').select('id, sport_id, deleted_at').in('id', teamIds as string[]);
+  for (const id of teamIds) {
+    const t = ((data ?? []) as Array<{ id: string; sport_id: string; deleted_at?: string | null }>).find((x) => x.id === id);
+    if (!t) return { status: 400, error: 'That team could not be found.', code: 'TEAM_NOT_FOUND' };
+    // Hard-delete list #6: a disbanded team can't be picked for a new match.
+    if (t.deleted_at) return { status: 410, error: 'This team was disbanded.', code: 'TEAM_DISBANDED' };
+    if (t.sport_id !== sportId) {
+      return { status: 400, error: 'That team plays a different sport — pick a team for this sport.', code: 'TEAM_WRONG_SPORT' };
+    }
+  }
+  return null;
+}
 
 /**
  * Creation rules the form enforced but the server did not (confirmed live in
@@ -92,32 +149,19 @@ export async function createMatchRefusal(args: {
   tournamentId: string | null;
 }): Promise<{ status: number; error: string; code: string } | null> {
   if (!args.venue) return { status: 400, error: 'Add a ground / venue.', code: 'VENUE_REQUIRED' };
-  if (args.scheduledAt != null && args.scheduledAt !== '') {
-    const t = Date.parse(String(args.scheduledAt));
-    if (Number.isNaN(t)) return { status: 400, error: 'Pick a valid date and time.', code: 'BAD_SCHEDULED_AT' };
-    if (t < Date.now() - PAST_GRACE_MS) return { status: 400, error: 'Match time can’t be in the past.', code: 'SCHEDULED_IN_PAST' };
-  }
+  const when = scheduleRefusal(args.scheduledAt);
+  if (when) return when;
   if (args.isRanked && args.isOpen) {
     // Joiners are placed with no line-up choice and ranked needs a real one.
     return { status: 400, error: 'A ranked match can’t be open to other players.', code: 'RANKED_OPEN' };
   }
-  const [teams, tournament] = await Promise.all([
-    args.teamIds.length
-      ? Promise.resolve(supabase.from('teams').select('id, sport_id, deleted_at').in('id', args.teamIds)).then((r) => r.data ?? [])
-      : Promise.resolve([] as Array<{ id: string; sport_id: string; deleted_at?: string | null }>),
+  const [teamRefusal, tournament] = await Promise.all([
+    teamIdsRefusal(args.teamIds, args.sportId),
     args.tournamentId
       ? Promise.resolve(supabase.from('tournaments').select('id, sport_id').eq('id', args.tournamentId).maybeSingle()).then((r) => r.data)
       : Promise.resolve(null),
   ]);
-  for (const id of args.teamIds) {
-    const t = (teams as Array<{ id: string; sport_id: string; deleted_at?: string | null }>).find((x) => x.id === id);
-    if (!t) return { status: 400, error: 'That team could not be found.', code: 'TEAM_NOT_FOUND' };
-    // Hard-delete list #6: a disbanded team can't be picked for a new match.
-    if (t.deleted_at) return { status: 410, error: 'This team was disbanded.', code: 'TEAM_DISBANDED' };
-    if (t.sport_id !== args.sportId) {
-      return { status: 400, error: 'That team plays a different sport — pick a team for this sport.', code: 'TEAM_WRONG_SPORT' };
-    }
-  }
+  if (teamRefusal) return teamRefusal;
   if (args.tournamentId) {
     const tr = tournament as { id: string; sport_id: string } | null;
     if (!tr) return { status: 400, error: 'That tournament could not be found.', code: 'TOURNAMENT_NOT_FOUND' };
@@ -267,6 +311,10 @@ export async function createMatch(req: Request, res: Response) {
     // A6: cricket takes overs in every format, from the format's offered list;
     // no other sport has overs (they were stored for any sport and never read).
     const isCricketMatch = lengthSlug === 'cricket';
+    {
+      const fr = formatRefusal(lengthSlug, format, isCricketMatch ? overs : null);
+      if (fr) return res.status(fr.status).json({ error: fr.error, code: fr.code });
+    }
     if (isCricketMatch && overs != null && !isOfferedOvers(cricketFormatOf(format), Number(overs))) {
       return res.status(400).json({ error: 'Those overs aren’t offered for this format.', code: 'BAD_OVERS' });
     }
@@ -516,7 +564,11 @@ export async function listOpenMatches(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { sport_id, city_id } = req.query as Record<string, string | undefined>;
+    // Phase 3 B05-F16: city_id=nope gave a 500.
+    if (city_id && !isUuid(city_id)) return res.status(400).json({ error: 'Invalid id', code: 'INVALID_ID' });
+    if (sport_id != null && typeof sport_id !== 'string') return res.status(400).json({ error: 'Unknown sport', code: 'BAD_SPORT' });
     const resolvedSportId = await resolveSportId(sport_id);
+    if (sport_id && !resolvedSportId) return res.status(400).json({ error: 'Unknown sport', code: 'BAD_SPORT' });
     // SC-263: a "suggested for you" match you CREATED, one that's already FULL, or
     // one you've already JOINED is a silly suggestion. Exclude all three. (Single
     // caller = HomeScreen, verified — safe to filter server-side. Sport/city
@@ -651,6 +703,34 @@ export async function listOpenMatches(req: Request, res: Response) {
   }
 }
 
+/**
+ * Took part: the creator, the umpire, anyone in the line-up, or a member of
+ * either registered team. Exported for tests.
+ */
+export async function tookPartInMatch(
+  match: { id: string; created_by?: string | null; umpire_id?: string | null; team_a_id?: string | null; team_b_id?: string | null },
+  userId: string,
+): Promise<boolean> {
+  if (match.created_by === userId || match.umpire_id === userId) return true;
+  const { data: row } = await supabase
+    .from('match_participants')
+    .select('user_id')
+    .eq('match_id', match.id)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (row) return true;
+  const teamIds = [match.team_a_id, match.team_b_id].filter(Boolean) as string[];
+  if (!teamIds.length) return false;
+  const { data: member } = await supabase
+    .from('team_members')
+    .select('user_id')
+    .in('team_id', teamIds)
+    .eq('user_id', userId)
+    .limit(1)
+    .maybeSingle();
+  return !!member;
+}
+
 // POST /matches/:id/rate  { matchQuality: 1-5, wouldPlayAgain: boolean }
 // Inserts one row per (match, rater) into match_ratings. Returns the
 // existing row if the user has already rated this match.
@@ -660,7 +740,8 @@ export async function rateMatchHandler(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const { matchQuality, wouldPlayAgain } = req.body ?? {};
-    if (typeof matchQuality !== 'number' || matchQuality < 1 || matchQuality > 5) {
+    // Phase 3 B05-F8: whole stars only (2.5 failed the insert with a 500).
+    if (typeof matchQuality !== 'number' || !Number.isInteger(matchQuality) || matchQuality < 1 || matchQuality > 5) {
       return res.status(400).json({ error: 'matchQuality must be 1-5' });
     }
     if (typeof wouldPlayAgain !== 'boolean') {
@@ -671,12 +752,20 @@ export async function rateMatchHandler(req: Request, res: Response) {
     // that actually happened.
     const { data: match } = await supabase
       .from('matches')
-      .select('id, status')
+      .select('id, status, created_by, umpire_id, team_a_id, team_b_id, voided_at')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (match.status !== 'completed') {
       return res.status(400).json({ error: 'Can only rate a completed match' });
+    }
+    // Phase 3 B05-F8: a voided match counts nowhere, and only the people in it
+    // rate it — anyone could move a stranger's match rating before.
+    if (match.voided_at) {
+      return res.status(409).json({ error: 'This match was voided, so it can’t be rated.', code: 'MATCH_VOIDED' });
+    }
+    if (!(await tookPartInMatch(match, userId))) {
+      return res.status(403).json({ error: 'Only people who took part in this match can rate it.', code: 'NOT_IN_MATCH' });
     }
 
     // Dedupe — one rating per user per match.
@@ -715,13 +804,24 @@ export async function setMatchTossHandler(req: Request, res: Response) {
   const { id } = req.params;
   const { tossWinnerTeamId, tossWinnerSide, tossChoice } = req.body || {};
   if (!tossChoice) return res.status(400).json({ error: 'tossChoice is required' });
+  // Phase 3 B05-F4: only what the toss screen sends (and chasingSide reads) is
+  // stored; an object was stored as-is and a junk team id failed with a 500.
+  if (tossChoice !== 'bat' && tossChoice !== 'bowl') {
+    return res.status(400).json({ error: 'The toss winner chooses to bat or bowl.', code: 'BAD_TOSS_CHOICE' });
+  }
+  if (tossWinnerSide != null && tossWinnerSide !== 'A' && tossWinnerSide !== 'B') {
+    return res.status(400).json({ error: 'The toss winner is side A or side B.', code: 'BAD_TOSS_SIDE' });
+  }
 
   const { data: match } = await supabase
     .from('matches')
-    .select('created_by, umpire_id, status, score_summary, tournament_id')
+    .select('id, created_by, umpire_id, status, score_summary, tournament_id, is_ranked, team_a_id, team_b_id, team_b_name')
     .eq('id', id)
     .maybeSingle();
   if (!match) return res.status(404).json({ error: 'Match not found' });
+  if (tossWinnerTeamId != null && tossWinnerTeamId !== match.team_a_id && tossWinnerTeamId !== match.team_b_id) {
+    return res.status(400).json({ error: 'The toss winner must be one of the two teams.', code: 'BAD_TOSS_WINNER' });
+  }
   if (!(await canOfficiateMatch(match, userId))) {
     return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can record the toss' : 'Only the creator or umpire can record the toss' });
   }
@@ -737,6 +837,12 @@ export async function setMatchTossHandler(req: Request, res: Response) {
   // SC-42: a finished match is immutable — no toss changes.
   if (isTerminalMatchStatus(match.status)) {
     return res.status(409).json({ error: 'This match is finished and can no longer be changed' });
+  }
+  // Phase 3 B05-F3: the toss starts the match, so the F-02 gate applies — it
+  // set an unaccepted ranked singles match live, where it then sat stuck.
+  {
+    const refusal = await opponentNotAcceptedRefusal(match);
+    if (refusal) return res.status(409).json(refusal);
   }
 
   // Recording the toss is the moment play begins, so flip the match to `live`
@@ -1047,7 +1153,13 @@ export async function listMatches(req: Request, res: Response) {
     const { sport_id, status, tournament_id, team_id, mine } = req.query as Record<string, string | undefined>;
     // Accept either a UUID or a slug/name for sport_id — the mobile app
     // has some legacy call sites that still pass 'cricket' / 'badminton'.
+    // Phase 3 B05-F16: a bad id gave a 500 (team_id also went into .or()
+    // unchecked), and an unknown sport was silently ignored.
+    if ((team_id && !isUuid(team_id)) || (tournament_id && !isUuid(tournament_id)) || (sport_id != null && typeof sport_id !== 'string')) {
+      return res.status(400).json({ error: 'Invalid id', code: 'INVALID_ID' });
+    }
     const resolvedSportId = await resolveSportId(sport_id);
+    if (sport_id && !resolvedSportId) return res.status(400).json({ error: 'Unknown sport', code: 'BAD_SPORT' });
     const p = parsePagination(req.query as Record<string, unknown>);
     let query = supabase
       .from('matches')
@@ -1422,6 +1534,8 @@ export async function getMatch(req: Request, res: Response) {
       [{ count: followerCount }, { data: myFollow }],
       canOfficiate,
       tournamentFormat,
+      myJoinRequest,
+      umpire,
     ] = await Promise.all([
       supabase
         .from('match_participants')
@@ -1441,6 +1555,15 @@ export async function getMatch(req: Request, res: Response) {
         ? supabase.from('tournaments').select('format').eq('id', match.tournament_id).maybeSingle()
           .then(({ data: tf }) => (tf as any)?.format ?? null)
         : Promise.resolve(undefined),
+      Promise.resolve(
+        supabase.from('match_join_requests').select('status').eq('match_id', id).eq('user_id', userId).maybeSingle(),
+      ).then(({ data: jr }) => (jr as { status?: string } | null)?.status ?? null, () => null),
+      // Phase 3 B05-F7: the match page names its umpire.
+      match.umpire_id
+        ? Promise.resolve(
+          supabase.from('users').select('id, name, username').eq('id', match.umpire_id).is('deleted_at', null).maybeSingle(),
+        ).then(({ data: u }) => u ?? null, () => null)
+        : Promise.resolve(null),
     ]);
     timer.mark('reads');
 
@@ -1457,6 +1580,10 @@ export async function getMatch(req: Request, res: Response) {
     // followers does it have.
     matchWithRating.follower_count = followerCount ?? 0;
     matchWithRating.is_following = !!myFollow;
+    // Phase 3 B05-F11: the viewer's own join request, so a reopened match still
+    // shows "Requested" (or that it was declined) instead of the join button.
+    matchWithRating.my_join_request = myJoinRequest === 'pending' || myJoinRequest === 'rejected' ? myJoinRequest : null;
+    matchWithRating.umpire = umpire;
 
     // SC-287: authoritative "can this caller score/officiate this match" flag,
     // computed with the SAME canOfficiateMatch the scoring/toss/complete APIs
@@ -1500,6 +1627,83 @@ export async function getMatch(req: Request, res: Response) {
   }
 }
 
+const MATCH_STATUSES = ['scheduled', 'live', 'completed', 'cancelled', 'abandoned'];
+const isDateOrNull = (v: unknown) => v === null || (typeof v === 'string' && !Number.isNaN(Date.parse(v)));
+
+/**
+ * Phase 3 B05-F2 · PATCH /matches/:id checks what it stores, with create's
+ * rules. Normalises team names in `update` in place. Returns the refusal, or
+ * null. Exported for tests.
+ */
+export async function updateFieldRefusal(
+  match: {
+    team_a_id?: string | null; team_b_id?: string | null; team_a_name?: string | null; team_b_name?: string | null;
+    sport_id: string; is_open?: boolean | null; format?: string | null; overs?: number | null;
+  },
+  update: Record<string, any>,
+  _userId: string,
+): Promise<{ status: number; error: string; code: string } | null> {
+  const bad = (error: string, code: string) => ({ status: 400, error, code });
+  if ('status' in update && !MATCH_STATUSES.includes(update.status)) return bad('That isn’t a match status.', 'BAD_STATUS');
+  if ('venue' in update && !update.venue) return bad('Add a ground / venue.', 'VENUE_REQUIRED');
+  if ('scheduled_at' in update) {
+    if (update.scheduled_at == null || update.scheduled_at === '') return bad('Pick a valid date and time.', 'BAD_SCHEDULED_AT');
+    const when = scheduleRefusal(update.scheduled_at);
+    if (when) return when;
+  }
+  for (const k of ['squad_locked_at', 'scorecard_locked_at']) {
+    if (k in update && !isDateOrNull(update[k])) return bad(`${k} must be a date.`, 'BAD_DATE');
+  }
+  if ('score_summary' in update && update.score_summary !== null
+    && (typeof update.score_summary !== 'object' || Array.isArray(update.score_summary))) {
+    return bad('score_summary must be an object.', 'BAD_SCORE_SUMMARY');
+  }
+  if ('city_id' in update && update.city_id !== null && update.city_id !== '') {
+    if (!isUuid(update.city_id)) return bad('That city could not be found.', 'BAD_CITY');
+    const { data: city } = await supabase.from('cities').select('id').eq('id', update.city_id).maybeSingle();
+    if (!city) return bad('That city could not be found.', 'BAD_CITY');
+  }
+  if (update.city_id === '') update.city_id = null;
+  const effA = 'team_a_id' in update ? update.team_a_id || null : match.team_a_id ?? null;
+  const effB = 'team_b_id' in update ? update.team_b_id || null : match.team_b_id ?? null;
+  {
+    const changed = [['team_a_id', effA], ['team_b_id', effB]].filter(([k, v]) => k in update && v).map(([, v]) => v);
+    const r = await teamIdsRefusal(changed, match.sport_id);
+    if (r) return r;
+  }
+  if ('winner_team_id' in update && update.winner_team_id != null && update.winner_team_id !== effA && update.winner_team_id !== effB) {
+    return bad('The winner must be one of the two teams.', 'BAD_WINNER');
+  }
+  if ('team_a_name' in update || 'team_b_name' in update) {
+    const sides = teamSidesFor({
+      isOpen: !!match.is_open,
+      teamAId: effA,
+      teamBId: effB,
+      teamAName: 'team_a_name' in update ? update.team_a_name : match.team_a_name,
+      teamBName: 'team_b_name' in update ? update.team_b_name : match.team_b_name,
+    });
+    if ('status' in sides) return sides;
+    if ('team_a_name' in update) update.team_a_name = sides.a;
+    if ('team_b_name' in update) update.team_b_name = sides.b;
+  }
+  if ('format' in update || 'overs' in update) {
+    const slug = normSportSlug((await getSport(String(match.sport_id)))?.slug);
+    const format = 'format' in update ? update.format : match.format;
+    const overs = 'overs' in update ? update.overs : match.overs;
+    if (slug !== 'cricket') {
+      if ('overs' in update && update.overs != null) return bad('Only cricket has overs.', 'BAD_OVERS');
+    } else if (overs != null && !isOfferedOvers(cricketFormatOf(format), Number(overs))) {
+      return bad('Those overs aren’t offered for this format.', 'BAD_OVERS');
+    }
+    if ('format' in update && !isAcceptableMatchLength(slug, update.format)) {
+      return bad('That match length isn’t offered for this sport.', 'BAD_MATCH_LENGTH');
+    }
+    const fr = formatRefusal(slug, format, slug === 'cricket' ? overs : null);
+    if (fr) return fr;
+  }
+  return null;
+}
+
 // PATCH /matches/:id — creator or umpire only
 export async function updateMatch(req: Request, res: Response) {
   const userId = req.userId;
@@ -1508,7 +1712,7 @@ export async function updateMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id, status, team_a_id, team_b_id, tournament_id, is_ranked, team_b_name')
+      .select('created_by, umpire_id, status, team_a_id, team_b_id, tournament_id, is_ranked, team_a_name, team_b_name, sport_id, is_open, format, overs')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1561,6 +1765,14 @@ export async function updateMatch(req: Request, res: Response) {
         });
       }
       update.venue = v;
+    }
+    // Phase 3 B05-F2: every key is checked with create's rules — junk status,
+    // time, city, team or overs failed with a 500, and a past time, an empty or
+    // 300-char name and a 1000-char format were stored. (Whether this route may
+    // set a result at all is decision B05-D1; the result keys stay, checked.)
+    {
+      const refusal = await updateFieldRefusal(match as never, update, userId);
+      if (refusal) return res.status(refusal.status).json({ error: refusal.error, code: refusal.code });
     }
     // SC-85: a finished match's result is frozen. Editing status/winner/score/
     // team identity on a terminal match would let it be resurrected (status->live)
@@ -1619,6 +1831,27 @@ export function lineupSideConflict(participants: Array<{ user_id?: unknown; team
   return null;
 }
 
+export const PARTICIPANT_ROLE_MAX = 30;
+/** Phase 3 B05-F14 · one line-up row's shape. Exported for tests. */
+export function participantRowRefusal(rows: unknown[]): { error: string; code: string } | null {
+  for (const raw of rows) {
+    const p = (raw ?? {}) as { user_id?: unknown; jersey_number?: unknown; role?: unknown; batting_order?: unknown };
+    if (!isUuid(p.user_id)) return { error: 'That player could not be found.', code: 'BAD_PLAYER' };
+    const j = p.jersey_number;
+    if (j != null && (typeof j !== 'number' || !Number.isInteger(j) || j < 0 || j > 999)) {
+      return { error: 'A jersey number is a whole number from 0 to 999.', code: 'BAD_JERSEY' };
+    }
+    const b = p.batting_order;
+    if (b != null && (typeof b !== 'number' || !Number.isInteger(b) || b < 1 || b > 99)) {
+      return { error: 'A batting order is a whole number from 1 to 99.', code: 'BAD_BATTING_ORDER' };
+    }
+    if (p.role != null && (typeof p.role !== 'string' || p.role.trim().length > PARTICIPANT_ROLE_MAX)) {
+      return { error: `A role is ${PARTICIPANT_ROLE_MAX} characters or fewer.`, code: 'BAD_ROLE' };
+    }
+  }
+  return null;
+}
+
 export async function addParticipants(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1660,6 +1893,26 @@ export async function addParticipants(req: Request, res: Response) {
         return res.status(400).json({ error: 'team_side must be A or B' });
       }
     }
+    // Phase 3 B05-F14: each row is checked — a junk id or a text jersey failed
+    // the upsert with a 500, and a 500-char role was stored.
+    {
+      const refusal = participantRowRefusal(participants as unknown[]);
+      if (refusal) return res.status(400).json(refusal);
+      const ids = [...new Set((participants as Array<{ user_id: string }>).map((p) => p.user_id))];
+      const { data: people } = await supabase.from('users').select('id, deleted_at').in('id', ids);
+      const live = new Set(((people ?? []) as Array<{ id: string; deleted_at?: string | null }>).filter((u) => !u.deleted_at).map((u) => u.id));
+      if (ids.some((uid) => !live.has(uid))) {
+        return res.status(404).json({ error: 'That player could not be found.', code: 'PLAYER_NOT_FOUND' });
+      }
+      // The same gate as joining (SC-261): nobody is put into a match — and its
+      // chat — with a creator they blocked or who blocked them.
+      if (match.created_by) {
+        const blocked = await blockedUserIds(match.created_by as string);
+        if (ids.some((uid) => blocked.has(uid))) {
+          return res.status(403).json({ error: 'That player can’t be added to this match.', code: 'BLOCKED_FROM_MATCH' });
+        }
+      }
+    }
     // F-29: one player, one side. A batch placing the same player on both sides
     // used to be "deduped" (last wins), so the line-up stored was not the one
     // the scorer saw. It is refused; an exact repeat is still just deduped.
@@ -1679,7 +1932,7 @@ export async function addParticipants(req: Request, res: Response) {
       match_id: id,
       user_id: p.user_id,
       team_side: p.team_side,
-      role: p.role || null,
+      role: typeof p.role === 'string' && p.role.trim() ? p.role.trim() : null,
       jersey_number: p.jersey_number ?? null,
       // F-13: a batting order means something only in cricket.
       batting_order: isCricketLineup ? p.batting_order ?? null : null,
@@ -2108,6 +2361,12 @@ export async function completeMatch(req: Request, res: Response) {
     // through to the existing replay/400 handling below.
     if (match.voided_at && match.status !== 'completed') {
       return res.status(409).json({ error: 'This match was voided. Restore it before recording a result.', code: 'MATCH_VOIDED' });
+    }
+    // Phase 3 B05-F5: a winner must be one of the two teams. Any other id (or
+    // junk, which failed with a 500) skipped the "not started" guard and was
+    // written as the winner of a match it wasn't in.
+    if (winner_team_id != null && winner_team_id !== '' && winner_team_id !== match.team_a_id && winner_team_id !== match.team_b_id) {
+      return res.status(400).json({ error: 'The winner must be one of the two teams.', code: 'BAD_WINNER' });
     }
     // Phase 3: the winning SIDE, from a team id or — for a match with no teams
     // (singles, casual free-text) — from `winner_side`. Everything below that
@@ -3160,6 +3419,11 @@ export async function claimScoringLease(req: Request, res: Response) {
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: 'Only the scorer, umpire or organiser can score this match.' });
     }
+    // Phase 3 B05-F25: a finished match has nothing left to score (a lease was
+    // handed out on a cancelled match).
+    if (isTerminalMatchStatus(match.status)) {
+      return res.status(409).json({ error: 'This match is finished and can no longer be scored.', code: 'MATCH_FINISHED' });
+    }
     const out = await claimLease(id, userId, deviceId);
     if (!out.taken) {
       // Somebody else holds it. Not an error the caller can fix by retrying, so
@@ -3218,6 +3482,7 @@ export async function releaseScoringLease(req: Request, res: Response) {
   }
 }
 
+export const TAKEOVER_REASON_MAX = 500;
 export async function takeOverScoringLease(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -3231,11 +3496,18 @@ export async function takeOverScoringLease(req: Request, res: Response) {
     if (reason.length < 3) {
       return res.status(400).json({ error: 'Say why you are taking over.', code: 'REASON_REQUIRED' });
     }
+    // Phase 3 B05-F25: the reason is stored and shown, so it is capped.
+    if (reason.length > TAKEOVER_REASON_MAX) {
+      return res.status(400).json({ error: `Keep the reason under ${TAKEOVER_REASON_MAX} characters.`, code: 'REASON_TOO_LONG' });
+    }
     const { data: match } = await supabase
       .from('matches').select('id, created_by, umpire_id, tournament_id, status').eq('id', id).maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: 'Only the scorer, umpire or organiser can take over.' });
+    }
+    if (isTerminalMatchStatus(match.status)) {
+      return res.status(409).json({ error: 'This match is finished and can no longer be scored.', code: 'MATCH_FINISHED' });
     }
     const out = await takeOverLease(id, userId, deviceId, reason);
     if (!out.ok) {

@@ -66,7 +66,7 @@ export async function pushRecipients(
 export async function pushChatMessage(chatId: string, senderId: string, senderName: string, text: string): Promise<void> {
   try {
     const [{ data: chat }, { data: members }] = await Promise.all([
-      supabase.from('chats').select('type, name, deleted_at').eq('id', chatId).maybeSingle(),
+      supabase.from('chats').select('is_group, name, deleted_at').eq('id', chatId).maybeSingle(),
       // Current members only — someone who left (left_at set) gets nothing.
       supabase.from('chat_participants').select('user_id').eq('chat_id', chatId).is('left_at', null),
     ]);
@@ -84,8 +84,10 @@ export async function pushChatMessage(chatId: string, senderId: string, senderNa
     const due = dueForPush(chatId, ids);
     if (due.length === 0) return;
     if (ids.length === 0) return;
-    const c = chat as { type?: string; name?: string | null } | null;
-    const { title, body } = chatPushText({ isGroup: c?.type !== 'dm', chatName: c?.name ?? null, senderName, text });
+    // chats has is_group (migration 005), not `type` — selecting `type` made the
+    // query fail, so no chat push was ever sent (Phase 3 B09-F1).
+    const c = chat as { is_group?: boolean | null; name?: string | null };
+    const { title, body } = chatPushText({ isGroup: !!c.is_group, chatName: c.name ?? null, senderName, text });
     await sendPushToUsers(due.map((userId) => ({
       userId, type: 'chat_message', title, body, data: { chatId, screen: 'ChatRoom' },
     })));

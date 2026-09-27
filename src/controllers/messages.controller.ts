@@ -10,6 +10,55 @@ import { isActiveMember, leaveChat, joinChat, softDeleteChat } from '../utils/ch
 import { pushChatMessage } from '../utils/chatPush';
 import { taggableBy } from '../utils/tagPrivacy';
 
+// ─── Phase 3 B09 · shared checks ─────────────────────────────────────────────
+/** The app's six reactions (ChatScreens) — nothing else is stored (B09-F10). */
+export const REACTIONS = ['👍', '❤️', '😂', '🔥', '👏', '😮'];
+const NOT_A_GROUP = { error: 'This is a one-to-one chat.', code: 'NOT_A_GROUP' };
+
+/**
+ * B09-F3: the /groups endpoints act on groups only. A DM's creator holds the
+ * admin role, so without this they could add a third person to a DM (who then
+ * read all of it), rename it, or "leave"/"delete" it and break the pair.
+ */
+async function notAGroup(chatId: string): Promise<{ status: number; body: object } | null> {
+  const { data: chat } = await supabase.from('chats').select('is_group').eq('id', chatId).maybeSingle();
+  if (!chat) return { status: 404, body: { error: 'Group not found' } };
+  if (!(chat as { is_group?: boolean }).is_group) return { status: 400, body: NOT_A_GROUP };
+  return null;
+}
+
+/** B09-F5/F6: which of these ids are real, live (not deleted) accounts. */
+async function liveUserIds(ids: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const { data } = await supabase.from('users').select('id').in('id', ids).is('deleted_at', null);
+  return new Set((data ?? []).map((u: { id: string }) => u.id));
+}
+
+/** B09-F5/F20: a group name is a string with something in it. */
+function groupNameError(name: unknown): string | null {
+  if (typeof name !== 'string' || !name.trim()) return 'Give the group a name.';
+  if (name.trim().length > LIMITS.groupNameMax) return `Group name must be ${LIMITS.groupNameMax} characters or fewer`;
+  return null;
+}
+
+/**
+ * B09-F11: what "unread" means, for the chat list's numbers and the Home dot
+ * alike — not mine, not deleted, not read by me, not from someone blocked
+ * either way. (Deleted senders are dropped by the callers with deletedIdSet.)
+ */
+function unreadQuery(chatIds: string[], userId: string, blocked: Set<string>, cap: number) {
+  let q = supabase
+    .from('messages')
+    .select('id, chat_id, sender_id')
+    .in('chat_id', chatIds)
+    .neq('sender_id', userId)
+    .eq('is_deleted', false)
+    .not('read_by', 'cs', `{${userId}}`)
+    .limit(cap);
+  q = excludeIds(q, 'sender_id', blocked);
+  return q;
+}
+
 // ─── SC-241: 1:1 DM block/privacy gate for EXISTING conversations ────────────
 // getOrCreateDM enforces block + message_privacy ONLY when a DM is first created.
 // Every path that acts on an existing chat (send/read/react/mark-read) must apply
@@ -124,9 +173,10 @@ export async function listChats(req: Request, res: Response) {
   await markDeliveredForUser(chatIds, userId);
 
   const lcp = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
-  const { data: chats, error } = await supabase
+  const { data: chats, error, count: liveTotal } = await supabase
     .from('chats')
-    .select('*')
+    // B09-F20: count the chats that are listed — a deleted one made `total` too big.
+    .select('*', { count: 'exact' })
     .in('id', chatIds)
     .is('deleted_at', null) // soft-deleted groups (098) are in no list
     .order('last_message_at', { ascending: false, nullsFirst: false })
@@ -134,8 +184,9 @@ export async function listChats(req: Request, res: Response) {
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
+  const blocked = await blockedUserIds(userId);
   // Enrich with participants and last message
-  const enriched = await Promise.all(
+  const withUnread = await Promise.all(
     (chats || []).map(async (chat) => {
       const { data: participants } = await supabase
         .from('chat_participants')
@@ -158,27 +209,52 @@ export async function listChats(req: Request, res: Response) {
         .limit(1)
         .maybeSingle();
 
-      // Unread count
-      const { count: unreadCount } = await supabase
-        .from('messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('chat_id', chat.id)
-        .neq('sender_id', userId)
-        .not('read_by', 'cs', `{${userId}}`);
+      // Unread (B09-F11): the Home dot's predicate, so the two never disagree.
+      const { data: unreadRows } = await unreadQuery([chat.id], userId, blocked, UNREAD_SCAN_CAP);
 
       return {
-        ...chat,
-        participants: participants || [],
-        lastMessage: lastMsg,
-        unreadCount: unreadCount ?? 0,
+        chat: {
+          ...chat,
+          participants: participants || [],
+          lastMessage: lastMsg,
+        },
+        unread: (unreadRows ?? []) as Array<{ sender_id: string }>,
       };
     })
   );
+  const dead = await deletedIdSet([...new Set(withUnread.flatMap((c) => c.unread.map((m) => m.sender_id)))]);
+  const enriched = withUnread.map(({ chat, unread }) => ({
+    ...chat,
+    unreadCount: unread.filter((m) => !dead.has(m.sender_id)).length,
+  }));
 
   // SC-299: pagination envelope so the FE knows whether older chats remain. The
   // true total is the number of chats the user participates in (chatIds), not the
   // ranged page — so has_more is accurate regardless of the page window.
-  return res.json({ data: enriched, chats: enriched, ...pageMeta(chatIds.length, lcp) });
+  return res.json({ data: enriched, chats: enriched, ...pageMeta(liveTotal ?? chatIds.length, lcp) });
+}
+
+// ─── ONE CHAT ────────────────────────────────────────────────────────────────
+// B09-F19 · GET /messages/chats/:id — one chat and its members, for Group info.
+// It used to scan the newest page of listChats, so a group past your newest 50
+// chats read "This group is no longer available".
+export async function getChat(req: Request, res: Response) {
+  const userId = req.userId!;
+  const { id } = req.params;
+  if (!(await isActiveMember(id, userId))) return res.status(403).json({ error: 'Not a member of this chat' });
+  const { data: chat, error } = await supabase.from('chats').select('*').eq('id', id).is('deleted_at', null).maybeSingle();
+  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  const { data: participants } = await supabase
+    .from('chat_participants')
+    .select(`
+      user_id, role,
+      user:users!user_id(id, name, username, profile_picture_url)
+    `)
+    .is('left_at', null)
+    .eq('chat_id', id);
+  const full = { ...chat, participants: participants || [] };
+  return res.json({ data: full, chat: full });
 }
 
 // ─── UNREAD MESSAGE COUNT (badge) ───────────────────────────────────────────
@@ -215,17 +291,7 @@ export async function getUnreadCount(req: Request, res: Response) {
   const chatIds = (participations || []).map((p) => p.chat_id);
   if (chatIds.length === 0) return res.json({ unread: 0, chats: 0, capped: false });
 
-  let q = supabase
-    .from('messages')
-    .select('id, chat_id, sender_id')
-    .in('chat_id', chatIds)
-    .neq('sender_id', userId)
-    .eq('is_deleted', false)
-    .not('read_by', 'cs', `{${userId}}`)
-    .limit(UNREAD_SCAN_CAP);
-  q = excludeIds(q, 'sender_id', blocked);
-
-  const { data: rows, error } = await q;
+  const { data: rows, error } = await unreadQuery(chatIds, userId, blocked, UNREAD_SCAN_CAP);
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   const candidates = rows || [];
@@ -290,6 +356,12 @@ export async function getOrCreateDM(req: Request, res: Response) {
     if (existing) return res.json({ data: existing, chat: existing });
   }
 
+  // B09-F5: an unknown or deleted account can't be messaged — this used to make
+  // a chat with nobody in it and answer 201.
+  if (!(await liveUserIds([other_user_id])).has(other_user_id)) {
+    return res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
+  }
+
   // Gate NEW DM creation (SC-A1): honour blocks in either direction (a
   // pre-existing hole — blocks weren't enforced on DM creation) and the
   // target's message_privacy. Existing conversations above are unaffected.
@@ -332,6 +404,16 @@ export async function getOrCreateDM(req: Request, res: Response) {
   const [a, b] = [userId, other_user_id].sort();
   const dmKey = `${a}:${b}`;
 
+  // B09-F3: the pair's DM may already exist but be broken by the old group
+  // endpoints — one side "left", or it was "deleted". Mend it rather than hand
+  // back a chat the caller can't read, or collide with its dm_key for ever.
+  const { data: keyed } = await supabase
+    .from('chats').select('*').eq('dm_key', dmKey).eq('is_group', false).maybeSingle();
+  if (keyed) {
+    const mended = await mendDm(keyed, [userId, other_user_id]);
+    return res.json({ data: mended, chat: mended });
+  }
+
   const { data: chat, error } = await supabase
     .from('chats')
     .insert({ is_group: false, created_by: userId, dm_key: dmKey })
@@ -346,7 +428,10 @@ export async function getOrCreateDM(req: Request, res: Response) {
         .eq('dm_key', dmKey)
         .eq('is_group', false)
         .maybeSingle();
-      if (existingChat) return res.json({ data: existingChat, chat: existingChat });
+      if (existingChat) {
+        const mended = await mendDm(existingChat, [userId, other_user_id]);
+        return res.json({ data: mended, chat: mended });
+      }
     }
     return res.status(500).json({ error: sanitizeError(error) });
   }
@@ -355,28 +440,62 @@ export async function getOrCreateDM(req: Request, res: Response) {
     { chat_id: chat.id, user_id: userId, role: 'admin' },
     { chat_id: chat.id, user_id: other_user_id, role: 'member' },
   ]);
-  if (partErr) console.error('DM chat_participants insert failed:', partErr.message);
+  if (partErr) {
+    // B09-F5: no chat without its two people — take it back out of every list.
+    console.error('DM chat_participants insert failed:', partErr.message);
+    await softDeleteChat(chat.id);
+    return res.status(500).json({ error: 'Could not start the chat. Try again.' });
+  }
 
   return res.status(201).json({ data: chat, chat });
+}
+
+/** B09-F3: a DM is always its two people, and never deleted. */
+async function mendDm<T extends { id: string; deleted_at?: string | null }>(chat: T, pair: string[]): Promise<T> {
+  if (chat.deleted_at) {
+    await supabase.from('chats').update({ deleted_at: null }).eq('id', chat.id);
+  }
+  // joinChat leaves a current member alone and rejoins one who left.
+  await joinChat(chat.id, pair.map((user_id) => ({ user_id, role: 'member' as const })));
+  return { ...chat, deleted_at: null };
 }
 
 // ─── CREATE GROUP CHAT ──────────────────────────────────────────────────────
 export async function createGroup(req: Request, res: Response) {
   const userId = req.userId!;
-  const { name, icon_url, member_ids } = req.body ?? {};
+  const { name: rawName, icon_url, member_ids: rawMembers } = req.body ?? {};
 
-  if (!name) return res.status(400).json({ error: 'Group name is required' });
-  if (typeof name === 'string' && name.length > LIMITS.groupNameMax) {
-    return res.status(400).json({ error: `Group name must be ${LIMITS.groupNameMax} characters or fewer` });
-  }
+  // B09-F5: everything checked before anything is written — a bad member list
+  // used to leave a group behind with no participants, not even its creator.
+  const nameErr = groupNameError(rawName);
+  if (nameErr) return res.status(400).json({ error: nameErr });
+  const name = (rawName as string).trim();
   if (firstDisallowedImageUrl({ icon_url }, ['icon_url'])) {
     return res.status(400).json({ error: 'icon_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
   }
-  if (!member_ids || member_ids.length === 0) {
+  if (!Array.isArray(rawMembers) || rawMembers.length === 0) {
+    return res.status(400).json({ error: 'At least one member required' });
+  }
+  if (rawMembers.some((m: unknown) => typeof m !== 'string' || !isUuid(m))) {
+    return res.status(400).json({ error: 'member_ids must be user ids', code: 'INVALID_ID' });
+  }
+  const member_ids = [...new Set(rawMembers as string[])].filter((m) => m !== userId);
+  if (member_ids.length === 0) {
     return res.status(400).json({ error: 'At least one member required' });
   }
   if (member_ids.length > 49) {
     return res.status(400).json({ error: 'Max 50 members per group' });
+  }
+  const live = await liveUserIds(member_ids);
+  if (member_ids.some((m) => !live.has(m))) {
+    return res.status(404).json({ error: 'Some of these people aren’t on SportClan.', code: 'USER_NOT_FOUND' });
+  }
+  // addMember's block gate (SC-96), for every pair in the new group.
+  const everyone = [userId, ...member_ids];
+  const { data: blocks } = await supabase
+    .from('user_blocks').select('id').in('blocker_id', everyone).in('blocked_id', everyone).limit(1);
+  if ((blocks ?? []).length > 0) {
+    return res.status(403).json({ error: 'Can’t create this group — a block exists between some of its members.', code: 'BLOCKED_FROM_GROUP' });
   }
 
   const { data: chat, error } = await supabase
@@ -403,7 +522,11 @@ export async function createGroup(req: Request, res: Response) {
   ];
 
   const { error: partErr } = await supabase.from('chat_participants').insert(participants);
-  if (partErr) console.error('Group chat_participants insert failed:', partErr.message);
+  if (partErr) {
+    console.error('Group chat_participants insert failed:', partErr.message);
+    await softDeleteChat(chat.id);
+    return res.status(500).json({ error: 'Could not create the group. Try again.' });
+  }
 
   // System message
   const { error: sysErr } = await supabase.from('messages').insert({
@@ -423,6 +546,9 @@ export async function updateGroup(req: Request, res: Response) {
   const { id } = req.params;
   const { name, icon_url } = req.body ?? {};
 
+  const notGroup = await notAGroup(id);
+  if (notGroup) return res.status(notGroup.status).json(notGroup.body);
+
   // Check admin
   const { data: participant } = await supabase
     .from('chat_participants')
@@ -435,9 +561,9 @@ export async function updateGroup(req: Request, res: Response) {
   if (!participant || participant.role !== 'admin') {
     return res.status(403).json({ error: 'Only admins can update group' });
   }
-  if (typeof name === 'string' && name.length > LIMITS.groupNameMax) {
-    return res.status(400).json({ error: `Group name must be ${LIMITS.groupNameMax} characters or fewer` });
-  }
+  // B09-F20: a blank or non-text name is refused, not stored.
+  const nameErr = name !== undefined ? groupNameError(name) : null;
+  if (nameErr) return res.status(400).json({ error: nameErr });
   if (firstDisallowedImageUrl({ icon_url }, ['icon_url'])) {
     return res.status(400).json({ error: 'icon_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
   }
@@ -445,7 +571,7 @@ export async function updateGroup(req: Request, res: Response) {
   const { data, error } = await supabase
     .from('chats')
     .update({
-      ...(name !== undefined && { name }),
+      ...(name !== undefined && { name: (name as string).trim() }),
       ...(icon_url !== undefined && { icon_url }),
     })
     .eq('id', id)
@@ -460,7 +586,10 @@ export async function updateGroup(req: Request, res: Response) {
 export async function addMember(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
-  const { user_id } = req.body;
+  const { user_id } = req.body ?? {};
+
+  const notGroup = await notAGroup(id);
+  if (notGroup) return res.status(notGroup.status).json(notGroup.body);
 
   // Check admin
   const { data: participant } = await supabase
@@ -473,6 +602,14 @@ export async function addMember(req: Request, res: Response) {
 
   if (!participant || participant.role !== 'admin') {
     return res.status(403).json({ error: 'Only admins can add members' });
+  }
+  // B09-F6: a real, live person — a bogus id answered success and posted
+  // "A user was added to the group".
+  if (typeof user_id !== 'string' || !isUuid(user_id)) {
+    return res.status(400).json({ error: 'user_id must be a valid id', code: 'INVALID_ID' });
+  }
+  if (!(await liveUserIds([user_id])).has(user_id)) {
+    return res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
   }
 
   // Check group size
@@ -505,6 +642,10 @@ export async function addMember(req: Request, res: Response) {
   // same row (left_at cleared) rather than a second row inserted.
   if (await isActiveMember(id, user_id)) return res.json({ success: true }); // already a member
   await joinChat(id, [{ user_id, role: 'member' }]);
+  // The system line only for a join that happened.
+  if (!(await isActiveMember(id, user_id))) {
+    return res.status(500).json({ error: 'Could not add them. Try again.' });
+  }
 
   // System message
   const { data: addedUser } = await supabase
@@ -529,6 +670,9 @@ export async function removeMember(req: Request, res: Response) {
   const userId = req.userId!;
   const { id, memberId } = req.params;
 
+  const notGroup = await notAGroup(id);
+  if (notGroup) return res.status(notGroup.status).json(notGroup.body);
+
   const { data: participant } = await supabase
     .from('chat_participants')
     .select('role')
@@ -539,6 +683,10 @@ export async function removeMember(req: Request, res: Response) {
 
   if (!participant || participant.role !== 'admin') {
     return res.status(403).json({ error: 'Only admins can remove members' });
+  }
+  // B09-F6: removing someone who isn't there isn't a success.
+  if (!(await isActiveMember(id, memberId))) {
+    return res.status(404).json({ error: 'Not a member of this group' });
   }
 
   // 098: removal is a soft leave — the row stays with left_at set.
@@ -552,6 +700,9 @@ export async function promoteMember(req: Request, res: Response) {
   const userId = req.userId!;
   const { id, memberId } = req.params;
 
+  const notGroup = await notAGroup(id);
+  if (notGroup) return res.status(notGroup.status).json(notGroup.body);
+
   const { data: participant } = await supabase
     .from('chat_participants')
     .select('role')
@@ -564,14 +715,17 @@ export async function promoteMember(req: Request, res: Response) {
     return res.status(403).json({ error: 'Only admins can promote members' });
   }
 
-  const { error } = await supabase
+  const { data: promoted, error } = await supabase
     .from('chat_participants')
     .update({ role: 'admin' })
     .eq('chat_id', id)
     .eq('user_id', memberId)
-    .is('left_at', null); // can't promote someone who left
+    .is('left_at', null) // can't promote someone who left
+    .select('user_id');
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
+  // B09-F6: nobody promoted → not a member.
+  if (!promoted || promoted.length === 0) return res.status(404).json({ error: 'Not a member of this group' });
   return res.json({ success: true });
 }
 
@@ -579,6 +733,9 @@ export async function promoteMember(req: Request, res: Response) {
 export async function leaveGroup(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
+
+  const notGroup = await notAGroup(id);
+  if (notGroup) return res.status(notGroup.status).json(notGroup.body);
 
   // SC-301 (SC-243 sibling): if an ADMIN leaves, hand the group to an heir BEFORE
   // removing them — otherwise the group is left admin-less and becomes a
@@ -647,6 +804,9 @@ export async function deleteGroup(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
 
+  const notGroup = await notAGroup(id);
+  if (notGroup) return res.status(notGroup.status).json(notGroup.body);
+
   const { data: chat } = await supabase
     .from('chats')
     .select('created_by')
@@ -670,7 +830,15 @@ export async function getMessages(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
   const { cursor, limit = '50' } = req.query;
-  const pageSize = Math.min(parseInt(limit as string, 10) || 50, 100);
+  // B09-F8: bad paging answers 400, not 500.
+  const asked = typeof limit === 'string' ? Number(limit) : NaN;
+  if (!Number.isInteger(asked) || asked < 1) {
+    return res.status(400).json({ error: 'limit must be a whole number from 1', code: 'INVALID_LIMIT' });
+  }
+  if (cursor !== undefined && (typeof cursor !== 'string' || Number.isNaN(Date.parse(cursor)))) {
+    return res.status(400).json({ error: 'cursor must be a date', code: 'INVALID_CURSOR' });
+  }
+  const pageSize = Math.min(asked, 100);
 
   // Verify participant
   // 098: a current member of a chat that still exists (not left, not deleted).
@@ -690,8 +858,7 @@ export async function getMessages(req: Request, res: Response) {
     .from('messages')
     .select(`
       *,
-      sender:users!sender_id(id, name, username, profile_picture_url),
-      reply_to:messages!reply_to_id(id, content, sender:users!sender_id(id, name))
+      sender:users!sender_id(id, name, username, profile_picture_url)
     `)
     .eq('chat_id', id)
     .order('created_at', { ascending: false })
@@ -703,6 +870,22 @@ export async function getMessages(req: Request, res: Response) {
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   const items = data || [];
+  // B09-F9: `reply_to` is the message being replied to, from this chat. The old
+  // `messages!reply_to_id` embed ran the other way — it listed the messages
+  // replying TO each row, from any chat.
+  const parentIds = [...new Set(items.map((m: { reply_to_id?: string | null }) => m.reply_to_id).filter(Boolean))] as string[];
+  const parents = new Map<string, unknown>();
+  if (parentIds.length > 0) {
+    const { data: rows } = await supabase
+      .from('messages')
+      .select('id, content, sender:users!sender_id(id, name)')
+      .in('id', parentIds)
+      .eq('chat_id', id);
+    for (const r of rows ?? []) parents.set((r as { id: string }).id, r);
+  }
+  for (const m of items as Array<{ reply_to_id?: string | null; reply_to?: unknown }>) {
+    m.reply_to = m.reply_to_id ? parents.get(m.reply_to_id) ?? null : null;
+  }
   const reversed = items.reverse();
 
   // SC-344: real typing — OTHER participants whose typing_until is still in the
@@ -762,8 +945,13 @@ export async function sendMessage(req: Request, res: Response) {
   if (imageUrl || audioUrl) {
     return res.status(400).json({ error: 'Chat supports text and links only.', code: 'CHAT_TEXT_ONLY' });
   }
-  if (!body) {
-    return res.status(400).json({ error: 'text is required' });
+  // B09-F7: a message is text with something in it — spaces, a number or a
+  // list were stored as an empty bubble.
+  if (typeof body !== 'string' || !body.trim()) {
+    return res.status(400).json({ error: 'Type a message first.', code: 'EMPTY_MESSAGE' });
+  }
+  if (reply_to_id != null && (typeof reply_to_id !== 'string' || !isUuid(reply_to_id))) {
+    return res.status(400).json({ error: 'reply_to_id must be a valid id', code: 'INVALID_ID' });
   }
   if (typeof body === 'string' && body.length > MAX_MESSAGE_LENGTH) {
     return res.status(400).json({ error: `Message exceeds ${MAX_MESSAGE_LENGTH} character limit` });
@@ -780,13 +968,20 @@ export async function sendMessage(req: Request, res: Response) {
   const gate = await dmSendGate(id, userId);
   if (gate) return res.status(gate.status).json({ error: gate.error });
 
+  // B09-F9: a reply points at a message in this chat.
+  if (reply_to_id) {
+    const { data: parent } = await supabase
+      .from('messages').select('id').eq('id', reply_to_id).eq('chat_id', id).maybeSingle();
+    if (!parent) return res.status(400).json({ error: 'You can only reply to a message in this chat.', code: 'INVALID_REPLY' });
+  }
+
   // Build insert payload. Some columns may not exist on older schemas;
   // pgrest will surface an error if so, which we propagate.
   // Text + link only (SC-75) — media is rejected above, so nothing to store.
   const insertPayload: Record<string, unknown> = {
     chat_id: id,
     sender_id: userId,
-    content: (typeof body === 'string' ? body.trim() : null) || null,
+    content: body.trim(),
     reply_to_id: reply_to_id || null,
   };
 
@@ -802,12 +997,10 @@ export async function sendMessage(req: Request, res: Response) {
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   // B13 (D18): a push to the other members — fire-and-forget, throttled.
-  if (body && typeof body === 'string') {
-    void pushChatMessage(id, userId, data?.sender?.name ?? 'Someone', body);
-  }
+  void pushChatMessage(id, userId, data?.sender?.name ?? 'Someone', body);
 
   // Parse @mentions and create notifications (fire-and-forget)
-  if (body && typeof body === 'string') {
+  {
     const mentionMatches = body.match(/@([a-zA-Z0-9_]+)/g);
     if (mentionMatches && mentionMatches.length > 0) {
       const usernames = mentionMatches.map((m) => m.slice(1).toLowerCase());
@@ -896,8 +1089,12 @@ export async function forwardMessage(req: Request, res: Response) {
   const userId = req.userId!;
   const { message_id, chat_ids } = req.body ?? {};
 
-  if (!message_id || !chat_ids?.length) {
+  if (!message_id || !Array.isArray(chat_ids) || chat_ids.length === 0) {
     return res.status(400).json({ error: 'message_id and chat_ids required' });
+  }
+  // B09-F8: ids are ids.
+  if (typeof message_id !== 'string' || !isUuid(message_id) || chat_ids.some((c: unknown) => typeof c !== 'string' || !isUuid(c))) {
+    return res.status(400).json({ error: 'message_id and chat_ids must be valid ids', code: 'INVALID_ID' });
   }
   if (tooManyItems(chat_ids, ARRAY_LIMITS.forwardChats)) {
     return res.status(400).json({ error: `Too many chats (max ${ARRAY_LIMITS.forwardChats})` });
@@ -905,11 +1102,15 @@ export async function forwardMessage(req: Request, res: Response) {
 
   const { data: original } = await supabase
     .from('messages')
-    .select('content, image_url, chat_id')
+    .select('content, image_url, chat_id, is_deleted, is_system')
     .eq('id', message_id)
-    .single();
+    .maybeSingle();
 
   if (!original) return res.status(404).json({ error: 'Original message not found' });
+  // B09-F7: a deleted message or a system line forwarded as an empty bubble.
+  if (original.is_deleted || original.is_system || !original.content) {
+    return res.status(409).json({ error: 'This message can’t be forwarded.', code: 'CANNOT_FORWARD' });
+  }
 
   // SC-94 SOURCE: the caller must belong to the chat the message came from —
   // otherwise they could read (and re-emit) a message from a chat they're not in.
@@ -961,6 +1162,9 @@ export async function batchMarkRead(req: Request, res: Response) {
   }
   if (tooManyItems(messageIds, ARRAY_LIMITS.batchIds)) {
     return res.status(400).json({ error: `Too many messageIds (max ${ARRAY_LIMITS.batchIds})` });
+  }
+  if (messageIds.some((m: unknown) => typeof m !== 'string' || !isUuid(m))) {
+    return res.status(400).json({ error: 'messageIds must be valid ids', code: 'INVALID_ID' }); // B09-F8
   }
 
   // SC-107 IDOR: only mark messages in chats the caller is a participant of.
@@ -1114,6 +1318,10 @@ export async function setTyping(req: Request, res: Response) {
 // ─── GET GROUP MEMBERS ──────────────────────────────────────────────────────
 export async function getGroupMembers(req: Request, res: Response) {
   const { id } = req.params;
+  // B09-F4: only a member sees who else is in a chat.
+  if (!(await isActiveMember(id, req.userId!))) {
+    return res.status(403).json({ error: 'Not a member of this chat' });
+  }
 
   const { data, error } = await supabase
     .from('chat_participants')
@@ -1140,6 +1348,11 @@ export async function reactToMessage(req: Request, res: Response) {
     const { messageId } = req.params;
     const { emoji } = req.body || {};
     if (!emoji) return res.status(400).json({ error: 'emoji is required' });
+    // B09-F8/F10: one of the app's reactions — junk (and `__proto__`, which read
+    // Object.prototype and threw) is refused.
+    if (typeof emoji !== 'string' || !REACTIONS.includes(emoji)) {
+      return res.status(400).json({ error: 'Pick one of the reactions.', code: 'INVALID_REACTION' });
+    }
 
     const { data: msg, error } = await supabase
       .from('messages')
@@ -1159,8 +1372,8 @@ export async function reactToMessage(req: Request, res: Response) {
       return res.status(403).json({ error: 'You can’t react in this conversation.' });
     }
 
-    const reactions: Record<string, string[]> = msg.reactions ?? {};
-    const current = reactions[emoji] ?? [];
+    const reactions: Record<string, string[]> = { ...(msg.reactions ?? {}) };
+    const current = Object.prototype.hasOwnProperty.call(reactions, emoji) ? reactions[emoji] : [];
     if (current.includes(userId)) {
       reactions[emoji] = current.filter((id: string) => id !== userId);
       if (reactions[emoji].length === 0) delete reactions[emoji];

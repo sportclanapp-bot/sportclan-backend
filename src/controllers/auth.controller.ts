@@ -737,9 +737,14 @@ export async function refresh(req: Request, res: Response) {
 
 // POST /auth/logout  { refreshToken }
 export async function logout(req: Request, res: Response) {
-  const { refreshToken } = req.body || {};
+  const { refreshToken, pushToken } = req.body || {};
   if (refreshToken) {
     await supabase.from('refresh_tokens').update({ revoked: true }).eq('token', refreshToken);
+  }
+  // Phase 3 B09-F2: a signed-out phone stops getting this account's pushes. The
+  // token itself is the proof — only the phone that holds it can send it.
+  if (typeof pushToken === 'string' && pushToken) {
+    await supabase.from('push_tokens').delete().eq('token', pushToken);
   }
   return res.json({ success: true });
 }

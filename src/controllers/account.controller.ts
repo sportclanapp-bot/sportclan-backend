@@ -384,6 +384,14 @@ export async function revokeAllSessions(req: Request, res: Response) {
   // every token minted before now fail on its next request.
   const cutoffMs = await revokeSessionsNow(userId);
 
+  // Phase 3 B09-F2: the signed-out phones stop getting pushes too. Only when
+  // this phone says which token is its own (X-Push-Token) — an older build
+  // doesn't, and would otherwise lose its own pushes until it signs in again.
+  const keepPushToken = req.headers['x-push-token'];
+  if (typeof keepPushToken === 'string' && keepPushToken) {
+    await supabase.from('push_tokens').delete().eq('user_id', userId).neq('token', keepPushToken);
+  }
+
   // That stamp would also kill the caller's own token, so hand this device a
   // replacement that provably postdates the cutoff. `iat` is whole seconds
   // while the cutoff has milliseconds, so a normally-minted replacement lands

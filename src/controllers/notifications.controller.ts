@@ -14,6 +14,10 @@ export async function savePushToken(req: Request, res: Response) {
   if (!['ios', 'android', 'web'].includes(platform)) {
     return res.status(400).json({ error: 'platform must be ios, android, or web' });
   }
+  if (typeof token !== 'string' || token.length > 512) return res.status(400).json({ error: 'token must be a string' });
+  // Phase 3 B09-F2: one phone, one account. A token saved by someone else is
+  // this phone's previous account — without this, it kept getting their pushes.
+  await supabase.from('push_tokens').delete().eq('token', token).neq('user_id', userId);
   const { error } = await supabase
     .from('push_tokens')
     .upsert({ user_id: userId, token, platform }, { onConflict: 'user_id,token' });

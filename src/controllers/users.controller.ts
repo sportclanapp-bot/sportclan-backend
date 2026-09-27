@@ -861,6 +861,11 @@ export async function blockUser(req: Request, res: Response) {
   const { error } = await supabase
     .from('user_blocks')
     .insert({ blocker_id: userId, blocked_id: target });
+  // Phase 3 B11: a well-formed id that matches nobody is a foreign-key
+  // violation (23503) — that's "no such person", not a server fault.
+  if (error && (error as { code?: string }).code === '23503') {
+    return res.status(404).json({ error: 'User not found' });
+  }
   if (error && (error as { code?: string }).code !== '23505') {
     return res.status(500).json({ error: error.message });
   }
@@ -887,7 +892,7 @@ export async function getBlockedUsers(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { data, error } = await supabase
     .from('user_blocks')
-    .select('blocked_id, users:blocked_id (id, name, profile_picture_url)')
+    .select('blocked_id, users:blocked_id (id, name, username, profile_picture_url)')
     .eq('blocker_id', userId)
     .order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });

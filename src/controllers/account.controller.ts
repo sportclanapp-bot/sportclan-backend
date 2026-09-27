@@ -93,6 +93,10 @@ export async function deleteAccount(req: Request, res: Response) {
     bio: null,
     gender: null,
     dob: null,
+    link: null,
+    // Sign-in is already refused for a deleted account; neither is needed.
+    password_hash: null,
+    google_id: null,
   }).eq('id', userId);
 
   if (error) return res.status(500).json({ error: 'Could not deactivate account' });
@@ -192,6 +196,7 @@ export function tombstoneFields(userId: string, nowIso: string) {
     google_id: null,
     profile_picture_url: null,
     bio: null,
+    link: null,
     gender: null,
     dob: null,
     city_id: null,
@@ -268,16 +273,13 @@ export async function purgeExpiredAccounts(req: Request, res: Response) {
   }
 }
 
-// GET /account/sessions — returns the caller's active sessions, deduped
-// per device.
-//
-// refresh_tokens accumulates a new row every time the app rotates its
-// token (which happens on every login and on every silent refresh), so a
-// single device can easily have dozens of rows. We read all rows for the
-// user ordered newest-first, then keep only the MOST RECENT row for each
-// unique device. The device key is `device_info`/`device_name`/`user_agent`
-// if any of them exist, else the last 8 chars of the token as a stable
-// fallback. Capped at 10 sessions.
+// GET /account/sessions — the caller's live sign-ins (unrevoked
+// refresh_tokens rows), this device first, then most recently used. Each row is
+// one sign-in: logging in again on the same phone makes a new row, and each can
+// be signed out on its own.
+/** How many sessions the list returns; `total` says how many are live. */
+export const SESSIONS_LIMIT = 50;
+
 export async function getSessions(req: Request, res: Response) {
   const userId = req.userId!;
   const currentRefreshToken =
@@ -309,42 +311,31 @@ export async function getSessions(req: Request, res: Response) {
     }
   }
 
-  // Dedup newest-first per device key. We iterate in order (already desc
-  // by created_at) and keep the first occurrence for each device.
-  const seen = new Set<string>();
-  const deduped: any[] = [];
-  for (const row of rows) {
-    const deviceKey: string =
-      (row.device_name && `${row.device_name}|${row.device_os ?? ''}`) ||
-      // Fallback: use the last 8 chars of the token. Unique enough per
-      // device since tokens are 100+ chars and rotate frequently.
-      `tok_${String(row.token ?? '').slice(-8) || row.id}`;
-    if (seen.has(deviceKey)) continue;
-    seen.add(deviceKey);
-    deduped.push({ ...row, _deviceKey: deviceKey });
-    if (deduped.length >= 10) break;
-  }
+  // Phase 3 B11-F1: every live row is its own sign-in — refresh tokens don't
+  // rotate on /auth/refresh, so there is no "new row per silent refresh" to
+  // collapse, and the old per-model dedupe hid a second phone of the same
+  // model (which then couldn't be signed out). "This device" is found by token
+  // BEFORE the cap and always listed first; the newest-row guess is only for
+  // a caller that sent no X-Refresh-Token at all (an older app).
+  const recency = (r: any) => String(r.last_used_at ?? r.created_at ?? '');
+  const ordered = rows
+    .map((row) => ({ row, current: !!currentRefreshToken && row.token === currentRefreshToken }))
+    .sort((a, b) => (a.current === b.current ? recency(b.row).localeCompare(recency(a.row)) : a.current ? -1 : 1));
+  if (!currentRefreshToken && ordered.length > 0) ordered[0].current = true;
 
-  const sessions = deduped.map((row) => ({
+  const sessions = ordered.slice(0, SESSIONS_LIMIT).map(({ row, current }) => ({
     id: row.id,
     device_name: sessionLabel(row),
     device_os: row.device_os ?? null,
     app_version: row.app_version ?? null,
     ip_address: null,
     location: null,
-    is_current: currentRefreshToken ? row.token === currentRefreshToken : false,
+    is_current: current,
     last_active: row.last_used_at ?? row.created_at,
     created_at: row.created_at,
   }));
 
-  // If we couldn't identify "this device" by the refresh token header, mark
-  // the most recently used row as current — that's almost always the
-  // session the user is sitting in right now.
-  if (!sessions.some((s) => s.is_current) && sessions.length > 0) {
-    sessions[0].is_current = true;
-  }
-
-  return res.json({ sessions });
+  return res.json({ sessions, total: ordered.length });
 }
 
 // DELETE /account/sessions/:sessionId — delete a single refresh_tokens row.
@@ -424,10 +415,10 @@ export async function revokeAllSessions(req: Request, res: Response) {
  *   · nothing stopped stored markup from travelling verbatim into a file that
  *     might later be opened as HTML.
  *
- * What it must NEVER contain is equally explicit: no credentials. otp_codes,
- * refresh_tokens and push_tokens are not read at all, and `sessions` is read by
- * an explicit column list so `sessions.refresh_token` cannot leak — a select('*')
- * here would hand every device's refresh token to anyone who got the file.
+ * What it must NEVER contain is equally explicit: no credentials. otp_codes
+ * and push_tokens are not read at all, and refresh_tokens (the "sessions"
+ * section) is read by an explicit column list so `token` cannot leak — a
+ * select('*') there would hand every device's sign-in to anyone who got the file.
  */
 
 /** Read every row of a user-owned slice, paging so nothing is silently capped. */
@@ -477,8 +468,12 @@ export async function exportData(req: Request, res: Response) {
     // SC-435: a 'subscriptions' export lived here. The table is dropped by
     // migration 091; exporting it would 500 the whole GDPR download. Coins and
     // gifts still export — they are the parts of the ledger that survive.
-    // Explicit columns — NEVER select('*') here, refresh_token lives on this row.
-    ['sessions', exportAll('sessions', 'id, device_name, device_os, location, is_current, last_active, created_at', (q) => q.eq('user_id', userId))],
+    // Phase 3 B11-F7: sign-ins live in refresh_tokens (the legacy `sessions`
+    // table is never written, so this section was always empty). Explicit
+    // columns — NEVER select('*') here: `token` is the credential itself.
+    ['sessions', exportAll('refresh_tokens', 'id, device_name, device_os, app_version, created_at, last_used_at, revoked', (q) => q.eq('user_id', userId))],
+    ['comments', exportAll('post_comments', 'id, post_id, parent_id, content, created_at, deleted_at', (q) => q.eq('author_id', userId))],
+    ['profile_post_comments', exportAll('profile_post_comments', 'id, post_id, content, created_at, deleted_at', (q) => q.eq('author_id', userId))],
   ];
 
   // Tournament entries are keyed by TEAM, so they have to be resolved through
@@ -497,7 +492,7 @@ export async function exportData(req: Request, res: Response) {
 
   const { data: profile, error: profileErr } = await supabase
     .from('users')
-    .select('id, phone, name, username, email, bio, gender, dob, city_id, created_at, coin_balance, referral_code, referred_by')
+    .select('id, phone, name, username, email, bio, link, gender, dob, show_dob, city_id, created_at, coin_balance, referral_code, referred_by, discoverability, message_privacy, tag_privacy, notification_preferences')
     .eq('id', userId)
     .maybeSingle();
 
@@ -538,21 +533,36 @@ export async function exportData(req: Request, res: Response) {
   return res.send(body);
 }
 
+/** The app's feedback categories; anything else is filed as 'general'. */
+export const FEEDBACK_CATEGORIES = ['bug', 'feature', 'praise', 'complaint', 'general'];
+
 // POST /account/feedback  { category, message, rating?, email? }
 export async function submitFeedback(req: Request, res: Response) {
   const userId = req.userId!;
   const { category, message, rating, email } = req.body || {};
 
-  if (!message || message.trim().length === 0) {
+  // Phase 3 B11-F2: a non-string message or a rating the table's CHECK refuses
+  // used to reach .trim() / the insert and come back as a 500.
+  if (typeof message !== 'string' || message.trim().length === 0) {
     return res.status(400).json({ error: 'message required' });
+  }
+  if (rating !== undefined && rating !== null && !(Number.isInteger(rating) && rating >= 1 && rating <= 5)) {
+    return res.status(400).json({ error: 'Rating must be a whole number from 1 to 5.' });
+  }
+  let cleanEmail: string | null = null;
+  if (email !== undefined && email !== null && email !== '') {
+    if (typeof email !== 'string' || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return res.status(400).json({ error: 'That email address doesn\u2019t look right.' });
+    }
+    cleanEmail = email.trim();
   }
 
   const { error } = await supabase.from('feedback').insert({
     user_id: userId,
-    category: category || 'general',
+    category: FEEDBACK_CATEGORIES.includes(category) ? category : 'general',
     message: message.trim().slice(0, 1000),
-    rating: rating || null,
-    email: email || null,
+    rating: rating ?? null,
+    email: cleanEmail,
   });
 
   if (error) return res.status(500).json({ error: error.message });

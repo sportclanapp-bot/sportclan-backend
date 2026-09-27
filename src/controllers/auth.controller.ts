@@ -274,6 +274,20 @@ export async function sendOtp(req: Request, res: Response) {
       // fall through and send
     }
   }
+  // Phase 3 B11-F16: the same for Change phone the other way round — a number
+  // a live account already uses can never be moved to, and change-phone said so
+  // only after the code (a paid SMS nobody could use) was typed.
+  if (purpose === 'change_phone') {
+    try {
+      const { data: taken, error: takenErr } = await supabase
+        .from('users').select('id').in('phone', phoneVariants(p)).is('deleted_at', null).limit(1);
+      if (!takenErr && Array.isArray(taken) && taken.length > 0) {
+        return res.status(409).json({ error: 'That number is already on another SportClan account.', code: 'PHONE_IN_USE' });
+      }
+    } catch {
+      // fall through and send
+    }
+  }
 
   // 28 Sep: a per-number send limit on top of the per-IP one — it stops
   // SMS-bombing someone else's number from many IPs and caps what we pay.
@@ -800,7 +814,7 @@ export async function changePhone(req: Request, res: Response) {
   // Honor the dev-only test bypass uniformly (see isTestOtp). Production runs
   // the real OTP check since isTestOtp() is always false there.
   if (!isTestOtp(code)) {
-    const chk = await checkOtpCode(p, code);
+    const chk = await checkOtpCode(p, code, { purpose: 'change_phone' });
     if (chk !== 'ok') { const e = otpCheckError(chk); return res.status(e.status).json(e.body); }
   }
   // Decided 28 Sep: a deleted account's number is held for 30 days, then free —

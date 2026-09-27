@@ -18,11 +18,13 @@ jest.mock('../utils/otpStore', () => ({
   clearCounter: jest.fn(async (k: string) => { mockCtr.delete(k); }),
 }));
 jest.mock('axios', () => ({ __esModule: true, default: { get: jest.fn(async () => ({ data: { Status: 'Success', Details: 'sess' } })) } }));
+let mockLiveOwner = true;
 jest.mock('../utils/supabase', () => {
   const chain: any = {};
   for (const m of ['from', 'select', 'in', 'not', 'eq', 'is', 'maybeSingle', 'update', 'insert']) chain[m] = jest.fn(() => chain);
-  // a live account holds every number here (Phase 3 B01-F5: reset codes need one)
-  chain.limit = jest.fn(async () => ({ data: [{ id: 'u-live' }], error: null }));
+  // a live account holds every number here (Phase 3 B01-F5: reset codes need
+  // one) — except for change_phone, whose target must be free (B11-F16)
+  chain.limit = jest.fn(async () => ({ data: mockLiveOwner ? [{ id: 'u-live' }] : [], error: null }));
   return { supabase: chain };
 });
 
@@ -51,6 +53,7 @@ beforeEach(() => {
   mockCtr.clear();
   store.clear();
   get.mockClear();
+  mockLiveOwner = true;
   process.env = { ...ENV, TWOFACTOR_API_KEY: 'k-test', OTP_TEST_NUMBERS: '9876500001, +91 98765 00002', OTP_TEST_CODE: '246810' };
   delete process.env.ALLOW_TEST_OTP;
 });
@@ -78,6 +81,7 @@ describe('config', () => {
 describe('a listed number: no SMS, the fixed code', () => {
   test.each(['login', 'register', 'change_phone', 'reset'])('purpose %s', async (purpose) => {
     const info = jest.spyOn(console, 'info').mockImplementation(() => undefined);
+    mockLiveOwner = purpose !== 'change_phone';
     const r = await send('98765 00001', purpose);
     expect(r.statusCode).toBe(200);
     expect(r.body).toEqual({ success: true, message: 'OTP sent', channel: 'sms' });

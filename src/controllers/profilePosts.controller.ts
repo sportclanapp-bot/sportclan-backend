@@ -14,7 +14,10 @@
  *  - the image-URL allowlist (firstDisallowedImageUrl), profanity, block filter.
  */
 
-import { postGone, profilePostForWrite, softDeleteProfilePost } from '../utils/postVisibility';
+import {
+  WallCommentDeletedReason, asDeletedWallComment, postGone, profilePostForWrite, softDeleteProfileComment,
+  softDeleteProfilePost,
+} from '../utils/postVisibility';
 import { Request, Response } from 'express';
 import { parsePagination } from '../utils/pagination';
 import { supabase } from '../utils/supabase';
@@ -291,21 +294,33 @@ export async function listProfilePostComments(req: Request, res: Response) {
     maxLimit: 100,
   });
 
-  const { data, error, count } = await supabase
-    .from('profile_post_comments')
-    .select(`*, ${AUTHOR_SELECT}`, { count: 'exact' })
-    .eq('post_id', id)
-    .order('created_at', { ascending: true })
-    .range(offset, offset + pageSize - 1);
+  const [{ data, error, count }, live] = await Promise.all([
+    supabase
+      .from('profile_post_comments')
+      .select(`*, ${AUTHOR_SELECT}`, { count: 'exact' })
+      .eq('post_id', id)
+      .order('created_at', { ascending: true })
+      .range(offset, offset + pageSize - 1),
+    // Hard-delete list #5: COMMENTS · N counts live comments only.
+    supabase
+      .from('profile_post_comments')
+      .select('id', { count: 'exact', head: true })
+      .eq('post_id', id)
+      .is('deleted_at', null),
+  ]);
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
-  const total = count ?? 0;
+  // #5: a deleted comment keeps its place — "This comment was deleted" or
+  // "Removed by the wall owner" — with nothing it said or who said it.
+  const rows = (data || []).map((c) =>
+    (c as { deleted_at?: string | null }).deleted_at ? asDeletedWallComment(c as Record<string, unknown>) : c);
+  const all = count ?? 0;
   return res.json({
-    comments: data || [],
-    total,
+    comments: rows,
+    total: live.count ?? rows.filter((c) => !(c as { deleted?: boolean }).deleted).length,
     limit: pageSize,
     offset,
-    has_more: offset + (data?.length ?? 0) < total,
+    has_more: offset + rows.length < all,
   });
 }
 
@@ -349,10 +364,11 @@ export async function deleteProfilePostComment(req: Request, res: Response) {
   // Comment author OR the wall owner can remove a comment.
   const { data: row } = await supabase
     .from('profile_post_comments')
-    .select('id, author_id, post_id')
+    .select('id, author_id, post_id, deleted_at')
     .eq('id', commentId)
     .maybeSingle();
   if (!row) return res.status(404).json({ error: 'Comment not found' });
+  if (row.deleted_at) return res.status(404).json({ error: 'Comment not found' }); // #5: already deleted
   // #4: everything under a deleted wall post stays as it was.
   const parentPost = await profilePostForWrite(row.post_id as string);
   if (parentPost?.deleted) return res.status(410).json(postGone(parentPost));
@@ -368,6 +384,14 @@ export async function deleteProfilePostComment(req: Request, res: Response) {
   }
   if (!allowed) return res.status(403).json({ error: 'Not yours to delete' });
 
-  await supabase.from('profile_post_comments').delete().eq('id', commentId);
-  return res.json({ success: true });
+  // Hard-delete list #5: marked, not removed — and whose delete it was: the
+  // comment's author, or the wall owner removing someone else's comment.
+  const reason: WallCommentDeletedReason = row.author_id === userId ? 'author' : 'wall_owner';
+  try {
+    const done = await softDeleteProfileComment(commentId, userId, reason);
+    if (!done) return res.status(404).json({ error: 'Comment not found' });
+  } catch (err) {
+    return res.status(500).json({ error: sanitizeError(err as { message?: string }) });
+  }
+  return res.json({ success: true, deleted_reason: reason });
 }

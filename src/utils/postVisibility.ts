@@ -235,3 +235,41 @@ export async function softDeleteProfilePost(id: string, authorId: string): Promi
   if (error) throw error;
   return !!data && data.length > 0;
 }
+
+// ── Hard-delete list #5 (27 Sep 2026) · wall-post comments (migration 105) ──
+//
+// Two people may delete one: its author, or the owner of the wall it is on.
+// The row is marked with who and which — 'author' or 'wall_owner' — and keeps
+// its place in the thread: "This comment was deleted" / "Removed by the wall
+// owner". Wall comments have no replies, likes, edits or notifications.
+
+export type WallCommentDeletedReason = 'author' | 'wall_owner';
+
+/** Mark a wall-post comment deleted. False when there was no live comment. */
+export async function softDeleteProfileComment(
+  id: string,
+  deletedBy: string,
+  reason: WallCommentDeletedReason,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('profile_post_comments')
+    .update({ deleted_at: new Date().toISOString(), deleted_by: deletedBy, deleted_reason: reason })
+    .eq('id', id)
+    .is('deleted_at', null)
+    .select('id');
+  if (error) throw error;
+  return !!data && data.length > 0;
+}
+
+/** A deleted wall comment as the thread shows it: its place and time, and
+ *  which kind of delete — nothing it said or who said it. */
+export function asDeletedWallComment<T extends Record<string, unknown>>(row: T): T {
+  return {
+    ...row,
+    content: null,
+    author_id: null,
+    author: null,
+    deleted: true,
+    removed_by_wall_owner: row.deleted_reason === 'wall_owner',
+  };
+}

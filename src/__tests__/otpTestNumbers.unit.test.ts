@@ -129,7 +129,7 @@ describe('the four flows and the rate limits', () => {
     return auth.slice(s, e === -1 ? undefined : e);
   };
   test.each(['otpLogin', 'register', 'changePhone', 'resetPassword'])('%s checks the stored code, so the test code works there', (fn) => {
-    expect(body(fn)).toMatch(/await getOtp\(p\)/);
+    expect(body(fn)).toMatch(/await checkOtpCode\(p, code/);
   });
   test('sends are rate-limited before the controller runs', () => {
     const idx = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');

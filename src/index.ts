@@ -3,6 +3,7 @@ import 'dotenv/config';
 // FIRST, before anything else can throw. An error while wiring the app is
 // precisely the error most worth reporting, and it is the one a reporter
 // initialised further down would miss.
+import { canonicalisePhone } from './utils/phone';
 import { initSentry, installProcessHandlers } from './utils/sentry';
 initSentry();
 installProcessHandlers();
@@ -152,6 +153,35 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+/**
+ * 28 Sep: the endpoints that CHECK a reset code get their own limits, per IP
+ * and per number, on top of the 5-wrong-codes rule (utils/otpCheck). authLimiter
+ * alone (20 / 15 min per IP, shared by every /auth route) let a number's code
+ * be guessed from many IPs with nothing counting per number.
+ */
+const resetCheckIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => `rip:${req.ip ?? 'unknown'}`,
+  skip: rateLimitBypassed,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Try again in a few minutes.', code: 'RATE_LIMITED' },
+});
+const resetCheckNumberLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => {
+    const raw = (req.body as { phone?: unknown } | undefined)?.phone;
+    const p = typeof raw === 'string' ? canonicalisePhone(raw) : null;
+    return p ? `rnum:${p}` : `rip:${req.ip ?? 'unknown'}`;
+  },
+  skip: rateLimitBypassed,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts for this number. Try again later.', code: 'RATE_LIMITED' },
+});
+
 const sendOtpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
@@ -200,6 +230,7 @@ const cacheFor = (seconds: number) => (_req: any, res: any, next: any) => {
 };
 
 app.use('/auth/send-otp', sendOtpLimiter);
+app.use(['/auth/reset-password', '/auth/verify-otp'], resetCheckIpLimiter, resetCheckNumberLimiter);
 app.use('/auth', authLimiter, authRoutes);
 app.use('/cities', cacheFor(86400), citiesRoutes);      // 24h — pure static reference (id/name/state)
 // SC-269: /sports was 24h, but it now carries OPERATIONAL config (is_active

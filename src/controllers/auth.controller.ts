@@ -4,6 +4,7 @@ import axios from 'axios';
 import { supabase } from '../utils/supabase';
 import { isValidIndianPhone, canonicalisePhone, phoneVariants } from '../utils/phone';
 import { testCodeFor, maskPhone } from '../utils/otpTestNumbers';
+import { checkOtpCode, otpCheckError, verifiedMarker, clearWrongCodes } from '../utils/otpCheck';
 import { deletedNumberState, deletedResponse, holdUntil, releaseNumber } from '../utils/deletedNumber';
 import { resolveSportId } from '../utils/sportId';
 import {
@@ -255,6 +256,7 @@ export async function sendOtp(req: Request, res: Response) {
   // gets a clear, retryable message instead of "Internal server error".
   try {
     await setOtp(p, code, purpose, OTP_TTL_SECONDS);
+    clearWrongCodes(p); // a new code, a new count of wrong guesses
   } catch (err: any) {
     // eslint-disable-next-line no-console
     console.error('[send-otp] OTP storage unavailable:', err?.message);
@@ -325,14 +327,18 @@ export async function verifyOtp(req: Request, res: Response) {
   const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // Dev-only bypass (see isTestOtp): accept the fixed test code without a real OTP.
   if (isTestOtp(code)) {
-    await setOtp(p, 'VERIFIED', 'login', OTP_TTL_SECONDS);
+    await setOtp(p, verifiedMarker(code), 'login', OTP_TTL_SECONDS);
     return res.json({ success: true, verified: true });
   }
+  // 28 Sep: one shared check — 5 wrong codes and the code is gone.
+  const chk = await checkOtpCode(p, code);
+  if (chk !== 'ok') { const e = otpCheckError(chk); return res.status(e.status).json(e.body); }
   const entry = await getOtp(p);
-  if (!entry) return res.status(400).json({ error: 'No OTP requested or OTP expired' });
-  if (entry.code !== code) return res.status(400).json({ error: 'That code isn\u2019t right. Check the 6 digits and try again.' });
+  if (!entry) return res.status(400).json({ error: 'No OTP requested or OTP expired', code: 'OTP_EXPIRED' });
   // Mark verified — store VERIFIED with fresh TTL
-  await setOtp(p, 'VERIFIED', entry.purpose, OTP_TTL_SECONDS);
+  // The marker only stands in for THIS code (it used to be a bare 'VERIFIED'
+  // that reset-password accepted with any code).
+  await setOtp(p, verifiedMarker(code), entry.purpose, OTP_TTL_SECONDS);
   return res.json({ success: true, verified: true });
 }
 
@@ -387,10 +393,8 @@ export async function register(req: Request, res: Response) {
   // code (not 123456), so the entry.code check below would always fail. Skip it.
   // In production isTestOtp() is always false, so the real OTP check still runs.
   if (!isTestOtp(code)) {
-    const entry = await getOtp(p);
-    if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
-      return res.status(400).json({ error: 'OTP not verified' });
-    }
+    const chk = await checkOtpCode(p, code);
+    if (chk !== 'ok') { const e = otpCheckError(chk); return res.status(e.status).json(e.body); }
   }
 
   // Phone must be free — EXCEPT a soft-deleted account still holds its phone.
@@ -549,13 +553,8 @@ export async function otpLogin(req: Request, res: Response) {
   // Dev-only bypass (see isTestOtp): skip OTP validation for the fixed test code.
   // The user must still exist (seeded) — otherwise we fall through to the 404 below.
   if (!isTestOtp(code)) {
-    const entry = await getOtp(p);
-    if (!entry) return res.status(400).json({ error: 'No OTP requested or OTP expired' });
-    // Accept either the original code or the VERIFIED marker (verify-otp may
-    // have already been called separately by the client).
-    if (entry.code !== code && entry.code !== 'VERIFIED') {
-      return res.status(400).json({ error: 'That code isn\u2019t right. Check the 6 digits and try again.' });
-    }
+    const chk = await checkOtpCode(p, code);
+    if (chk !== 'ok') { const e = otpCheckError(chk); return res.status(e.status).json(e.body); }
   }
 
   const { data: user, error } = await supabase
@@ -688,15 +687,24 @@ export async function resetPassword(req: Request, res: Response) {
   // (see isTestOtp). In production isTestOtp() is always false, so the real
   // OTP check still runs.
   if (!isTestOtp(code)) {
-    const entry = await getOtp(p);
-    if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
-      return res.status(400).json({ error: 'OTP not verified or expired' });
-    }
+    const chk = await checkOtpCode(p, code, { purpose: 'reset' });
+    if (chk !== 'ok') { const e = otpCheckError(chk); return res.status(e.status).json(e.body); }
   }
   const password_hash = await bcrypt.hash(newPassword, 10);
-  const { error } = await supabase.from('users').update({ password_hash }).in('phone', phoneVariants(p));
+  // 28 Sep: this said "success" when no account matched (an update of zero
+  // rows is not an error to PostgREST), and it could reach a deleted account's
+  // row. Live accounts only, and zero rows is an answer, not a success.
+  const { data: updated, error } = await supabase
+    .from('users')
+    .update({ password_hash })
+    .in('phone', phoneVariants(p))
+    .is('deleted_at', null)
+    .select('id');
   if (error) return res.status(500).json({ error: error.message });
   await deleteOtp(p);
+  if (!updated || updated.length === 0) {
+    return res.status(404).json({ error: 'No SportClan account uses this number.', code: 'PHONE_NOT_REGISTERED' });
+  }
   return res.json({ success: true });
 }
 
@@ -717,10 +725,8 @@ export async function changePhone(req: Request, res: Response) {
   // Honor the dev-only test bypass uniformly (see isTestOtp). Production runs
   // the real OTP check since isTestOtp() is always false there.
   if (!isTestOtp(code)) {
-    const entry = await getOtp(p);
-    if (!entry || (entry.code !== code && entry.code !== 'VERIFIED')) {
-      return res.status(400).json({ error: 'OTP not verified or expired' });
-    }
+    const chk = await checkOtpCode(p, code);
+    if (chk !== 'ok') { const e = otpCheckError(chk); return res.status(e.status).json(e.body); }
   }
   // Decided 28 Sep: a deleted account's number is held for 30 days, then free —
   // an expired row still carrying it (purge not run yet) is released here.

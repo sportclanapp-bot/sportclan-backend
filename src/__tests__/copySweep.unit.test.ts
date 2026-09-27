@@ -18,8 +18,10 @@ describe('F-07 · "Invalid OTP" was developer jargon in a user-facing string', (
   it('is replaced by something a person can act on', () => {
     // It must say what to check, because the most common cause is a mistyped
     // digit and the old message offered no next step.
-    expect(auth.match(/That code isn.u2019t right\. Check the 6 digits and try again\./g)?.length ?? 0)
-      .toBeGreaterThanOrEqual(2);
+    // 28 Sep: said once, in the shared code check every endpoint uses.
+    const check = code('utils/otpCheck.ts');
+    expect(check).toMatch(/That code isn.u2019t right\. Check the 6 digits and try again\./);
+    expect(auth.match(/otpCheckError\(chk\)/g)?.length ?? 0).toBeGreaterThanOrEqual(5);
   });
 });
 

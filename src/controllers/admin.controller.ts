@@ -118,14 +118,15 @@ export async function getReports(req: Request, res: Response) {
         ? supabase.from('community_posts').select('id, content, author_id, deleted_at, deleted_by').in('id', postIds)
         : Promise.resolve({ data: [] as any[] }),
       commentIds.length
-        ? supabase.from('post_comments').select('id, content, author_id').in('id', commentIds)
+        // #2: deleted comments included — an admin still sees what was reported.
+        ? supabase.from('post_comments').select('id, content, author_id, deleted_at, deleted_by').in('id', commentIds)
         : Promise.resolve({ data: [] as any[] }),
       messageIds.length
         ? supabase.from('messages').select('id, content, sender_id').in('id', messageIds)
         : Promise.resolve({ data: [] as any[] }),
     ]);
     const posts = (postsRes.data ?? []) as Array<{ id: string; content: string; author_id: string; deleted_at?: string | null; deleted_by?: string | null }>;
-    const comments = (commentsRes.data ?? []) as Array<{ id: string; content: string; author_id: string }>;
+    const comments = (commentsRes.data ?? []) as Array<{ id: string; content: string; author_id: string; deleted_at?: string | null; deleted_by?: string | null }>;
     const messages = (messagesRes.data ?? []) as Array<{ id: string; content: string; sender_id: string }>;
 
     // One batched user fetch: reporters + user-targets + content authors/senders.
@@ -164,6 +165,8 @@ export async function getReports(req: Request, res: Response) {
         content_exists = !!c;
         content_preview = c ? String(c.content).slice(0, 240) : null;
         if (c) content_author = { id: c.author_id, name: userMap.get(c.author_id)?.name ?? null };
+        content_deleted_at = c?.deleted_at ?? null;
+        content_deleted_by_author = !!c?.deleted_at && c.deleted_by === c.author_id;
       } else if (r.target_type === 'message') {
         const m = messageMap.get(r.target_id);
         content_exists = !!m;

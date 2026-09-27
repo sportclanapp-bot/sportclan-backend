@@ -1,4 +1,7 @@
-import { POST_DELETED, isDeletedPost, livePosts, postForWrite, softDeletePost } from '../utils/postVisibility';
+import {
+  COMMENT_DELETED, POST_DELETED, asDeletedPlaceholder, commentForWrite, isDeletedPost, livePosts, postForWrite,
+  softDeleteComment, softDeletePost,
+} from '../utils/postVisibility';
 import { isAdminUser } from '../middleware/admin.middleware';
 import { hideTestFor, excludeTest, excludeTestEmbed } from '../utils/testContent';
 import { Request, Response } from 'express';
@@ -994,18 +997,37 @@ export async function listComments(req: Request, res: Response) {
 
     .order('created_at', { ascending: true })
     .range(lcp.from, lcp.to);
-  cq = excludeIds(cq, 'author_id', await blockedUserIds(req.userId));
+  const blocked = await blockedUserIds(req.userId);
+  const hideTest = await hideTestFor(req.userId);
+  cq = excludeIds(cq, 'author_id', blocked);
   // B03 (V245, D3): comments by test accounts are hidden from real viewers.
-  if (await hideTestFor(req.userId)) cq = excludeTestEmbed(cq, 'author');
-  const { data, error, count } = await cq;
+  if (hideTest) cq = excludeTestEmbed(cq, 'author');
+  // Hard-delete list #2: the header counts live comments only. The page itself
+  // still holds a deleted comment's place (below), so paging uses `count`.
+  let lq = supabase
+    .from('post_comments')
+    .select('id, author:users!author_id!inner(id)', { count: 'exact', head: true })
+    .eq('post_id', id)
+    .is('deleted_at', null);
+  lq = excludeIds(lq, 'author_id', blocked);
+  if (hideTest) lq = excludeTestEmbed(lq, 'author');
+  const [{ data, error, count }, live] = await Promise.all([cq, lq]);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
-  const total = count ?? (data || []).length;
+  // #2: a deleted comment keeps its place so its replies still answer something
+  // — "This comment was deleted" to a normal user; an admin reads the text.
+  const admin = !!req.userId && (await isAdminUser(req.userId));
+  const rows = (data || []).map((c) =>
+    (c as { deleted_at?: string | null }).deleted_at && !admin
+      ? asDeletedPlaceholder(c as Record<string, unknown>)
+      : c);
+  const all = count ?? rows.length;
+  const total = live.count ?? rows.filter((c) => !(c as { deleted?: boolean }).deleted).length;
   return res.json({
-    data: data || [],
-    comments: data || [],
+    data: rows,
+    comments: rows,
     total,
-    has_more: lcp.from + (data?.length ?? 0) < total,
+    has_more: lcp.from + rows.length < all,
   });
 }
 
@@ -1039,6 +1061,12 @@ export async function createComment(req: Request, res: Response) {
   if (commentPostRow.deleted) return res.status(410).json(POST_DELETED); // #1
   if (await isBlockedBetween(userId, commentPostRow.author_id)) {
     return res.status(403).json({ error: 'BLOCKED' });
+  }
+  // #2: no reply to a deleted comment.
+  if (parent_id) {
+    const parentRow = await commentForWrite(parent_id);
+    if (!parentRow || parentRow.post_id !== id) return res.status(404).json({ error: 'Comment not found' });
+    if (parentRow.deleted) return res.status(410).json(COMMENT_DELETED);
   }
 
   // SC-130: idempotent comment. With a key → insert-first (unique index dedups a
@@ -1127,18 +1155,16 @@ export async function deleteComment(req: Request, res: Response) {
   const userId = req.userId!;
   const { commentId } = req.params;
 
-  const { data: deleted, error } = await supabase
-    .from('post_comments')
-    .delete()
-    .eq('id', commentId)
-    .eq('author_id', userId)
-    .select('id');
-
-  if (error) return res.status(500).json({ error: error.message });
-  // SC-32: a 0-row delete (wrong owner or missing) must 404, not a false 200.
-  if (!deleted || deleted.length === 0) {
-    return res.status(404).json({ error: 'Comment not found or not yours' });
+  // Hard-delete list #2: marked, not removed — the replies to it and the
+  // reports against it stay; its notifications are hidden, not deleted.
+  let deleted: boolean;
+  try {
+    deleted = await softDeleteComment(commentId, userId, { authorId: userId });
+  } catch (err) {
+    return res.status(500).json({ error: sanitizeError(err as { message?: string }) });
   }
+  // SC-32: a 0-row delete (wrong owner, missing, or already deleted) must 404.
+  if (!deleted) return res.status(404).json({ error: 'Comment not found or not yours' });
   return res.json({ success: true });
 }
 
@@ -1155,11 +1181,12 @@ export async function reactToComment(req: Request, res: Response) {
   // Get current reactions
   const { data: comment } = await supabase
     .from('post_comments')
-    .select('reactions, author_id, post_id')
+    .select('reactions, author_id, post_id, deleted_at')
     .eq('id', commentId)
     .single();
 
   if (!comment) return res.status(404).json({ error: 'Comment not found' });
+  if (comment.deleted_at) return res.status(410).json(COMMENT_DELETED); // #2
   // #1: the comments on a deleted post stay as they were.
   if ((await postForWrite(comment.post_id as string))?.deleted) return res.status(410).json(POST_DELETED);
 
@@ -1242,7 +1269,9 @@ export async function reportContent(req: Request, res: Response) {
     if (t?.deleted) return res.status(410).json(POST_DELETED); // #1: already gone
     exists = !!t; ownerId = t?.author_id ?? null;
   } else if (resolvedType === 'comment') {
-    const { data: t } = await supabase.from('post_comments').select('author_id, post_id').eq('id', resolvedId).maybeSingle();
+    const { data: t } = await supabase.from('post_comments').select('author_id, post_id, deleted_at').eq('id', resolvedId).maybeSingle();
+    // #2: a deleted comment can't be reported (its existing reports stay).
+    if ((t as { deleted_at?: string | null } | null)?.deleted_at) return res.status(410).json(COMMENT_DELETED);
     // #1: a comment on a deleted post is out of sight like the post.
     const cpost = (t as { post_id?: string } | null)?.post_id;
     if (cpost && (await postForWrite(cpost))?.deleted) return res.status(410).json(POST_DELETED);

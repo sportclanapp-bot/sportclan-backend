@@ -1,3 +1,4 @@
+import { logThenDeleteEvent } from '../utils/scoringAudit';
 import { Request, Response } from 'express';
 import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
@@ -1201,15 +1202,17 @@ export async function undoEvent(req: Request, res: Response) {
 
     const { data: latest } = await supabase
       .from('match_events')
-      .select('id')
+      .select('*')
       .eq('match_id', matchId)
       .eq('created_by', userId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
     if (!latest) return res.status(404).json({ error: 'No event to undo' });
-    const { error } = await supabase.from('match_events').delete().eq('id', latest.id);
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // Hard-delete list #7: the undo stays a real delete, but it is logged first
+    // — who, when, and the whole event as it was. No log row, no delete.
+    const removed = await logThenDeleteEvent(latest as { id: string; match_id: string }, userId, 'undo');
+    if (removed.error) return res.status(500).json({ error: removed.error });
     // Recompute the summary from the remaining events so it can't drift out of
     // sync with the event log (the old code left score_summary stale on undo).
     try {

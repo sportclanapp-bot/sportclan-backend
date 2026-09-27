@@ -1,3 +1,4 @@
+import { logThenDeleteEvent } from '../utils/scoringAudit';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
@@ -488,7 +489,7 @@ export async function deleteMatchEvent(req: Request, res: Response) {
     // Get event for audit
     const { data: event } = await supabase
       .from('match_events')
-      .select('id, payload')
+      .select('*')
       .eq('id', eventId)
       .eq('match_id', id)
       .maybeSingle();
@@ -506,14 +507,10 @@ export async function deleteMatchEvent(req: Request, res: Response) {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    // Audit log
-    await supabase.from('match_event_audit').insert({
-      event_id: eventId, match_id: id, changed_by: userId,
-      old_payload: event.payload ?? {}, new_payload: {}, action: 'delete',
-    });
-
-    // Delete
-    await supabase.from('match_events').delete().eq('id', eventId);
+    // Hard-delete list #7: logged first — who, when, the whole event — and
+    // only then deleted. (The row now outlives the event: migration 107.)
+    const removed = await logThenDeleteEvent(event as { id: string; match_id: string }, userId, 'delete');
+    if (removed.error) return res.status(500).json({ error: removed.error });
 
     // SC-319: rebuild score_summary from the remaining events (was left stale).
     const summary = await recomputeSummary(id);

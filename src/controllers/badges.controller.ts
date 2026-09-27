@@ -104,7 +104,8 @@ export async function evaluateBadgesForUser(
     const { count, error: e1 } = await supabase
       .from('community_posts')
       .select('id', { count: 'exact', head: true })
-      .eq('author_id', userId);
+      .eq('author_id', userId)
+      .is('deleted_at', null); // hard-delete list #1: as a hard delete did, a deleted post doesn't count
     if (e1) statsFailed = true;
     postCount = count ?? 0;
   }

@@ -734,6 +734,7 @@ export async function runPublishScheduledPosts(): Promise<{ published: number }>
     .update({ scheduled_at: null, created_at: now })
     .lte('scheduled_at', now)
     .not('scheduled_at', 'is', null)
+    .is('deleted_at', null) // hard-delete list #1: a scheduled post deleted before its time never goes out
     .select('id');
   if (error) throw new Error(error.message);
   return { published: data?.length ?? 0 };

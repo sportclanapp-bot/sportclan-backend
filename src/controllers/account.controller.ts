@@ -449,7 +449,8 @@ export async function exportData(req: Request, res: Response) {
   const slices: Array<[string, Promise<{ rows: any[]; error: unknown }>]> = [
     ['sport_profiles', exportAll('user_sport_profiles', 'sport_id, rating, matches_played, wins, losses, draws, last_match_at', (q) => q.eq('user_id', userId))],
     ['sports', exportAll('user_sports', '*', (q) => q.eq('user_id', userId))],
-    ['posts', exportAll('community_posts', 'id, content, image_url, created_at', (q) => q.eq('author_id', userId))],
+    // #1: a post you deleted is still yours and still held — exported, marked.
+    ['posts', exportAll('community_posts', 'id, content, image_url, created_at, deleted_at', (q) => q.eq('author_id', userId))],
     ['profile_posts', exportAll('profile_posts', '*', (q) => q.eq('author_id', userId))],
     ['matches', exportAll('match_participants', 'match_id, team_side, role, match:matches(id, sport_id, scheduled_at, status, winner_team_id)', (q) => q.eq('user_id', userId))],
     ['messages', exportAll('messages', 'id, chat_id, content, created_at', (q) => q.eq('sender_id', userId))],

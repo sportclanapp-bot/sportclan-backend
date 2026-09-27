@@ -114,7 +114,8 @@ export async function getReports(req: Request, res: Response) {
     // Fetch reported posts/comments/messages first so we can also resolve authors.
     const [postsRes, commentsRes, messagesRes] = await Promise.all([
       postIds.length
-        ? supabase.from('community_posts').select('id, content, author_id').in('id', postIds)
+        // #1: deleted posts included — an admin still sees what was reported.
+        ? supabase.from('community_posts').select('id, content, author_id, deleted_at, deleted_by').in('id', postIds)
         : Promise.resolve({ data: [] as any[] }),
       commentIds.length
         ? supabase.from('post_comments').select('id, content, author_id').in('id', commentIds)
@@ -123,7 +124,7 @@ export async function getReports(req: Request, res: Response) {
         ? supabase.from('messages').select('id, content, sender_id').in('id', messageIds)
         : Promise.resolve({ data: [] as any[] }),
     ]);
-    const posts = (postsRes.data ?? []) as Array<{ id: string; content: string; author_id: string }>;
+    const posts = (postsRes.data ?? []) as Array<{ id: string; content: string; author_id: string; deleted_at?: string | null; deleted_by?: string | null }>;
     const comments = (commentsRes.data ?? []) as Array<{ id: string; content: string; author_id: string }>;
     const messages = (messagesRes.data ?? []) as Array<{ id: string; content: string; sender_id: string }>;
 
@@ -148,11 +149,16 @@ export async function getReports(req: Request, res: Response) {
       let content_preview: string | null = null;
       let content_exists = true;
       let content_author: { id: string; name: string | null } | null = null;
+      // #1: when the reported post was deleted, and whether its author did it.
+      let content_deleted_at: string | null = null;
+      let content_deleted_by_author = false;
       if (r.target_type === 'post') {
         const p = postMap.get(r.target_id);
         content_exists = !!p;
         content_preview = p ? String(p.content).slice(0, 240) : null;
         if (p) content_author = { id: p.author_id, name: userMap.get(p.author_id)?.name ?? null };
+        content_deleted_at = p?.deleted_at ?? null;
+        content_deleted_by_author = !!p?.deleted_at && p.deleted_by === p.author_id;
       } else if (r.target_type === 'comment') {
         const c = commentMap.get(r.target_id);
         content_exists = !!c;
@@ -176,6 +182,8 @@ export async function getReports(req: Request, res: Response) {
         content_preview,
         content_exists,
         content_author,
+        content_deleted_at,
+        content_deleted_by_author,
       };
     });
     return res.json({ reports: enriched, ...pageMeta(count, p) });

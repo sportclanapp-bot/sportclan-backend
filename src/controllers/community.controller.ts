@@ -1,3 +1,5 @@
+import { POST_DELETED, isDeletedPost, livePosts, postForWrite, softDeletePost } from '../utils/postVisibility';
+import { isAdminUser } from '../middleware/admin.middleware';
 import { hideTestFor, excludeTest, excludeTestEmbed } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -210,6 +212,8 @@ export async function listPosts(req: Request, res: Response) {
       match:${matchJoin}(id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
     `)
     .limit(pageSize);
+  // Hard-delete list #1: a deleted post is in no feed, no profile grid.
+  q = livePosts(q);
   if (sortMode === 'trending') {
     // SC-138: deterministic order even when likes_count ties (created_at, then id).
     q = q
@@ -295,6 +299,7 @@ export async function listPosts(req: Request, res: Response) {
       .from('community_posts')
       .select('id', { count: 'exact', head: true })
       .eq('author_id', authorFilter);
+    cq = livePosts(cq); // #1: the count agrees with the grid
     if (!viewingOwn) cq = cq.is('scheduled_at', null);
     const { count } = await cq;
     total = count ?? undefined;
@@ -330,6 +335,7 @@ export async function getSportStoryCounts(req: Request, res: Response) {
     .gt('created_at', since)
     .not('sport_id', 'is', null)
     .is('scheduled_at', null); // SC-218: don't let unpublished scheduled posts inflate the story count
+  query = livePosts(query); // #1: nor deleted ones
   query = excludeIds(query, 'author_id', await blockedUserIds(req.userId));
   // B03 (V245, D3): the story count agrees with the feed it counts.
   if (await hideTestFor(req.userId)) query = excludeTestEmbed(excludeTest(query), 'author');
@@ -377,6 +383,12 @@ export async function getPost(req: Request, res: Response) {
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
   if (!data) return res.status(404).json({ error: 'Post not found' });
+  // Hard-delete list #1: a deleted post opened by link says so (410); an admin
+  // still sees it, with deleted_at / deleted_by on the row.
+  if (isDeletedPost(data as { deleted_at?: string | null })
+      && !(req.userId && (await isAdminUser(req.userId)))) {
+    return res.status(410).json(POST_DELETED);
+  }
   // SC-218: mirror the feed's embargo on this sibling path — a not-yet-published
   // scheduled post (scheduled_at in the future) is visible ONLY to its author.
   // The feed hid these; getPost didn't, so any user with the id could read an
@@ -679,6 +691,10 @@ export async function updatePost(req: Request, res: Response) {
     }
   }
 
+  // #1: a deleted post can't be edited (or brought back by an edit).
+  const editTarget = await postForWrite(id);
+  if (editTarget?.deleted && editTarget.author_id === userId) return res.status(410).json(POST_DELETED);
+
   // SC-355: media + schedule are editable now. Both need the CURRENT row first —
   // rescheduling is only legal while the post is still pending, and we must not
   // let an edit resurrect a schedule on something already published.
@@ -753,6 +769,7 @@ export async function updatePost(req: Request, res: Response) {
     })
     .eq('id', id)
     .eq('author_id', userId)
+    .is('deleted_at', null)
     .select()
     .single();
 
@@ -767,18 +784,17 @@ export async function deletePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
 
-  const { data: deleted, error } = await supabase
-    .from('community_posts')
-    .delete()
-    .eq('id', id)
-    .eq('author_id', userId)
-    .select('id');
-
-  if (error) return res.status(500).json({ error: error.message });
-  // SC-32: a 0-row delete (wrong owner or missing) must 404, not a false 200.
-  if (!deleted || deleted.length === 0) {
-    return res.status(404).json({ error: 'Post not found or not yours' });
+  // Hard-delete list #1: marked, not removed — other people's comments, the
+  // likes and the reports against the post all stay. Its notifications are
+  // hidden, not deleted.
+  let deleted: boolean;
+  try {
+    deleted = await softDeletePost(id, userId, { authorId: userId });
+  } catch (err) {
+    return res.status(500).json({ error: sanitizeError(err as { message?: string }) });
   }
+  // SC-32: a 0-row delete (wrong owner, missing, or already deleted) must 404.
+  if (!deleted) return res.status(404).json({ error: 'Post not found or not yours' });
   return res.json({ success: true });
 }
 
@@ -792,6 +808,7 @@ export async function closePost(req: Request, res: Response) {
     .update({ is_closed: true, updated_at: new Date().toISOString() })
     .eq('id', id)
     .eq('author_id', userId)
+    .is('deleted_at', null) // #1
     .select()
     .single();
 
@@ -906,9 +923,9 @@ export async function likePost(req: Request, res: Response) {
   const { id } = req.params;
 
   // Block gate: a blocked user (either direction) can't like the author's post.
-  const { data: likePostRow } = await supabase
-    .from('community_posts').select('author_id').eq('id', id).maybeSingle();
+  const likePostRow = await postForWrite(id);
   if (!likePostRow) return res.status(404).json({ error: 'Post not found' });
+  if (likePostRow.deleted) return res.status(410).json(POST_DELETED); // #1
   if (await isBlockedBetween(userId, likePostRow.author_id)) {
     return res.status(403).json({ error: 'BLOCKED' });
   }
@@ -930,6 +947,8 @@ export async function likePost(req: Request, res: Response) {
 export async function unlikePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
+  // #1: a deleted post's likes stay as they were.
+  if ((await postForWrite(id))?.deleted) return res.status(410).json(POST_DELETED);
 
   await supabase
     .from('post_likes')
@@ -949,6 +968,10 @@ export async function unlikePost(req: Request, res: Response) {
 // ─── COMMENTS ───────────────────────────────────────────────────────────────
 export async function listComments(req: Request, res: Response) {
   const { id } = req.params;
+  // #1: a deleted post's comments stay, but only an admin reads them.
+  if ((await postForWrite(id))?.deleted && !(req.userId && (await isAdminUser(req.userId)))) {
+    return res.status(410).json(POST_DELETED);
+  }
 
   // SC-77: hide comments authored by a soft-deleted account.
   // SC-81: hide comments authored by blocked-either-direction users (viewer via
@@ -1011,9 +1034,9 @@ export async function createComment(req: Request, res: Response) {
   }
 
   // Block gate: a blocked user (either direction) can't comment on the post.
-  const { data: commentPostRow } = await supabase
-    .from('community_posts').select('author_id').eq('id', id).maybeSingle();
+  const commentPostRow = await postForWrite(id);
   if (!commentPostRow) return res.status(404).json({ error: 'Post not found' });
+  if (commentPostRow.deleted) return res.status(410).json(POST_DELETED); // #1
   if (await isBlockedBetween(userId, commentPostRow.author_id)) {
     return res.status(403).json({ error: 'BLOCKED' });
   }
@@ -1137,6 +1160,8 @@ export async function reactToComment(req: Request, res: Response) {
     .single();
 
   if (!comment) return res.status(404).json({ error: 'Comment not found' });
+  // #1: the comments on a deleted post stay as they were.
+  if ((await postForWrite(comment.post_id as string))?.deleted) return res.status(410).json(POST_DELETED);
 
   // SC-96: block gate — can't react to a blocked-either-direction user's comment.
   if (await isBlockedBetween(userId, comment.author_id)) {
@@ -1213,10 +1238,14 @@ export async function reportContent(req: Request, res: Response) {
   let exists = false;
   let ownerId: string | null = null;
   if (resolvedType === 'post') {
-    const { data: t } = await supabase.from('community_posts').select('author_id').eq('id', resolvedId).maybeSingle();
-    exists = !!t; ownerId = (t as { author_id?: string } | null)?.author_id ?? null;
+    const t = await postForWrite(resolvedId);
+    if (t?.deleted) return res.status(410).json(POST_DELETED); // #1: already gone
+    exists = !!t; ownerId = t?.author_id ?? null;
   } else if (resolvedType === 'comment') {
-    const { data: t } = await supabase.from('post_comments').select('author_id').eq('id', resolvedId).maybeSingle();
+    const { data: t } = await supabase.from('post_comments').select('author_id, post_id').eq('id', resolvedId).maybeSingle();
+    // #1: a comment on a deleted post is out of sight like the post.
+    const cpost = (t as { post_id?: string } | null)?.post_id;
+    if (cpost && (await postForWrite(cpost))?.deleted) return res.status(410).json(POST_DELETED);
     exists = !!t; ownerId = (t as { author_id?: string } | null)?.author_id ?? null;
   } else if (resolvedType === 'message') {
     const { data: t } = await supabase.from('messages').select('sender_id').eq('id', resolvedId).maybeSingle();
@@ -1272,7 +1301,7 @@ export async function getMyPostCount(req: Request, res: Response) {
   // reject the next one. The number the user reads must be the number enforced.
   const [{ count: communityCount }, { count: profileCount }] = await Promise.all([
     supabase.from('community_posts').select('id', { count: 'exact', head: true })
-      .eq('author_id', userId).gte('created_at', startOfMonth),
+      .eq('author_id', userId).gte('created_at', startOfMonth).is('deleted_at', null), // #1
     supabase.from('profile_posts').select('id', { count: 'exact', head: true })
       .eq('author_id', userId).gte('created_at', startOfMonth),
   ]);
@@ -1361,12 +1390,13 @@ export async function votePoll(req: Request, res: Response) {
   // 1. Fetch post; verify it's a poll
   const { data: post, error: fetchErr } = await supabase
     .from('community_posts')
-    .select('id, poll_options, post_type, is_closed, author_id, allow_multiple')
+    .select('id, poll_options, post_type, is_closed, author_id, allow_multiple, deleted_at')
     .eq('id', id)
     .maybeSingle();
 
   if (fetchErr) return res.status(500).json({ error: sanitizeError(fetchErr) });
   if (!post) return res.status(404).json({ error: 'Post not found' });
+  if (isDeletedPost(post)) return res.status(410).json(POST_DELETED); // #1
   // SC-96: block gate — can't vote on a blocked-either-direction user's poll.
   if (await isBlockedBetween(userId, post.author_id)) {
     return res.status(403).json({ error: 'BLOCKED' });

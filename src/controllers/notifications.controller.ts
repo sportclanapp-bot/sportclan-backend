@@ -39,6 +39,9 @@ export async function listNotifications(req: Request, res: Response) {
       .from('notifications')
       .select('id, type, title, body, data, read, created_at', { count: 'exact' })
       .eq('user_id', userId)
+      // Hard-delete list #1: a notification about a deleted post is hidden
+      // (hidden_at), not deleted — out of the list, the badge and the chips.
+      .is('hidden_at', null)
       .order('created_at', { ascending: false })
       .range(p.from, p.to),
     // Unread is a SEPARATE whole-inbox count (unaffected by the page window) so the
@@ -47,6 +50,7 @@ export async function listNotifications(req: Request, res: Response) {
       .from('notifications')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId)
+      .is('hidden_at', null)
       .eq('read', false),
     // V009 (visual review B13): the filter chips counted only the page held
     // (so every busy chip read "50"). The type of every notification, for the
@@ -56,6 +60,7 @@ export async function listNotifications(req: Request, res: Response) {
       .from('notifications')
       .select('type')
       .eq('user_id', userId)
+      .is('hidden_at', null)
       .range(0, TYPE_COUNT_CAP - 1),
   ]);
   // SC-41: an offset landing past the end returns PGRST103 — treat it as an
@@ -168,7 +173,8 @@ export async function weeklyDigest(req: Request, res: Response) {
   const { data: myPosts } = await supabase
     .from('community_posts')
     .select('id')
-    .eq('author_id', userId);
+    .eq('author_id', userId)
+    .is('deleted_at', null); // hard-delete list #1
   const postIds = (myPosts || []).map((p) => p.id);
   let posts_liked = 0;
   if (postIds.length > 0) {

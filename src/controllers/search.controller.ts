@@ -208,6 +208,7 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
       sport:sports!sport_id(id, name, emoji)
     `)
     .ilike('content', `%${escapeLike(q)}%`)
+    .is('deleted_at', null) // hard-delete list #1: a deleted post is not found
     .order('created_at', { ascending: false })
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging (no overlap/gaps)
     .range(p.from, p.to);

@@ -14,6 +14,23 @@ import { supabase } from './supabase';
  *  "This post was deleted". */
 export const POST_DELETED = { error: 'This post was deleted', code: 'POST_DELETED' } as const;
 
+/** #3: the same, when a moderator removed it (deleted_reason = 'moderator'). */
+export const POST_REMOVED = { error: 'This post was removed by a moderator', code: 'POST_REMOVED' } as const;
+
+/** Why a post or comment is gone. NULL on a row deleted before migration 103
+ *  reads as the author's own delete — the only kind there was. */
+export type DeletedReason = 'author' | 'moderator';
+
+/** Was it a moderator's removal? */
+export function isModeratorRemoval(row: { deleted_at?: string | null; deleted_reason?: string | null } | null | undefined): boolean {
+  return !!row?.deleted_at && row.deleted_reason === 'moderator';
+}
+
+/** The 410 body for a gone post: deleted by its author, or removed by a moderator. */
+export function postGone(row: { removed?: boolean; deleted_at?: string | null; deleted_reason?: string | null }) {
+  return row.removed || isModeratorRemoval(row) ? POST_REMOVED : POST_DELETED;
+}
+
 /** Only posts that are not deleted. Applied to every read a normal user sees. */
 export function livePosts<Q>(q: Q): Q {
   return (q as unknown as { is: (c: string, v: null) => Q }).is('deleted_at', null);
@@ -28,15 +45,15 @@ export function isDeletedPost(row: { deleted_at?: string | null } | null | undef
  * The post's author and whether it is deleted — one read for the write paths
  * (like, comment, vote, report, edit) that must refuse a deleted post.
  */
-export async function postForWrite(id: string): Promise<{ author_id: string; deleted: boolean } | null> {
+export async function postForWrite(id: string): Promise<{ author_id: string; deleted: boolean; removed: boolean } | null> {
   const { data } = await supabase
     .from('community_posts')
-    .select('author_id, deleted_at')
+    .select('author_id, deleted_at, deleted_reason')
     .eq('id', id)
     .maybeSingle();
   if (!data) return null;
-  const row = data as { author_id: string; deleted_at?: string | null };
-  return { author_id: row.author_id, deleted: isDeletedPost(row) };
+  const row = data as { author_id: string; deleted_at?: string | null; deleted_reason?: string | null };
+  return { author_id: row.author_id, deleted: isDeletedPost(row), removed: isModeratorRemoval(row) };
 }
 
 /**
@@ -47,12 +64,12 @@ export async function postForWrite(id: string): Promise<{ author_id: string; del
 export async function softDeletePost(
   id: string,
   deletedBy: string,
-  opts: { authorId?: string } = {},
+  opts: { authorId?: string; reason?: DeletedReason } = {},
 ): Promise<boolean> {
   const now = new Date().toISOString();
   let q = supabase
     .from('community_posts')
-    .update({ deleted_at: now, deleted_by: deletedBy })
+    .update({ deleted_at: now, deleted_by: deletedBy, deleted_reason: opts.reason ?? 'author' })
     .eq('id', id)
     .is('deleted_at', null);
   if (opts.authorId) q = q.eq('author_id', opts.authorId);
@@ -78,17 +95,25 @@ export async function softDeletePost(
 /** What a normal user gets for acting on a deleted comment. */
 export const COMMENT_DELETED = { error: 'This comment was deleted', code: 'COMMENT_DELETED' } as const;
 
+/** #3: the same, when a moderator removed it. */
+export const COMMENT_REMOVED = { error: 'This comment was removed by a moderator', code: 'COMMENT_REMOVED' } as const;
+
+/** The 410 body for a gone comment. */
+export function commentGone(row: { removed?: boolean; deleted_at?: string | null; deleted_reason?: string | null }) {
+  return row.removed || isModeratorRemoval(row) ? COMMENT_REMOVED : COMMENT_DELETED;
+}
+
 /** The comment's author, post and whether it is deleted — one read for the
  *  write paths (react, reply, report) that must refuse a deleted comment. */
-export async function commentForWrite(id: string): Promise<{ author_id: string; post_id: string; deleted: boolean } | null> {
+export async function commentForWrite(id: string): Promise<{ author_id: string; post_id: string; deleted: boolean; removed: boolean } | null> {
   const { data } = await supabase
     .from('post_comments')
-    .select('author_id, post_id, deleted_at')
+    .select('author_id, post_id, deleted_at, deleted_reason')
     .eq('id', id)
     .maybeSingle();
   if (!data) return null;
-  const row = data as { author_id: string; post_id: string; deleted_at?: string | null };
-  return { author_id: row.author_id, post_id: row.post_id, deleted: !!row.deleted_at };
+  const row = data as { author_id: string; post_id: string; deleted_at?: string | null; deleted_reason?: string | null };
+  return { author_id: row.author_id, post_id: row.post_id, deleted: !!row.deleted_at, removed: isModeratorRemoval(row) };
 }
 
 /**
@@ -104,6 +129,8 @@ export function asDeletedPlaceholder<T extends Record<string, unknown>>(row: T):
     author_id: null,
     author: null,
     deleted: true,
+    // #3: "removed by a moderator" rather than "deleted"
+    removed_by_moderator: row.deleted_reason === 'moderator',
   };
 }
 
@@ -115,12 +142,12 @@ export function asDeletedPlaceholder<T extends Record<string, unknown>>(row: T):
 export async function softDeleteComment(
   id: string,
   deletedBy: string,
-  opts: { authorId?: string } = {},
+  opts: { authorId?: string; reason?: DeletedReason } = {},
 ): Promise<boolean> {
   const now = new Date().toISOString();
   let q = supabase
     .from('post_comments')
-    .update({ deleted_at: now, deleted_by: deletedBy })
+    .update({ deleted_at: now, deleted_by: deletedBy, deleted_reason: opts.reason ?? 'author' })
     .eq('id', id)
     .is('deleted_at', null);
   if (opts.authorId) q = q.eq('author_id', opts.authorId);
@@ -132,5 +159,45 @@ export async function softDeleteComment(
     .update({ hidden_at: now })
     .eq('data->>comment_id', id)
     .is('hidden_at', null);
+  return true;
+}
+
+// ── Hard-delete list #3 (27 Sep 2026) · a moderator's removal can be undone ──
+
+const CONTENT = {
+  post:    { table: 'community_posts', key: 'post_id' },
+  comment: { table: 'post_comments',   key: 'comment_id' },
+} as const;
+
+/**
+ * Restore a post or comment a MODERATOR removed. An author's own delete is not
+ * restorable here — it was their choice. It comes back everywhere: the row is
+ * live again (feeds, search, threads; the comments_count trigger adds the
+ * comment back), and exactly the notifications the removal hid — matched on
+ * its timestamp — are shown again. A comment that was deleted separately
+ * keeps its own notifications hidden.
+ */
+export async function restoreRemovedContent(type: 'post' | 'comment', id: string): Promise<boolean> {
+  const c = CONTENT[type];
+  const { data: row } = await supabase
+    .from(c.table)
+    .select('deleted_at, deleted_reason')
+    .eq('id', id)
+    .maybeSingle();
+  const r = row as { deleted_at?: string | null; deleted_reason?: string | null } | null;
+  if (!r || !isModeratorRemoval(r)) return false;
+  const { data, error } = await supabase
+    .from(c.table)
+    .update({ deleted_at: null, deleted_by: null, deleted_reason: null })
+    .eq('id', id)
+    .eq('deleted_reason', 'moderator')
+    .select('id');
+  if (error) throw error;
+  if (!data || data.length === 0) return false;
+  await supabase
+    .from('notifications')
+    .update({ hidden_at: null })
+    .eq(`data->>${c.key}`, id)
+    .eq('hidden_at', r.deleted_at as string);
   return true;
 }

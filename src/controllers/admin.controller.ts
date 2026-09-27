@@ -5,6 +5,10 @@ import { sanitizeError } from '../utils/response';
 import { orIlikeContains } from '../utils/likeSearch'; // SC-237
 import axios from 'axios';
 import { getLastOtpSend } from './auth.controller';
+import {
+  commentForWrite, isModeratorRemoval, postForWrite, restoreRemovedContent, softDeleteComment, softDeletePost,
+} from '../utils/postVisibility';
+import { logAdminAction } from '../utils/tournamentAuth';
 
 /**
  * Admin controller · stats + moderation + broadcast.
@@ -95,12 +99,15 @@ export async function getStats(_req: Request, res: Response) {
 // without a round-trip per row.
 export async function getReports(req: Request, res: Response) {
   const p = parsePagination(req.query as Record<string, unknown>);
+  // #3: ?status=actioned lists resolved reports with the action taken (and
+  // Restore for a moderator's removal); the default is the open queue.
+  const actioned = req.query.status === 'actioned';
   try {
     const { data: reports, error, count } = await supabase
       .from('content_reports')
-      .select('id, target_type, target_id, reason, reporter_id, resolved, created_at', { count: 'exact' })
-      .eq('resolved', false)
-      .order('created_at', { ascending: false })
+      .select('id, target_type, target_id, reason, reporter_id, resolved, created_at, resolved_at, resolved_action, actioned_via', { count: 'exact' })
+      .eq('resolved', actioned)
+      .order(actioned ? 'resolved_at' : 'created_at', { ascending: false })
       .range(p.from, p.to);
     if (error) return res.json({ reports: [], ...pageMeta(0, p) }); // table may not exist yet
     const rows = reports ?? [];
@@ -115,18 +122,18 @@ export async function getReports(req: Request, res: Response) {
     const [postsRes, commentsRes, messagesRes] = await Promise.all([
       postIds.length
         // #1: deleted posts included — an admin still sees what was reported.
-        ? supabase.from('community_posts').select('id, content, author_id, deleted_at, deleted_by').in('id', postIds)
+        ? supabase.from('community_posts').select('id, content, author_id, deleted_at, deleted_by, deleted_reason').in('id', postIds)
         : Promise.resolve({ data: [] as any[] }),
       commentIds.length
         // #2: deleted comments included — an admin still sees what was reported.
-        ? supabase.from('post_comments').select('id, content, author_id, deleted_at, deleted_by').in('id', commentIds)
+        ? supabase.from('post_comments').select('id, content, author_id, deleted_at, deleted_by, deleted_reason').in('id', commentIds)
         : Promise.resolve({ data: [] as any[] }),
       messageIds.length
         ? supabase.from('messages').select('id, content, sender_id').in('id', messageIds)
         : Promise.resolve({ data: [] as any[] }),
     ]);
-    const posts = (postsRes.data ?? []) as Array<{ id: string; content: string; author_id: string; deleted_at?: string | null; deleted_by?: string | null }>;
-    const comments = (commentsRes.data ?? []) as Array<{ id: string; content: string; author_id: string; deleted_at?: string | null; deleted_by?: string | null }>;
+    const posts = (postsRes.data ?? []) as Array<{ id: string; content: string; author_id: string; deleted_at?: string | null; deleted_by?: string | null; deleted_reason?: string | null }>;
+    const comments = (commentsRes.data ?? []) as Array<{ id: string; content: string; author_id: string; deleted_at?: string | null; deleted_by?: string | null; deleted_reason?: string | null }>;
     const messages = (messagesRes.data ?? []) as Array<{ id: string; content: string; sender_id: string }>;
 
     // One batched user fetch: reporters + user-targets + content authors/senders.
@@ -153,20 +160,24 @@ export async function getReports(req: Request, res: Response) {
       // #1: when the reported post was deleted, and whether its author did it.
       let content_deleted_at: string | null = null;
       let content_deleted_by_author = false;
+      // #3: removed by a moderator — Restore is offered for this one.
+      let content_removed_by_moderator = false;
       if (r.target_type === 'post') {
         const p = postMap.get(r.target_id);
         content_exists = !!p;
         content_preview = p ? String(p.content).slice(0, 240) : null;
         if (p) content_author = { id: p.author_id, name: userMap.get(p.author_id)?.name ?? null };
         content_deleted_at = p?.deleted_at ?? null;
-        content_deleted_by_author = !!p?.deleted_at && p.deleted_by === p.author_id;
+        content_removed_by_moderator = isModeratorRemoval(p);
+        content_deleted_by_author = !!p?.deleted_at && !content_removed_by_moderator && p.deleted_by === p.author_id;
       } else if (r.target_type === 'comment') {
         const c = commentMap.get(r.target_id);
         content_exists = !!c;
         content_preview = c ? String(c.content).slice(0, 240) : null;
         if (c) content_author = { id: c.author_id, name: userMap.get(c.author_id)?.name ?? null };
         content_deleted_at = c?.deleted_at ?? null;
-        content_deleted_by_author = !!c?.deleted_at && c.deleted_by === c.author_id;
+        content_removed_by_moderator = isModeratorRemoval(c);
+        content_deleted_by_author = !!c?.deleted_at && !content_removed_by_moderator && c.deleted_by === c.author_id;
       } else if (r.target_type === 'message') {
         const m = messageMap.get(r.target_id);
         content_exists = !!m;
@@ -187,6 +198,7 @@ export async function getReports(req: Request, res: Response) {
         content_author,
         content_deleted_at,
         content_deleted_by_author,
+        content_removed_by_moderator,
       };
     });
     return res.json({ reports: enriched, ...pageMeta(count, p) });
@@ -196,53 +208,86 @@ export async function getReports(req: Request, res: Response) {
 }
 
 // PATCH /admin/reports/:id
-// Body: { action?: 'remove' | 'dismiss' }  (default 'dismiss')
-//   dismiss → mark the report resolved, leave the content untouched.
-//   remove  → delete the reported post/comment, then resolve this report AND
-//             any sibling reports targeting the same content.
+// Body: { action?: 'remove' | 'restore' | 'dismiss' }  (default 'dismiss')
+//   dismiss → this report resolved as 'dismissed'; the content is untouched.
+//   remove  → hard-delete list #3: the post / comment is REMOVED BY A MODERATOR —
+//             the #1 / #2 soft delete with deleted_reason 'moderator'. Nothing
+//             hanging off it is lost (comments, replies, likes, reports). This
+//             report resolves as 'removed'; the other open reports on the same
+//             content resolve too, as 'removed' with actioned_via = this report.
+//   restore → a moderator's removal undone: the content is live everywhere
+//             again, and the reports that removed it read 'restored'. An
+//             author's own delete can't be restored here — it was their choice.
+// Every remove and restore is also written to admin_actions (who, when, via).
 export async function resolveReport(req: Request, res: Response) {
   const { id } = req.params;
-  const action = (req.body || {}).action === 'remove' ? 'remove' : 'dismiss';
+  const raw = (req.body || {}).action;
+  const action: 'remove' | 'restore' | 'dismiss' = raw === 'remove' || raw === 'restore' ? raw : 'dismiss';
+  const adminId = req.userId!;
   try {
     // Existence check — a missing/already-handled id is a 404, not a silent ok.
     const { data: report, error: fetchErr } = await supabase
       .from('content_reports')
-      .select('id, target_type, target_id, resolved')
+      .select('id, target_type, target_id, resolved, resolved_action')
       .eq('id', id)
       .maybeSingle();
     if (fetchErr) return res.status(500).json({ error: fetchErr.message });
     if (!report) return res.status(404).json({ error: 'Report not found' });
 
     const now = new Date().toISOString();
-    let contentRemoved = false;
+    const isContent = report.target_type === 'post' || report.target_type === 'comment';
+    const type = report.target_type as 'post' | 'comment';
+    const resolution = (resolved_action: 'dismissed' | 'removed' | 'restored') =>
+      ({ resolved: true, resolved_at: now, resolved_by: adminId, resolved_action });
 
-    if (action === 'remove' && (report.target_type === 'post' || report.target_type === 'comment')) {
-      const table = report.target_type === 'post' ? 'community_posts' : 'post_comments';
-      const { error: delErr } = await supabase.from(table).delete().eq('id', report.target_id);
-      if (delErr) return res.status(500).json({ error: delErr.message });
-      contentRemoved = true;
-    }
-
-    // Resolve this report; if content was removed, also resolve any other
-    // open reports pointing at the same target so the queue stays clean.
-    const resolution = { resolved: true, resolved_at: now, resolved_by: req.userId };
-    if (contentRemoved) {
+    if (action === 'restore') {
+      if (!isContent) return res.status(400).json({ error: 'Only a post or comment can be restored' });
+      const restored = await restoreRemovedContent(type, report.target_id);
+      if (!restored) {
+        return res.status(409).json({ error: 'Only content a moderator removed can be restored.', code: 'NOT_REMOVED' });
+      }
       const { error: updErr } = await supabase
         .from('content_reports')
-        .update(resolution)
+        .update(resolution('restored'))
         .eq('target_type', report.target_type)
         .eq('target_id', report.target_id)
-        .eq('resolved', false);
+        .eq('resolved_action', 'removed');
       if (updErr) return res.status(500).json({ error: updErr.message });
-    } else {
-      const { error: updErr } = await supabase
-        .from('content_reports')
-        .update(resolution)
-        .eq('id', id);
-      if (updErr) return res.status(500).json({ error: updErr.message });
+      await logAdminAction(adminId, `restore_${type}`, type, report.target_id, `via report ${id}`);
+      return res.json({ ok: true, action, contentRestored: true });
     }
 
-    return res.json({ ok: true, action, contentRemoved });
+    if (action === 'remove' && isContent) {
+      const target = type === 'post' ? await postForWrite(report.target_id) : await commentForWrite(report.target_id);
+      if (!target) return res.status(404).json({ error: 'Reported content not found' });
+      if (target.deleted && !target.removed) {
+        // Its author already deleted it; there is nothing left to remove.
+        return res.status(409).json({ error: 'Its author already deleted this.', code: 'ALREADY_DELETED' });
+      }
+      if (!target.deleted) {
+        const removed = type === 'post'
+          ? await softDeletePost(report.target_id, adminId, { reason: 'moderator' })
+          : await softDeleteComment(report.target_id, adminId, { reason: 'moderator' });
+        if (removed) await logAdminAction(adminId, `remove_${type}`, type, report.target_id, `via report ${id}`);
+      }
+      // This report, then the other open ones on the same content — kept, and
+      // shown as already actioned through this one.
+      const { error: e1 } = await supabase.from('content_reports').update(resolution('removed')).eq('id', id);
+      if (e1) return res.status(500).json({ error: e1.message });
+      const { error: e2 } = await supabase
+        .from('content_reports')
+        .update({ ...resolution('removed'), actioned_via: id })
+        .eq('target_type', report.target_type)
+        .eq('target_id', report.target_id)
+        .eq('resolved', false)
+        .neq('id', id);
+      if (e2) return res.status(500).json({ error: e2.message });
+      return res.json({ ok: true, action, contentRemoved: true });
+    }
+
+    const { error: updErr } = await supabase.from('content_reports').update(resolution('dismissed')).eq('id', id);
+    if (updErr) return res.status(500).json({ error: updErr.message });
+    return res.json({ ok: true, action: 'dismiss', contentRemoved: false });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed' });
   }

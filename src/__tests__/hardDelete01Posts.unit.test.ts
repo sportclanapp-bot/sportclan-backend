@@ -89,10 +89,10 @@ describe('a deleted post does not show for a normal user', () => {
   test('the post count', () => expect(fnBody(C, 'getMyPostCount')).toMatch(/\.is\('deleted_at', null\)/));
   test('a deep link: 410 POST_DELETED, unless the viewer is an admin', () => {
     const f = fnBody(C, 'getPost');
-    expect(f).toMatch(/isDeletedPost\(data[\s\S]*?!\(req\.userId && \(await isAdminUser\(req\.userId\)\)\)[\s\S]*?status\(410\)\.json\(POST_DELETED\)/);
+    expect(f).toMatch(/isDeletedPost\(data[\s\S]*?!\(req\.userId && \(await isAdminUser\(req\.userId\)\)\)[\s\S]*?status\(410\)\.json\(postGone\(data/);
   });
   test('its comments: 410 unless admin', () => {
-    expect(fnBody(C, 'listComments')).toMatch(/postForWrite\(id\)\)\?\.deleted && !\(req\.userId && \(await isAdminUser\(req\.userId\)\)\)/);
+    expect(fnBody(C, 'listComments')).toMatch(/threadPost\?\.deleted && !\(req\.userId && \(await isAdminUser\(req\.userId\)\)\)[\s\S]*?json\(postGone\(threadPost\)\)/);
   });
   test('search', () => {
     const s = code('controllers/search.controller.ts');
@@ -114,21 +114,21 @@ describe('nothing can be done to a deleted post', () => {
   const C = 'controllers/community.controller.ts';
   test.each([
     ['likePost', /likePostRow\.deleted\) return res\.status\(410\)/],
-    ['unlikePost', /postForWrite\(id\)\)\?\.deleted\) return res\.status\(410\)/],
+    ['unlikePost', /unlikeTarget\?\.deleted\) return res\.status\(410\)\.json\(postGone\(unlikeTarget\)\)/],
     ['createComment', /commentPostRow\.deleted\) return res\.status\(410\)/],
-    ['reactToComment', /postForWrite\(comment\.post_id as string\)\)\?\.deleted\) return res\.status\(410\)/],
+    ['reactToComment', /reactPost\?\.deleted\) return res\.status\(410\)\.json\(postGone\(reactPost\)\)/],
     ['votePoll', /isDeletedPost\(post\)\) return res\.status\(410\)/],
     ['updatePost', /editTarget\?\.deleted[\s\S]*?status\(410\)[\s\S]*?\.is\('deleted_at', null\)/],
     ['closePost', /\.is\('deleted_at', null\)/],
-    ['reportContent', /t\?\.deleted\) return res\.status\(410\)[\s\S]*?cpost && \(await postForWrite\(cpost\)\)\?\.deleted\) return res\.status\(410\)/],
+    ['reportContent', /t\?\.deleted\) return res\.status\(410\)\.json\(postGone\(t\)\)[\s\S]*?cpostRow\?\.deleted\) return res\.status\(410\)\.json\(postGone\(cpostRow\)\)/],
   ])('%s refuses', (name, re) => expect(fnBody(C, name as string)).toMatch(re as RegExp));
 });
 
 describe('admins still see it, with its reports', () => {
   test('the report queue reads deleted posts and says when and by whom', () => {
     const f = fnBody('controllers/admin.controller.ts', 'getReports');
-    expect(f).toMatch(/select\('id, content, author_id, deleted_at, deleted_by'\)/);
-    expect(f).toMatch(/content_deleted_by_author = !!p\?\.deleted_at && p\.deleted_by === p\.author_id/);
+    expect(f).toMatch(/select\('id, content, author_id, deleted_at, deleted_by, deleted_reason'\)/);
+    expect(f).toMatch(/content_deleted_by_author = !!p\?\.deleted_at && !content_removed_by_moderator && p\.deleted_by === p\.author_id/);
   });
   test('the owner\'s data export keeps their deleted posts, marked', () => {
     expect(code('controllers/account.controller.ts')).toMatch(/'id, content, image_url, created_at, deleted_at'/);

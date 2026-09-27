@@ -106,9 +106,9 @@ describe('in its thread, and in counts', () => {
 });
 
 describe('nothing can be done to a deleted comment', () => {
-  test('react', () => expect(fnBody(C, 'reactToComment')).toMatch(/comment\.deleted_at\) return res\.status\(410\)\.json\(COMMENT_DELETED\)/));
-  test('reply', () => expect(fnBody(C, 'createComment')).toMatch(/parentRow\.deleted\) return res\.status\(410\)\.json\(COMMENT_DELETED\)/));
-  test('report', () => expect(fnBody(C, 'reportContent')).toMatch(/deleted_at\) return res\.status\(410\)\.json\(COMMENT_DELETED\)/));
+  test('react', () => expect(fnBody(C, 'reactToComment')).toMatch(/comment\.deleted_at\) return res\.status\(410\)\.json\(commentGone\(comment\)\)/));
+  test('reply', () => expect(fnBody(C, 'createComment')).toMatch(/parentRow\.deleted\) return res\.status\(410\)\.json\(commentGone\(parentRow\)\)/));
+  test('report', () => expect(fnBody(C, 'reportContent')).toMatch(/crow\?\.deleted_at\) return res\.status\(410\)\.json\(commentGone\(crow\)\)/));
   test('edit: there is no comment-edit route (control: one PATCH route exists)', () => {
     const r = fs.readFileSync(path.join(__dirname, '..', 'routes', 'community.routes.ts'), 'utf8');
     expect(r).not.toMatch(/router\.(patch|put)\('\/comments/);
@@ -119,7 +119,7 @@ describe('nothing can be done to a deleted comment', () => {
 describe('admins still see it, with its reports', () => {
   test('the report queue reads deleted comments and says when and by whom', () => {
     const f = fnBody('controllers/admin.controller.ts', 'getReports');
-    expect(f).toMatch(/from\('post_comments'\)\.select\('id, content, author_id, deleted_at, deleted_by'\)/);
-    expect(f).toMatch(/content_deleted_by_author = !!c\?\.deleted_at && c\.deleted_by === c\.author_id/);
+    expect(f).toMatch(/from\('post_comments'\)\.select\('id, content, author_id, deleted_at, deleted_by, deleted_reason'\)/);
+    expect(f).toMatch(/content_deleted_by_author = !!c\?\.deleted_at && !content_removed_by_moderator && c\.deleted_by === c\.author_id/);
   });
 });

@@ -1,5 +1,5 @@
 import {
-  COMMENT_DELETED, POST_DELETED, asDeletedPlaceholder, commentForWrite, isDeletedPost, livePosts, postForWrite,
+  asDeletedPlaceholder, commentForWrite, commentGone, isDeletedPost, livePosts, postForWrite, postGone,
   softDeleteComment, softDeletePost,
 } from '../utils/postVisibility';
 import { isAdminUser } from '../middleware/admin.middleware';
@@ -390,7 +390,7 @@ export async function getPost(req: Request, res: Response) {
   // still sees it, with deleted_at / deleted_by on the row.
   if (isDeletedPost(data as { deleted_at?: string | null })
       && !(req.userId && (await isAdminUser(req.userId)))) {
-    return res.status(410).json(POST_DELETED);
+    return res.status(410).json(postGone(data as { deleted_at?: string | null; deleted_reason?: string | null }));
   }
   // SC-218: mirror the feed's embargo on this sibling path — a not-yet-published
   // scheduled post (scheduled_at in the future) is visible ONLY to its author.
@@ -696,7 +696,7 @@ export async function updatePost(req: Request, res: Response) {
 
   // #1: a deleted post can't be edited (or brought back by an edit).
   const editTarget = await postForWrite(id);
-  if (editTarget?.deleted && editTarget.author_id === userId) return res.status(410).json(POST_DELETED);
+  if (editTarget?.deleted && editTarget.author_id === userId) return res.status(410).json(postGone(editTarget));
 
   // SC-355: media + schedule are editable now. Both need the CURRENT row first —
   // rescheduling is only legal while the post is still pending, and we must not
@@ -928,7 +928,7 @@ export async function likePost(req: Request, res: Response) {
   // Block gate: a blocked user (either direction) can't like the author's post.
   const likePostRow = await postForWrite(id);
   if (!likePostRow) return res.status(404).json({ error: 'Post not found' });
-  if (likePostRow.deleted) return res.status(410).json(POST_DELETED); // #1
+  if (likePostRow.deleted) return res.status(410).json(postGone(likePostRow)); // #1 / #3
   if (await isBlockedBetween(userId, likePostRow.author_id)) {
     return res.status(403).json({ error: 'BLOCKED' });
   }
@@ -951,7 +951,8 @@ export async function unlikePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
   // #1: a deleted post's likes stay as they were.
-  if ((await postForWrite(id))?.deleted) return res.status(410).json(POST_DELETED);
+  const unlikeTarget = await postForWrite(id);
+  if (unlikeTarget?.deleted) return res.status(410).json(postGone(unlikeTarget));
 
   await supabase
     .from('post_likes')
@@ -972,8 +973,9 @@ export async function unlikePost(req: Request, res: Response) {
 export async function listComments(req: Request, res: Response) {
   const { id } = req.params;
   // #1: a deleted post's comments stay, but only an admin reads them.
-  if ((await postForWrite(id))?.deleted && !(req.userId && (await isAdminUser(req.userId)))) {
-    return res.status(410).json(POST_DELETED);
+  const threadPost = await postForWrite(id);
+  if (threadPost?.deleted && !(req.userId && (await isAdminUser(req.userId)))) {
+    return res.status(410).json(postGone(threadPost));
   }
 
   // SC-77: hide comments authored by a soft-deleted account.
@@ -1058,7 +1060,7 @@ export async function createComment(req: Request, res: Response) {
   // Block gate: a blocked user (either direction) can't comment on the post.
   const commentPostRow = await postForWrite(id);
   if (!commentPostRow) return res.status(404).json({ error: 'Post not found' });
-  if (commentPostRow.deleted) return res.status(410).json(POST_DELETED); // #1
+  if (commentPostRow.deleted) return res.status(410).json(postGone(commentPostRow)); // #1 / #3
   if (await isBlockedBetween(userId, commentPostRow.author_id)) {
     return res.status(403).json({ error: 'BLOCKED' });
   }
@@ -1066,7 +1068,7 @@ export async function createComment(req: Request, res: Response) {
   if (parent_id) {
     const parentRow = await commentForWrite(parent_id);
     if (!parentRow || parentRow.post_id !== id) return res.status(404).json({ error: 'Comment not found' });
-    if (parentRow.deleted) return res.status(410).json(COMMENT_DELETED);
+    if (parentRow.deleted) return res.status(410).json(commentGone(parentRow));
   }
 
   // SC-130: idempotent comment. With a key → insert-first (unique index dedups a
@@ -1181,14 +1183,15 @@ export async function reactToComment(req: Request, res: Response) {
   // Get current reactions
   const { data: comment } = await supabase
     .from('post_comments')
-    .select('reactions, author_id, post_id, deleted_at')
+    .select('reactions, author_id, post_id, deleted_at, deleted_reason')
     .eq('id', commentId)
     .single();
 
   if (!comment) return res.status(404).json({ error: 'Comment not found' });
-  if (comment.deleted_at) return res.status(410).json(COMMENT_DELETED); // #2
+  if (comment.deleted_at) return res.status(410).json(commentGone(comment)); // #2 / #3
   // #1: the comments on a deleted post stay as they were.
-  if ((await postForWrite(comment.post_id as string))?.deleted) return res.status(410).json(POST_DELETED);
+  const reactPost = await postForWrite(comment.post_id as string);
+  if (reactPost?.deleted) return res.status(410).json(postGone(reactPost));
 
   // SC-96: block gate — can't react to a blocked-either-direction user's comment.
   if (await isBlockedBetween(userId, comment.author_id)) {
@@ -1266,15 +1269,17 @@ export async function reportContent(req: Request, res: Response) {
   let ownerId: string | null = null;
   if (resolvedType === 'post') {
     const t = await postForWrite(resolvedId);
-    if (t?.deleted) return res.status(410).json(POST_DELETED); // #1: already gone
+    if (t?.deleted) return res.status(410).json(postGone(t)); // #1 / #3: already gone
     exists = !!t; ownerId = t?.author_id ?? null;
   } else if (resolvedType === 'comment') {
-    const { data: t } = await supabase.from('post_comments').select('author_id, post_id, deleted_at').eq('id', resolvedId).maybeSingle();
+    const { data: t } = await supabase.from('post_comments').select('author_id, post_id, deleted_at, deleted_reason').eq('id', resolvedId).maybeSingle();
     // #2: a deleted comment can't be reported (its existing reports stay).
-    if ((t as { deleted_at?: string | null } | null)?.deleted_at) return res.status(410).json(COMMENT_DELETED);
+    const crow = t as { deleted_at?: string | null; deleted_reason?: string | null } | null;
+    if (crow?.deleted_at) return res.status(410).json(commentGone(crow));
     // #1: a comment on a deleted post is out of sight like the post.
     const cpost = (t as { post_id?: string } | null)?.post_id;
-    if (cpost && (await postForWrite(cpost))?.deleted) return res.status(410).json(POST_DELETED);
+    const cpostRow = cpost ? await postForWrite(cpost) : null;
+    if (cpostRow?.deleted) return res.status(410).json(postGone(cpostRow));
     exists = !!t; ownerId = (t as { author_id?: string } | null)?.author_id ?? null;
   } else if (resolvedType === 'message') {
     const { data: t } = await supabase.from('messages').select('sender_id').eq('id', resolvedId).maybeSingle();
@@ -1419,13 +1424,13 @@ export async function votePoll(req: Request, res: Response) {
   // 1. Fetch post; verify it's a poll
   const { data: post, error: fetchErr } = await supabase
     .from('community_posts')
-    .select('id, poll_options, post_type, is_closed, author_id, allow_multiple, deleted_at')
+    .select('id, poll_options, post_type, is_closed, author_id, allow_multiple, deleted_at, deleted_reason')
     .eq('id', id)
     .maybeSingle();
 
   if (fetchErr) return res.status(500).json({ error: sanitizeError(fetchErr) });
   if (!post) return res.status(404).json({ error: 'Post not found' });
-  if (isDeletedPost(post)) return res.status(410).json(POST_DELETED); // #1
+  if (isDeletedPost(post)) return res.status(410).json(postGone(post)); // #1 / #3
   // SC-96: block gate — can't vote on a blocked-either-direction user's poll.
   if (await isBlockedBetween(userId, post.author_id)) {
     return res.status(403).json({ error: 'BLOCKED' });

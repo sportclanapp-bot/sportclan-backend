@@ -8,6 +8,8 @@ import { inviteFreshCutoffIso } from './invites.controller';
 import { resolveSportId } from '../utils/sportId';
 import { isSportInactive } from '../utils/sports';
 import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
+import { RESERVED_USERNAMES, EMAIL_RE } from '../utils/profileRules';
+import { escapeLike } from '../utils/likeSearch';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
@@ -428,26 +430,8 @@ const ALLOWED_FIELDS = [
 
 const USERNAME_COOLDOWN_DAYS = 30;
 
-/**
- * SC-365: usernames nobody may take.
- *
- * Found by testing: there was no list at all, so a normal user could become
- * @admin or @support and message people from what reads like an official
- * account. That's an impersonation vector, not a naming nicety.
- *
- * Matched case-insensitively against the whole username (not a substring — we
- * don't want to block a legitimate "adminder" or "supporter").
- */
-const RESERVED_USERNAMES = new Set([
-  'admin', 'admins', 'administrator', 'root', 'superuser', 'sysadmin',
-  'support', 'help', 'helpdesk', 'contact', 'info', 'team', 'staff',
-  'sportclan', 'sportclanapp', 'official', 'verified', 'moderator', 'mod',
-  'security', 'billing', 'payments', 'noreply', 'no-reply', 'system',
-  'api', 'www', 'about', 'settings', 'login', 'signup', 'register', 'me',
-]);
-
-/** RFC-shaped enough to catch real typos without rejecting valid addresses. */
-const EMAIL_RE = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
+// SC-365 RESERVED_USERNAMES / EMAIL_RE live in utils/profileRules — sign-up
+// applies the same rules (Phase 3 B01-F3).
 
 /** B13: why a notification_preferences value is refused, or null when it's fine. */
 export function notificationPrefsProblem(v: unknown): string | null {
@@ -588,7 +572,7 @@ export async function updateMe(req: Request, res: Response) {
       const { data: taken } = await supabase
         .from('users')
         .select('id')
-        .ilike('username', patch.username as string)
+        .ilike('username', escapeLike(patch.username as string)) // B01-F11: `_` is a literal
         .neq('id', userId)
         .maybeSingle();
       if (taken) return res.status(409).json({ error: 'Username already taken' });

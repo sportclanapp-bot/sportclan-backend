@@ -42,7 +42,7 @@ describe('email + password ride on the phone signup as extras', () => {
   });
 
   it('email stays optional on that path', () => {
-    expect(a).toContain('email: email || null,');
+    expect(a).toContain('email: cleanEmail,'); // null when not given (Phase 3 B01-F3: trimmed, lower-cased)
   });
 });
 

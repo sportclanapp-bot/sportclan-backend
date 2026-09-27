@@ -21,7 +21,8 @@ jest.mock('axios', () => ({ __esModule: true, default: { get: jest.fn(async () =
 jest.mock('../utils/supabase', () => {
   const chain: any = {};
   for (const m of ['from', 'select', 'in', 'not', 'eq', 'is', 'maybeSingle', 'update', 'insert']) chain[m] = jest.fn(() => chain);
-  chain.limit = jest.fn(async () => ({ data: [], error: null }));
+  // a live account holds every number here (Phase 3 B01-F5: reset codes need one)
+  chain.limit = jest.fn(async () => ({ data: [{ id: 'u-live' }], error: null }));
   return { supabase: chain };
 });
 

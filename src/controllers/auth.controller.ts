@@ -14,6 +14,8 @@ import {
 } from '../utils/jwt';
 import { setOtp, getOtp, deleteOtp, bumpCounter, readCounter } from '../utils/otpStore';
 import { normalizeAccountTypes } from '../constants/accountTypes';
+import { signupProfileProblem, USERNAME_RE, RESERVED_USERNAMES } from '../utils/profileRules';
+import { escapeLike } from '../utils/likeSearch';
 import { awardCoins } from '../utils/coins';
 import { insertRefreshToken } from '../utils/sessionDevice';
 
@@ -76,6 +78,12 @@ function generateOtp(): string {
 function normalizePhone(phone: string): string {
   return phone.trim().replace(/\s+/g, '');
 }
+
+/** The one answer for a phone that isn't a usable number (send-otp's, SC-398). */
+const INVALID_PHONE_BODY = { error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE' } as const;
+
+/** What a code can be sent for. Anything else was stored as-is (Phase 3 B01-F14). */
+export const OTP_PURPOSES = ['login', 'register', 'reset', 'change_phone'] as const;
 
 // Send OTP via 2Factor.in — SMS or voice call.
 //
@@ -217,6 +225,9 @@ export async function sendOtp(req: Request, res: Response) {
   // SC-441 (P1): 'whatsapp' is no longer accepted — an old build still asking for
   // it gets SMS rather than an error, so upgrading is not forced.
   const channel: OtpChannel = rawChannel === 'voice' ? 'voice' : 'sms';
+  if (!(OTP_PURPOSES as readonly unknown[]).includes(purpose)) {
+    return res.status(400).json({ error: 'Unknown code purpose.', code: 'INVALID_PURPOSE' });
+  }
   const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // SC-385: reuse the SAME rule register already enforces (SC-72). It was only
   // applied at registration, so the number could afterwards be replaced with
@@ -245,6 +256,23 @@ export async function sendOtp(req: Request, res: Response) {
     if (heldUntil) return res.status(403).json(deletedResponse(heldUntil));
   } catch {
     // fall through and send — see above
+  }
+
+  // Phase 3 B01-F5: a reset code for a number no live account uses was sent
+  // (and paid for), and the user only learnt at the end — after typing the
+  // code and a new password — that there was nothing to reset. Same trade as
+  // the deleted check above: resetPassword already says this a step later.
+  // Fails open on a query error, like the check above.
+  if (purpose === 'reset') {
+    try {
+      const { data: live, error: liveErr } = await supabase
+        .from('users').select('id').in('phone', phoneVariants(p)).is('deleted_at', null).limit(1);
+      if (!liveErr && Array.isArray(live) && live.length === 0) {
+        return res.status(404).json({ error: 'No SportClan account uses this number.', code: 'PHONE_NOT_REGISTERED' });
+      }
+    } catch {
+      // fall through and send
+    }
   }
 
   // 28 Sep: a per-number send limit on top of the per-IP one — it stops
@@ -345,6 +373,7 @@ async function isDeleted(userId: string): Promise<boolean> {
 export async function verifyOtp(req: Request, res: Response) {
   const { phone, code } = req.body || {};
   if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
+  if (typeof phone !== 'string') return res.status(400).json(INVALID_PHONE_BODY); // B01-F12: was a 500
   const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // Dev-only bypass (see isTestOtp): accept the fixed test code without a real OTP.
   if (isTestOtp(code)) {
@@ -385,11 +414,17 @@ export async function register(req: Request, res: Response) {
   const {
     phone, code,
     name, username, email, password, gender, dob, link, city_id, bio,
-    account_types, sport_ids, coupon_code,
+    account_types, sport_ids, coupon_code, profile_picture_url,
   } = req.body || {};
 
   if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
+  if (typeof phone !== 'string') return res.status(400).json(INVALID_PHONE_BODY); // B01-F12: was a 500
   if (!name || !username) return res.status(400).json({ error: 'name and username are required' });
+  // Phase 3 B01-F3: the rules Edit profile enforces, checked before the code
+  // is used up. Sign-up checked none of them.
+  const rule = signupProfileProblem({ name, username, email, dob, bio, link, profile_picture_url });
+  if (rule) return res.status(rule.status).json({ error: rule.error, ...(rule.code ? { code: rule.code } : {}) });
+  const cleanEmail = typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : null;
   // A password is OPTIONAL on signup, and it is the only way one is ever set at
   // signup now: the phone-less email+password path (registerEmail) is gone.
   // Phone is mandatory because a verified number is the only recovery route
@@ -448,9 +483,11 @@ export async function register(req: Request, res: Response) {
   }
 
   // Email must be free (if provided)
-  if (email) {
+  // B01-F3: case-insensitive, like Edit profile — `Foo@x.com` and `foo@x.com`
+  // could both register, and email sign-in (ilike) then failed for both.
+  if (cleanEmail) {
     const { data: existingEmail } = await supabase
-      .from('users').select('id').eq('email', email).maybeSingle();
+      .from('users').select('id').ilike('email', escapeLike(cleanEmail)).limit(1).maybeSingle();
     if (existingEmail) {
       return res.status(400).json({
         code: 'EMAIL_ALREADY_REGISTERED',
@@ -461,7 +498,7 @@ export async function register(req: Request, res: Response) {
 
   // Username must be free (case-insensitive)
   const { data: existingUsername } = await supabase
-    .from('users').select('id').ilike('username', username).maybeSingle();
+    .from('users').select('id').ilike('username', escapeLike(username.trim())).limit(1).maybeSingle(); // B01-F11
   if (existingUsername) return res.status(409).json({ error: 'Username already taken' });
 
   if (gender && !['male', 'female', 'other'].includes(gender)) {
@@ -495,14 +532,17 @@ export async function register(req: Request, res: Response) {
     .from('users')
     .insert({
       phone: p,
-      name,
-      username,
-      email: email || null,
+      name: name.trim(),
+      username: username.trim(),
+      email: cleanEmail,
       password_hash: password ? await bcrypt.hash(password, 10) : null,
       gender: gender || null,
       dob: dob || null,
       link: link || null,
       bio: bio || null,
+      // B01-F2: the photo picked at sign-up was uploaded, then dropped here.
+      // Checked against the storage allowlist by signupProfileProblem above.
+      profile_picture_url: profile_picture_url || null,
       city_id: city_id || null,
       account_type: primaryAccountType,
       coin_balance: 0,
@@ -570,6 +610,7 @@ export async function register(req: Request, res: Response) {
 export async function otpLogin(req: Request, res: Response) {
   const { phone, code } = req.body || {};
   if (!phone || !code) return res.status(400).json({ error: 'phone and code are required' });
+  if (typeof phone !== 'string') return res.status(400).json(INVALID_PHONE_BODY); // B01-F12: was a 500
   const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // Dev-only bypass (see isTestOtp): skip OTP validation for the fixed test code.
   // The user must still exist (seeded) — otherwise we fall through to the 404 below.
@@ -615,13 +656,17 @@ export async function login(req: Request, res: Response) {
   if (!password || (!phone && !email)) {
     return res.status(400).json({ error: 'password and either phone or email are required' });
   }
+  // B01-F12: a number or object here reached .trim() / phoneVariants → 500.
+  if (typeof password !== 'string' || (email && typeof email !== 'string') || (!email && typeof phone !== 'string')) {
+    return res.status(400).json({ error: 'password and either phone or email are required' });
+  }
 
   let query = supabase
     .from('users')
     .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, coin_balance, is_admin, created_at');
 
   if (email) {
-    query = query.ilike('email', email.trim());
+    query = query.ilike('email', escapeLike(email.trim())); // B01-F11: `_` is a literal
   } else {
     query = query.in('phone', phoneVariants(phone)).limit(1);  // SC-386: any stored form
   }
@@ -691,8 +736,10 @@ export async function checkUsername(req: Request, res: Response) {
   const username = ((req.query.username as string) || '').trim();
   if (!username) return res.status(400).json({ error: 'username is required' });
   if (username.length < 3) return res.json({ available: false });
+  // B01-F3: what sign-up refuses isn't "available" (`admin`, 31+ characters).
+  if (!USERNAME_RE.test(username) || RESERVED_USERNAMES.has(username.toLowerCase())) return res.json({ available: false });
   const { data } = await supabase
-    .from('users').select('id').ilike('username', username).maybeSingle();
+    .from('users').select('id').ilike('username', escapeLike(username)).limit(1).maybeSingle(); // B01-F11
   return res.json({ available: !data });
 }
 
@@ -702,6 +749,12 @@ export async function resetPassword(req: Request, res: Response) {
   const { phone, code, newPassword } = req.body || {};
   if (!phone || !code || !newPassword) {
     return res.status(400).json({ error: 'phone, code, newPassword are required' });
+  }
+  if (typeof phone !== 'string') return res.status(400).json(INVALID_PHONE_BODY); // B01-F12
+  // B01-F4: the app's 8-character rule, on the server too — checked before the
+  // code so a guess isn't spent on a password that would be refused.
+  if (typeof newPassword !== 'string' || newPassword.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
   const p = canonicalisePhone(phone) ?? normalizePhone(phone);
   // Honor the dev-only test bypass uniformly with verifyOtp/otpLogin/register
@@ -735,6 +788,7 @@ export async function changePhone(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { newPhone, code } = req.body || {};
   if (!newPhone || !code) return res.status(400).json({ error: 'newPhone and code are required' });
+  if (typeof newPhone !== 'string') return res.status(400).json(INVALID_PHONE_BODY); // B01-F12
   const p = canonicalisePhone(newPhone) ?? normalizePhone(newPhone);
   // SC-385: reuse the SAME rule register already enforces (SC-72). It was only
   // applied at registration, so the number could afterwards be replaced with

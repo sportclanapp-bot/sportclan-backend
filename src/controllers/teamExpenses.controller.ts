@@ -249,8 +249,19 @@ function validateExpenseFields(body: Record<string, any>, partial: boolean): str
   if (tooManyItems(split_among, ARRAY_LIMITS.splitAmong)) {
     return `Too many split_among entries (max ${ARRAY_LIMITS.splitAmong})`;
   }
+  // B07-F12: notes were stored whatever their type or length (an object, 5,000
+  // characters) and the ledger rendered every character.
+  if (body.notes != null && body.notes !== '') {
+    if (typeof body.notes !== 'string') return 'The note must be text.';
+    if (body.notes.length > EXPENSE_NOTE_MAX) return `Keep the note under ${EXPENSE_NOTE_MAX} characters.`;
+  }
+  // B07-F11: a malformed match or tournament id reached the uuid column (500).
+  if (body.match_id != null && body.match_id !== '' && !isUuid(body.match_id)) return 'Invalid match.';
+  if (body.tournament_id != null && body.tournament_id !== '' && !isUuid(body.tournament_id)) return 'Invalid tournament.';
   return null;
 }
+
+export const EXPENSE_NOTE_MAX = 280;
 
 export async function addExpense(req: Request, res: Response) {
   const userId = req.userId;
@@ -266,6 +277,20 @@ export async function addExpense(req: Request, res: Response) {
 
     const { title, amount, category, paid_by, split_among, notes, match_id, tournament_id } = body;
     const cleanTitle = String(title).trim();
+    // B07-F9b: the split took any array — a stranger's id made "5 people" of a
+    // 4-member team, and "abc" was a 500. Same rule as the edit path, where the
+    // only people allowed are current members (a new expense has no prior split).
+    let split: string[] | null = null;
+    if (split_among !== undefined && split_among !== null) {
+      if (!Array.isArray(split_among)) return res.status(400).json({ error: 'split_among must be an array of member ids.' });
+      const next = Array.from(new Set(split_among.map((x: unknown) => String(x))));
+      if (next.some((x) => !isUuid(x))) return res.status(400).json({ error: 'split_among may only contain team members.' });
+      if (next.length > 0) {
+        const roster = new Set(await currentRoster(id!));
+        if (next.some((x) => !roster.has(x))) return res.status(400).json({ error: 'split_among may only contain team members.' });
+        split = next;
+      }
+    }
     const cleanAmount = toRupees(toPaise(amount));
 
     // SC-360: a double-tapped Add used to create two identical expenses — real
@@ -306,9 +331,7 @@ export async function addExpense(req: Request, res: Response) {
         // SC-417: CAPTURE the split set now. This is what freezes history — the
         // summary reads this array, never the live roster, so a later join or
         // removal cannot change what this expense was split between.
-        split_among: (Array.isArray(split_among) && split_among.length > 0)
-          ? split_among
-          : await currentRoster(id!),
+        split_among: split ?? await currentRoster(id!),
         notes: notes || null,
         match_id: match_id || null,
         tournament_id: tournament_id || null,

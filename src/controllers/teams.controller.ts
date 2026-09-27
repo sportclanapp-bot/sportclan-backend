@@ -115,6 +115,24 @@ async function joinGate(
   return null;
 }
 
+/**
+ * Phase 3 B07-F13: a team name is a trimmed string of 1..teamNameMax
+ * characters. `name:""`, spaces or a number used to be stored as is, and a
+ * blank title then showed across lists, match sides and chats.
+ */
+export function cleanTeamName(name: unknown): { value?: string; error?: string } {
+  if (typeof name !== 'string' || !name.trim()) return { error: 'Give the team a name.' };
+  const v = name.trim();
+  if (v.length > LIMITS.teamNameMax) return { error: `Team name must be ${LIMITS.teamNameMax} characters or fewer` };
+  return { value: v };
+}
+
+/** B07-F11: one value of a query param — a repeated param arrives as an array. */
+function oneQuery(v: unknown): string | undefined {
+  if (Array.isArray(v)) return typeof v[0] === 'string' ? v[0] : undefined;
+  return typeof v === 'string' ? v : undefined;
+}
+
 export async function createTeam(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -127,8 +145,11 @@ export async function createTeam(req: Request, res: Response) {
     if (!sport_id || !name) {
       return res.status(400).json({ error: 'sport_id and name are required' });
     }
-    if (String(name).length > LIMITS.teamNameMax) {
-      return res.status(400).json({ error: `Team name must be ${LIMITS.teamNameMax} characters or fewer` });
+    const cleanName = cleanTeamName(name);
+    if (cleanName.error) return res.status(400).json({ error: cleanName.error });
+    // B07-F11: a malformed city id reached the uuid column (500).
+    if (city_id != null && city_id !== '' && !isUuid(city_id)) {
+      return res.status(400).json({ error: 'Pick a city from the list.' });
     }
     // Migration 110: the short name the form always asked for is kept now.
     const shortName = normalizeShortName(short_name);
@@ -150,7 +171,7 @@ export async function createTeam(req: Request, res: Response) {
     const { data: team, error } = await supabase
       .from('teams')
       .insert({
-        sport_id, name, logo_url: logo_url || null, city_id: city_id || null,
+        sport_id, name: cleanName.value, logo_url: logo_url || null, city_id: city_id || null,
         created_by: userId, join_code,
         ...(shortName.value !== undefined ? { short_name: shortName.value } : {}),
         // Same validation as updateTeam; anything else falls back to the column default.
@@ -177,7 +198,12 @@ export async function listTeams(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const { sport_id, city_id, mine, q } = req.query as Record<string, string | undefined>;
+    const qs = req.query as Record<string, unknown>;
+    const sport_id = oneQuery(qs.sport_id);
+    const city_id = oneQuery(qs.city_id);
+    const mine = oneQuery(qs.mine);
+    const q = oneQuery(qs.q);
+    if (city_id && !isUuid(city_id)) return res.status(400).json({ error: 'Invalid city_id' });
 
     let teamIdsFilter: string[] | null = null;
     // V056 (visual review): "My teams" rows showed the join code but not the
@@ -307,6 +333,14 @@ export async function getTeam(req: Request, res: Response) {
     const viewerIsMember = !!userId && (members || []).some(
       (m: any) => (m.user?.id ?? m.user_id) === userId,
     );
+    // B07-F6: a non-member's pending request, so the page doesn't offer
+    // "Request to join" again (and 409) after a reopen.
+    if (!viewerIsMember) {
+      const { data: reqRow } = await supabase
+        .from('team_join_requests').select('status')
+        .eq('team_id', id).eq('user_id', userId).maybeSingle();
+      (team as { my_request?: 'pending' | null }).my_request = reqRow?.status === 'pending' ? 'pending' : null;
+    }
     return res.json({ team: stripJoinCode(team as any, viewerIsMember), members: members || [] });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -334,6 +368,10 @@ export async function addTeamMember(req: Request, res: Response) {
     // 23503 FK violation for a missing user.)
     if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
     if (!isUuid(user_id)) return res.status(400).json({ error: 'Invalid user_id' });
+    // B07-F11: a text jersey number reached the integer column (500).
+    if (jersey_number != null && !(Number.isInteger(jersey_number) && jersey_number >= 0 && jersey_number <= 999)) {
+      return res.status(400).json({ error: 'Jersey number must be a whole number from 0 to 999.' });
+    }
     const { data: userRow } = await supabase.from('users').select('id').eq('id', user_id).maybeSingle();
     if (!userRow) return res.status(404).json({ error: 'User not found' });
     // SC-103: only 'player' and 'vice_captain' may be assigned here. 'captain'
@@ -359,6 +397,17 @@ export async function addTeamMember(req: Request, res: Response) {
     // is trivially bypassed by the one person most able to bypass it.
     if (isAtCapacity(await memberCount(id))) {
       return res.status(409).json({ error: `This team is full (${TEAM_MAX_MEMBERS} members).`, code: 'TEAM_FULL' });
+    }
+    // B07-F3b: every join path refuses a person blocked (either direction) with
+    // a current member; the captain-add path skipped it, putting someone into a
+    // team and its chat with a person they blocked. Same gate, and the answer
+    // doesn't say who blocked whom.
+    const blockedWithTarget = await blockedUserIds(user_id);
+    if (blockedWithTarget.size > 0) {
+      const { data: current } = await supabase.from('team_members').select('user_id').eq('team_id', id);
+      if ((current ?? []).some((m) => blockedWithTarget.has(m.user_id as string))) {
+        return res.status(403).json({ error: 'You can’t add this person.', code: 'BLOCKED_FROM_TEAM' });
+      }
     }
     // SC-359: adding someone back IS the undo for a removal. Clearing the ban
     // here means a mistaken removal is never permanent and needs no separate
@@ -497,12 +546,16 @@ export async function removeTeamMember(req: Request, res: Response) {
       return res.json({ removed: true, team_empty: true });
     }
 
-    const { error } = await supabase
+    const { data: gone, error } = await supabase
       .from('team_members')
       .delete()
       .eq('team_id', id)
-      .eq('user_id', targetUserId);
+      .eq('user_id', targetUserId)
+      .select('id');
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // B07-F22: removing a non-member answered "removed, banned" while nothing
+    // was removed and the ban write failed silently.
+    if (!gone || gone.length === 0) return res.status(404).json({ error: 'Not a member of this team.' });
 
     // SC-359: a ban is written ONLY when a manager removed SOMEONE ELSE. The
     // earlier self-removal branch covers just the CAPTAIN leaving (heir transfer
@@ -511,9 +564,10 @@ export async function removeTeamMember(req: Request, res: Response) {
     // leaver was banned from their own team, which inverts the whole feature.
     const isSelfLeave = targetUserId === userId;
     if (!isSelfLeave) {
-      await supabase
+      const { error: banErr } = await supabase
         .from('team_bans')
         .upsert({ team_id: id, user_id: targetUserId, banned_by: userId }, { onConflict: 'team_id,user_id' });
+      if (banErr) return res.json({ removed: true, banned: false });
       // Drop any pending request too, or the removed user's stale request could
       // be approved straight back in.
       await supabase
@@ -618,8 +672,13 @@ export async function updateTeam(req: Request, res: Response) {
     }
     const allowed: Record<string, any> = {};
     const { name, logo_url, city_id, is_public, join_policy, short_name } = req.body || {};
-    if (typeof name === 'string' && name.length > LIMITS.teamNameMax) {
-      return res.status(400).json({ error: `Team name must be ${LIMITS.teamNameMax} characters or fewer` });
+    const cleanName = name !== undefined ? cleanTeamName(name) : {};
+    if (cleanName.error) return res.status(400).json({ error: cleanName.error });
+    if (city_id != null && city_id !== '' && !isUuid(city_id)) {
+      return res.status(400).json({ error: 'Pick a city from the list.' });
+    }
+    if (is_public !== undefined && typeof is_public !== 'boolean') {
+      return res.status(400).json({ error: 'is_public must be true or false' });
     }
     // Migration 110: short_name is saved on edit (it was silently dropped).
     const shortName = normalizeShortName(short_name);
@@ -630,9 +689,9 @@ export async function updateTeam(req: Request, res: Response) {
     if (join_policy !== undefined && !['open', 'approval'].includes(join_policy)) {
       return res.status(400).json({ error: "join_policy must be 'open' or 'approval'" });
     }
-    if (name !== undefined) allowed.name = name;
+    if (cleanName.value !== undefined) allowed.name = cleanName.value;
     if (logo_url !== undefined) allowed.logo_url = logo_url;
-    if (city_id !== undefined) allowed.city_id = city_id;
+    if (city_id !== undefined) allowed.city_id = city_id || null;
     if (is_public !== undefined) allowed.is_public = is_public;
     if (join_policy !== undefined) allowed.join_policy = join_policy;
     if (shortName.value !== undefined) allowed.short_name = shortName.value;
@@ -803,11 +862,12 @@ export async function joinTeamByCode(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { join_code } = req.body || {};
-    if (!join_code) return res.status(400).json({ error: 'join_code is required' });
+    // B07-F11: a number or a list reached `.toUpperCase()` (500).
+    if (typeof join_code !== 'string' || !join_code.trim()) return res.status(400).json({ error: 'join_code is required' });
     const { data: team } = await supabase
       .from('teams')
       .select('id, name, short_name, sport_id, join_policy, deleted_at')
-      .eq('join_code', join_code.toUpperCase())
+      .eq('join_code', join_code.trim().toUpperCase())
       .maybeSingle();
     if (!team) return res.status(404).json({ error: 'Invalid team code' });
     // Hard-delete list #6: a disbanded team's invite code joins nobody.

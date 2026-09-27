@@ -147,3 +147,13 @@ describe('migration 101', () => {
     expect(sql.replace(/--.*$/gm, '').replace(/ON DELETE SET NULL/g, '')).not.toMatch(/\bDELETE\b|\bDROP\b|\bTRUNCATE\b/i);
   });
 });
+
+describe('local check server', () => {
+  test('SC_NO_BACKGROUND_JOBS=1 returns before any job is scheduled', () => {
+    const s = code('index.ts');
+    const off = s.indexOf("process.env.SC_NO_BACKGROUND_JOBS === '1'");
+    expect(off).toBeGreaterThan(0);
+    expect(off).toBeLessThan(s.indexOf('setInterval('));
+    expect(s.slice(off, off + 200)).toMatch(/return;/);
+  });
+});

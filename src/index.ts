@@ -253,6 +253,16 @@ app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`[sportclan-backend] listening on :${PORT}`);
 
+  // A local server pointed at the real database (to check a change before it
+  // deploys) must not also run the jobs Render already runs — reminders and
+  // digests would send real pushes twice. Off only when asked; Render never
+  // sets it.
+  if (process.env.SC_NO_BACKGROUND_JOBS === '1') {
+    // eslint-disable-next-line no-console
+    console.log('[sportclan-backend] background jobs OFF (SC_NO_BACKGROUND_JOBS=1)');
+    return;
+  }
+
   // SC-434: an hourly premium-expiry sweep ran here, flipping lapsed users to the
   // free tier and firing "your Premium expires in 3 days" reminders. There are no
   // tiers and nothing expires, so it is gone — which is also what guarantees that

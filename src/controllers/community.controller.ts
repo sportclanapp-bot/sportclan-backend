@@ -1,5 +1,5 @@
 import {
-  asDeletedPlaceholder, commentForWrite, commentGone, isDeletedPost, livePosts, postForWrite, postGone,
+  asDeletedPlaceholder, commentForWrite, commentGone, hiddenFrom, isDeletedPost, livePosts, postForWrite, postGone,
   profileCommentForWrite, profilePostForWrite,
   softDeleteComment, softDeletePost,
 } from '../utils/postVisibility';
@@ -15,6 +15,7 @@ import { excludeDeleted } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
+import { isUuid } from '../utils/uuid';
 import { notifyUsers } from '../utils/notify';
 import { taggableBy } from '../utils/tagPrivacy';
 
@@ -172,6 +173,21 @@ export async function attachLikes<T extends { id: string; is_liked?: boolean }>(
   for (const p of posts) p.is_liked = liked.has(p.id);
 }
 
+/**
+ * B03-F8: the feed's keyset cursor, "created_at|id" (or a legacy bare
+ * created_at). Returns false for anything else — it is interpolated into a
+ * PostgREST filter, so only a real timestamp and a real uuid get through.
+ */
+export function parseFeedCursor(raw: unknown): { ts: string; id: string | null } | false {
+  if (typeof raw !== 'string' || !raw) return false;
+  const parts = raw.split('|');
+  if (parts.length > 2) return false;
+  const [ts, id] = parts;
+  if (!/^\d{4}-\d{2}-\d{2}T[\d:.]+(Z|[+-]\d{2}:?\d{2})?$/.test(ts) || Number.isNaN(Date.parse(ts))) return false;
+  if (id !== undefined && !isUuid(id)) return false;
+  return { ts, id: id ?? null };
+}
+
 // ─── LIST POSTS (feed) ──────────────────────────────────────────────────────
 export async function listPosts(req: Request, res: Response) {
   const { sport_id, city_id, post_type, author_id, user_id, cursor, limit = '20', sort } = req.query;
@@ -179,7 +195,16 @@ export async function listPosts(req: Request, res: Response) {
   // `author_id`. Accept either so "My posts" filters to the profile owner
   // instead of silently returning the whole feed.
   const authorFilter = (author_id ?? user_id) as string | undefined;
-  const pageSize = Math.min(parseInt(limit as string, 10) || 20, 50);
+  // B03-F8: ids are checked before they reach PostgREST (a malformed one was a
+  // 500), and the cursor is parsed rather than spliced raw into `.or()`.
+  for (const [name, v] of [['sport_id', sport_id], ['city_id', city_id], ['author_id', authorFilter]] as const) {
+    if (v !== undefined && !isUuid(v)) return res.status(400).json({ error: `Invalid ${name}` });
+  }
+  if (post_type !== undefined && typeof post_type !== 'string') return res.status(400).json({ error: 'Invalid post_type' });
+  const parsedCursor = cursor === undefined ? null : parseFeedCursor(cursor);
+  if (parsedCursor === false) return res.status(400).json({ error: 'Invalid cursor' });
+  const limitNum = parseInt(String(limit), 10);
+  const pageSize = Math.min(Math.max(Number.isFinite(limitNum) ? limitNum : 20, 1), 50);
   const sortMode = (sort as string) || 'recent';
   // SC-197: feed curation mode. for_you = the default feed (unchanged). following
   // = only posts by users the viewer follows. tournaments = only posts linked to a
@@ -259,8 +284,8 @@ export async function listPosts(req: Request, res: Response) {
   // timestamp is no longer skipped (paginate on the (created_at, id) tuple).
   // Backward-compat: an OLD ts-only cursor (no "|") falls back to the previous
   // .lt('created_at') behaviour, so the current app keeps working mid-deploy.
-  if (cursor && sortMode !== 'trending') {
-    const [cts, cid] = String(cursor).split('|');
+  if (parsedCursor && sortMode !== 'trending') {
+    const { ts: cts, id: cid } = parsedCursor;
     if (cid) {
       q = q.or(`created_at.lt.${cts},and(created_at.eq.${cts},id.lt.${cid})`);
     } else {
@@ -331,7 +356,12 @@ export async function listPosts(req: Request, res: Response) {
 // sport, how many posts exist newer than `since` (defaults to 7 days ago).
 // The frontend passes the user's last-visit timestamp from AsyncStorage.
 export async function getSportStoryCounts(req: Request, res: Response) {
-  const since = (req.query.since as string) ||
+  // B03-F8: a `since` that isn't a date was a 500; now it's a 400.
+  const rawSince = req.query.since;
+  if (rawSince !== undefined && rawSince !== '' && (typeof rawSince !== 'string' || Number.isNaN(Date.parse(rawSince)))) {
+    return res.status(400).json({ error: 'since must be a date' });
+  }
+  const since = rawSince ? new Date(rawSince).toISOString() :
     new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   // SC-106: block-filtered either direction (SC-82). B2-a: posts by a deleted
@@ -459,7 +489,8 @@ export async function createPost(req: Request, res: Response) {
     }
   }
 
-  if (!bodyContent || bodyContent.trim().length === 0) {
+  // B03-F8: a number or object as the content was a 500 at .trim().
+  if (typeof bodyContent !== 'string' || bodyContent.trim().length === 0) {
     return res.status(400).json({ error: 'Content is required' });
   }
   // N320 side finding 4: only a type the app can show.
@@ -485,6 +516,10 @@ export async function createPost(req: Request, res: Response) {
   if (tooManyItems(mentions, ARRAY_LIMITS.mentions)) {
     return res.status(400).json({ error: `Too many mentions (max ${ARRAY_LIMITS.mentions})` });
   }
+  // B03-F8: mentions go straight to the RPC as uuid[] — anything else was a 500.
+  if (mentions !== undefined && mentions !== null && (!Array.isArray(mentions) || !mentions.every(isUuid))) {
+    return res.status(400).json({ error: 'mentions must be a list of user ids' });
+  }
 
   // Poll validation: accept string[] from frontend; convert to JSONB with
   // generated option_id + zero votes.
@@ -493,9 +528,16 @@ export async function createPost(req: Request, res: Response) {
     if (!Array.isArray(rawPollOptions) || rawPollOptions.length < 2 || rawPollOptions.length > 5) {
       return res.status(400).json({ error: 'Polls need 2-5 options' });
     }
-    pollOptions = rawPollOptions.map((text: string, i: number) => ({
+    // B03-F10: blank or repeated options made a poll of empty radios; the app
+    // already refuses both, so the server does too.
+    const texts = rawPollOptions.map((o: unknown) => (typeof o === 'string' ? o.trim().slice(0, 80) : ''));
+    const keys = texts.map((s: string) => s.toLowerCase());
+    if (texts.some((s: string) => !s) || new Set(keys).size !== keys.length) {
+      return res.status(400).json({ error: "Poll options can't be blank or repeated." });
+    }
+    pollOptions = texts.map((text: string, i: number) => ({
       id: `opt_${i + 1}`,
-      text: String(text).trim().slice(0, 80),
+      text,
       vote_count: 0,
     }));
   }
@@ -702,6 +744,11 @@ export async function updatePost(req: Request, res: Response) {
     return res.status(400).json({ error: `Unknown post type. Use one of: ${POST_TYPES.join(', ')}.`, code: 'INVALID_POST_TYPE' });
   }
 
+  // B03-F9: '' or '   ' used to skip every check (`if (content)`) and then be
+  // written as a blank post; a non-string was a 500 at .trim().
+  if (content !== undefined && (typeof content !== 'string' || content.trim().length === 0)) {
+    return res.status(400).json({ error: 'Content is required' });
+  }
   if (content) {
     if (content.length > LIMITS.postTextMax) {
       return res.status(400).json({ error: `Post must be ${LIMITS.postTextMax} characters or fewer` });
@@ -765,7 +812,9 @@ export async function updatePost(req: Request, res: Response) {
       });
     }
     if (scheduled_at === null) {
-      schedulePatch = { scheduled_at: null }; // publish now
+      // publish now. B03-F12: restamp created_at, as the scheduled-post job
+      // does (SC-350) — otherwise it lands at its compose-time slot, buried.
+      schedulePatch = { scheduled_at: null, created_at: new Date().toISOString() };
     } else {
       const when = new Date(scheduled_at);
       if (Number.isNaN(when.getTime())) return res.status(400).json({ error: 'Invalid scheduled_at' });
@@ -945,7 +994,7 @@ export async function likePost(req: Request, res: Response) {
 
   // Block gate: a blocked user (either direction) can't like the author's post.
   const likePostRow = await postForWrite(id);
-  if (!likePostRow) return res.status(404).json({ error: 'Post not found' });
+  if (!likePostRow || hiddenFrom(likePostRow, userId)) return res.status(404).json({ error: 'Post not found' }); // B03-F13
   if (likePostRow.deleted) return res.status(410).json(postGone(likePostRow)); // #1 / #3
   if (await isBlockedBetween(userId, likePostRow.author_id)) {
     return res.status(403).json({ error: 'BLOCKED' });
@@ -992,7 +1041,10 @@ export async function listComments(req: Request, res: Response) {
   const { id } = req.params;
   // #1: a deleted post's comments stay, but only an admin reads them.
   const threadPost = await postForWrite(id);
-  if (threadPost?.deleted && !(req.userId && (await isAdminUser(req.userId)))) {
+  // B03-F18: a post that doesn't exist was a 200 with no comments.
+  // B03-F13: nor can anyone but its author read a scheduled post's thread.
+  if (!threadPost || hiddenFrom(threadPost, req.userId)) return res.status(404).json({ error: 'Post not found' });
+  if (threadPost.deleted && !(req.userId && (await isAdminUser(req.userId)))) {
     return res.status(410).json(postGone(threadPost));
   }
 
@@ -1059,7 +1111,8 @@ export async function createComment(req: Request, res: Response) {
   // malformed key can't 500 the comment insert — the comment still posts.
   const idempotency_key = normalizeClientKey(req.body?.idempotency_key);
 
-  if (!content || content.trim().length === 0) {
+  // B03-F8: a non-string content was a 500 at .trim().
+  if (typeof content !== 'string' || content.trim().length === 0) {
     return res.status(400).json({ error: 'Content is required' });
   }
   if (content.length > LIMITS.postTextMax) {
@@ -1077,7 +1130,7 @@ export async function createComment(req: Request, res: Response) {
 
   // Block gate: a blocked user (either direction) can't comment on the post.
   const commentPostRow = await postForWrite(id);
-  if (!commentPostRow) return res.status(404).json({ error: 'Post not found' });
+  if (!commentPostRow || hiddenFrom(commentPostRow, userId)) return res.status(404).json({ error: 'Post not found' }); // B03-F13
   if (commentPostRow.deleted) return res.status(410).json(postGone(commentPostRow)); // #1 / #3
   if (await isBlockedBetween(userId, commentPostRow.author_id)) {
     return res.status(403).json({ error: 'BLOCKED' });
@@ -1258,6 +1311,9 @@ export async function reportContent(req: Request, res: Response) {
   const { target_type, target_id, comment_id, post_id, user_id, message_id, reason } = req.body || {};
 
   if (!reason) return res.status(400).json({ error: 'Reason is required' });
+  // B03-F8: the reason is stored as text — an object or an essay was accepted.
+  if (typeof reason !== 'string' || !reason.trim()) return res.status(400).json({ error: 'Reason is required' });
+  if (reason.length > 500) return res.status(400).json({ error: 'Keep the reason under 500 characters.' });
 
   // SC-209: 'message' is now reportable alongside post/comment/user.
   // 27 Sep 2026 (migration 108): so are wall posts and wall comments.

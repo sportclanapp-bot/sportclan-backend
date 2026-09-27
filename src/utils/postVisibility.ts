@@ -45,15 +45,30 @@ export function isDeletedPost(row: { deleted_at?: string | null } | null | undef
  * The post's author and whether it is deleted — one read for the write paths
  * (like, comment, vote, report, edit) that must refuse a deleted post.
  */
-export async function postForWrite(id: string): Promise<{ author_id: string; deleted: boolean; removed: boolean } | null> {
+export async function postForWrite(id: string): Promise<{ author_id: string; deleted: boolean; removed: boolean; embargoed: boolean } | null> {
   const { data } = await supabase
     .from('community_posts')
-    .select('author_id, deleted_at, deleted_reason')
+    .select('author_id, deleted_at, deleted_reason, scheduled_at')
     .eq('id', id)
     .maybeSingle();
   if (!data) return null;
-  const row = data as { author_id: string; deleted_at?: string | null; deleted_reason?: string | null };
-  return { author_id: row.author_id, deleted: isDeletedPost(row), removed: isModeratorRemoval(row) };
+  const row = data as { author_id: string; deleted_at?: string | null; deleted_reason?: string | null; scheduled_at?: string | null };
+  return { author_id: row.author_id, deleted: isDeletedPost(row), removed: isModeratorRemoval(row), embargoed: isEmbargoed(row) };
+}
+
+/**
+ * B03-F13: a scheduled post not yet published. getPost hides it from everyone
+ * but its author; the like, comment and comments-list paths must too — they
+ * answered 200/201 to anyone holding the id.
+ */
+export function isEmbargoed(row: { scheduled_at?: string | null } | null | undefined, now: number = Date.now()): boolean {
+  const at = row?.scheduled_at ? Date.parse(row.scheduled_at) : NaN;
+  return Number.isFinite(at) && at > now;
+}
+
+/** Hidden from this viewer: embargoed and not theirs. */
+export function hiddenFrom(post: { author_id: string; embargoed?: boolean }, userId: string | undefined): boolean {
+  return !!post.embargoed && post.author_id !== userId;
 }
 
 /**

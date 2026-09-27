@@ -92,7 +92,7 @@ describe('a deleted post does not show for a normal user', () => {
     expect(f).toMatch(/isDeletedPost\(data[\s\S]*?!\(req\.userId && \(await isAdminUser\(req\.userId\)\)\)[\s\S]*?status\(410\)\.json\(postGone\(data/);
   });
   test('its comments: 410 unless admin', () => {
-    expect(fnBody(C, 'listComments')).toMatch(/threadPost\?\.deleted && !\(req\.userId && \(await isAdminUser\(req\.userId\)\)\)[\s\S]*?json\(postGone\(threadPost\)\)/);
+    expect(fnBody(C, 'listComments')).toMatch(/threadPost(?:\?)?\.deleted && !\(req\.userId && \(await isAdminUser\(req\.userId\)\)\)[\s\S]*?json\(postGone\(threadPost\)\)/);
   });
   test('search', () => {
     const s = code('controllers/search.controller.ts');

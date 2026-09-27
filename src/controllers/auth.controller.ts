@@ -12,12 +12,15 @@ import {
   generateRefreshToken,
   verifyRefreshToken,
 } from '../utils/jwt';
-import { setOtp, getOtp, deleteOtp } from '../utils/otpStore';
+import { setOtp, getOtp, deleteOtp, bumpCounter, readCounter } from '../utils/otpStore';
 import { normalizeAccountTypes } from '../constants/accountTypes';
 import { awardCoins } from '../utils/coins';
 import { insertRefreshToken } from '../utils/sessionDevice';
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
+/** Codes sent to one number (28 Sep): per hour and per day, whoever asks. */
+export const SEND_PER_NUMBER_HOUR = 5;
+export const SEND_PER_NUMBER_DAY = 10;
 
 // ─── Welcome coins ───────────────────────────────────────────────────────────
 // Every NEW signup (phone or email) gets 50 coins, on top of the 10 for
@@ -244,6 +247,24 @@ export async function sendOtp(req: Request, res: Response) {
     // fall through and send — see above
   }
 
+  // 28 Sep: a per-number send limit on top of the per-IP one — it stops
+  // SMS-bombing someone else's number from many IPs and caps what we pay.
+  // Counted in the OTP store (survives restarts / instances). Allowlisted
+  // numbers are counted too: the limit is about the number, not the SMS.
+  const [sentHour, sentDay] = await Promise.all([
+    readCounter(`sendh:${p}`),
+    readCounter(`sendd:${p}`),
+  ]);
+  if (sentHour >= SEND_PER_NUMBER_HOUR || sentDay >= SEND_PER_NUMBER_DAY) {
+    return res.status(429).json({
+      error: sentDay >= SEND_PER_NUMBER_DAY
+        ? 'Too many codes sent to this number today. Try again tomorrow.'
+        : 'Too many codes sent to this number. Try again in an hour.',
+      code: 'OTP_SEND_LIMIT',
+    });
+  }
+  await Promise.all([bumpCounter(`sendh:${p}`, 3600), bumpCounter(`sendd:${p}`, 86400)]);
+
   // OTP test-number allowlist (utils/otpTestNumbers): a listed number gets the
   // fixed test code and no SMS; every other number is unchanged.
   const testCode = testCodeFor(p);
@@ -256,7 +277,7 @@ export async function sendOtp(req: Request, res: Response) {
   // gets a clear, retryable message instead of "Internal server error".
   try {
     await setOtp(p, code, purpose, OTP_TTL_SECONDS);
-    clearWrongCodes(p); // a new code, a new count of wrong guesses
+    await clearWrongCodes(p); // a new code, a new count of wrong guesses
   } catch (err: any) {
     // eslint-disable-next-line no-console
     console.error('[send-otp] OTP storage unavailable:', err?.message);

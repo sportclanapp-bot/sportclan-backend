@@ -12,10 +12,14 @@ import fs from 'fs';
 import path from 'path';
 
 const store = new Map<string, { code: string; purpose: string }>();
+const mockCtr = new Map<string, number>();
 jest.mock('../utils/otpStore', () => ({
   setOtp: jest.fn(async (phone: string, code: string, purpose: string) => { store.set(phone, { code, purpose }); }),
   getOtp: jest.fn(async (phone: string) => store.get(phone) ?? null),
   deleteOtp: jest.fn(async (phone: string) => { store.delete(phone); }),
+  bumpCounter: jest.fn(async (k: string) => { const n = (mockCtr.get(k) ?? 0) + 1; mockCtr.set(k, n); return n; }),
+  readCounter: jest.fn(async (k: string) => mockCtr.get(k) ?? 0),
+  clearCounter: jest.fn(async (k: string) => { mockCtr.delete(k); }),
 }));
 let updatedRows: Array<{ id: string }> = [];
 const calls: string[] = [];
@@ -31,7 +35,7 @@ jest.mock('bcrypt', () => ({ hash: jest.fn(async () => 'hash') }), { virtual: tr
 // eslint-disable-next-line import/first
 import { verifyOtp, resetPassword } from '../controllers/auth.controller';
 // eslint-disable-next-line import/first
-import { checkOtpCode, verifiedMarker, _resetOtpCounters, MAX_WRONG_CODES } from '../utils/otpCheck';
+import { checkOtpCode, verifiedMarker, MAX_WRONG_CODES } from '../utils/otpCheck';
 // eslint-disable-next-line import/first
 import { deleteOtp } from '../utils/otpStore';
 
@@ -45,8 +49,8 @@ const res = () => {
 const call = async (fn: any, body: object) => { const r = res(); await fn({ body } as any, r); return r; };
 
 beforeEach(() => {
+  mockCtr.clear();
   store.clear();
-  _resetOtpCounters();
   updatedRows = [{ id: 'u1' }];
   calls.length = 0;
   (deleteOtp as jest.Mock).mockClear();
@@ -63,7 +67,7 @@ describe('5 wrong codes and the code is gone', () => {
   });
   test('a new code starts a new count (the lock is on the code, not the number)', () => {
     const auth = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'auth.controller.ts'), 'utf8');
-    expect(auth).toMatch(/await setOtp\(p, code, purpose, OTP_TTL_SECONDS\);\s*clearWrongCodes\(p\);/);
+    expect(auth).toMatch(/await setOtp\(p, code, purpose, OTP_TTL_SECONDS\);\s*await clearWrongCodes\(p\);/);
   });
   test('a right code clears the count', async () => {
     store.set(P, { code: '482913', purpose: 'reset' });
@@ -133,5 +137,34 @@ describe('limits in front of reset-password and verify-otp', () => {
     const auth = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'auth.controller.ts'), 'utf8');
     expect((auth.match(/await checkOtpCode\(p, code/g) ?? []).length).toBe(5);
     expect(auth).not.toMatch(/entry\.code !== 'VERIFIED'/);
+  });
+});
+
+describe('send-otp: per-number limit (5 an hour, 10 a day), allowlisted numbers too', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { sendOtp, SEND_PER_NUMBER_HOUR, SEND_PER_NUMBER_DAY } = require('../controllers/auth.controller');
+  const send = (phone = '9000000001') => call(sendOtp, { phone, purpose: 'login' });
+  beforeEach(() => {
+    process.env.OTP_TEST_NUMBERS = '9000000001';
+    process.env.OTP_TEST_CODE = '246810';
+    updatedRows = [];
+  });
+  afterEach(() => { delete process.env.OTP_TEST_NUMBERS; delete process.env.OTP_TEST_CODE; });
+  test('the 6th send in an hour → 429 OTP_SEND_LIMIT (allowlisted number, no SMS either way)', async () => {
+    expect([SEND_PER_NUMBER_HOUR, SEND_PER_NUMBER_DAY]).toEqual([5, 10]);
+    for (let i = 0; i < 5; i++) expect((await send()).statusCode).toBe(200);
+    const r = await send();
+    expect(r.statusCode).toBe(429);
+    expect(r.body).toEqual({ error: 'Too many codes sent to this number. Try again in an hour.', code: 'OTP_SEND_LIMIT' });
+    expect((await send('9000000002')).statusCode).not.toBe(429); // another number is unaffected
+  });
+  test('10 a day, even across hours', async () => {
+    for (let i = 0; i < 5; i++) await send();
+    mockCtr.delete('sendh:+919000000001'); // the hour window rolls over
+    for (let i = 0; i < 5; i++) expect((await send()).statusCode).toBe(200);
+    mockCtr.delete('sendh:+919000000001');
+    const r = await send();
+    expect(r.statusCode).toBe(429);
+    expect(r.body.error).toBe('Too many codes sent to this number today. Try again tomorrow.');
   });
 });

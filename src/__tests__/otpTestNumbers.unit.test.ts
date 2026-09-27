@@ -8,10 +8,14 @@ import fs from 'fs';
 import path from 'path';
 
 const store = new Map<string, { code: string; purpose: string }>();
+const mockCtr = new Map<string, number>();
 jest.mock('../utils/otpStore', () => ({
   setOtp: jest.fn(async (phone: string, code: string, purpose: string) => { store.set(phone, { code, purpose }); }),
   getOtp: jest.fn(async (phone: string) => store.get(phone) ?? null),
   deleteOtp: jest.fn(async (phone: string) => { store.delete(phone); }),
+  bumpCounter: jest.fn(async (k: string) => { const n = (mockCtr.get(k) ?? 0) + 1; mockCtr.set(k, n); return n; }),
+  readCounter: jest.fn(async (k: string) => mockCtr.get(k) ?? 0),
+  clearCounter: jest.fn(async (k: string) => { mockCtr.delete(k); }),
 }));
 jest.mock('axios', () => ({ __esModule: true, default: { get: jest.fn(async () => ({ data: { Status: 'Success', Details: 'sess' } })) } }));
 jest.mock('../utils/supabase', () => {
@@ -43,6 +47,7 @@ const send = async (phone: string, purpose = 'login') => {
 
 const ENV = { ...process.env };
 beforeEach(() => {
+  mockCtr.clear();
   store.clear();
   get.mockClear();
   process.env = { ...ENV, TWOFACTOR_API_KEY: 'k-test', OTP_TEST_NUMBERS: '9876500001, +91 98765 00002', OTP_TEST_CODE: '246810' };

@@ -14,23 +14,19 @@
  *    only stands in for THAT code;
  *  - a caller can require the code's purpose (reset-password requires 'reset').
  *
- * The wrong-guess counter lives in memory — one Render instance serves the API.
- * If the service is ever scaled out, move it next to the OTP (Redis / otp_codes).
+ * The wrong-guess count lives in the same store as the codes (Redis on
+ * Render, else otp_codes, else memory — see otpStore counters), so it survives
+ * a restart and holds across instances.
  */
 import crypto from 'crypto';
-import { getOtp, deleteOtp } from './otpStore';
+import { getOtp, deleteOtp, bumpCounter, readCounter, clearCounter } from './otpStore';
 
 export const MAX_WRONG_CODES = 5;
-const COUNTER_TTL_MS = 15 * 60 * 1000;
-const wrong = new Map<string, { n: number; until: number }>();
+const COUNTER_TTL_SECONDS = 15 * 60;
+const wrongKey = (phone: string) => `wrong:${phone}`;
 
-function sweep(now: number) {
-  for (const [k, v] of wrong) if (v.until <= now) wrong.delete(k);
-}
-
-export function wrongCount(phone: string, now: number = Date.now()): number {
-  const e = wrong.get(phone);
-  return e && e.until > now ? e.n : 0;
+export async function wrongCount(phone: string): Promise<number> {
+  return readCounter(wrongKey(phone));
 }
 
 /** The value verify-otp stores once a code is proven — bound to that code. */
@@ -49,15 +45,12 @@ export async function checkOtpCode(
   code: string,
   opts: { purpose?: string } = {},
 ): Promise<OtpCheck> {
-  const now = Date.now();
-  sweep(now);
-  if (wrongCount(phone, now) >= MAX_WRONG_CODES) return 'locked';
+  if ((await wrongCount(phone)) >= MAX_WRONG_CODES) return 'locked';
   const entry = await getOtp(phone);
   if (!entry) return 'expired';
   const matches = String(entry.code) === String(code) || entry.code === verifiedMarker(code);
   if (!matches) {
-    const n = wrongCount(phone, now) + 1;
-    wrong.set(phone, { n, until: now + COUNTER_TTL_MS });
+    const n = await bumpCounter(wrongKey(phone), COUNTER_TTL_SECONDS);
     if (n >= MAX_WRONG_CODES) {
       await deleteOtp(phone);
       return 'locked';
@@ -65,7 +58,7 @@ export async function checkOtpCode(
     return 'wrong';
   }
   if (opts.purpose && entry.purpose !== opts.purpose) return 'wrong_purpose';
-  wrong.delete(phone);
+  await clearCounter(wrongKey(phone));
   return 'ok';
 }
 
@@ -89,11 +82,6 @@ export function otpCheckError(result: Exclude<OtpCheck, 'ok'>): { status: number
  * a new code. Guessing stays bounded by the per-number limit on the checking
  * endpoints (10 an hour) and the send limits.
  */
-export function clearWrongCodes(phone: string): void {
-  wrong.delete(phone);
-}
-
-/** Test hook: forget every counter. */
-export function _resetOtpCounters(): void {
-  wrong.clear();
+export async function clearWrongCodes(phone: string): Promise<void> {
+  await clearCounter(wrongKey(phone));
 }

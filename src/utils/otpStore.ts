@@ -49,7 +49,7 @@ function otpKey(phone: string): string {
 let _redis: unknown | null = null;
 let _redisChecked = false;
 
-function redisClient(): { set: Function; get: Function; del: Function } | null {
+function redisClient(): { set: Function; get: Function; del: Function; incr: Function; expire: Function } | null {
   if (_redisChecked) return _redis as never;
   _redisChecked = true;
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -186,10 +186,101 @@ export async function deleteOtp(phone: string): Promise<void> {
   _mem.delete(otpKey(phone));
 }
 
+/* ------------------------------------------------------------------ *
+ * Counters (28 Sep 2026) — the wrong-guess count per number and the
+ * per-number send limits live in the SAME store as the codes, so they survive
+ * a restart and hold across instances: Redis INCR + EXPIRE when Upstash is
+ * configured (live), else a `ctr:<key>` row in otp_codes (no migration), else
+ * memory. A counter only ever counts up within its window, then expires.
+ * ------------------------------------------------------------------ */
+
+const _ctrMem = new Map<string, { n: number; expiresAt: number }>();
+/** Set when otp_codes won't take a counter row: reads then use memory too, so a
+ *  count that could only be kept in memory is never read back as 0. */
+let _pgCountersBroken = false;
+const ctrKey = (key: string) => `ctr:${key}`;
+
+/** Add one and return the new count; the window starts at the first hit. */
+export async function bumpCounter(key: string, ttlSeconds: number): Promise<number> {
+  const r = redisClient();
+  if (r) {
+    try {
+      const n = Number(await r.incr(ctrKey(key)));
+      if (n === 1) await r.expire(ctrKey(key), ttlSeconds);
+      return n;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (!_pgMissing && !_pgCountersBroken) {
+    const now = Date.now();
+    const { data, error } = await supabase
+      .from('otp_codes').select('code, expires_at').eq('phone', ctrKey(key)).maybeSingle();
+    if (!error) {
+      const live = data && new Date((data as { expires_at: string }).expires_at).getTime() > now;
+      const n = (live ? Number((data as { code: string }).code) || 0 : 0) + 1;
+      const expiresAt = live ? (data as { expires_at: string }).expires_at : new Date(now + ttlSeconds * 1000).toISOString();
+      const { error: upErr } = await supabase
+        .from('otp_codes')
+        .upsert({ phone: ctrKey(key), code: String(n), purpose: 'counter', expires_at: expiresAt }, { onConflict: 'phone' });
+      if (!upErr) return n;
+      if (isMissingTable(upErr)) _pgMissing = true;
+      else _pgCountersBroken = true;
+    } else if (isMissingTable(error)) _pgMissing = true;
+  }
+  const now = Date.now();
+  const hit = _ctrMem.get(key);
+  const n = hit && hit.expiresAt > now ? hit.n + 1 : 1;
+  _ctrMem.set(key, { n, expiresAt: hit && hit.expiresAt > now ? hit.expiresAt : now + ttlSeconds * 1000 });
+  return n;
+}
+
+/** The current count (0 when unset or expired). */
+export async function readCounter(key: string): Promise<number> {
+  const r = redisClient();
+  if (r) {
+    try {
+      return Number(await r.get(ctrKey(key))) || 0;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (!_pgMissing && !_pgCountersBroken) {
+    const { data, error } = await supabase
+      .from('otp_codes').select('code, expires_at').eq('phone', ctrKey(key)).maybeSingle();
+    if (!error) {
+      return data && new Date((data as { expires_at: string }).expires_at).getTime() > Date.now()
+        ? Number((data as { code: string }).code) || 0
+        : 0;
+    }
+    if (isMissingTable(error)) _pgMissing = true;
+  }
+  const hit = _ctrMem.get(key);
+  return hit && hit.expiresAt > Date.now() ? hit.n : 0;
+}
+
+export async function clearCounter(key: string): Promise<void> {
+  const r = redisClient();
+  if (r) {
+    try {
+      await r.del(ctrKey(key));
+    } catch {
+      /* fall through */
+    }
+  }
+  if (!_pgMissing) {
+    const { error } = await supabase.from('otp_codes').delete().eq('phone', ctrKey(key));
+    if (error && isMissingTable(error)) _pgMissing = true;
+  }
+  _ctrMem.delete(key);
+}
+
 /** Test seam — resets the memoised backend probes between cases. */
 export function __resetOtpStoreForTests(): void {
   _redis = null;
   _redisChecked = false;
   _pgMissing = false;
   _mem.clear();
+  _ctrMem.clear();
+  _pgCountersBroken = false;
 }

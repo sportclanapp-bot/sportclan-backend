@@ -12,10 +12,14 @@ import path from 'path';
 
 const DAY = 86400000;
 let deletedRows: Array<{ id: string; deleted_at: string }> = [];
+const mockCtr = new Map<string, number>();
 jest.mock('../utils/otpStore', () => ({
   setOtp: jest.fn(async () => undefined),
   getOtp: jest.fn(async () => null),
   deleteOtp: jest.fn(async () => undefined),
+  bumpCounter: jest.fn(async (k: string) => { const n = (mockCtr.get(k) ?? 0) + 1; mockCtr.set(k, n); return n; }),
+  readCounter: jest.fn(async (k: string) => mockCtr.get(k) ?? 0),
+  clearCounter: jest.fn(async (k: string) => { mockCtr.delete(k); }),
 }));
 jest.mock('axios', () => ({ __esModule: true, default: { get: jest.fn(async () => ({ data: { Status: 'Success' } })) } }));
 jest.mock('../utils/supabase', () => {
@@ -54,6 +58,7 @@ const body = (name: string) => {
 };
 const ENV = { ...process.env };
 beforeEach(() => {
+  mockCtr.clear();
   deletedRows = [];
   get.mockClear();
   (setOtp as jest.Mock).mockClear();

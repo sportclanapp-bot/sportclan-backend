@@ -11,6 +11,7 @@ import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCounts';
 import { plural } from '../utils/plural';
 import { deletedIdSet } from '../utils/activeUser';
+import { targetUserHidden } from '../utils/blocks';
 
 // ────────────────────────────────────────────────────────────────────────────
 // TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
@@ -351,6 +352,8 @@ export async function publishScheduledPosts(_req: Request, res: Response) {
 
 export async function getSeasonRecap(req: Request, res: Response) {
   const { id } = req.params;
+  // B04-F2: hidden like the profile itself when the target is deleted or blocked.
+  if (await targetUserHidden(id, req.userId)) return res.status(404).json({ error: 'User not found' });
   try {
     // Current season = last 90 days
     const since = new Date(Date.now() - 90 * 86400000).toISOString();

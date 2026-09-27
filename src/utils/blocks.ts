@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { excludeDeleted } from './activeUser';
 
 /**
  * SC-81/82 — hide BLOCKED users (either direction) from a viewer's read paths.
@@ -52,4 +53,22 @@ export async function isBlockedBetween(userA?: string, userB?: string): Promise<
     .or(`and(blocker_id.eq.${userA},blocked_id.eq.${userB}),and(blocker_id.eq.${userB},blocked_id.eq.${userA})`)
     .maybeSingle();
   return !!data;
+}
+
+// SC-106 — a user-scoped read (heatmap / rating-history / sport-profile, and
+// since B04-F2 recap / insights / rival / badges / kudos / follow lists) must
+// be invisible when its target is soft-deleted OR blocked either direction with
+// the caller, exactly as getUserById gates the profile page itself. Mirrors that
+// guard: excludeDeleted existence check → 404, then a pairwise block check → 404
+// (isBlockedBetween is the single-query form of getUserById's inline .or()).
+// Returns true (and the caller should 404) when the target must be hidden.
+export async function targetUserHidden(targetId: string, viewerId?: string): Promise<boolean> {
+  // Both checks together — one round-trip, not two, in front of every profile
+  // sub-resource (sport profile, heatmap, recap, rating history…).
+  const [{ data }, blocked] = await Promise.all([
+    excludeDeleted(supabase.from('users').select('id').eq('id', targetId)).maybeSingle(),
+    viewerId && viewerId !== targetId ? isBlockedBetween(viewerId, targetId) : Promise.resolve(false),
+  ]);
+  if (!data) return true;
+  return blocked;
 }

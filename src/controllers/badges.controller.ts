@@ -1,9 +1,12 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { targetUserHidden } from '../utils/blocks';
 
 // GET /users/:id/badges — list badges for a user
 export async function getUserBadges(req: Request, res: Response) {
   const { id } = req.params;
+  // B04-F2: hidden like the profile itself when the target is deleted or blocked.
+  if (await targetUserHidden(id, req.userId)) return res.status(404).json({ error: 'User not found' });
 
   const { data, error } = await supabase
     .from('user_badges')

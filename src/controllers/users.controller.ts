@@ -10,9 +10,10 @@ import { isSportInactive } from '../utils/sports';
 import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
 import { RESERVED_USERNAMES, EMAIL_RE } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
+import { isUuid } from '../utils/uuid';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
-import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
+import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
 import { istDay } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
@@ -476,6 +477,23 @@ export async function updateMe(req: Request, res: Response) {
     const problem = notificationPrefsProblem(patch.notification_preferences);
     if (problem) return res.status(400).json({ error: problem, code: 'INVALID_NOTIFICATION_PREFS' });
   }
+  // B04-F1: these went to the DB unchecked, so a bad value was a 500 (a CHECK,
+  // a uuid cast or a missing FK) instead of a worded 400.
+  if ('gender' in patch && patch.gender !== null && !['male', 'female', 'other'].includes(String(patch.gender))) {
+    return res.status(400).json({ error: 'gender must be male, female, or other', code: 'INVALID_GENDER' });
+  }
+  for (const k of ['is_available', 'show_dob'] as const) {
+    if (k in patch && typeof patch[k] !== 'boolean') {
+      return res.status(400).json({ error: `${k} must be true or false`, code: 'INVALID_FIELD' });
+    }
+  }
+  if (patch.dob === '') patch.dob = null;
+  if ('city_id' in patch && patch.city_id !== null) {
+    const { data: city } = isUuid(patch.city_id)
+      ? await supabase.from('cities').select('id').eq('id', patch.city_id).maybeSingle()
+      : { data: null };
+    if (!city) return res.status(400).json({ error: 'Pick a city from the list.', code: 'INVALID_CITY' });
+  }
   // Length caps (no cap existed before): bio + display name.
   if (typeof patch.bio === 'string' && patch.bio.length > LIMITS.bioMax) {
     return res.status(400).json({ error: `Bio must be ${LIMITS.bioMax} characters or fewer` });
@@ -557,7 +575,14 @@ export async function updateMe(req: Request, res: Response) {
       .eq('id', userId)
       .single();
 
-    if (current && (patch.username as string).toLowerCase() !== current.username?.toLowerCase()) {
+    // B04-F7: a change of letter case only is a rename of your own handle —
+    // no clash is possible and no cooldown applies — it used to be dropped
+    // while the answer said saved.
+    const caseOnly = !!current && patch.username !== current.username
+      && (patch.username as string).toLowerCase() === current.username?.toLowerCase();
+    if (caseOnly) {
+      // keep patch.username; last_username_changed_at is left alone
+    } else if (current && (patch.username as string).toLowerCase() !== current.username?.toLowerCase()) {
       // Check cooldown
       if (current.last_username_changed_at) {
         const lastChanged = new Date(current.last_username_changed_at);
@@ -737,9 +762,18 @@ export async function followUser(req: Request, res: Response) {
     .maybeSingle();
   if (block) return res.status(403).json({ error: 'Cannot follow this user' });
 
+  // B04-F10: only a live account can be followed. An unknown id used to hit
+  // the foreign key as a 500, and a deleted one was followed — then counted in
+  // `followers` while every list hid it.
+  const { data: live } = await excludeDeleted(supabase.from('users').select('id').eq('id', target)).maybeSingle();
+  if (!live) return res.status(404).json({ error: 'User not found' });
+
   const { error } = await supabase
     .from('follow_relationships')
     .insert({ follower_id: userId, following_id: target });
+  if (error && (error as { code?: string }).code === '23503') {
+    return res.status(404).json({ error: 'User not found' });
+  }
   if (error && (error as { code?: string }).code !== '23505') {
     return res.status(500).json({ error: error.message });
   }
@@ -809,6 +843,8 @@ async function annotateFollowState(users: any[], viewerId: string | undefined): 
 
 export async function getFollowers(req: Request, res: Response) {
   const { id } = req.params;
+  // B04-F2: a deleted or blocked target's lists are hidden like its profile.
+  if (await targetUserHidden(id, req.userId)) return res.status(404).json({ error: 'User not found' });
   // SC-77: hide soft-deleted accounts. Block edge: when a viewer is present
   // (optionalAuth), also hide anyone they've blocked either direction — so a
   // blocked user never surfaces even in a third party's follower list.
@@ -829,6 +865,8 @@ export async function getFollowers(req: Request, res: Response) {
 // GET /users/:id/following
 export async function getFollowing(req: Request, res: Response) {
   const { id } = req.params;
+  // B04-F2: a deleted or blocked target's lists are hidden like its profile.
+  if (await targetUserHidden(id, req.userId)) return res.status(404).json({ error: 'User not found' });
   // SC-77: hide soft-deleted accounts. Block edge (optionalAuth viewer): hide
   // anyone the viewer has blocked either direction from a third party's list.
   const pg = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
@@ -1083,23 +1121,6 @@ export async function discoverPlayers(req: Request, res: Response) {
 // GET /users/:id/activity-heatmap — returns an entry per day for the last
 // 84 days. `type` is one of 'none' | 'played' | 'won'. Cheap to compute
 // on demand; the frontend caches it per-user.
-// SC-106 — a user-scoped read (heatmap / rating-history / sport-profile) must
-// be invisible when its target is soft-deleted OR blocked either direction with
-// the caller, exactly as getUserById gates the profile page itself. Mirrors that
-// guard: excludeDeleted existence check → 404, then a pairwise block check → 404
-// (isBlockedBetween is the single-query form of getUserById's inline .or()).
-// Returns true (and the caller should 404) when the target must be hidden.
-async function targetUserHidden(targetId: string, viewerId?: string): Promise<boolean> {
-  // Both checks together — one round-trip, not two, in front of every profile
-  // sub-resource (sport profile, heatmap, recap, rating history…).
-  const [{ data }, blocked] = await Promise.all([
-    excludeDeleted(supabase.from('users').select('id').eq('id', targetId)).maybeSingle(),
-    viewerId && viewerId !== targetId ? isBlockedBetween(viewerId, targetId) : Promise.resolve(false),
-  ]);
-  if (!data) return true;
-  return blocked;
-}
-
 export async function getActivityHeatmap(req: Request, res: Response) {
   const { id } = req.params;
   // SC-106: hide the heatmap of a soft-deleted or blocked target.
@@ -1197,9 +1218,14 @@ export async function getRival(req: Request, res: Response) {
   const { id } = req.params;
   const rawSportId = req.query.sport_id as string | undefined;
   if (!rawSportId) return res.status(400).json({ error: 'sport_id is required' });
-  const sportId = (await resolveSportId(rawSportId)) ?? rawSportId;
+  // B04-F3: an unknown sport is a 400 — it used to reach a uuid column as a
+  // 500, or come back as a made-up rating-1200 profile.
+  const sportId = await resolveSportId(rawSportId);
+  if (!sportId) return res.status(400).json({ error: 'Unknown sport', code: 'INVALID_SPORT' });
   // SC-335: never surface per-sport data for an out-of-scope sport (no kabaddi/athletics).
   if (await isSportInactive(sportId)) return res.status(404).json({ error: 'Sport not available' });
+  // B04-F2: `:id`'s rating is read here — hidden like the profile when deleted/blocked.
+  if (await targetUserHidden(id, userId)) return res.status(404).json({ error: 'User not found' });
 
   // Get the requester's rating + location.
   const { data: myProfile } = await supabase
@@ -1316,7 +1342,10 @@ export async function getRatingHistory(req: Request, res: Response) {
   const { id } = req.params;
   const rawSportId = req.query.sport_id as string | undefined;
   if (!rawSportId) return res.status(400).json({ error: 'sport_id is required' });
-  const sportId = (await resolveSportId(rawSportId)) ?? rawSportId; // cached
+  // B04-F3: an unknown sport is a 400 — it used to reach a uuid column as a
+  // 500, or come back as a made-up rating-1200 profile.
+  const sportId = await resolveSportId(rawSportId);
+  if (!sportId) return res.status(400).json({ error: 'Unknown sport', code: 'INVALID_SPORT' });
   // The visibility check and the read together; nothing is returned if hidden.
   const [hidden, inactive, { data, error }] = await Promise.all([
     // SC-106: hide the rating history of a soft-deleted or blocked target.
@@ -1364,7 +1393,10 @@ const SPORT_PROFILE_SELECT =
 export async function getSportProfile(req: Request, res: Response) {
   const { id, sportId: rawSportId } = req.params;
   // Accept either a slug ('cricket') or a UUID; the app passes slugs. (Cached.)
-  const sportId = (await resolveSportId(rawSportId)) ?? rawSportId;
+  // B04-F3: an unknown sport is a 400 — it used to reach a uuid column as a
+  // 500, or come back as a made-up rating-1200 profile.
+  const sportId = await resolveSportId(rawSportId);
+  if (!sportId) return res.status(400).json({ error: 'Unknown sport', code: 'INVALID_SPORT' });
   // ~6 sequential round-trips (~2.3 s) before. The visibility check, the
   // profile row, the user's city and their match list do not depend on each
   // other: one round. Nothing read here is returned when the target is hidden.
@@ -1666,7 +1698,10 @@ export async function updateSportProfile(req: Request, res: Response) {
   if (!callerId) return res.status(401).json({ error: 'Unauthorized' });
   const { id, sportId: rawSportId } = req.params;
   if (id !== callerId) return res.status(403).json({ error: 'Can only update your own sport profile' });
-  const sportId = (await resolveSportId(rawSportId)) ?? rawSportId;
+  // B04-F3: an unknown sport is a 400 — it used to reach a uuid column as a
+  // 500, or come back as a made-up rating-1200 profile.
+  const sportId = await resolveSportId(rawSportId);
+  if (!sportId) return res.status(400).json({ error: 'Unknown sport', code: 'INVALID_SPORT' });
 
   // Whitelist the incoming patch against SPORT_PROFILE_PREFS so arbitrary
   // fields (like rating) can't be overwritten through this endpoint.
@@ -1857,7 +1892,12 @@ export async function submitReview(req: Request, res: Response) {
 
     const { rating } = req.body || {};
     const comment = req.body?.comment ?? req.body?.text;
-    if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: 'rating 1-5 required' });
+    // B04-F17: a whole number of stars (3.5 or "5" used to reach the integer
+    // column), and a bounded comment (there was no cap).
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) return res.status(400).json({ error: 'rating 1-5 required' });
+    if (comment != null && (typeof comment !== 'string' || comment.length > LIMITS.postTextMax)) {
+      return res.status(400).json({ error: `Keep the review under ${LIMITS.postTextMax} characters.`, code: 'INVALID_COMMENT' });
+    }
     // Person-level one-per-pair: UNIQUE(reviewer_id, reviewed_id) + upsert = edit.
     const { data, error } = await supabase
       .from('user_reviews')

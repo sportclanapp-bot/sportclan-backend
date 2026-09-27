@@ -61,7 +61,8 @@ export async function uploadProfilePhoto(req: Request, res: Response) {
     return res.status(400).json({ error: 'base64 is required' });
   }
   if (!mime || !ALLOWED_MIME.has(mime)) {
-    return res.status(400).json({ error: 'mime must be image/jpeg, image/png, or image/webp' });
+    // B04-F15: words a person can act on (HEIC/HEIF are accepted too).
+    return res.status(400).json({ error: 'That file isn\u2019t an image we can use. Try a JPG, PNG, WebP or HEIC photo.', code: 'INVALID_IMAGE' });
   }
 
   // Strip optional data:image/*;base64, prefix.
@@ -91,9 +92,10 @@ export async function uploadProfilePhoto(req: Request, res: Response) {
     try {
       buf = await heicToJpeg(buf);
     } catch (err: any) {
-      return res
-        .status(400)
-        .json({ error: 'Could not read this HEIC image: ' + (err?.message ?? 'unknown'), code: 'HEIC_DECODE_FAILED' });
+      // B04-F15: the decoder's own text goes to the log, not to the person.
+      // eslint-disable-next-line no-console
+      console.warn('[upload] HEIC decode failed', err?.message);
+      return res.status(400).json({ error: 'That file isn\u2019t an image we can use. Try a JPG, PNG, WebP or HEIC photo.', code: 'HEIC_DECODE_FAILED' });
     }
   }
 
@@ -112,7 +114,9 @@ export async function uploadProfilePhoto(req: Request, res: Response) {
       .jpeg({ quality: JPEG_QUALITY })
       .toBuffer();
   } catch (err: any) {
-    return res.status(400).json({ error: 'Could not process image: ' + (err?.message ?? 'unknown') });
+    // eslint-disable-next-line no-console
+    console.warn('[upload] image processing failed', err?.message);
+    return res.status(400).json({ error: 'That file isn\u2019t an image we can use. Try a JPG, PNG, WebP or HEIC photo.', code: 'INVALID_IMAGE' });
   }
 
   const key = `profile-photos/${userId}/${randomUUID()}.jpg`;

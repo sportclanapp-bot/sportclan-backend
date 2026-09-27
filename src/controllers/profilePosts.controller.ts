@@ -20,6 +20,7 @@ import {
 } from '../utils/postVisibility';
 import { Request, Response } from 'express';
 import { parsePagination } from '../utils/pagination';
+import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { LIMITS, firstDisallowedImageUrl, firstInvalidUrl } from '../utils/validation';
@@ -58,7 +59,8 @@ function validateBody(content: unknown, media: unknown, link: unknown):
   // same split community posts use (image fields are allowlisted to our storage,
   // link fields are genuinely external).
   if (link !== undefined && link !== null && link !== '' && firstInvalidUrl({ link }, ['link'])) {
-    return { status: 400, body: { error: 'link_url must be a valid http(s) URL' } };
+    // B04-F5: worded for the person (it used to name the field).
+    return { status: 400, body: { error: 'Enter a link that starts with https://', code: 'INVALID_LINK' } };
   }
   return null;
 }
@@ -101,6 +103,8 @@ export async function listProfilePosts(req: Request, res: Response) {
   const viewerId = req.userId;
   const authorId = (req.query.user_id ?? req.query.author_id) as string | undefined;
   if (!authorId) return res.status(400).json({ error: 'user_id is required' });
+  // B04-F14: a malformed id or cursor used to reach the query as a 500.
+  if (!isUuid(authorId)) return res.status(400).json({ error: 'user_id must be a valid id', code: 'INVALID_ID' });
 
   // SC-396: shared parser — a negative limit used to survive `|| 20` (it is
   // truthy) and reach .range() as a negative page size.
@@ -109,6 +113,12 @@ export async function listProfilePosts(req: Request, res: Response) {
     maxLimit: 50,
   });
   const cursor = req.query.cursor as string | undefined;
+  if (cursor !== undefined) {
+    const [cts, cid] = String(cursor).split('|');
+    if (Number.isNaN(Date.parse(cts)) || (cid !== undefined && !isUuid(cid))) {
+      return res.status(400).json({ error: 'Invalid cursor', code: 'INVALID_CURSOR' });
+    }
+  }
 
   // SC-81/82: a blocked author's wall is not readable (either direction).
   if (viewerId && authorId !== viewerId) {

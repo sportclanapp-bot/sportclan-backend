@@ -3,7 +3,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { notifyUser } from '../utils/notify';
 import { excludeDeletedEmbed } from '../utils/activeUser';
-import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
+import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
 
 const KUDOS_COINS = 2;
 
@@ -131,6 +131,8 @@ export async function sendKudos(req: Request, res: Response) {
 // paginated to the most recent 50. Public; no auth scope needed.
 export async function listReceivedKudos(req: Request, res: Response) {
   const { userId } = req.params;
+  // B04-F2: hidden like the profile itself when the target is deleted or blocked.
+  if (await targetUserHidden(userId, req.userId)) return res.status(404).json({ error: 'User not found' });
   // SC-77: hide kudos by a soft-deleted account. Block edge: hide kudos sent by
   // anyone the viewer (req.userId — route is authed) has blocked either direction.
   const blocked = await blockedUserIds(req.userId);
@@ -147,10 +149,15 @@ export async function listReceivedKudos(req: Request, res: Response) {
 // GET /kudos/count/:userId — total received count (used in Profile stat row).
 export async function getKudosCount(req: Request, res: Response) {
   const { userId } = req.params;
-  const { count, error } = await supabase
+  // B04-F2: hidden like the profile itself when the target is deleted or blocked.
+  if (await targetUserHidden(userId, req.userId)) return res.status(404).json({ error: 'User not found' });
+  // B04-F16: the same exclusions as the list (deleted senders, blocked either
+  // way), so the count on the Profile row can't exceed the list it opens.
+  const blocked = await blockedUserIds(req.userId);
+  const { count, error } = await excludeIds(excludeDeletedEmbed(supabase
     .from('kudos')
-    .select('id', { count: 'exact', head: true })
-    .eq('to_user_id', userId);
+    .select('id, sender:users!from_user_id!inner(id)', { count: 'exact', head: true })
+    .eq('to_user_id', userId), 'sender'), 'from_user_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ count: count ?? 0 });
 }

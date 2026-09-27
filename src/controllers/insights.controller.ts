@@ -1,6 +1,7 @@
 import { excludeTest, hideTestFor, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { targetUserHidden } from '../utils/blocks';
 import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCounts';
 
 // ── Scorer Leaderboard ──────────────────────────────────────────────────────
@@ -79,6 +80,8 @@ export async function getScorerLeaderboard(req: Request, res: Response) {
 export async function getUserInsights(req: Request, res: Response) {
   try {
     const { id } = req.params;
+    // B04-F2: hidden like the profile itself when the target is deleted or blocked.
+    if (await targetUserHidden(id, req.userId)) return res.status(404).json({ error: 'User not found' });
 
     // SC-276: the previous query ordered by an EMBEDDED column
     // (`.order('match.created_at')`). PostgREST can't order the parent rows by a

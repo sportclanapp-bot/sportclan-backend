@@ -14,6 +14,7 @@
  *  - the image-URL allowlist (firstDisallowedImageUrl), profanity, block filter.
  */
 
+import { postGone, profilePostForWrite, softDeleteProfilePost } from '../utils/postVisibility';
 import { Request, Response } from 'express';
 import { parsePagination } from '../utils/pagination';
 import { supabase } from '../utils/supabase';
@@ -118,6 +119,7 @@ export async function listProfilePosts(req: Request, res: Response) {
     .from('profile_posts')
     .select(`*, ${AUTHOR_SELECT}`)
     .eq('author_id', authorId)
+    .is('deleted_at', null) // hard-delete list #4: a deleted wall post is off the wall
     // SC-356: strictly newest-first with `id` as the FINAL tie-break, so keyset
     // pagination has a total order and can't skip or repeat rows that share a
     // timestamp (the SC-138 rule, applied to the new table from day one).
@@ -141,7 +143,8 @@ export async function listProfilePosts(req: Request, res: Response) {
   const { count } = await supabase
     .from('profile_posts')
     .select('id', { count: 'exact', head: true })
-    .eq('author_id', authorId);
+    .eq('author_id', authorId)
+    .is('deleted_at', null); // #4: the count agrees with the wall
 
   const last = items[items.length - 1] as { created_at?: string; id?: string } | undefined;
   return res.json({
@@ -163,6 +166,11 @@ export async function getProfilePost(req: Request, res: Response) {
     .maybeSingle();
   if (error) return res.status(500).json({ error: sanitizeError(error) });
   if (!data) return res.status(404).json({ error: 'Post not found' });
+  // #4: opened from anywhere it still exists (an old screen, a share), a
+  // deleted wall post says so.
+  if ((data as { deleted_at?: string | null }).deleted_at) {
+    return res.status(410).json(postGone(data as { deleted_at?: string | null; deleted_reason?: string | null }));
+  }
 
   if (req.userId) {
     const blocked = await blockedUserIds(req.userId);
@@ -185,11 +193,12 @@ export async function updateProfilePost(req: Request, res: Response) {
   // (or the images of a text-only one) could leave an empty post.
   const { data: current } = await supabase
     .from('profile_posts')
-    .select('content, media_urls, link_url')
+    .select('content, media_urls, link_url, deleted_at, deleted_reason')
     .eq('id', id)
     .eq('author_id', userId)
     .maybeSingle();
   if (!current) return res.status(404).json({ error: 'Post not found or not yours' });
+  if (current.deleted_at) return res.status(410).json(postGone(current)); // #4: no edit, no resurrection
 
   const nextContent = content !== undefined ? content : current.content;
   const nextMedia = media_urls !== undefined ? media_urls : current.media_urls;
@@ -212,6 +221,7 @@ export async function updateProfilePost(req: Request, res: Response) {
     })
     .eq('id', id)
     .eq('author_id', userId)
+    .is('deleted_at', null)
     .select(`*, ${AUTHOR_SELECT}`)
     .single();
 
@@ -227,16 +237,17 @@ export async function updateProfilePost(req: Request, res: Response) {
 export async function deleteProfilePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
-  const { data, error } = await supabase
-    .from('profile_posts')
-    .delete()
-    .eq('id', id)
-    .eq('author_id', userId)
-    .select('id');
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  // Hard-delete list #4: marked, not removed — other people's comments and
+  // likes on it stay.
+  let deleted: boolean;
+  try {
+    deleted = await softDeleteProfilePost(id, userId);
+  } catch (err) {
+    return res.status(500).json({ error: sanitizeError(err as { message?: string }) });
+  }
   // Owner check is the WHERE clause, not a hidden button: someone else's id
-  // deletes 0 rows → 404, same shape as SC-32/SC-355.
-  if (!data || data.length === 0) return res.status(404).json({ error: 'Post not found or not yours' });
+  // (or an already-deleted post) marks 0 rows → 404, same shape as SC-32/SC-355.
+  if (!deleted) return res.status(404).json({ error: 'Post not found or not yours' });
   return res.json({ success: true });
 }
 
@@ -244,6 +255,9 @@ export async function deleteProfilePost(req: Request, res: Response) {
 export async function likeProfilePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
+  const target = await profilePostForWrite(id);
+  if (!target) return res.status(404).json({ error: 'Post not found' });
+  if (target.deleted) return res.status(410).json(postGone(target)); // #4
   const { error } = await supabase
     .from('profile_post_likes')
     .insert({ post_id: id, user_id: userId });
@@ -258,6 +272,9 @@ export async function likeProfilePost(req: Request, res: Response) {
 export async function unlikeProfilePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
+  // #4: a deleted wall post's likes stay as they were.
+  const target = await profilePostForWrite(id);
+  if (target?.deleted) return res.status(410).json(postGone(target));
   await supabase.from('profile_post_likes').delete().eq('post_id', id).eq('user_id', userId);
   const { data } = await supabase.from('profile_posts').select('likes_count').eq('id', id).maybeSingle();
   return res.json({ liked: false, like_count: data?.likes_count ?? 0 });
@@ -266,6 +283,9 @@ export async function unlikeProfilePost(req: Request, res: Response) {
 // ─── COMMENTS ───────────────────────────────────────────────────────────────
 export async function listProfilePostComments(req: Request, res: Response) {
   const { id } = req.params;
+  // #4: the comments on a deleted wall post stay, out of sight with it.
+  const wallPost = await profilePostForWrite(id);
+  if (wallPost?.deleted) return res.status(410).json(postGone(wallPost));
   const { limit: pageSize, offset } = parsePagination(req.query as Record<string, unknown>, {
     defaultLimit: 50,
     maxLimit: 100,
@@ -305,8 +325,9 @@ export async function addProfilePostComment(req: Request, res: Response) {
     return res.status(400).json({ error: 'PROFANITY_DETECTED', detected_words: detected });
   }
 
-  const { data: post } = await supabase.from('profile_posts').select('author_id').eq('id', id).maybeSingle();
+  const post = await profilePostForWrite(id);
   if (!post) return res.status(404).json({ error: 'Post not found' });
+  if (post.deleted) return res.status(410).json(postGone(post)); // #4
   // Can't comment on a wall you're blocked from (either direction).
   const blocked = await blockedUserIds(userId);
   if (blocked.has((post as { author_id: string }).author_id)) {
@@ -332,6 +353,9 @@ export async function deleteProfilePostComment(req: Request, res: Response) {
     .eq('id', commentId)
     .maybeSingle();
   if (!row) return res.status(404).json({ error: 'Comment not found' });
+  // #4: everything under a deleted wall post stays as it was.
+  const parentPost = await profilePostForWrite(row.post_id as string);
+  if (parentPost?.deleted) return res.status(410).json(postGone(parentPost));
 
   let allowed = row.author_id === userId;
   if (!allowed) {

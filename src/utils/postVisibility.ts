@@ -201,3 +201,37 @@ export async function restoreRemovedContent(type: 'post' | 'comment', id: string
     .eq('hidden_at', r.deleted_at as string);
   return true;
 }
+
+// ── Hard-delete list #4 (27 Sep 2026) · wall posts, the #1 way (migration 104) ──
+//
+// DELETE /profilePosts/:id used to remove the row, and the cascade took other
+// people's comments and likes on it. The row now stays marked. Wall posts send
+// no notifications and are in no feed or search, so the wall itself, its
+// count, the post screen and the write paths are where it has to disappear.
+// They can't be reported, so there is no moderator removal for them (yet).
+
+/** A wall post's author and whether it is deleted. */
+export async function profilePostForWrite(id: string): Promise<{ author_id: string; deleted: boolean; removed: boolean } | null> {
+  const { data } = await supabase
+    .from('profile_posts')
+    .select('author_id, deleted_at, deleted_reason')
+    .eq('id', id)
+    .maybeSingle();
+  if (!data) return null;
+  const row = data as { author_id: string; deleted_at?: string | null; deleted_reason?: string | null };
+  return { author_id: row.author_id, deleted: !!row.deleted_at, removed: isModeratorRemoval(row) };
+}
+
+/** Mark the author's wall post deleted. False when there was no live post of
+ *  theirs to delete (missing, already deleted, or not theirs). */
+export async function softDeleteProfilePost(id: string, authorId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('profile_posts')
+    .update({ deleted_at: new Date().toISOString(), deleted_by: authorId, deleted_reason: 'author' })
+    .eq('id', id)
+    .eq('author_id', authorId)
+    .is('deleted_at', null)
+    .select('id');
+  if (error) throw error;
+  return !!data && data.length > 0;
+}

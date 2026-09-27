@@ -1337,7 +1337,7 @@ export async function getMyPostCount(req: Request, res: Response) {
     supabase.from('community_posts').select('id', { count: 'exact', head: true })
       .eq('author_id', userId).gte('created_at', startOfMonth).is('deleted_at', null), // #1
     supabase.from('profile_posts').select('id', { count: 'exact', head: true })
-      .eq('author_id', userId).gte('created_at', startOfMonth),
+      .eq('author_id', userId).gte('created_at', startOfMonth).is('deleted_at', null), // #4
   ]);
 
   /**

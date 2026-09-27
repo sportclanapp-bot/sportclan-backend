@@ -1,3 +1,4 @@
+import { disbandedTeamIds } from '../utils/teamVisibility';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { revokeSessionsNow } from '../utils/sessionRevocation';
@@ -44,7 +45,11 @@ async function resolveCaptainciesOnDelete(userId: string): Promise<void> {
     .eq('user_id', userId)
     .eq('role', 'captain');
 
+  // Hard-delete list #6: a disbanded team's members are its former-member
+  // list — nothing to hand over, and nothing there to remove.
+  const disbanded = await disbandedTeamIds((captainRows || []).map((r) => r.team_id as string));
   for (const { team_id } of captainRows || []) {
+    if (disbanded.has(team_id as string)) continue;
     const { data: others } = await supabase
       .from('team_members')
       .select('user_id, role, joined_at')
@@ -458,7 +463,8 @@ export async function exportData(req: Request, res: Response) {
     ['coin_ledger', exportAll('coin_events', 'id, event_type, coins, created_at', (q) => q.eq('user_id', userId))],
     ['followers', exportAll('follow_relationships', 'follower_id, created_at', (q) => q.eq('following_id', userId))],
     ['following', exportAll('follow_relationships', 'following_id, created_at', (q) => q.eq('follower_id', userId))],
-    ['teams', exportAll('team_members', 'team_id, role, joined_at, team:teams(id, name, sport_id)', (q) => q.eq('user_id', userId))],
+    // #6: a disbanded team stays in your export, marked (team.deleted_at).
+    ['teams', exportAll('team_members', 'team_id, role, joined_at, team:teams(id, name, sport_id, deleted_at)', (q) => q.eq('user_id', userId))],
     ['notifications', exportAll('notifications', 'id, type, title, body, read, created_at', (q) => q.eq('user_id', userId))],
     ['gifts_sent', exportAll('gift_transactions', '*', (q) => q.eq('sender_id', userId))],
     ['gifts_received', exportAll('gift_transactions', '*', (q) => q.eq('receiver_id', userId))],

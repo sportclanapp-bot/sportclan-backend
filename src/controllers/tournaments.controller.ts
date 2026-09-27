@@ -1,3 +1,4 @@
+import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { syncTournamentChatMembers, syncAfterSuccess, canOpenTournamentChat } from '../utils/tournamentChat';
 import { isTeamManager } from '../utils/teamAuth';
@@ -391,6 +392,8 @@ export async function directAddTeam(req: Request, res: Response) {
     const { id } = req.params;
     const { team_id } = req.body || {};
     if (!team_id) return res.status(400).json({ error: 'team_id is required' });
+    // #6: an organiser can't add a disbanded team either.
+    if (await isTeamDisbanded(team_id)) return res.status(410).json(TEAM_DISBANDED);
 
     const { data: tournament } = await supabase
       .from('tournaments')
@@ -461,6 +464,8 @@ export async function createEntry(req: Request, res: Response) {
     const { id } = req.params;
     const { team_id } = req.body || {};
     if (!team_id) return res.status(400).json({ error: 'team_id is required' });
+    // Hard-delete list #6: a disbanded team can't enter a tournament.
+    if (await isTeamDisbanded(team_id)) return res.status(410).json(TEAM_DISBANDED);
     const { data: membership } = await supabase
       .from('team_members')
       .select('role')
@@ -1244,6 +1249,7 @@ export async function joinByCode(req: Request, res: Response) {
   try {
     const { entry_code, team_id } = req.body || {};
     if (!entry_code || !team_id) return res.status(400).json({ error: 'entry_code and team_id are required' });
+    if (await isTeamDisbanded(team_id)) return res.status(410).json(TEAM_DISBANDED); // #6
     const { data: tournament } = await supabase
       .from('tournaments')
       .select('id')

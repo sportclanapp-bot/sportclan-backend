@@ -102,15 +102,17 @@ export async function createMatchRefusal(args: {
   }
   const [teams, tournament] = await Promise.all([
     args.teamIds.length
-      ? Promise.resolve(supabase.from('teams').select('id, sport_id').in('id', args.teamIds)).then((r) => r.data ?? [])
-      : Promise.resolve([] as Array<{ id: string; sport_id: string }>),
+      ? Promise.resolve(supabase.from('teams').select('id, sport_id, deleted_at').in('id', args.teamIds)).then((r) => r.data ?? [])
+      : Promise.resolve([] as Array<{ id: string; sport_id: string; deleted_at?: string | null }>),
     args.tournamentId
       ? Promise.resolve(supabase.from('tournaments').select('id, sport_id').eq('id', args.tournamentId).maybeSingle()).then((r) => r.data)
       : Promise.resolve(null),
   ]);
   for (const id of args.teamIds) {
-    const t = (teams as Array<{ id: string; sport_id: string }>).find((x) => x.id === id);
+    const t = (teams as Array<{ id: string; sport_id: string; deleted_at?: string | null }>).find((x) => x.id === id);
     if (!t) return { status: 400, error: 'That team could not be found.', code: 'TEAM_NOT_FOUND' };
+    // Hard-delete list #6: a disbanded team can't be picked for a new match.
+    if (t.deleted_at) return { status: 410, error: 'This team was disbanded.', code: 'TEAM_DISBANDED' };
     if (t.sport_id !== args.sportId) {
       return { status: 400, error: 'That team plays a different sport — pick a team for this sport.', code: 'TEAM_WRONG_SPORT' };
     }

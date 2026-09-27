@@ -132,6 +132,7 @@ async function searchTeams(res: Response, q: string, sportId: string | undefined
       members:team_members(count)
     `)
     .ilike('name', `%${escapeLike(q)}%`)
+    .is('deleted_at', null) // hard-delete list #6: a disbanded team is not found
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging (no overlap/gaps)
     .range(p.from, p.to);
 

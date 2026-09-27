@@ -1,3 +1,4 @@
+import { refuseDisbandedTeam } from '../utils/teamVisibility';
 import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
@@ -29,27 +30,31 @@ router.post('/', authenticateToken, createTeam);
 router.post('/join', authenticateToken, joinTeamByCode);
 router.get('/', authenticateToken, listTeams);
 router.get('/:id', authenticateToken, getTeam);
+// Hard-delete list #6: a disbanded team answers 410 on every route below that
+// carries refuseDisbandedTeam. Left open: the team page (it says whether you
+// were a member), the three expense READS (former members keep the history),
+// and withdrawing your own pending join request.
 // SC-275: Team insights (PREMIUM + member-gated inside the handler). Additive.
-router.get('/:id/insights', authenticateToken, getTeamInsights);
-router.post('/:id/members', authenticateToken, addTeamMember);
-router.delete('/:id/members/:userId', authenticateToken, removeTeamMember);
+router.get('/:id/insights', authenticateToken, refuseDisbandedTeam, getTeamInsights);
+router.post('/:id/members', authenticateToken, refuseDisbandedTeam, addTeamMember);
+router.delete('/:id/members/:userId', authenticateToken, refuseDisbandedTeam, removeTeamMember);
 // SC-359 · removed-member (ban) visibility + undo. Managers only.
-router.get('/:id/bans', authenticateToken, listTeamBans);
-router.delete('/:id/bans/:userId', authenticateToken, unbanTeamMember);
-router.patch('/:id/members/:userId/role', authenticateToken, updateMemberRole);
-router.patch('/:id', authenticateToken, updateTeam);
-router.delete('/:id', authenticateToken, disbandTeam);
-router.post('/:id/join-requests', authenticateToken, requestToJoin);
-router.get('/:id/join-requests', authenticateToken, listJoinRequests);
-router.patch('/:id/join-requests/:userId', authenticateToken, decideJoinRequest);
+router.get('/:id/bans', authenticateToken, refuseDisbandedTeam, listTeamBans);
+router.delete('/:id/bans/:userId', authenticateToken, refuseDisbandedTeam, unbanTeamMember);
+router.patch('/:id/members/:userId/role', authenticateToken, refuseDisbandedTeam, updateMemberRole);
+router.patch('/:id', authenticateToken, refuseDisbandedTeam, updateTeam);
+router.delete('/:id', authenticateToken, refuseDisbandedTeam, disbandTeam);
+router.post('/:id/join-requests', authenticateToken, refuseDisbandedTeam, requestToJoin);
+router.get('/:id/join-requests', authenticateToken, refuseDisbandedTeam, listJoinRequests);
+router.patch('/:id/join-requests/:userId', authenticateToken, refuseDisbandedTeam, decideJoinRequest);
 router.delete('/:id/join-requests/me', authenticateToken, withdrawJoinRequest);
 router.get('/:id/expenses', authenticateToken, listExpenses);
 router.get('/:id/expenses/summary', authenticateToken, getExpenseSummary);
 // SC-361: read-only by design — the audit trail has no write route, and the
 // table is append-only in the database too (migration 077).
 router.get('/:id/expenses/log', authenticateToken, listExpenseLog);
-router.post('/:id/expenses', authenticateToken, addExpense);
-router.patch('/:id/expenses/:expenseId', authenticateToken, updateExpense);
-router.delete('/:id/expenses/:expenseId', authenticateToken, deleteExpense);
+router.post('/:id/expenses', authenticateToken, refuseDisbandedTeam, addExpense);
+router.patch('/:id/expenses/:expenseId', authenticateToken, refuseDisbandedTeam, updateExpense);
+router.delete('/:id/expenses/:expenseId', authenticateToken, refuseDisbandedTeam, deleteExpense);
 
 export default router;

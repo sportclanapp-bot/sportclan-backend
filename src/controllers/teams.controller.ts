@@ -1,3 +1,4 @@
+import { TEAM_DISBANDED, liveTeams, softDisbandTeam } from '../utils/teamVisibility';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { syncTournamentChatsForTeam, syncAfterSuccess } from '../utils/tournamentChat';
 import { Request, Response } from 'express';
@@ -197,6 +198,9 @@ export async function listTeams(req: Request, res: Response) {
       .select('*, city:cities!city_id(id, name), members:team_members(count)', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(p.from, p.to);
+    // Hard-delete list #6: a disbanded team is in no list — browse, the Sport
+    // Hub, "my teams" — and no count built from them.
+    query = liveTeams(query);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
     if (q) query = query.ilike('name', `%${q}%`);
@@ -255,6 +259,15 @@ export async function getTeam(req: Request, res: Response) {
       supabase.from('team_members').select('id', { count: 'exact', head: true }).eq('team_id', id),
     ]);
     if (error || !team) return res.status(404).json({ error: 'Team not found' });
+    // #6: a disbanded team's page says so. A former member is told they can
+    // still read the expense history (read-only).
+    if ((team as { deleted_at?: string | null }).deleted_at) {
+      return res.status(410).json({
+        ...TEAM_DISBANDED,
+        team: { id: (team as { id: string }).id, name: (team as { name: string }).name },
+        former_member: !!membership,
+      });
+    }
     // Flatten embedded city → flat city_name string; drop the nested object.
     (team as any).city_name = (team as any).city?.name ?? null;
     delete (team as any).city;
@@ -449,16 +462,9 @@ export async function removeTeamMember(req: Request, res: Response) {
         if (dErr) return res.status(500).json({ error: sanitizeError(dErr) });
         return res.json({ removed: true, captaincy_transferred_to: heir });
       }
-      // Last member leaving → remove them, then disband if the team has no
-      // match history or tournament entries (same guard as disbandTeam). If it
-      // does, keep the now-memberless team as a historical record (there is no
-      // one left to strand, so this is safe).
-      const { error: dErr } = await supabase
-        .from('team_members')
-        .delete()
-        .eq('team_id', id)
-        .eq('user_id', userId);
-      if (dErr) return res.status(500).json({ error: sanitizeError(dErr) });
+      // Last member leaving → the team is disbanded if it has no match
+      // history or tournament entries (same guard as disbandTeam). If it does,
+      // they leave and the now-memberless team stays as a historical record.
       const { count: matchCount } = await supabase
         .from('matches')
         .select('id', { count: 'exact', head: true })
@@ -468,10 +474,22 @@ export async function removeTeamMember(req: Request, res: Response) {
         .select('id', { count: 'exact', head: true })
         .eq('team_id', id);
       if ((matchCount ?? 0) === 0 && (entryCount ?? 0) === 0) {
-        await supabase.from('team_expenses').delete().eq('team_id', id);
-        await supabase.from('teams').delete().eq('id', id);
+        // Hard-delete list #6: disbanded, not deleted — recorded as the last
+        // member leaving. Their membership row stays (they are its last former
+        // member, and keep the expense history), and so do the expenses.
+        try {
+          await softDisbandTeam(id, userId, 'last_member_left');
+        } catch (err) {
+          return res.status(500).json({ error: sanitizeError(err as { message?: string }) });
+        }
         return res.json({ removed: true, team_disbanded: true });
       }
+      const { error: dErr } = await supabase
+        .from('team_members')
+        .delete()
+        .eq('team_id', id)
+        .eq('user_id', userId);
+      if (dErr) return res.status(500).json({ error: sanitizeError(dErr) });
       return res.json({ removed: true, team_empty: true });
     }
 
@@ -780,10 +798,12 @@ export async function joinTeamByCode(req: Request, res: Response) {
     if (!join_code) return res.status(400).json({ error: 'join_code is required' });
     const { data: team } = await supabase
       .from('teams')
-      .select('id, name, sport_id, join_policy')
+      .select('id, name, sport_id, join_policy, deleted_at')
       .eq('join_code', join_code.toUpperCase())
       .maybeSingle();
     if (!team) return res.status(404).json({ error: 'Invalid team code' });
+    // Hard-delete list #6: a disbanded team's invite code joins nobody.
+    if ((team as { deleted_at?: string | null }).deleted_at) return res.status(410).json(TEAM_DISBANDED);
 
     // SC-267: 'approval' policy → the code proves the captain shared it, but a
     // manager still confirms. Route through the request flow instead of joining.
@@ -872,11 +892,10 @@ export async function disbandTeam(req: Request, res: Response) {
       });
     }
 
-    // Clean up dependent rows, then the team itself.
-    await supabase.from('team_members').delete().eq('team_id', id);
-    await supabase.from('team_expenses').delete().eq('team_id', id);
-    const { error } = await supabase.from('teams').delete().eq('id', id);
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // Hard-delete list #6: disbanded, not deleted — recorded as the captain's
+    // disband. The members (now former members) and every expense stay.
+    const done = await softDisbandTeam(id, userId, 'captain_disband');
+    if (!done) return res.status(410).json(TEAM_DISBANDED);
     return res.json({ success: true });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

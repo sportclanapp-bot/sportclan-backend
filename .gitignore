@@ -9,3 +9,6 @@ dist/
 
 # Local-only notes holding secrets (CRON_SECRET, QA credentials). Never committed.
 *.local.md
+
+# Local check server (see .env.local-check) — never committed.
+.env.local-check

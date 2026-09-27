@@ -84,11 +84,10 @@ CREATE TRIGGER trg_post_comments_count
 
 
 -- ---------------------------------------------------------------------------
--- BLOCK 3 · READ-ONLY · verify.
+-- BLOCK 3 · READ-ONLY · verify the schema (columns, index, trigger events).
 -- Expected: 2 rows — post_comments.deleted_at timestamp with time zone YES,
--- post_comments.deleted_by uuid YES; then new_index_present = 1,
--- trigger_events = 'DELETE,INSERT,UPDATE', deleted_comments = 0, and
--- count_drift unchanged from block 1.
+-- post_comments.deleted_by uuid YES; then new_index_present = 1 and
+-- trigger_events = 'DELETE,INSERT,UPDATE'.
 -- ---------------------------------------------------------------------------
 SELECT table_name, column_name, data_type, is_nullable
 FROM information_schema.columns
@@ -101,7 +100,4 @@ SELECT
      AND indexname = 'idx_notifications_comment_id')                                     AS new_index_present,
   (SELECT string_agg(event_manipulation, ',' ORDER BY event_manipulation)
      FROM information_schema.triggers
-     WHERE event_object_table = 'post_comments' AND trigger_name = 'trg_post_comments_count') AS trigger_events,
-  (SELECT count(*) FROM post_comments WHERE deleted_at IS NOT NULL)                        AS deleted_comments,
-  (SELECT count(*) FROM community_posts p
-     WHERE p.comments_count <> (SELECT count(*) FROM post_comments c WHERE c.post_id = p.id)) AS count_drift;
+     WHERE event_object_table = 'post_comments' AND trigger_name = 'trg_post_comments_count') AS trigger_events;

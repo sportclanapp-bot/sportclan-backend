@@ -121,8 +121,11 @@ describe('a disbanded team does not show', () => {
     // Phase 3 B05: the team checks moved into teamIdsRefusal, shared by create and edit.
     expect(fnBody('controllers/matches.controller.ts', 'createMatchRefusal')).toMatch(/teamIdsRefusal\(args\.teamIds, args\.sportId\)/);
     expect(fnBody('controllers/matches.controller.ts', 'teamIdsRefusal')).toMatch(/t\.deleted_at\) return \{ status: 410, error: 'This team was disbanded\.', code: 'TEAM_DISBANDED' \}/);
-    for (const fn of ['createEntry', 'joinByCode', 'directAddTeam']) {
-      expect([fn, /isTeamDisbanded\(team_id\)\) return res\.status\(410\)\.json\(TEAM_DISBANDED\)/.test(fnBody('controllers/tournaments.controller.ts', fn))]).toEqual([fn, true]);
+    expect(fnBody('controllers/tournaments.controller.ts', 'directAddTeam')).toMatch(/isTeamDisbanded\(team_id\)\) return res\.status\(410\)\.json\(TEAM_DISBANDED\)/);
+    // Phase 3 B08-F2: the captain's entry and the join code share one routine.
+    expect(code('controllers/tournaments.controller.ts')).toMatch(/async function enterTeam\([\s\S]*?if \(await isTeamDisbanded\(teamId\)\) return \{ status: 410, body: TEAM_DISBANDED/);
+    for (const fn of ['createEntry', 'joinByCode']) {
+      expect([fn, /await enterTeam\(/.test(fnBody('controllers/tournaments.controller.ts', fn))]).toEqual([fn, true]);
     }
   });
 });

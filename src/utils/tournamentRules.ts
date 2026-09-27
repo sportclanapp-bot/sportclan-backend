@@ -1,0 +1,94 @@
+/**
+ * Phase 3 · B08 (28 Sep 2026) · what a tournament's details must be, on create
+ * AND edit.
+ *
+ * Only lengths were checked. A name of "   " or {"a":1} was stored, an edit
+ * could blank the name or put the end date before the start, a negative entry
+ * fee saved, and text in a date or number column reached Postgres and came back
+ * as a 500. These are the rules, in one place, with the words the organiser
+ * sees.
+ */
+import { isUuid } from './uuid';
+import { LIMITS } from './validation';
+import type { TournamentStatus } from './tournamentStatus';
+
+export type Refusal = { error: string; code?: string };
+
+/** The four statuses the column allows (utils/tournamentStatus, migration 004). */
+export const TOURNAMENT_STATUSES: readonly TournamentStatus[] = ['upcoming', 'live', 'completed', 'cancelled'];
+
+/**
+ * Older app builds filter the list by `registration` (or `draft`), which the
+ * column never held — their Upcoming tab was always empty. Read them as the
+ * status they meant.
+ */
+export function listStatusFilter(raw: unknown): TournamentStatus | null | 'bad' {
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (typeof raw !== 'string') return 'bad';
+  if (raw === 'registration' || raw === 'draft') return 'upcoming';
+  return (TOURNAMENT_STATUSES as readonly string[]).includes(raw) ? (raw as TournamentStatus) : 'bad';
+}
+
+export const TOURNAMENT_NAME_MIN = 3;
+
+export function tournamentNameRefusal(name: unknown): Refusal | null {
+  if (typeof name !== 'string' || name.trim().length < TOURNAMENT_NAME_MIN) {
+    return { error: `Give the tournament a name of at least ${TOURNAMENT_NAME_MIN} characters.`, code: 'INVALID_NAME' };
+  }
+  if (name.trim().length > LIMITS.tournamentNameMax) {
+    return { error: `name must be ${LIMITS.tournamentNameMax} characters or fewer`, code: 'INVALID_NAME' };
+  }
+  return null;
+}
+
+const present = (v: unknown) => v !== undefined && v !== null && v !== '';
+const isDateLike = (v: unknown) => typeof v === 'string' && Number.isFinite(Date.parse(v));
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+
+/**
+ * Dates, times, money, the schedule numbers and the city on a create or edit
+ * body. Only the keys present are checked; `current` supplies the stored dates
+ * so an edit that moves one end is still ordered against the other.
+ */
+export function tournamentDetailsRefusal(
+  body: Record<string, unknown>,
+  current: { start_date?: string | null; end_date?: string | null } = {},
+): Refusal | null {
+  for (const k of ['start_date', 'end_date', 'registration_deadline'] as const) {
+    if (present(body[k]) && !isDateLike(body[k])) return { error: `${k} must be a date.`, code: 'INVALID_DATE' };
+  }
+  for (const k of ['daily_start_time', 'daily_end_time'] as const) {
+    if (present(body[k]) && !(typeof body[k] === 'string' && TIME_RE.test(body[k] as string))) {
+      return { error: `${k} must be a time like 09:00.`, code: 'INVALID_TIME' };
+    }
+  }
+  const start = 'start_date' in body ? body.start_date : current.start_date;
+  const end = 'end_date' in body ? body.end_date : current.end_date;
+  if (present(start) && present(end) && isDateLike(start) && isDateLike(end)
+      && Date.parse(end as string) < Date.parse(start as string)) {
+    return { error: 'The end date can’t be before the start date.', code: 'END_BEFORE_START' };
+  }
+  for (const k of ['entry_fee', 'prize_pool'] as const) {
+    if (present(body[k])) {
+      const n = Number(body[k]);
+      if (typeof body[k] === 'boolean' || !Number.isFinite(n) || n < 0) {
+        return { error: `${k} must be 0 or more.`, code: 'INVALID_AMOUNT' };
+      }
+    }
+  }
+  const ints: Array<[string, number, number]> = [
+    ['match_duration_minutes', 1, 1440],
+    ['buffer_minutes', 0, 1440],
+    ['ground_count', 1, 50],
+  ];
+  for (const [k, min, max] of ints) {
+    if (present(body[k])) {
+      const n = Number(body[k]);
+      if (typeof body[k] === 'boolean' || !Number.isInteger(n) || n < min || n > max) {
+        return { error: `${k} must be a whole number from ${min} to ${max}.`, code: 'INVALID_NUMBER' };
+      }
+    }
+  }
+  if (present(body.city_id) && !isUuid(body.city_id)) return { error: 'city_id must be a valid city.', code: 'INVALID_CITY' };
+  return null;
+}

@@ -60,6 +60,7 @@ import { isTournamentOrganiser, authorizeCarveout, logAdminAction } from '../uti
 import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
+import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -113,6 +114,10 @@ export async function createTournament(req: Request, res: Response) {
     if (!sport_id || !name || !format) {
       return res.status(400).json({ error: 'sport_id, name, format are required' });
     }
+    // Phase 3 B08-F11/F12: a real name, and dates/money/schedule numbers that
+    // mean something — not "   ", {"a":1}, 'soon' or -5.
+    const cBad = tournamentNameRefusal(name) ?? tournamentDetailsRefusal(req.body || {});
+    if (cBad) return res.status(400).json(cBad);
     // SC-95/96: bound name/description; validate image URLs (were unbounded/arbitrary).
     const tLong = firstTooLong({ name, description }, [['name', LIMITS.tournamentNameMax], ['description', LIMITS.descriptionMax]]);
     if (tLong) return res.status(400).json({ error: `${tLong[0]} must be ${tLong[1]} characters or fewer` });
@@ -199,7 +204,7 @@ export async function createTournament(req: Request, res: Response) {
       .from('tournaments')
       .insert({
         sport_id,
-        name,
+        name: String(name).trim(),
         description: description || null,
         format,
         city_id: city_id || null,
@@ -265,7 +270,12 @@ export async function listTournaments(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const { sport_id, city_id, status, mine } = req.query as Record<string, string | undefined>;
+    const { sport_id, city_id, mine } = req.query as Record<string, string | undefined>;
+    // Phase 3 B08-F6/F11: a bad city is a 400, not a 500; an unknown status is a
+    // 400, and an older build's `registration` reads as `upcoming`.
+    if (city_id !== undefined && !isUuid(city_id)) return res.status(400).json({ error: 'city_id must be a valid city.' });
+    const status = listStatusFilter(req.query.status);
+    if (status === 'bad') return res.status(400).json({ error: `status must be one of: ${TOURNAMENT_STATUSES.join(', ')}` });
     const resolvedSportId = await resolveSportId(sport_id);
     const p = parsePagination(req.query as Record<string, unknown>);
     let query = supabase
@@ -302,7 +312,8 @@ export async function getTournament(req: Request, res: Response) {
     if (error || !tournament) return res.status(404).json({ error: 'Tournament not found' });
     const { data: entries } = await supabase
       .from('tournament_entries')
-      .select('id, status, seed, group_label, entered_at, team:team_id (id, name, short_name, logo_url, sport_id)')
+      // Phase 3 B08-F5: team_id too — the fixture editor keys its team chips on it.
+      .select('id, team_id, status, seed, group_label, entered_at, team:team_id (id, name, short_name, logo_url, sport_id)')
       .eq('tournament_id', id);
     // SC-293: authoritative fixture count so the Overview's Quick Stats agrees
     // with the Bracket + Officials tabs. Was: the FE showed fixtures.length, but
@@ -383,6 +394,92 @@ async function awardTournamentBadges(teamId: string): Promise<void> {
   }
 }
 
+type EntryTournament = {
+  id: string;
+  name?: string | null;
+  status?: string | null;
+  sport_id?: string | null;
+  max_teams?: number | null;
+  registration_deadline?: string | null;
+  fixtures_generated?: boolean | null;
+  created_by?: string | null;
+};
+type EntryRefusal = { status: number; body: { error: string; code: string } };
+const ENTRY_TOURNAMENT_COLS = 'id, name, status, sport_id, max_teams, registration_deadline, fixtures_generated, created_by';
+
+/**
+ * Phase 3 · B08-F2/F4/F8/F9: the rules EVERY way into a tournament passes — a
+ * captain's entry, the join code, the organiser's direct add and the approval.
+ * The join code inserted straight away and skipped all of them (a team joined
+ * after the draw, into a full cup, with a player already on another entered
+ * team); no path refused a cancelled or finished tournament or a team of
+ * another sport; direct add and approve could push past max_teams.
+ *
+ *  - `capCounts`: the entries that fill the cap. A captain's request counts
+ *    pending ones too (a request holds a place); the organiser's direct add and
+ *    approval count approved only.
+ *  - `deadline`: the registration deadline binds captains, not the organiser.
+ */
+async function entryRefusal(
+  t: EntryTournament,
+  teamId: string,
+  opts: { capCounts: Array<'pending' | 'approved'>; deadline: boolean; overlap: boolean },
+): Promise<EntryRefusal | null> {
+  if (t.status === 'completed' || t.status === 'cancelled') {
+    return {
+      status: 409,
+      body: {
+        error: t.status === 'completed' ? 'This tournament is finished.' : 'This tournament was cancelled.',
+        code: 'TOURNAMENT_FINISHED',
+      },
+    };
+  }
+  if (opts.deadline && t.registration_deadline && new Date(t.registration_deadline) < new Date()) {
+    return { status: 400, body: { error: 'Registration closed', code: 'REGISTRATION_CLOSED' } };
+  }
+  // SC-99: no new entries once the bracket is generated (they would never play).
+  if (t.fixtures_generated) {
+    return { status: 409, body: { error: 'Registration is closed — the bracket has already been generated.', code: 'REGISTRATION_CLOSED' } };
+  }
+  const { data: team } = await supabase.from('teams').select('id, sport_id').eq('id', teamId).maybeSingle();
+  if (!team) return { status: 404, body: { error: 'Team not found', code: 'TEAM_NOT_FOUND' } };
+  if (t.sport_id && team.sport_id && team.sport_id !== t.sport_id) {
+    const { data: sport } = await supabase.from('sports').select('name').eq('id', t.sport_id).maybeSingle();
+    const s = typeof sport?.name === 'string' ? sport.name.toLowerCase() : null;
+    return {
+      status: 400,
+      body: {
+        error: s ? `This is a ${s} tournament — enter a ${s} team.` : 'This tournament is for another sport — enter a team of its sport.',
+        code: 'WRONG_SPORT',
+      },
+    };
+  }
+  if (t.max_teams) {
+    const { count } = await supabase
+      .from('tournament_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('tournament_id', t.id)
+      .in('status', opts.capCounts);
+    if ((count ?? 0) >= t.max_teams) {
+      return { status: 400, body: { error: 'Tournament is full', code: 'TOURNAMENT_FULL' } };
+    }
+  }
+  // SC-240: no player may appear on two teams in the same tournament.
+  if (opts.overlap) {
+    const overlap = await rosterOverlapConflict(t.id, teamId);
+    if (overlap) {
+      return {
+        status: 409,
+        body: {
+          error: `A player on this team is already registered with ${overlap.teamName} in this tournament.`,
+          code: 'ROSTER_OVERLAP',
+        },
+      };
+    }
+  }
+  return null;
+}
+
 export async function directAddTeam(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -392,12 +489,13 @@ export async function directAddTeam(req: Request, res: Response) {
     const { id } = req.params;
     const { team_id } = req.body || {};
     if (!team_id) return res.status(400).json({ error: 'team_id is required' });
+    if (!isUuid(team_id)) return res.status(400).json({ error: 'team_id must be a valid team.' }); // B08-F11
     // #6: an organiser can't add a disbanded team either.
     if (await isTeamDisbanded(team_id)) return res.status(410).json(TEAM_DISBANDED);
 
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, max_teams, fixtures_generated')
+      .select(ENTRY_TOURNAMENT_COLS)
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -405,23 +503,9 @@ export async function directAddTeam(req: Request, res: Response) {
     if (!(await isTournamentOrganiser(id, userId))) {
       return res.status(403).json({ error: 'Only the organiser can directly add teams' });
     }
-    // SC-99: once the bracket is generated a new team would never appear in the
-    // fixtures (entries diverge from the played bracket). Registration is closed.
-    if ((tournament as any).fixtures_generated) {
-      return res.status(409).json({ error: 'Registration is closed — the bracket has already been generated.', code: 'REGISTRATION_CLOSED' });
-    }
 
-    // Check max_teams cap
-    if (tournament.max_teams) {
-      const { count } = await supabase
-        .from('tournament_entries')
-        .select('id', { count: 'exact', head: true })
-        .eq('tournament_id', id)
-        .in('status', ['approved']);
-      if ((count ?? 0) >= tournament.max_teams) {
-        return res.status(400).json({ error: 'Tournament is full', code: 'TOURNAMENT_FULL' });
-      }
-    }
+    const refusal = await entryRefusal(tournament as EntryTournament, team_id, { capCounts: ['approved'], deadline: false, overlap: false });
+    if (refusal) return res.status(refusal.status).json(refusal.body);
 
     // Check not already entered
     const { data: existing } = await supabase
@@ -454,6 +538,106 @@ export async function directAddTeam(req: Request, res: Response) {
   }
 }
 
+/**
+ * A captain (or co-captain) enters their team: POST /:id/entries, and the join
+ * code once it has named its tournament (B08-F2 — one routine, so the code can
+ * never again skip a rule the entry form applies).
+ */
+async function enterTeam(tournamentId: string, teamId: unknown, userId: string): Promise<{ status: number; body: Record<string, unknown> }> {
+  if (!teamId) return { status: 400, body: { error: 'team_id is required' } };
+  if (!isUuid(teamId)) return { status: 400, body: { error: 'team_id must be a valid team.' } };
+  // Hard-delete list #6: a disbanded team can't enter a tournament.
+  if (await isTeamDisbanded(teamId)) return { status: 410, body: TEAM_DISBANDED as unknown as Record<string, unknown> };
+  const { data: membership } = await supabase
+    .from('team_members')
+    .select('role')
+    .eq('team_id', teamId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  // SC-267: a co-captain (vice_captain) may also enter the team into a tournament.
+  if (membership?.role !== 'captain' && membership?.role !== 'vice_captain') {
+    return { status: 403, body: { error: 'Only the team captain or a co-captain can enter a tournament' } };
+  }
+
+  const { data: tournament } = await supabase
+    .from('tournaments')
+    .select(ENTRY_TOURNAMENT_COLS)
+    .eq('id', tournamentId)
+    .maybeSingle();
+  // B08-F11: an unknown tournament is a 404 (the insert used to 500 on the FK).
+  if (!tournament) return { status: 404, body: { error: 'Tournament not found' } };
+
+  // Checked before the reopen/insert so a re-entry after a rejection is
+  // re-validated too.
+  const refusal = await entryRefusal(tournament as EntryTournament, teamId, { capCounts: ['pending', 'approved'], deadline: true, overlap: true });
+  if (refusal) return refusal;
+
+  // SC-83: a team may re-enter after a REJECTED/WITHDRAWN entry. Reopen the
+  // existing row to `pending` with a single filtered UPDATE (atomic per
+  // statement). A row that is already pending/approved is a clean 400 —
+  // never a duplicate row and never a raw 500 from the unique constraint.
+  // Notify the ORGANISER that a team requested entry (block-respecting,
+  // best-effort). Fired for a fresh request AND a re-request (reopen).
+  const notifyEntryRequested = async (entryRowId: string) => {
+    try {
+      const organiserId = tournament.created_by;
+      if (!organiserId || organiserId === userId) return;
+      const { data: team } = await supabase.from('teams').select('name').eq('id', teamId).maybeSingle();
+      await notifyUnlessBlocked(userId, {
+        userId: organiserId,
+        type: 'entry_requested',
+        title: 'New tournament entry',
+        body: `${team?.name ?? 'A team'} requested to enter ${tournament.name ?? 'your tournament'}.`,
+        data: { tournamentId, teamId, entryId: entryRowId },
+      });
+    } catch { /* best-effort */ }
+  };
+
+  const nowIso = new Date().toISOString();
+  const { data: reopened } = await supabase
+    .from('tournament_entries')
+    .update({ status: 'pending', entered_at: nowIso })
+    .eq('tournament_id', tournamentId)
+    .eq('team_id', teamId)
+    .in('status', ['rejected', 'withdrawn'])
+    .select('*')
+    .maybeSingle();
+  if (reopened) {
+    await notifyEntryRequested(reopened.id);
+    return { status: 200, body: { entry: reopened } };
+  }
+
+  // No rejected/withdrawn row was reopened → either a live (pending/approved)
+  // entry already exists, or there is no row yet.
+  const { data: existing } = await supabase
+    .from('tournament_entries')
+    .select('status')
+    .eq('tournament_id', tournamentId)
+    .eq('team_id', teamId)
+    .maybeSingle();
+  if (existing) {
+    return { status: 400, body: { error: 'This team is already entered in this tournament.', code: 'ALREADY_ENTERED' } };
+  }
+
+  const { data, error } = await supabase
+    .from('tournament_entries')
+    .insert({ tournament_id: tournamentId, team_id: teamId, status: 'pending' })
+    .select('*')
+    .single();
+  if (error) {
+    // Race backstop: a concurrent submit inserted first → unique violation.
+    // The unique constraint guarantees no duplicate row; surface a clean 400,
+    // never a 500.
+    const code = (error as { code?: string }).code;
+    if (code === '23505' || /duplicate|unique/i.test(error.message || '')) {
+      return { status: 400, body: { error: 'This team is already entered in this tournament.', code: 'ALREADY_ENTERED' } };
+    }
+    return { status: 500, body: { error: sanitizeError(error) } };
+  }
+  await notifyEntryRequested(data.id);
+  return { status: 200, body: { entry: data } };
+}
+
 // POST /tournaments/:id/entries — captain enters their team
 export async function createEntry(req: Request, res: Response) {
   const userId = req.userId;
@@ -461,126 +645,8 @@ export async function createEntry(req: Request, res: Response) {
   try {
     // B02 (V022, D7): the chat follows the entries and organisers.
     syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
-    const { id } = req.params;
-    const { team_id } = req.body || {};
-    if (!team_id) return res.status(400).json({ error: 'team_id is required' });
-    // Hard-delete list #6: a disbanded team can't enter a tournament.
-    if (await isTeamDisbanded(team_id)) return res.status(410).json(TEAM_DISBANDED);
-    const { data: membership } = await supabase
-      .from('team_members')
-      .select('role')
-      .eq('team_id', team_id)
-      .eq('user_id', userId)
-      .maybeSingle();
-    // SC-267: a co-captain (vice_captain) may also enter the team into a tournament.
-    if (membership?.role !== 'captain' && membership?.role !== 'vice_captain') {
-      return res.status(403).json({ error: 'Only the team captain or a co-captain can enter a tournament' });
-    }
-
-    // Check registration deadline and max_teams cap
-    const { data: tournament } = await supabase
-      .from('tournaments')
-      .select('max_teams, registration_deadline, created_by, name, fixtures_generated')
-      .eq('id', id)
-      .maybeSingle();
-    if (tournament?.registration_deadline && new Date(tournament.registration_deadline) < new Date()) {
-      return res.status(400).json({ error: 'Registration closed', code: 'REGISTRATION_CLOSED' });
-    }
-    // SC-99: no new entries once the bracket is generated (would never play).
-    if ((tournament as any)?.fixtures_generated) {
-      return res.status(409).json({ error: 'Registration is closed — the bracket has already been generated.', code: 'REGISTRATION_CLOSED' });
-    }
-    if (tournament?.max_teams) {
-      const { count } = await supabase
-        .from('tournament_entries')
-        .select('id', { count: 'exact', head: true })
-        .eq('tournament_id', id)
-        .in('status', ['pending', 'approved']);
-      if ((count ?? 0) >= tournament.max_teams) {
-        return res.status(400).json({ error: 'Tournament is full', code: 'TOURNAMENT_FULL' });
-      }
-    }
-
-    // SC-240: no player may appear on two teams in the same tournament. Checked
-    // before the reopen/insert so a re-entry after a rejection is re-validated too.
-    const overlap = await rosterOverlapConflict(id, team_id);
-    if (overlap) {
-      return res.status(409).json({
-        error: `A player on this team is already registered with ${overlap.teamName} in this tournament.`,
-        code: 'ROSTER_OVERLAP',
-      });
-    }
-
-    // SC-83: a team may re-enter after a REJECTED/WITHDRAWN entry. Reopen the
-    // existing row to `pending` with a single filtered UPDATE (atomic per
-    // statement). A row that is already pending/approved is a clean 400 —
-    // never a duplicate row and never a raw 500 from the unique constraint.
-    // Notify the ORGANISER that a team requested entry (block-respecting,
-    // best-effort). Fired for a fresh request AND a re-request (reopen).
-    const notifyEntryRequested = async (entryRowId: string) => {
-      try {
-        const organiserId = tournament?.created_by;
-        if (!organiserId || organiserId === userId) return;
-        const { data: team } = await supabase.from('teams').select('name').eq('id', team_id).maybeSingle();
-        await notifyUnlessBlocked(userId, {
-          userId: organiserId,
-          type: 'entry_requested',
-          title: 'New tournament entry',
-          body: `${team?.name ?? 'A team'} requested to enter ${tournament?.name ?? 'your tournament'}.`,
-          data: { tournamentId: id, teamId: team_id, entryId: entryRowId },
-        });
-      } catch { /* best-effort */ }
-    };
-
-    const nowIso = new Date().toISOString();
-    const { data: reopened } = await supabase
-      .from('tournament_entries')
-      .update({ status: 'pending', entered_at: nowIso })
-      .eq('tournament_id', id)
-      .eq('team_id', team_id)
-      .in('status', ['rejected', 'withdrawn'])
-      .select('*')
-      .maybeSingle();
-    if (reopened) {
-      await notifyEntryRequested(reopened.id);
-      return res.json({ entry: reopened });
-    }
-
-    // No rejected/withdrawn row was reopened → either a live (pending/approved)
-    // entry already exists, or there is no row yet.
-    const { data: existing } = await supabase
-      .from('tournament_entries')
-      .select('status')
-      .eq('tournament_id', id)
-      .eq('team_id', team_id)
-      .maybeSingle();
-    if (existing) {
-      return res.status(400).json({
-        error: 'This team is already entered in this tournament.',
-        code: 'ALREADY_ENTERED',
-      });
-    }
-
-    const { data, error } = await supabase
-      .from('tournament_entries')
-      .insert({ tournament_id: id, team_id, status: 'pending' })
-      .select('*')
-      .single();
-    if (error) {
-      // Race backstop: a concurrent submit inserted first → unique violation.
-      // The unique constraint guarantees no duplicate row; surface a clean 400,
-      // never a 500.
-      const code = (error as { code?: string }).code;
-      if (code === '23505' || /duplicate|unique/i.test(error.message || '')) {
-        return res.status(400).json({
-          error: 'This team is already entered in this tournament.',
-          code: 'ALREADY_ENTERED',
-        });
-      }
-      return res.status(500).json({ error: sanitizeError(error) });
-    }
-    await notifyEntryRequested(data.id);
-    return res.json({ entry: data });
+    const out = await enterTeam(String(req.params.id), (req.body || {}).team_id, userId);
+    return res.status(out.status).json(out.body);
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -598,9 +664,17 @@ export async function updateEntry(req: Request, res: Response) {
     if (status && !['pending', 'approved', 'rejected', 'withdrawn'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
+    // B08-F11: a seed is a whole number and a group a short label (text in the
+    // integer column 500'd).
+    if (seed !== undefined && seed !== null && !(Number.isInteger(seed) && seed >= 1 && seed <= 256)) {
+      return res.status(400).json({ error: 'seed must be a whole number from 1 to 256.' });
+    }
+    if (group_label !== undefined && group_label !== null && !(typeof group_label === 'string' && group_label.trim().length >= 1 && group_label.trim().length <= 8)) {
+      return res.status(400).json({ error: 'group_label must be a short label, like A.' });
+    }
     const { data: entry } = await supabase
       .from('tournament_entries')
-      .select('id, tournament_id, team_id')
+      .select('id, tournament_id, team_id, status')
       .eq('id', entryId)
       .eq('tournament_id', id)
       .maybeSingle();
@@ -608,7 +682,7 @@ export async function updateEntry(req: Request, res: Response) {
 
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, name, fixtures_generated')
+      .select(ENTRY_TOURNAMENT_COLS)
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -625,8 +699,11 @@ export async function updateEntry(req: Request, res: Response) {
       if (!isCreator) return res.status(403).json({ error: 'Only the tournament organiser can approve/reject' });
       // SC-99: can't approve a NEW team into the bracket after it's generated.
       // (reject stays allowed for pending cleanup; withdrawn → SC-88 walkover.)
-      if (status === 'approved' && (tournament as any).fixtures_generated) {
-        return res.status(409).json({ error: 'Registration is closed — the bracket has already been generated.', code: 'REGISTRATION_CLOSED' });
+      // B08-F4/F8/F9: nor into a finished tournament, past max_teams, or from
+      // another sport — the same rules as every other way in.
+      if (status === 'approved' && entry.status !== 'approved') {
+        const refusal = await entryRefusal(tournament as EntryTournament, entry.team_id, { capCounts: ['approved'], deadline: false, overlap: false });
+        if (refusal) return res.status(refusal.status).json(refusal.body);
       }
     } else if (status === 'withdrawn') {
       // SC-88: the team captain (self-withdraw) or the organiser may withdraw.
@@ -640,7 +717,7 @@ export async function updateEntry(req: Request, res: Response) {
     const update: Record<string, any> = {};
     if (status !== undefined) update.status = status;
     if (seed !== undefined) update.seed = seed;
-    if (group_label !== undefined) update.group_label = group_label;
+    if (group_label !== undefined) update.group_label = typeof group_label === 'string' ? group_label.trim() : group_label;
 
     const { data, error } = await supabase
       .from('tournament_entries')
@@ -752,11 +829,31 @@ export async function updateTournament(req: Request, res: Response) {
         error: `Invalid format. Must be one of: ${TOURNAMENT_FORMATS.join(', ')}`,
       });
     }
-    const validStatuses = ['draft', 'upcoming', 'registration', 'live', 'active', 'completed', 'cancelled'];
-    if (body.status !== undefined && !validStatuses.includes(body.status)) {
+    // B08-F6: only the four statuses the column holds — 'registration' and
+    // friends reached the CHECK constraint and came back as a 500.
+    if (body.status !== undefined && !(TOURNAMENT_STATUSES as readonly unknown[]).includes(body.status)) {
       return res.status(400).json({
-        error: `Invalid status. Must be one of: ${validStatuses.join(', ')}`,
+        error: `Invalid status. Must be one of: ${TOURNAMENT_STATUSES.join(', ')}`,
       });
+    }
+    // B08-F11/F12: an edit can't blank the name, end before it starts, charge a
+    // negative fee or put text in a date/number column.
+    const detailBad = ('name' in body ? tournamentNameRefusal(body.name) : null)
+      ?? tournamentDetailsRefusal(body, { start_date: tournament.start_date, end_date: tournament.end_date });
+    if (detailBad) return res.status(400).json(detailBad);
+    // B08-F8: max_teams can't go below the teams already approved.
+    if (body.max_teams !== undefined) {
+      const { count: approvedCount } = await supabase
+        .from('tournament_entries')
+        .select('id', { count: 'exact', head: true })
+        .eq('tournament_id', id)
+        .eq('status', 'approved');
+      if ((approvedCount ?? 0) > Number(body.max_teams)) {
+        return res.status(400).json({
+          error: `${approvedCount} teams are already approved — max teams can’t be lower than that.`,
+          code: 'MAX_BELOW_APPROVED',
+        });
+      }
     }
 
     const allowedKeys = [
@@ -792,6 +889,11 @@ export async function updateTournament(req: Request, res: Response) {
     const update: Record<string, any> = {};
     for (const key of allowedKeys) {
       if (req.body && key in req.body) update[key] = req.body[key];
+    }
+    if (typeof update.name === 'string') update.name = update.name.trim();
+    // Empty strings in date/number/city columns mean "clear it", not a cast error.
+    for (const k of ['start_date', 'end_date', 'registration_deadline', 'city_id', 'daily_start_time', 'daily_end_time']) {
+      if (update[k] === '') update[k] = null;
     }
     // SC-86: don't let a tournament be marked completed while matches are still
     // scheduled/live — that crowns a champion with an unplayed bracket.
@@ -1249,37 +1351,27 @@ export async function joinByCode(req: Request, res: Response) {
   try {
     const { entry_code, team_id } = req.body || {};
     if (!entry_code || !team_id) return res.status(400).json({ error: 'entry_code and team_id are required' });
-    if (await isTeamDisbanded(team_id)) return res.status(410).json(TEAM_DISBANDED); // #6
+    if (typeof entry_code !== 'string' || entry_code.trim().length > 20) {
+      return res.status(400).json({ error: 'That doesn’t look like a join code.', code: 'INVALID_CODE' });
+    }
     const { data: tournament } = await supabase
       .from('tournaments')
       .select('id')
-      .eq('entry_code', entry_code)
+      .eq('entry_code', entry_code.trim().toUpperCase())
       .maybeSingle();
-    if (!tournament) return res.status(404).json({ error: 'Invalid entry code' });
-    const { data: membership } = await supabase
-      .from('team_members')
-      .select('role')
-      .eq('team_id', team_id)
-      .eq('user_id', userId)
-      .maybeSingle();
-    // SC-267: a co-captain (vice_captain) may also enter the team into a tournament.
-    if (membership?.role !== 'captain' && membership?.role !== 'vice_captain') {
-      return res.status(403).json({ error: 'Only the team captain or a co-captain can enter a tournament' });
-    }
-    const { data, error } = await supabase
-      .from('tournament_entries')
-      .insert({ tournament_id: tournament.id, team_id, status: 'pending' })
-      .select('*')
-      .single();
-    if ((error as { code?: string } | null)?.code === '23505') {
-      return res.status(409).json({ error: 'This team has already entered.', code: 'ALREADY_ENTERED' });
-    }
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ entry: data, tournament_id: tournament.id });
+    if (!tournament) return res.status(404).json({ error: 'No tournament uses that code. Check it and try again.', code: 'INVALID_CODE' });
+    // B08-F2: the code only names the tournament — the entry itself is the same
+    // routine as the entry form, with every rule and the organiser's notification.
+    syncAfterSuccess(res, () => syncTournamentChatMembers(String(tournament.id)));
+    const out = await enterTeam(String(tournament.id), team_id, userId);
+    if (out.status !== 200) return res.status(out.status).json(out.body);
+    return res.json({ ...out.body, tournament_id: tournament.id });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+const FIXTURE_STATUSES = ['scheduled', 'live', 'completed'];
 
 // PATCH /tournaments/:id/fixtures — bulk-update scheduled match times.
 // Only the tournament creator can modify, and only scheduled matches.
@@ -1309,22 +1401,72 @@ export async function updateFixtures(req: Request, res: Response) {
     const results: any[] = [];
     const blocked: string[] = [];
     const warnings: string[] = []; // SC-scheduling: soft team-double-book warnings (never block)
+    // B08-F10: an item the server did not apply says why. It used to be dropped
+    // silently — the modal closed as if it had saved.
+    const skipped: Array<{ id: string | null; reason: string }> = [];
     // CHANGE NOTIF: collect affected participants across the whole call, then send
     // ONE batched notification per user (dragging 12 fixtures ≠ 12×N pings).
     const RESCHED_KEYS = ['scheduled_at', 'ground_label', 'venue', 'team_a_id', 'team_b_id'];
     const affectedByUser = new Map<string, Array<{ matchId: string; slot: string }>>();
     for (const upd of items) {
+      // B08-F11: `[null]` and friends 500'd.
+      if (!upd || typeof upd !== 'object') { skipped.push({ id: null, reason: 'Not a fixture update.' }); continue; }
       const fixtureId = upd.id ?? upd.fixture_id;
       if (!fixtureId) continue;
+      const skip = (reason: string) => { skipped.push({ id: typeof fixtureId === 'string' ? fixtureId : null, reason }); };
+      if (!isUuid(fixtureId)) { skip('That fixture isn’t in this tournament.'); continue; }
+      if (upd.status !== undefined && !FIXTURE_STATUSES.includes(upd.status)) { skip('status must be scheduled, live or completed.'); continue; }
+      if (upd.scheduled_at && !(typeof upd.scheduled_at === 'string' && Number.isFinite(Date.parse(upd.scheduled_at)))) {
+        skip('scheduled_at must be a date and time.'); continue;
+      }
+      if (('team_a_id' in upd && upd.team_a_id !== null && !isUuid(upd.team_a_id))
+          || ('team_b_id' in upd && upd.team_b_id !== null && !isUuid(upd.team_b_id))) {
+        skip('That team isn’t in this tournament.'); continue;
+      }
+      const { data: cur } = await supabase
+        .from('matches')
+        .select('id, status, team_a_id, team_b_id, winner_team_id, next_match_id, next_slot')
+        .eq('id', fixtureId)
+        .eq('tournament_id', id)
+        .maybeSingle();
+      if (!cur) { skip('That fixture isn’t in this tournament.'); continue; }
+
       const patch: Record<string, any> = {};
       if (upd.scheduled_at) patch.scheduled_at = upd.scheduled_at;
       if (upd.venue) patch.venue = upd.venue;
       if (upd.ground_label !== undefined) patch.ground_label = upd.ground_label; // scheduling: move a match to another ground
-      if ('team_a_id' in upd) patch.team_a_id = upd.team_a_id;
-      if ('team_b_id' in upd) patch.team_b_id = upd.team_b_id;
-      if (upd.team_a_name) patch.team_a_name = upd.team_a_name;
-      if (upd.team_b_name) patch.team_b_name = upd.team_b_name;
-      if (upd.winner_team_id !== undefined) patch.winner_team_id = upd.winner_team_id;
+      // B08-F5: a team moves with its name. The id changed on its own, so the
+      // card kept showing the old team while the fixture pointed at another.
+      let badTeam = false;
+      for (const side of ['a', 'b'] as const) {
+        const idKey = `team_${side}_id`;
+        if (!(idKey in upd)) continue;
+        patch[idKey] = upd[idKey];
+        if (upd[idKey] === null) { patch[`team_${side}_name`] = null; continue; }
+        const { data: team } = await supabase.from('teams').select('name').eq('id', upd[idKey]).maybeSingle();
+        if (!team) { badTeam = true; break; }
+        patch[`team_${side}_name`] = team.name;
+      }
+      if (badTeam) { skip('That team isn’t in this tournament.'); continue; }
+      if (upd.team_a_name && !('team_a_id' in upd)) patch.team_a_name = upd.team_a_name;
+      if (upd.team_b_name && !('team_b_id' in upd)) patch.team_b_name = upd.team_b_name;
+      const sideA = 'team_a_id' in patch ? patch.team_a_id : cur.team_a_id;
+      const sideB = 'team_b_id' in patch ? patch.team_b_id : cur.team_b_id;
+      // B08-F10: the winner is one of the two teams in the match — a stranger was
+      // accepted and advanced into the final. `null` clears a result: the match
+      // goes back to scheduled and, below, its winner leaves the next round.
+      let clearing = false;
+      if ('winner_team_id' in upd) {
+        if (upd.winner_team_id === null) {
+          patch.winner_team_id = null;
+          clearing = !!cur.winner_team_id;
+          if (clearing && upd.status === undefined) patch.status = 'scheduled';
+        } else if (!isUuid(upd.winner_team_id) || (upd.winner_team_id !== sideA && upd.winner_team_id !== sideB)) {
+          skip('The winner must be one of the two teams in this match.'); continue;
+        } else {
+          patch.winner_team_id = upd.winner_team_id;
+        }
+      }
       if (upd.status) patch.status = upd.status;
       if (Object.keys(patch).length === 0) continue;
 
@@ -1332,23 +1474,15 @@ export async function updateFixtures(req: Request, res: Response) {
 
       // SC-23: once a winner has advanced into the next round and that match has
       // started, don't let the organizer rewrite this result out from under it.
-      if (settingWinner) {
-        const { data: cur } = await supabase
+      if (settingWinner && cur.next_match_id) {
+        const { data: child } = await supabase
           .from('matches')
-          .select('next_match_id')
-          .eq('id', fixtureId)
-          .eq('tournament_id', id)
+          .select('status')
+          .eq('id', cur.next_match_id)
           .maybeSingle();
-        if (cur?.next_match_id) {
-          const { data: child } = await supabase
-            .from('matches')
-            .select('status')
-            .eq('id', cur.next_match_id)
-            .maybeSingle();
-          if (child && child.status !== 'scheduled') {
-            blocked.push(fixtureId);
-            continue;
-          }
+        if (child && child.status !== 'scheduled') {
+          blocked.push(fixtureId);
+          continue;
         }
       }
 
@@ -1367,61 +1501,79 @@ export async function updateFixtures(req: Request, res: Response) {
       }
 
       // Allow updates even when status isn't 'scheduled' if explicitly setting
-      // a new status (e.g. organizer marking 'completed' for an offline match)
+      // a new status or a result (e.g. organizer marking 'completed' for an
+      // offline match, or clearing one).
       let query = supabase
         .from('matches')
         .update(patch)
         .eq('id', fixtureId)
         .eq('tournament_id', id);
-      if (!upd.status && !upd.winner_team_id) {
+      if (!('status' in upd) && !('winner_team_id' in upd)) {
         query = query.eq('status', 'scheduled');
       }
-      const { data, error } = await query.select('*').single();
-      if (!error && data) {
-        results.push(data);
-        // CHANGE NOTIF: collect who needs to know this fixture moved.
-        if (touchesResched && oldResched) {
-          const changed = RESCHED_KEYS.some((k) => String(oldResched[k] ?? '') !== String((data as any)[k] ?? ''));
-          if (changed) {
-            // SC-270: the ENTRANT TEAMS' members UNION any lineup already set,
-            // deduped (matchAudienceIds). Participants-only reached NOBODY on a
-            // pre-match reschedule (the normal case) — a bracket fixture has no
-            // participants until scoring.
-            const recipients = await matchAudienceIds(fixtureId, data.team_a_id, data.team_b_id);
-            const slot = formatSlotIst(data.scheduled_at, data.ground_label);
-            for (const uid of recipients) {
-              const arr = affectedByUser.get(uid) ?? [];
-              arr.push({ matchId: fixtureId, slot });
-              affectedByUser.set(uid, arr);
-            }
+      const { data, error } = await query.select('*').maybeSingle();
+      if (error || !data) {
+        skip(error ? 'Couldn’t save this fixture. Try again.' : 'Only a fixture that hasn’t started can be moved.');
+        continue;
+      }
+      results.push(data);
+      // CHANGE NOTIF: collect who needs to know this fixture moved.
+      if (touchesResched && oldResched) {
+        const changed = RESCHED_KEYS.some((k) => String(oldResched[k] ?? '') !== String((data as any)[k] ?? ''));
+        if (changed) {
+          // SC-270: the ENTRANT TEAMS' members UNION any lineup already set,
+          // deduped (matchAudienceIds). Participants-only reached NOBODY on a
+          // pre-match reschedule (the normal case) — a bracket fixture has no
+          // participants until scoring.
+          const recipients = await matchAudienceIds(fixtureId, data.team_a_id, data.team_b_id);
+          const slot = formatSlotIst(data.scheduled_at, data.ground_label);
+          for (const uid of recipients) {
+            const arr = affectedByUser.get(uid) ?? [];
+            arr.push({ matchId: fixtureId, slot });
+            affectedByUser.set(uid, arr);
           }
         }
-        // Scheduling: a manual slot move can create a team double-book. SOFT-WARN
-        // (the organiser knows their ground) — never block. A clash = another
-        // match of this tournament at the SAME scheduled_at sharing a team.
-        if (patch.scheduled_at && data.scheduled_at && (data.team_a_id || data.team_b_id)) {
-          const { data: siblings } = await supabase
-            .from('matches')
-            .select('id, team_a_id, team_b_id, team_a_name, team_b_name')
-            .eq('tournament_id', id)
-            .eq('scheduled_at', data.scheduled_at)
-            .neq('id', fixtureId);
-          const teamIds = new Set([data.team_a_id, data.team_b_id].filter(Boolean));
-          for (const s of siblings ?? []) {
-            const clashId = [s.team_a_id, s.team_b_id].find((t) => t && teamIds.has(t));
-            if (clashId) {
-              const name = clashId === data.team_a_id ? data.team_a_name : data.team_b_name;
-              warnings.push(`${name ?? 'A team'} is now double-booked at this time (also in ${s.team_a_name} vs ${s.team_b_name}).`);
-            }
+      }
+      // Scheduling: a manual slot move can create a team double-book. SOFT-WARN
+      // (the organiser knows their ground) — never block. A clash = another
+      // match of this tournament at the SAME scheduled_at sharing a team.
+      if (patch.scheduled_at && data.scheduled_at && (data.team_a_id || data.team_b_id)) {
+        const { data: siblings } = await supabase
+          .from('matches')
+          .select('id, team_a_id, team_b_id, team_a_name, team_b_name')
+          .eq('tournament_id', id)
+          .eq('scheduled_at', data.scheduled_at)
+          .neq('id', fixtureId);
+        const teamIds = new Set([data.team_a_id, data.team_b_id].filter(Boolean));
+        for (const s of siblings ?? []) {
+          const clashId = [s.team_a_id, s.team_b_id].find((t) => t && teamIds.has(t));
+          if (clashId) {
+            const name = clashId === data.team_a_id ? data.team_a_name : data.team_b_name;
+            warnings.push(`${name ?? 'A team'} is now double-booked at this time (also in ${s.team_a_name} vs ${s.team_b_name}).`);
           }
         }
-        // Propagate the winner into the bracket (SC-23) / auto-complete (SC-24).
-        if (settingWinner) {
+      }
+      if (clearing) {
+        // B08-F10: take the old winner back out of the next round while that
+        // match hasn't started (SC-23 above refused it otherwise).
+        if (cur.next_match_id) {
           try {
-            await advanceTournamentWinner(fixtureId);
-          } catch {
-            /* best effort */
-          }
+            const slotIdCol = cur.next_slot === 'A' ? 'team_a_id' : 'team_b_id';
+            const slotNameCol = cur.next_slot === 'A' ? 'team_a_name' : 'team_b_name';
+            await supabase
+              .from('matches')
+              .update({ [slotIdCol]: null, [slotNameCol]: null })
+              .eq('id', cur.next_match_id)
+              .eq(slotIdCol, cur.winner_team_id)
+              .eq('status', 'scheduled');
+          } catch { /* best effort */ }
+        }
+      } else if (settingWinner) {
+        // Propagate the winner into the bracket (SC-23) / auto-complete (SC-24).
+        try {
+          await advanceTournamentWinner(fixtureId);
+        } catch {
+          /* best effort */
         }
       }
     }
@@ -1439,11 +1591,19 @@ export async function updateFixtures(req: Request, res: Response) {
       void notifyUsers([uid], { type: 'match_rescheduled', title: 'Match rescheduled', body, data }, { actorId: userId });
     }
 
+    // B08-F10: one fixture from the editor — say plainly why it didn't save.
+    if (items.length === 1 && results.length === 0) {
+      if (skipped.length === 1) return res.status(400).json({ error: skipped[0]!.reason, code: 'FIXTURE_NOT_SAVED' });
+      if (blocked.length === 1) {
+        return res.status(409).json({ error: 'The next round has already started, so this result can’t change.', code: 'NEXT_ROUND_STARTED' });
+      }
+    }
     return res.json({
       updated: results.length,
       fixtures: results,
       blocked: blocked.length ? blocked : undefined,
       warnings: warnings.length ? warnings : undefined,
+      skipped: skipped.length ? skipped : undefined,
     });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
@@ -1464,6 +1624,18 @@ export async function getTournamentChat(req: Request, res: Response) {
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+
+    // N2 (visual review): this used to add ANY caller as a member, so anyone
+    // with a tournament id could read its chat. Only the organisers and the
+    // players of approved teams may open it (decision D7). B08-F19: asked
+    // BEFORE anything is written — a refused stranger used to create the chat
+    // (and repoint _chat_id) on the way to the 403.
+    if (!(await canOpenTournamentChat(id, userId))) {
+      return res.status(403).json({
+        error: 'Only this tournament’s organisers and players can open its chat.',
+        code: 'NOT_IN_TOURNAMENT',
+      });
+    }
 
     // Check if a chat already exists via sport_metadata._chat_id
     const meta: Record<string, unknown> = (tournament.sport_metadata as Record<string, unknown>) ?? {};
@@ -1489,16 +1661,8 @@ export async function getTournamentChat(req: Request, res: Response) {
       await supabase.from('tournaments').update({ sport_metadata: { ...meta, _chat_id: chatId } }).eq('id', id);
     }
 
-    // N2 (visual review): this used to add ANY caller as a member, so anyone
-    // with a tournament id could read its chat. Only the organisers and the
-    // players of approved teams may open it (decision D7); for them, the sync
-    // makes sure they — and everyone else who belongs — are in it.
-    if (!(await canOpenTournamentChat(id, userId))) {
-      return res.status(403).json({
-        error: 'Only this tournament’s organisers and players can open its chat.',
-        code: 'NOT_IN_TOURNAMENT',
-      });
-    }
+    // For those allowed in, the sync makes sure they — and everyone else who
+    // belongs — are in it.
     await syncTournamentChatMembers(id);
 
     return res.json({ chat_id: chatId, name: `${tournament.name} Chat`, conversationId: chatId });
@@ -1797,7 +1961,9 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
     .from('tournaments')
     .update({ status: 'completed', champion_team_id: championId, updated_at: new Date().toISOString() })
     .eq('id', tournamentId)
-    .eq('status', 'live')
+    // B08-F7: a draw made before the start date leaves the tournament
+    // `upcoming` (F-52); results recorded then must still crown it.
+    .in('status', ['upcoming', 'live'])
     .select('id, name')
     .maybeSingle();
   if (crowned) {
@@ -1849,7 +2015,7 @@ export async function advanceTournamentWinner(matchId: string): Promise<void> {
     // The resolving final is already terminal here, so it is not self-counted.
     if (await hasUnplayedFixtures(m.tournament_id)) return;
     // SC-253: crown the champion AND auto-complete in ONE conditional update.
-    // The .eq('status','live') CAS makes it idempotent — a re-fire finds the
+    // The status CAS (upcoming/live only) makes it idempotent — a re-fire finds the
     // tournament already 'completed', updates zero rows, and the read-back is
     // null → we never re-notify. So the notification fires exactly once, on the
     // real transition. champion_team_id is the final's winner.
@@ -1859,7 +2025,7 @@ export async function advanceTournamentWinner(matchId: string): Promise<void> {
       .from('tournaments')
       .update({ status: 'completed', champion_team_id: winnerId, updated_at: new Date().toISOString() })
       .eq('id', m.tournament_id)
-      .eq('status', 'live')
+      .in('status', ['upcoming', 'live']) // B08-F7, as in crownLeagueChampion
       .select('id, name')
       .maybeSingle();
     if (crowned) {
@@ -2155,6 +2321,16 @@ function applyScheduleToRows(
   return { ok: true };
 }
 
+/**
+ * SC-48's claim, given back. B08-F3: a schedule that didn't fit answered 400
+ * but kept the claim — fixtures_generated true, no fixtures — so the next try
+ * said "already generated", entries were refused, and the app hid Generate and
+ * Add team. Every early return after the claim releases it.
+ */
+async function releaseFixtureClaim(tournamentId: string): Promise<void> {
+  await supabase.from('tournaments').update({ fixtures_generated: false }).eq('id', tournamentId);
+}
+
 export async function generateFixtures(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -2162,12 +2338,20 @@ export async function generateFixtures(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, sport_id, format, city_id, venue, start_date, end_date, created_by, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names')
+      .select('id, status, sport_id, format, city_id, venue, start_date, end_date, created_by, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     if (!(await isTournamentOrganiser(id, userId))) {
       return res.status(403).json({ error: 'Only the organiser can generate fixtures' });
+    }
+    // B08-F4: a draw on a cancelled (or finished) tournament wrote a fresh status
+    // over it — "cancelled" came back as "upcoming" with a fixture scheduled.
+    if (tournament.status === 'cancelled' || tournament.status === 'completed') {
+      return res.status(409).json({
+        error: tournament.status === 'cancelled' ? 'This tournament was cancelled.' : 'This tournament is finished.',
+        code: 'TOURNAMENT_FINISHED',
+      });
     }
 
     // SC-378: approved entries in a DETERMINISTIC order. There was no ORDER BY
@@ -2269,7 +2453,7 @@ export async function generateFixtures(req: Request, res: Response) {
       const round1 = seededRound1(teams, nextPow2(teams.length));
       const shape = bracketShape(round1);
       const sched = buildSchedule(shape, schedCfg);
-      if (!sched.ok) return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' });
+      if (!sched.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' }); }
       const slotFor = (r: number, m: number): SlotAssign | undefined => sched.assignments.get(keyOf(r, m));
       const { byeMatchIds } = await insertSingleElim(base, round1, slotFor);
       for (const byeId of byeMatchIds) {
@@ -2330,7 +2514,7 @@ export async function generateFixtures(req: Request, res: Response) {
       // Schedule: team-conflict matters here (everyone plays everyone) — no team
       // may sit in two matches in the same time-slot.
       const schedRR = applyScheduleToRows(matchRows, schedCfg, fallbackStartIso);
-      if (!schedRR.ok) return res.status(400).json({ error: schedRR.error, code: 'SCHEDULE_CAPACITY' });
+      if (!schedRR.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: schedRR.error, code: 'SCHEDULE_CAPACITY' }); }
       if (matchRows.length > 0) {
         const { error } = await supabase.from('matches').insert(matchRows).select('id');
         if (error) throw new Error('fixture insert failed');
@@ -2398,7 +2582,7 @@ export async function generateFixtures(req: Request, res: Response) {
         ...bracketShape(koRound1),
       ];
       const schedGK = buildSchedule(gkShape, schedCfg);
-      if (!schedGK.ok) return res.status(400).json({ error: schedGK.error, code: 'SCHEDULE_CAPACITY' });
+      if (!schedGK.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: schedGK.error, code: 'SCHEDULE_CAPACITY' }); }
       for (const r of matchRows) {
         const slot = schedGK.assignments.get(keyOf(r.round, r.match_no));
         r.scheduled_at = slot?.scheduled_at ?? fallbackStartIso;
@@ -2424,7 +2608,7 @@ export async function generateFixtures(req: Request, res: Response) {
     }
 
     // Unsupported format after claiming — release the flag so it isn't stuck.
-    await supabase.from('tournaments').update({ fixtures_generated: false }).eq('id', id);
+    await releaseFixtureClaim(id);
     return res.status(400).json({ error: `Unsupported format: ${format}` });
   } catch {
     // SC-48: generation failed after the atomic claim — release the flag so the

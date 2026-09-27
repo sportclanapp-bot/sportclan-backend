@@ -55,7 +55,8 @@ export async function getOfflinePack(req: Request, res: Response) {
 
     const [{ data: entries }, { data: fixtures }, { data: organisers }] = await Promise.all([
       supabase.from('tournament_entries')
-        .select('id, team_id, team:teams(id, name, short_name, logo_url)')
+        // Phase 3 B08-F13: the status, so the hub's table keeps only the teams in it.
+        .select('id, team_id, status, team:teams(id, name, short_name, logo_url)')
         .eq('tournament_id', id),
       supabase.from('matches')
         .select('id, team_a_id, team_b_id, team_a_name, team_b_name, status, winner_team_id, score_summary, round, match_no, group_label, scheduled_at, venue, ground_label, voided_at, next_match_id, next_slot, overs, umpire_id, updated_at')

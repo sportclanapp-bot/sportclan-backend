@@ -12,6 +12,7 @@ import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCoun
 import { plural } from '../utils/plural';
 import { deletedIdSet } from '../utils/activeUser';
 import { targetUserHidden } from '../utils/blocks';
+import { isUuid } from '../utils/uuid';
 
 // ────────────────────────────────────────────────────────────────────────────
 // TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
@@ -212,6 +213,8 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
 // TOURNAMENT OFFICIALS
 // ────────────────────────────────────────────────────────────────────────────
 
+export const OFFICIAL_ROLES = ['umpire', 'referee', 'scorer', 'commentator', 'organiser'];
+
 export async function addTournamentOfficial(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -219,10 +222,18 @@ export async function addTournamentOfficial(req: Request, res: Response) {
     const { id } = req.params;
     const { user_id, role } = req.body || {};
     if (!user_id || !role) return res.status(400).json({ error: 'user_id and role required' });
+    // Phase 3 B08-F11: a bad id or an unknown person 500'd, and the role took
+    // any text (3000 characters, an object). The app offers these five.
+    if (!isUuid(user_id)) return res.status(400).json({ error: 'user_id must be a valid person.' });
+    if (typeof role !== 'string' || !OFFICIAL_ROLES.includes(role)) {
+      return res.status(400).json({ error: `role must be one of: ${OFFICIAL_ROLES.join(', ')}` });
+    }
 
     const { data: tournament } = await supabase.from('tournaments').select('created_by').eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     if (!(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only organiser can add officials' });
+    const { data: person } = await supabase.from('users').select('id').eq('id', user_id).is('deleted_at', null).maybeSingle();
+    if (!person) return res.status(404).json({ error: 'User not found' });
 
     const { data, error } = await supabase
       .from('tournament_officials')
@@ -279,6 +290,9 @@ export async function removeTournamentOfficial(req: Request, res: Response) {
 export async function getTournamentOfficials(req: Request, res: Response) {
   try {
     const { id } = req.params;
+    // B08-F19: an unknown tournament is a 404, not an empty list.
+    const { data: tournament } = await supabase.from('tournaments').select('id').eq('id', id).maybeSingle();
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     const { data, error } = await supabase
       .from('tournament_officials')
       .select('id, role, created_at, user:users!user_id(id, name, username, profile_picture_url)')
@@ -309,7 +323,9 @@ export async function getTournamentAnalytics(req: Request, res: Response) {
     // were a page length and completion_percentage was computed off it. Counted
     // server-side instead — the same class as SC-370/SC-296.
     const [entriesRes, totalRes, completedRes, pendingRes] = await Promise.all([
-      supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id),
+      // B08-F14: the teams in it — withdrawn and pending rows made this read 6
+      // beside the Overview's 4/4.
+      supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id).eq('status', 'approved'),
       // SC-428: a voided fixture is not a fixture for progress purposes either.
       supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id).is('voided_at', null),
       supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id).eq('status', 'completed').is('voided_at', null),

@@ -11,7 +11,7 @@ import {
 import { checkAndRecordDiscrepancy, checkResultBeforeRecording, recordUnsentPlayForFinalMatch } from '../utils/discrepancy';
 import { invokeController } from '../utils/invokeController';
 import { completeMatch } from './matches.controller';
-import { authorizeScorer, recordEventIdempotent, recomputeSummary } from './scoring.controller';
+import { authorizeScorer, recordEventIdempotent, recomputeSummary, validateScoringEvent, promoteToLive } from './scoring.controller';
 import { isTerminalMatchStatus } from '../utils/validation';
 import { isSportInactive } from '../utils/sports';
 
@@ -142,6 +142,30 @@ export async function uploadHandoff(req: Request, res: Response) {
     // definition, so it goes last.
     const eventOps = ops.filter(isEventOp);
     const resultOps = ops.filter(isResultOp);
+
+    // B06-F1: every event goes through the same checks as live scoring, all of
+    // them BEFORE any is applied — a signature proves which phone made the
+    // bytes, not that the bytes are a possible score (runs 99, an unknown type,
+    // a side "Z" and a pending ranked opponent all used to go straight in). One
+    // bad op refuses the whole code, so nothing is half-applied.
+    const scorerMatch = (auth as { ok: true; match: Parameters<typeof validateScoringEvent>[1] }).match;
+    for (const op of eventOps) {
+      const refused = await validateScoringEvent(id!, scorerMatch, {
+        event_type: op.e.event_type,
+        period: op.e.period,
+        clock_seconds: op.e.clock_seconds,
+        payload: op.e.payload,
+      });
+      if (refused) {
+        return res.status(400).json({
+          error: `This code has a scoring action the server can't accept (${refused.body.error}). Nothing from it was applied.`,
+          code: 'HANDOFF_OP_INVALID',
+          op: op.s,
+          reason: refused.body.code ?? null,
+        });
+      }
+    }
+    if (eventOps.some((op) => op.e.event_type !== 'serve_swap')) await promoteToLive(id!, scorerMatch);
 
     for (const op of eventOps) {
       const rec = await recordEventIdempotent({

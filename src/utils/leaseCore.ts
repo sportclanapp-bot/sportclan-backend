@@ -68,8 +68,18 @@ export function leaseVerdict<T extends Pick<LeaseRow, 'user_id' | 'device_id'>>(
   return { ok: true, lease };
 }
 
-/** The 409 body for a refused verdict — one wording for every write path. */
-export function leaseRefusal(verdict: { code: 'LEASE_LOST' | 'DEVICE_REQUIRED' }): { error: string; code: string } {
+/**
+ * The 409 body for a refused verdict — one wording for every write path. Pass
+ * the caller's id: when the lease is their OWN on another phone, "someone else"
+ * was wrong (B06-F11).
+ */
+export function leaseRefusal(
+  verdict: { code: 'LEASE_LOST' | 'DEVICE_REQUIRED'; lease?: { user_id?: string | null } | null },
+  userId?: string,
+): { error: string; code: string } {
+  if (verdict.code === 'LEASE_LOST' && userId && verdict.lease?.user_id === userId) {
+    return { error: 'Your other phone is scoring this match.', code: 'LEASE_LOST' };
+  }
   return verdict.code === 'DEVICE_REQUIRED'
     ? {
       error: 'This match is being scored on a phone, and this request did not say which device it came from. Update SportClan and score from the app, or take over scoring there.',

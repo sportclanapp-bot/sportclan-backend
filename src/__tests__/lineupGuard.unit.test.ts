@@ -40,8 +40,11 @@ describe('SC-442 · same-player guard', () => {
     const next = src.indexOf('\nexport ', start + 10);
     const body = src.slice(start, next === -1 ? undefined : next);
 
-    const guard = body.indexOf('SAME_PLAYER_BOTH_ROLES');
-    const insert = body.indexOf('record_match_event');
+    // B06-F1: the guard is in validateScoringEvent, which createEvent runs
+    // before recording.
+    expect(src.slice(src.indexOf('export async function validateScoringEvent'), start)).toContain('SAME_PLAYER_BOTH_ROLES');
+    const guard = body.indexOf('await validateScoringEvent(');
+    const insert = body.indexOf('recordEventIdempotent({');
     expect(guard).toBeGreaterThan(-1);
     expect(insert).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(insert);

@@ -731,7 +731,7 @@ export async function setMatchTossHandler(req: Request, res: Response) {
   {
     const verdict = await checkLease(id, userId, deviceIdOf(req));
     if (!verdict.ok) {
-      return res.status(409).json(leaseRefusal(verdict));
+      return res.status(409).json(leaseRefusal(verdict, userId));
     }
   }
   // SC-42: a finished match is immutable — no toss changes.
@@ -2135,7 +2135,7 @@ export async function completeMatch(req: Request, res: Response) {
       canonicalP,
     ]);
     if (!verdict.ok) {
-      return res.status(409).json(leaseRefusal(verdict));
+      return res.status(409).json(leaseRefusal(verdict, userId));
     }
     // F-02: completing is the most final way to start a match — Elo was applied
     // to an opponent who never accepted (confirmed live).
@@ -3165,7 +3165,7 @@ export async function claimScoringLease(req: Request, res: Response) {
       // Somebody else holds it. Not an error the caller can fix by retrying, so
       // it answers 409 with everything the UI needs to offer a takeover.
       return res.status(409).json({
-        error: 'Someone else is scoring this match.',
+        error: out.heldBy?.user_id === userId ? 'Your other phone is scoring this match.' : 'Someone else is scoring this match.',
         code: 'LEASE_HELD',
         lease: await leaseWithHolder(out.heldBy ?? null),
       });

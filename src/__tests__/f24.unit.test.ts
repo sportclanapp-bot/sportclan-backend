@@ -12,8 +12,18 @@ const scoring = read('controllers/scoring.controller.ts');
 const start = scoring.indexOf('export async function createEvent');
 const body = scoring.slice(start, scoring.indexOf('\nexport ', start + 10));
 
+// B06-F1: the refusals moved into validateScoringEvent (shared with the QR
+// handoff); createEvent runs it, and only then promotes the match.
+const vStart = scoring.indexOf('export async function validateScoringEvent');
+const validator = scoring.slice(vStart, scoring.indexOf('\nexport ', vStart + 10));
+
 describe('F-24 · createEvent promotes to live only after every refusal', () => {
-  const live = body.indexOf("update({ status: 'live' })");
+  const live = body.indexOf('await promoteToLive(');
+  const checked = body.indexOf('await validateScoringEvent(');
+  test('the validator runs before the live flip', () => {
+    expect(checked).toBeGreaterThan(0);
+    expect(live).toBeGreaterThan(checked);
+  });
   test.each([
     "code: 'BAD_CHESS_REASON'",
     "code: 'RESULT_PLAYER_WRONG_SIDE'",
@@ -21,10 +31,8 @@ describe('F-24 · createEvent promotes to live only after every refusal', () => 
     'Ranked matches require registered players, not guests.',
     "code: 'OPPONENT_NOT_ACCEPTED'",
     'must be an integer between',
-  ])('the live flip comes after %s', (refusal) => {
-    const at = body.indexOf(refusal);
-    expect(at).toBeGreaterThan(0);
-    expect(live).toBeGreaterThan(at);
+  ])('the validator refuses with %s', (refusal) => {
+    expect(validator.indexOf(refusal)).toBeGreaterThan(0);
   });
   test('and before the event is recorded', () => {
     expect(live).toBeLessThan(body.indexOf('recordEventIdempotent({'));

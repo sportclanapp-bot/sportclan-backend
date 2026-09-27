@@ -42,7 +42,7 @@ async function loadScorableMatch(
   // Terminal-status matches stay FROZEN (SC-42/85) — an edit can never change a
   // winner post-completion → no ELO double-apply. Keep exactly as-is.
   if (isTerminalMatchStatus(match.status)) {
-    return { error: { status: 409, msg: 'This match is finished and can no longer be modified' } };
+    return { error: { status: 409, msg: 'This match is finished and can no longer be modified', code: 'MATCH_FINISHED' } };
   }
   // SC-430: one scorer per match. Being ALLOWED to score is not the same as being
   // the one currently scoring — a second phone editing or deleting an event while
@@ -52,7 +52,7 @@ async function loadScorableMatch(
   if (deviceId !== undefined) {
     const verdict = await checkLease(id, userId, deviceId);
     if (!verdict.ok) {
-      const r = leaseRefusal(verdict);
+      const r = leaseRefusal(verdict, userId);
       return { error: { status: 409, msg: r.error, code: r.code } };
     }
   }
@@ -519,7 +519,8 @@ export async function deleteMatchEvent(req: Request, res: Response) {
     if (removed.error) return res.status(500).json({ error: removed.error });
 
     // SC-319: rebuild score_summary from the remaining events (was left stale).
-    const summary = await recomputeSummary(id);
+    // B06-F2: deleting the last one leaves a zero score, not the old one.
+    const summary = await recomputeSummary(id, { emptyMeansZero: true });
     await recordScoreAfter(removed.auditId, summary);
 
     return res.json({ success: true, score_summary: summary });

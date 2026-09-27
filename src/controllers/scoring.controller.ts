@@ -18,6 +18,7 @@ import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, winsNeeded } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
 import { allOutBySide, isDismissal } from '../utils/cricketRules';
+import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
@@ -77,7 +78,7 @@ export async function authorizeScorer(matchId: string, userId: string, deviceId?
   // asks the human. See utils/scoringLease.
   const verdict = await checkLease(matchId, userId, deviceId);
   if (!verdict.ok) {
-    const refusal = leaseRefusal(verdict);
+    const refusal = leaseRefusal(verdict, userId);
     return {
       ok: false as const,
       status: 409,
@@ -150,6 +151,177 @@ export async function recordEventIdempotent(args: {
   return { event: d, error: rpc.error, wasNew: true };
 }
 
+/**
+ * B06-F1 · every check on ONE scoring event, shared by live scoring
+ * (createEvent) and the signed QR handoff (uploadHandoff). A handoff's signature
+ * only proves which phone made the bytes — the scorer controls that phone — so
+ * its events are the same "buggy or crafted client" case these checks exist for.
+ *
+ * Returns the refusal to send, or null when the event may be recorded. Player
+ * names in `payload` are cleaned in place, as before. Match-level gates (auth,
+ * inactive sport, a finished match) stay with each caller.
+ */
+export async function validateScoringEvent(
+  matchId: string,
+  match: { id: string; status?: string | null; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_b_name?: string | null },
+  ev: { event_type: unknown; period?: unknown; clock_seconds?: unknown; payload?: any },
+): Promise<{ status: number; body: { error: string; code?: string } } | null> {
+  const refuse = (status: number, body: { error: string; code?: string }) => ({ status, body });
+  const { event_type, period, clock_seconds, payload } = ev;
+  if (!isKnownEventType(event_type)) {
+    return refuse(400, { error: `Unknown event_type "${String(event_type)}".`, code: 'UNKNOWN_EVENT_TYPE' });
+  }
+  // B06-F6: a payload is an object or nothing. A string, number or list used to
+  // skip every check below and still count as a legal ball.
+  if (payload != null && (typeof payload !== 'object' || Array.isArray(payload))) {
+    return refuse(400, { error: 'payload must be an object' });
+  }
+  // B06-F6: cricket extras and dismissals are closed lists — an unknown one
+  // counted a run or a wicket nobody can name.
+  if (event_type === 'extra' && payload && payload.type != null && !CRICKET_EXTRA_TYPES.has(String(payload.type))) {
+    return refuse(400, { error: 'An extra must be a wide, no-ball, bye or leg bye.', code: 'BAD_EXTRA_TYPE' });
+  }
+  if (event_type === 'wicket' && payload && payload.wicket_type != null && !isKnownWicketType(payload.wicket_type)) {
+    return refuse(400, { error: 'That isn’t a way a batter can be out.', code: 'BAD_WICKET_TYPE' });
+  }
+
+  // SC-228: validate numeric scoring inputs so a buggy/malicious client can't
+  // corrupt a score (negative subtracts, huge inflates). Clean 400, no write.
+  // Bounds by family: point/board `value` 1..3 (basketball 3-pointer, carrom
+  // queen 3, rally 1); cricket `runs` 0..7 (dot ball .. six + overthrow buffer);
+  // `period`/set/ply 0..2000; `clock_seconds` 0..86400 (≤24h). team_side A|B.
+  const outOfRange = (v: unknown, min: number, max: number): boolean =>
+    v != null && (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max);
+  if (outOfRange(period, 0, 2000)) {
+    return refuse(400, { error: 'period must be an integer between 0 and 2000' });
+  }
+  if (outOfRange(clock_seconds, 0, 86400)) {
+    return refuse(400, { error: 'clock_seconds must be an integer between 0 and 86400' });
+  }
+  if (payload && typeof payload === 'object') {
+    if (payload.team_side != null && payload.team_side !== 'A' && payload.team_side !== 'B') {
+      return refuse(400, { error: 'team_side must be "A" or "B"' });
+    }
+    // A5: a carrom BOARD result carries what the board was worth (pieces left
+    // 0–9, +3 queen) — the only score event worth more than 3 (or 0).
+    const isBoard = payload.kind === 'board';
+    if (isBoard) {
+      if (outOfRange(payload.pieces_left, 0, CARROM_MAX_PIECES)) {
+        return refuse(400, { error: `pieces_left must be an integer between 0 and ${CARROM_MAX_PIECES}` });
+      }
+      if (payload.queen != null && typeof payload.queen !== 'boolean') {
+        return refuse(400, { error: 'queen must be true or false' });
+      }
+      if (outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_POINTS)) {
+        return refuse(400, { error: 'value is out of range for a board' });
+      }
+    } else if (outOfRange(payload.value, 1, 3)) {
+      return refuse(400, { error: 'value must be an integer between 1 and 3' });
+    }
+    if (outOfRange(payload.runs, 0, 7)) {
+      return refuse(400, { error: 'runs must be an integer between 0 and 7' });
+    }
+  }
+
+  // Phase 3 · decision 2: a RANKED singles match cannot start until the
+  // opponent has accepted. Checked only before the first point (status still
+  // scheduled) — once it is live, it was accepted. 409 so the scorer's outbox
+  // halts and asks rather than dropping the point.
+  // V-3: a serve swap before the first rally is a pre-match setting (the
+  // toss), not play — it neither starts the match nor needs the opponent's yes.
+  if (event_type !== 'serve_swap' && match.status === 'scheduled') {
+    const gate = await pendingRankedOpponent(match);
+    if (gate.pending) {
+      return refuse(409, {
+        error: `${gate.opponentName ?? 'Your opponent'} hasn't accepted this ranked match yet. It can start once they do.`,
+        code: 'OPPONENT_NOT_ACCEPTED',
+      });
+    }
+  }
+
+  // A3: a chess result's reason must be one of the shared list (chessRules —
+  // the same list the app offers, incl. insufficient material / 50-move rule).
+  if (event_type === 'result' && payload && typeof payload === 'object'
+    && (payload.winner === 'white' || payload.winner === 'black' || payload.winner === 'draw')
+    && !isValidChessReason(payload.winner, payload.reason)) {
+    return refuse(400, { error: 'That isn’t a way this result can happen.', code: 'BAD_CHESS_REASON' });
+  }
+
+  // F-05 (confirmed live, session 1): a chess result names the player who won.
+  // The app sent the WHITE player's id for "Black wins" (it always dispatched
+  // results as side A), so the loser was credited and became Player of the
+  // Match. A registered player named on a result must be on the winning side.
+  if (event_type === 'result' && payload && typeof payload === 'object'
+    && (payload.winner === 'white' || payload.winner === 'black')
+    && typeof payload.player_id === 'string' && !isGuestId(payload.player_id)) {
+    const wantSide = payload.winner === 'white' ? 'A' : 'B';
+    const { data: part } = await supabase
+      .from('match_participants').select('team_side')
+      .eq('match_id', matchId).eq('user_id', payload.player_id).maybeSingle();
+    if (part && (part as { team_side?: string }).team_side !== wantSide) {
+      return refuse(400, {
+        error: `That player is on the other side — ${payload.winner === 'white' ? 'White' : 'Black'}'s player won.`,
+        code: 'RESULT_PLAYER_WRONG_SIDE',
+      });
+    }
+  }
+
+  // Guest players (manual entry for casual matches) + untrusted-name hygiene.
+  // Ranked matches are real-users-only (ELO/leaderboards) — reject guest ids
+  // there as defence-in-depth (the app also hides guest mode for ranked).
+  if (payload && typeof payload === 'object') {
+    const ids = [payload.player_id, payload.batsman_id, payload.bowler_id];
+    if (match.is_ranked && ids.some((v: unknown) => isGuestId(v as string))) {
+      return refuse(400, { error: 'Ranked matches require registered players, not guests.' });
+    }
+    for (const k of ['player_name', 'batsman_name', 'bowler_name'] as const) {
+      if (payload[k] != null) {
+        const clean = sanitizePlayerName(payload[k]);
+        if (clean) payload[k] = clean;
+        else delete payload[k];
+      }
+    }
+
+    // SC-442 (M6) · one person cannot bat and bowl the same delivery.
+    //
+    // The app's picker was letting a player from the FIELDING side be chosen
+    // as striker, and then the same person as bowler — so one player batted
+    // and bowled to himself, and the finished scorecard credited him with runs
+    // he had scored for both teams. The picker is now restricted by side, but
+    // the server must refuse it too: an old build keeps posting whatever it
+    // likes, and this is the only place that sees every delivery.
+    //
+    // Deliberately narrow. The server cannot cheaply verify squad membership
+    // for free-text and guest sides without a per-ball roster lookup, so it
+    // asserts the one thing that is impossible in any form of cricket rather
+    // than guessing at the rest.
+    const batId = payload.batsman_id ?? payload.player_id;
+    const bowlId = payload.bowler_id;
+    if (batId && bowlId && batId === bowlId) {
+      return refuse(400, {
+        error: 'The batter and the bowler cannot be the same player.',
+        code: 'SAME_PLAYER_BOTH_ROLES',
+      });
+    }
+  }
+
+  return null;
+}
+
+/**
+ * A scheduled match goes live on its first accepted play (never a downgrade of
+ * a finished one). Shared with the QR handoff, which used to leave a first-play
+ * match on `scheduled` (B06-F1).
+ */
+export async function promoteToLive(matchId: string, match: { status?: string | null }): Promise<void> {
+  if (match.status !== 'scheduled') return;
+  try {
+    await supabase.from('matches').update({ status: 'live' }).eq('id', matchId).eq('status', 'scheduled');
+  } catch {
+    // best-effort — don't block scoring on the status flip
+  }
+}
+
 // POST /scoring/:matchId/event
 export async function createEvent(req: Request, res: Response) {
   const userId = req.userId;
@@ -183,129 +355,16 @@ export async function createEvent(req: Request, res: Response) {
 
     // SC-42: a finished match is immutable — no more scoring events.
     if (isTerminalMatchStatus(match.status)) {
-      return res.status(409).json({ error: 'This match is finished and can no longer be scored' });
+      // B06-F5: a code, so the scorer's outbox can tell "ended elsewhere" from
+      // any other refusal and stop offering a retry that can never succeed.
+      return res.status(409).json({ error: 'This match is finished and can no longer be scored', code: 'MATCH_FINISHED' });
     }
 
-    // SC-228: validate numeric scoring inputs so a buggy/malicious client can't
-    // corrupt a score (negative subtracts, huge inflates). Clean 400, no write.
-    // Bounds by family: point/board `value` 1..3 (basketball 3-pointer, carrom
-    // queen 3, rally 1); cricket `runs` 0..7 (dot ball .. six + overthrow buffer);
-    // `period`/set/ply 0..2000; `clock_seconds` 0..86400 (≤24h). team_side A|B.
-    const outOfRange = (v: unknown, min: number, max: number): boolean =>
-      v != null && (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max);
-    if (outOfRange(period, 0, 2000)) {
-      return res.status(400).json({ error: 'period must be an integer between 0 and 2000' });
-    }
-    if (outOfRange(clock_seconds, 0, 86400)) {
-      return res.status(400).json({ error: 'clock_seconds must be an integer between 0 and 86400' });
-    }
-    if (payload && typeof payload === 'object') {
-      if (payload.team_side != null && payload.team_side !== 'A' && payload.team_side !== 'B') {
-        return res.status(400).json({ error: 'team_side must be "A" or "B"' });
-      }
-      // A5: a carrom BOARD result carries what the board was worth (pieces left
-      // 0–9, +3 queen) — the only score event worth more than 3 (or 0).
-      const isBoard = payload.kind === 'board';
-      if (isBoard) {
-        if (outOfRange(payload.pieces_left, 0, CARROM_MAX_PIECES)) {
-          return res.status(400).json({ error: `pieces_left must be an integer between 0 and ${CARROM_MAX_PIECES}` });
-        }
-        if (payload.queen != null && typeof payload.queen !== 'boolean') {
-          return res.status(400).json({ error: 'queen must be true or false' });
-        }
-        if (outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_POINTS)) {
-          return res.status(400).json({ error: 'value is out of range for a board' });
-        }
-      } else if (outOfRange(payload.value, 1, 3)) {
-        return res.status(400).json({ error: 'value must be an integer between 1 and 3' });
-      }
-      if (outOfRange(payload.runs, 0, 7)) {
-        return res.status(400).json({ error: 'runs must be an integer between 0 and 7' });
-      }
-    }
-
-    // Phase 3 · decision 2: a RANKED singles match cannot start until the
-    // opponent has accepted. Checked only before the first point (status still
-    // scheduled) — once it is live, it was accepted. 409 so the scorer's outbox
-    // halts and asks rather than dropping the point.
-    // V-3: a serve swap before the first rally is a pre-match setting (the
-    // toss), not play — it neither starts the match nor needs the opponent's yes.
+    // B06-F1: every check on the event itself lives in validateScoringEvent, so
+    // the signed QR handoff (qrHandoff.controller) runs exactly the same ones.
+    const refused = await validateScoringEvent(matchId, match, { event_type, period, clock_seconds, payload });
+    if (refused) return res.status(refused.status).json(refused.body);
     const startsPlay = event_type !== 'serve_swap';
-    if (startsPlay && match.status === 'scheduled') {
-      const gate = await pendingRankedOpponent(match);
-      if (gate.pending) {
-        return res.status(409).json({
-          error: `${gate.opponentName ?? 'Your opponent'} hasn't accepted this ranked match yet. It can start once they do.`,
-          code: 'OPPONENT_NOT_ACCEPTED',
-        });
-      }
-    }
-
-    // A3: a chess result's reason must be one of the shared list (chessRules —
-    // the same list the app offers, incl. insufficient material / 50-move rule).
-    if (event_type === 'result' && payload && typeof payload === 'object'
-      && (payload.winner === 'white' || payload.winner === 'black' || payload.winner === 'draw')
-      && !isValidChessReason(payload.winner, payload.reason)) {
-      return res.status(400).json({ error: 'That isn’t a way this result can happen.', code: 'BAD_CHESS_REASON' });
-    }
-
-    // F-05 (confirmed live, session 1): a chess result names the player who won.
-    // The app sent the WHITE player's id for "Black wins" (it always dispatched
-    // results as side A), so the loser was credited and became Player of the
-    // Match. A registered player named on a result must be on the winning side.
-    if (event_type === 'result' && payload && typeof payload === 'object'
-      && (payload.winner === 'white' || payload.winner === 'black')
-      && typeof payload.player_id === 'string' && !isGuestId(payload.player_id)) {
-      const wantSide = payload.winner === 'white' ? 'A' : 'B';
-      const { data: part } = await supabase
-        .from('match_participants').select('team_side')
-        .eq('match_id', matchId).eq('user_id', payload.player_id).maybeSingle();
-      if (part && (part as { team_side?: string }).team_side !== wantSide) {
-        return res.status(400).json({
-          error: `That player is on the other side — ${payload.winner === 'white' ? 'White' : 'Black'}'s player won.`,
-          code: 'RESULT_PLAYER_WRONG_SIDE',
-        });
-      }
-    }
-
-    // Guest players (manual entry for casual matches) + untrusted-name hygiene.
-    // Ranked matches are real-users-only (ELO/leaderboards) — reject guest ids
-    // there as defence-in-depth (the app also hides guest mode for ranked).
-    if (payload && typeof payload === 'object') {
-      const ids = [payload.player_id, payload.batsman_id, payload.bowler_id];
-      if (match.is_ranked && ids.some((v: unknown) => isGuestId(v as string))) {
-        return res.status(400).json({ error: 'Ranked matches require registered players, not guests.' });
-      }
-      for (const k of ['player_name', 'batsman_name', 'bowler_name'] as const) {
-        if (payload[k] != null) {
-          const clean = sanitizePlayerName(payload[k]);
-          if (clean) payload[k] = clean;
-          else delete payload[k];
-        }
-      }
-
-      // SC-442 (M6) · one person cannot bat and bowl the same delivery.
-      //
-      // The app's picker was letting a player from the FIELDING side be chosen
-      // as striker, and then the same person as bowler — so one player batted
-      // and bowled to himself, and the finished scorecard credited him with runs
-      // he had scored for both teams. The picker is now restricted by side, but
-      // the server must refuse it too: an old build keeps posting whatever it
-      // likes, and this is the only place that sees every delivery.
-      //
-      // Deliberately narrow. The server cannot cheaply verify squad membership
-      // for free-text and guest sides without a per-ball roster lookup, so it
-      // asserts the one thing that is impossible in any form of cricket rather
-      // than guessing at the rest.
-      const batId = payload.batsman_id ?? payload.player_id;
-      const bowlId = payload.bowler_id;
-      if (batId && bowlId && batId === bowlId) {
-        return res.status(400).json({
-          error: 'The batter and the bowler cannot be the same player.',
-          code: 'SAME_PLAYER_BOTH_ROLES',
-        });
-      }
-    }
 
     // Catch-all: any scored event means the match is in progress, so promote it
     // to `live`. The toss handler already does this for the normal flow; this
@@ -314,13 +373,7 @@ export async function createEvent(req: Request, res: Response) {
     // F-24: only once every check above has passed — a REFUSED event (a chess
     // result with a bad reason or the wrong player, a guest in a ranked match,
     // one player batting and bowling) used to start the match anyway.
-    if (startsPlay && match.status === 'scheduled') {
-      try {
-        await supabase.from('matches').update({ status: 'live' }).eq('id', matchId);
-      } catch {
-        // best-effort — don't block scoring on the status flip
-      }
-    }
+    if (startsPlay) await promoteToLive(matchId, match);
 
     // SC-113: atomic, race-safe insert. record_match_event serializes per-match
     // (advisory lock) and dedupes a rapid/concurrent IDENTICAL submit (double-tap
@@ -452,13 +505,18 @@ export async function listEvents(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const matchId = String(req.params.matchId);
-    const { since, limit } = req.query as Record<string, string | undefined>;
+    const { since, limit } = req.query as Record<string, unknown>;
+    // B06-F7: a bad limit or since went straight to PostgREST and came back a 500.
+    const n = typeof limit === 'string' && /^\d+$/.test(limit) ? parseInt(limit, 10) : 0;
+    if (since != null && (typeof since !== 'string' || Number.isNaN(Date.parse(since)))) {
+      return res.status(400).json({ error: 'since must be a date' });
+    }
     let query = supabase
       .from('match_events')
       .select('*')
       .eq('match_id', matchId)
       .order('created_at', { ascending: true })
-      .limit(Math.min(parseInt(limit || '500', 10), 1000));
+      .limit(n >= 1 ? Math.min(n, 1000) : 500);
     if (since) query = query.gt('created_at', since);
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: sanitizeError(error) });
@@ -847,11 +905,14 @@ export function aggregatePlayers(slug: string, events: { event_type: string; pay
  * `persist: false` builds the summary without writing it — for completion,
  * whose result patch writes this same summary (plus the result) one step later.
  */
-export async function recomputeSummary(matchId: string, opts: { persist?: boolean } = {}): Promise<Record<string, any> | null> {
+export async function recomputeSummary(
+  matchId: string,
+  opts: { persist?: boolean; emptyMeansZero?: boolean } = {},
+): Promise<Record<string, any> | null> {
   // The match and its events are independent reads — fetched together, and the
   // sport comes from the process cache: this runs on EVERY scoring event and at
   // completion, and each sequential round-trip costs ~300 ms from Render.
-  const [{ data: match }, { data: events }] = await Promise.all([
+  const [{ data: match }, { data: eventRows }] = await Promise.all([
     supabase.from('matches').select('sport_id, score_summary, format').eq('id', matchId).maybeSingle(),
     supabase.from('match_events').select('event_type, payload, clock_seconds, period').eq('match_id', matchId)
       .order('created_at', { ascending: true }),
@@ -866,8 +927,11 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
 
   const existing = (match.score_summary as Record<string, any>) || {};
   // Never wipe a pre-existing summary (e.g. seeded/legacy data) when there are
-  // no scoring events to recompute from.
-  if (!events || events.length === 0) return existing;
+  // no scoring events to recompute from — except after an undo or delete took
+  // the last one away (B06-F2): then the empty log IS the score, and keeping the
+  // old summary left Home's live card on "Game 1 1-0" with nothing scored.
+  const events = eventRows ?? [];
+  if (events.length === 0 && !opts.emptyMeansZero) return existing;
 
   const A: Record<string, any> = { score: 0 };
   const B: Record<string, any> = { score: 0 };
@@ -1089,12 +1153,6 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
       ? { [chessWinnerId]: { side: chessWinner, name: chessWinnerName ?? undefined, points: 1 } }
       : {};
   }
-  if (opts.persist !== false) {
-    await supabase
-      .from('matches')
-      .update({ score_summary: summary, updated_at: new Date().toISOString() })
-      .eq('id', matchId);
-  }
   // SC-442 (M1/B2-b) · carry the TOSS across the recompute.
   //
   // matches.controller sets score_summary.toss_winner_side when the toss is
@@ -1127,6 +1185,15 @@ export async function recomputeSummary(matchId: string, opts: { persist?: boolea
   // A2: a knockout match's shootout is set at completion, like the result.
   for (const k of ['toss_winner_side', 'result', 'winner_side', 'walkover', 'walkover_reason', 'shootout'] as const) {
     if (existing[k] != null && summary[k] == null) summary[k] = existing[k];
+  }
+  // B06: carried over BEFORE the write, not after it — written after, the
+  // returned summary kept these keys but the stored one lost them on every
+  // scoring event, so the next recompute had nothing to carry.
+  if (opts.persist !== false) {
+    await supabase
+      .from('matches')
+      .update({ score_summary: summary, updated_at: new Date().toISOString() })
+      .eq('id', matchId);
   }
 
   return summary;
@@ -1197,7 +1264,7 @@ export async function undoEvent(req: Request, res: Response) {
     if (!auth.ok) return res.status(auth.status).json({ error: auth.error, ...(auth.code ? { code: auth.code } : {}) });
     // SC-42: no edits to a finished match.
     if (isTerminalMatchStatus(auth.match.status)) {
-      return res.status(409).json({ error: 'This match is finished and can no longer be edited' });
+      return res.status(409).json({ error: 'This match is finished and can no longer be edited', code: 'MATCH_FINISHED' });
     }
 
     const { data: latest } = await supabase
@@ -1216,7 +1283,7 @@ export async function undoEvent(req: Request, res: Response) {
     // Recompute the summary from the remaining events so it can't drift out of
     // sync with the event log (the old code left score_summary stale on undo).
     try {
-      await recordScoreAfter(removed.auditId, await recomputeSummary(matchId));
+      await recordScoreAfter(removed.auditId, await recomputeSummary(matchId, { emptyMeansZero: true }));
     } catch {
       // best-effort — the event delete already succeeded
     }

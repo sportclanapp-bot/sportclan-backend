@@ -103,9 +103,13 @@ describe('wiring', () => {
   });
 
   test('createEvent: a ranked singles match cannot start before the opponent accepts', () => {
+    // B06-F1: the gate lives in validateScoringEvent, which createEvent (and the
+    // QR handoff) runs before promoting the match to live.
     const scoring = fn(code('controllers/scoring.controller.ts'), 'createEvent');
-    const gate = scoring.indexOf('OPPONENT_NOT_ACCEPTED');
-    const live = scoring.indexOf(".update({ status: 'live' })");
+    const validator = fn(code('controllers/scoring.controller.ts'), 'validateScoringEvent');
+    expect(validator).toContain("code: 'OPPONENT_NOT_ACCEPTED'");
+    const gate = scoring.indexOf('await validateScoringEvent(');
+    const live = scoring.indexOf('await promoteToLive(');
     expect(gate).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(live);
   });

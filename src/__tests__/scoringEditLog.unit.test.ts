@@ -144,6 +144,6 @@ describe('who can read it', () => {
   test('every writer records the score either side (edit, undo, delete)', () => {
     expect(code('controllers/matchFeatures.controller.ts')).toMatch(/recordScoreAfter\(logged\.auditId, summary\)/);
     expect(code('controllers/matchFeatures.controller.ts')).toMatch(/recordScoreAfter\(removed\.auditId, summary\)/);
-    expect(code('controllers/scoring.controller.ts')).toMatch(/recordScoreAfter\(removed\.auditId, await recomputeSummary\(matchId\)\)/);
+    expect(code('controllers/scoring.controller.ts')).toMatch(/recordScoreAfter\(removed\.auditId, await recomputeSummary\(matchId, \{ emptyMeansZero: true \}\)\)/);
   });
 });

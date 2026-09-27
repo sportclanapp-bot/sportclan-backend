@@ -119,6 +119,24 @@ export function scoreText(summary: P | null | undefined, ctx: LogContext): strin
   return null;
 }
 
+/** What an edited event is called when it has no ball number: "a point",
+ *  "a goal", "a card" — never the internal type name. */
+export function eventNoun(type: string | null | undefined, ctx: LogContext): string {
+  const t = String(type ?? '');
+  if (t === 'score' || t === 'point' || t === 'goal' || t === 'basket') {
+    if (ctx.sport === 'football' || ctx.sport === 'hockey') return 'a goal';
+    if (ctx.sport === 'basketball') return 'a basket';
+    if (ctx.sport === 'carrom') return 'a board';
+    return 'a point';
+  }
+  const named: Record<string, string> = {
+    ball: 'a ball', extra: 'an extra', wicket: 'a wicket', card: 'a card', yellow_card: 'a card', red_card: 'a card',
+    foul: 'a foul', assist: 'an assist', move: 'a move', result: 'the result', queen: 'the queen',
+    sub: 'a substitution', timeout: 'a timeout', period_change: 'a period change', serve_swap: 'a serve change',
+  };
+  return named[t] ?? (t ? `a ${words(t)} entry` : 'an entry');
+}
+
 /** An edit logged before migration 109 carries the payload only — guess its
  *  type from what it holds, so "2 runs → 3 runs" still reads. */
 function inferType(p: P): string | null {
@@ -162,7 +180,7 @@ export function editLine(row: AuditRow, who: string, ctx: LogContext, label?: st
   if (row.action === 'edit') {
     const from = describeEvent(type, oldP, ctx);
     const to = describeEvent(type, row.new_payload ?? {}, ctx);
-    const where = label ?? (type ? words(String(type)) : 'an entry');
+    const where = label ?? eventNoun(type, ctx);
     const change = from !== to ? `${from} → ${to}` : 'details changed';
     return `${who} edited ${where}: ${change}${scorePart}`;
   }

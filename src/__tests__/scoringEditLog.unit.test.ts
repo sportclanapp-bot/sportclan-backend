@@ -98,13 +98,24 @@ describe('a log row as a line', () => {
   test('an edit that changes nothing visible says so', () => {
     expect(editLine({ id: '4', action: 'edit', changed_by: 'u', created_at: at,
       old_payload: { runs: 1, bowler_id: 'x', __event_type: 'ball' }, new_payload: { runs: 1, bowler_id: 'y' } }, 'Rahul', ctx('cricket')))
-      .toBe('Rahul edited ball: details changed');
+      .toBe('Rahul edited a ball: details changed');
   });
   test('a pre-109 edit row (payload only, no type) still reads', () => {
     expect(editLine({ id: '5', action: 'edit', changed_by: 'u', created_at: at, old_payload: { runs: 2 }, new_payload: { runs: 3 } }, 'Rahul', ctx('cricket')))
-      .toBe('Rahul edited ball: 2 runs → 3 runs');
+      .toBe('Rahul edited a ball: 2 runs → 3 runs');
     expect(editLine({ id: '6', action: 'edit', changed_by: 'u', created_at: at, old_payload: { foo: 1 }, new_payload: { foo: 2 } }, 'Rahul', ctx('chess')))
       .toBe('Rahul edited an entry: details changed');
+  });
+});
+
+describe('what an edited event is called', () => {
+  test('by sport, never the internal type name', () => {
+    const { eventNoun } = require('../utils/editLog');
+    expect(eventNoun('score', ctx('badminton'))).toBe('a point');
+    expect(eventNoun('score', ctx('football'))).toBe('a goal');
+    expect(eventNoun('basket', ctx('basketball'))).toBe('a basket');
+    expect(eventNoun('card', ctx('hockey'))).toBe('a card');
+    expect(eventNoun('power_play', ctx('cricket'))).toBe('a power play entry');
   });
 });
 

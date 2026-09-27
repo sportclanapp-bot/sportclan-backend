@@ -37,7 +37,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     //     withdrawal still awards nothing for matches that won't happen.
     const { data: entries } = await supabase
       .from('tournament_entries')
-      .select('team_id, group_label, status, team:teams!team_id(id, name)')
+      .select('team_id, group_label, status, team:teams!team_id(id, name, short_name)')
       .eq('tournament_id', id)
       .in('status', ['approved', 'withdrawn']);
 
@@ -62,7 +62,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const stats = computeStats(teamIds, (matches ?? []) as any);
 
     const table = new Map<string, {
-      teamId: string; team: string; groupLabel: string | null; withdrawn: boolean;
+      teamId: string; team: string; teamShort: string | null; groupLabel: string | null; withdrawn: boolean;
       played: number; won: number; lost: number; drawn: number; points: number;
       scored: number; conceded: number; diff: number;
       nrr: number | null; runsScored: number; oversFaced: number; runsConceded: number; oversBowled: number;
@@ -75,7 +75,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
       // play stays, flagged, so its results still stand for its opponents.
       if ((e as any).status === 'withdrawn' && s.played === 0) continue;
       table.set(e.team_id, {
-        teamId: e.team_id, team: t?.name ?? 'TBD', groupLabel: e.group_label ?? null,
+        teamId: e.team_id, team: t?.name ?? 'TBD', teamShort: t?.short_name ?? null, groupLabel: e.group_label ?? null,
         withdrawn: (e as any).status === 'withdrawn',
         played: s.played, won: s.won, lost: s.lost, drawn: s.drawn, points: s.points,
         scored: s.scored, conceded: s.conceded, diff: s.diff,
@@ -142,6 +142,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const aliased = standings.map((r) => ({
       ...r,
       team_name: (r as any).team,
+      team_short_name: (r as any).teamShort, // migration 110
       team_id: (r as any).teamId,
     }));
 

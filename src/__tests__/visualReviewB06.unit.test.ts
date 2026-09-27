@@ -48,6 +48,6 @@ describe('V109 · the bracket carries the score and the void', () => {
 
 describe('D2 · the tournament list carries the champion’s name', () => {
   it('listTournaments embeds the champion team', () => {
-    expect(fnBody('listTournaments')).toMatch(/\.select\('\*, champion:teams!champion_team_id\(id, name\)', \{ count: 'exact' \}\)/);
+    expect(fnBody('listTournaments')).toMatch(/\.select\('\*, champion:teams!champion_team_id\(id, name, short_name\)', \{ count: 'exact' \}\)/);
   });
 });

@@ -143,7 +143,7 @@ describe('what stays', () => {
   test('account deletion leaves a disbanded team\'s former members alone; the export marks it', async () => {
     const a = code('controllers/account.controller.ts');
     expect(a).toMatch(/const disbanded = await disbandedTeamIds\([\s\S]*?if \(disbanded\.has\(team_id as string\)\) continue;/);
-    expect(a).toMatch(/team:teams\(id, name, sport_id, deleted_at\)/);
+    expect(a).toMatch(/team:teams\(id, name, short_name, sport_id, deleted_at\)/);
     rows = [{ id: 't9' }];
     expect([...(await disbandedTeamIds(['t9', 't9', '']))]).toEqual(['t9']);
   });

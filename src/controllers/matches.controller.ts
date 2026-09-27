@@ -1,4 +1,5 @@
 import { joinChat } from '../utils/chatMembership';
+import { attachTeamNames } from '../utils/teamNames';
 import { myScheduledMatches, pickNextMatch } from '../utils/nextMatch';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
@@ -1001,42 +1002,6 @@ async function attachChessElo(matches: any[]): Promise<void> {
   for (const m of chessMatches) m.elo = bySide[m.id];
 }
 
-/**
- * SC-366: fill in team_a_name / team_b_name from the registered teams.
- *
- * `matches.team_a_name` is a denormalised column that only ever gets written for
- * FREE-TEXT opponents ("vs Rahul's XI"). A match between two REGISTERED teams
- * leaves both columns NULL, so every live card fell back to the literal strings
- * "Team A" and "Team B" — the score was sport-correct but nobody could tell who
- * was playing. The card needs real names, and the fix belongs here rather than
- * in the FE: the client shouldn't have to fetch a team per card to caption it.
- *
- * Only fills what's missing, so a free-text opponent keeps its own label.
- */
-async function attachTeamNames(matches: any[]): Promise<void> {
-  if (!matches || matches.length === 0) return;
-  const ids = new Set<string>();
-  for (const m of matches) {
-    if (!m.team_a_name && m.team_a_id) ids.add(m.team_a_id);
-    if (!m.team_b_name && m.team_b_id) ids.add(m.team_b_id);
-  }
-  if (ids.size === 0) return;
-  // `teams` has no short_name column — selecting one made PostgREST reject the
-  // whole query, so `data` came back null and no name was ever filled. Select
-  // only what exists, and don't swallow the error if this ever breaks again.
-  const { data, error } = await supabase
-    .from('teams').select('id, name').in('id', [...ids]);
-  if (error) {
-    console.warn('[matches] attachTeamNames: teams lookup failed', error.message);
-    return;
-  }
-  const byId = new Map<string, string | null>();
-  for (const t of data ?? []) byId.set(t.id, t.name ?? null);
-  for (const m of matches) {
-    if (!m.team_a_name && m.team_a_id) m.team_a_name = byId.get(m.team_a_id) ?? m.team_a_name;
-    if (!m.team_b_name && m.team_b_id) m.team_b_name = byId.get(m.team_b_id) ?? m.team_b_name;
-  }
-}
 
 // GET /matches/next · B04 (V006, D1): the one match Home's "Your next match"
 // card shows — the soonest scheduled match you play in (see utils/nextMatch).

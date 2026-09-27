@@ -126,7 +126,7 @@ async function searchTeams(res: Response, q: string, sportId: string | undefined
   let query = supabase
     .from('teams')
     .select(`
-      id, name, logo_url, sport_id,
+      id, name, short_name, logo_url, sport_id,
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name),
       members:team_members(count)

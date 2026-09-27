@@ -271,7 +271,7 @@ export async function listTournaments(req: Request, res: Response) {
     let query = supabase
       .from('tournaments')
       // D2 (visual review): list cards show "🏆 <champion>" on a completed tournament.
-      .select('*, champion:teams!champion_team_id(id, name)', { count: 'exact' })
+      .select('*, champion:teams!champion_team_id(id, name, short_name)', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(p.from, p.to);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
@@ -302,7 +302,7 @@ export async function getTournament(req: Request, res: Response) {
     if (error || !tournament) return res.status(404).json({ error: 'Tournament not found' });
     const { data: entries } = await supabase
       .from('tournament_entries')
-      .select('id, status, seed, group_label, entered_at, team:team_id (id, name, logo_url, sport_id)')
+      .select('id, status, seed, group_label, entered_at, team:team_id (id, name, short_name, logo_url, sport_id)')
       .eq('tournament_id', id);
     // SC-293: authoritative fixture count so the Overview's Quick Stats agrees
     // with the Bracket + Officials tabs. Was: the FE showed fixtures.length, but
@@ -1712,7 +1712,7 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
   const fmt = (t as any)?.format;
   if (fmt === 'round_robin' || fmt === 'league') {
     const { data: entries } = await supabase
-      .from('tournament_entries').select('team_id, team:teams!team_id(id, name)')
+      .from('tournament_entries').select('team_id, team:teams!team_id(id, name, short_name)')
       .eq('tournament_id', tournamentId).eq('status', 'approved');
     const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id as string).filter(Boolean)));
     if (teamIds.length === 0) return null;
@@ -1772,7 +1772,7 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
   if (await hasUnplayedFixtures(tournamentId)) return;
   const { data: entries } = await supabase
     .from('tournament_entries')
-    .select('team_id, team:teams!team_id(id, name)')
+    .select('team_id, team:teams!team_id(id, name, short_name)')
     .eq('tournament_id', tournamentId)
     .eq('status', 'approved');
   const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
@@ -1965,7 +1965,7 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
 
   const { data: entries } = await supabase
     .from('tournament_entries')
-    .select('team_id, group_label, team:teams!team_id(id, name)')
+    .select('team_id, group_label, team:teams!team_id(id, name, short_name)')
     .eq('tournament_id', tournamentId)
     .not('group_label', 'is', null);
 
@@ -2178,7 +2178,7 @@ export async function generateFixtures(req: Request, res: Response) {
     // sequence is total and repeatable.
     const { data: entries } = await supabase
       .from('tournament_entries')
-      .select('team_id, seed, entered_at, team:teams!team_id(id, name)')
+      .select('team_id, seed, entered_at, team:teams!team_id(id, name, short_name)')
       .eq('tournament_id', id)
       .eq('status', 'approved')
       .order('seed', { ascending: true, nullsFirst: false })

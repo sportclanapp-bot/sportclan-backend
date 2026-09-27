@@ -3,6 +3,7 @@ import {
   profileCommentForWrite, profilePostForWrite,
   softDeleteComment, softDeletePost,
 } from '../utils/postVisibility';
+import { attachTeamNames } from '../utils/teamNames';
 import { isAdminUser } from '../middleware/admin.middleware';
 import { hideTestFor, excludeTest, excludeTestEmbed } from '../utils/testContent';
 import { Request, Response } from 'express';
@@ -213,7 +214,7 @@ export async function listPosts(req: Request, res: Response) {
       author:users!author_id!inner(id, name, username, profile_picture_url, deleted_at),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name),
-      match:${matchJoin}(id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
+      match:${matchJoin}(id, team_a_id, team_b_id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
     `)
     .limit(pageSize);
   // Hard-delete list #1: a deleted post is in no feed, no profile grid.
@@ -309,6 +310,9 @@ export async function listPosts(req: Request, res: Response) {
     total = count ?? undefined;
   }
 
+  // Migration 110: a match-result card carries each registered side's name and
+  // short name (the match row stores neither for a registered team).
+  await attachTeamNames(items.map((p: any) => p.match).filter(Boolean));
   return res.json({
     items,
     posts: items,
@@ -377,7 +381,7 @@ export async function getPost(req: Request, res: Response) {
       author:users!author_id!inner(id, name, username, profile_picture_url, deleted_at),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name),
-      match:matches!match_id(id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
+      match:matches!match_id(id, team_a_id, team_b_id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
     `)
     // B2-a: no deleted-author filter. This is the same post the feed shows; a
     // post you can see in a list and not open is the worse of the two bugs.
@@ -408,6 +412,8 @@ export async function getPost(req: Request, res: Response) {
   // SC-348: attach the viewer's liked-state on the detail read too (feed ↔ detail
   // now agree; the heart persists after a refetch/deep-link/notification open).
   await attachLikes([data as { id: string; is_liked?: boolean }], req.userId);
+  const m = (data as { match?: unknown }).match;
+  if (m) await attachTeamNames([m]);
   return res.json({ data, post: data });
 }
 

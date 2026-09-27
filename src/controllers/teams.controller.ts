@@ -9,7 +9,7 @@ import { excludeDeletedEmbed } from '../utils/activeUser';
 import { sanitizeError } from '../utils/response';
 import { notifyUnlessBlocked, notifyUsers } from '../utils/notify';
 import { validateSportForCreate } from '../utils/sports';
-import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
+import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl, normalizeShortName } from '../utils/validation';
 import { blockedUserIds } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
 import { isTeamManager, isTeamCaptain, getTeamRole } from '../utils/teamAuth';
@@ -123,13 +123,16 @@ export async function createTeam(req: Request, res: Response) {
     // accepted it — so a team could only ever be born 'open' and then be changed,
     // leaving a window where an approval-only team was joinable by code. A client
     // that sends a field the sibling endpoint honours should not have it ignored.
-    const { sport_id, name, logo_url, city_id, join_policy } = req.body || {};
+    const { sport_id, name, logo_url, city_id, join_policy, short_name } = req.body || {};
     if (!sport_id || !name) {
       return res.status(400).json({ error: 'sport_id and name are required' });
     }
     if (String(name).length > LIMITS.teamNameMax) {
       return res.status(400).json({ error: `Team name must be ${LIMITS.teamNameMax} characters or fewer` });
     }
+    // Migration 110: the short name the form always asked for is kept now.
+    const shortName = normalizeShortName(short_name);
+    if (shortName.error) return res.status(400).json({ error: shortName.error, code: 'INVALID_SHORT_NAME' });
     if (firstDisallowedImageUrl({ logo_url }, ['logo_url'])) {
       return res.status(400).json({ error: 'logo_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
     }
@@ -149,6 +152,7 @@ export async function createTeam(req: Request, res: Response) {
       .insert({
         sport_id, name, logo_url: logo_url || null, city_id: city_id || null,
         created_by: userId, join_code,
+        ...(shortName.value !== undefined ? { short_name: shortName.value } : {}),
         // Same validation as updateTeam; anything else falls back to the column default.
         ...(join_policy === 'approval' || join_policy === 'open' ? { join_policy } : {}),
       })
@@ -613,10 +617,13 @@ export async function updateTeam(req: Request, res: Response) {
       return res.status(403).json({ error: 'Only the captain or a co-captain can update the team' });
     }
     const allowed: Record<string, any> = {};
-    const { name, logo_url, city_id, is_public, join_policy } = req.body || {};
+    const { name, logo_url, city_id, is_public, join_policy, short_name } = req.body || {};
     if (typeof name === 'string' && name.length > LIMITS.teamNameMax) {
       return res.status(400).json({ error: `Team name must be ${LIMITS.teamNameMax} characters or fewer` });
     }
+    // Migration 110: short_name is saved on edit (it was silently dropped).
+    const shortName = normalizeShortName(short_name);
+    if (shortName.error) return res.status(400).json({ error: shortName.error, code: 'INVALID_SHORT_NAME' });
     if (firstDisallowedImageUrl({ logo_url }, ['logo_url'])) {
       return res.status(400).json({ error: 'logo_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
     }
@@ -628,6 +635,7 @@ export async function updateTeam(req: Request, res: Response) {
     if (city_id !== undefined) allowed.city_id = city_id;
     if (is_public !== undefined) allowed.is_public = is_public;
     if (join_policy !== undefined) allowed.join_policy = join_policy;
+    if (shortName.value !== undefined) allowed.short_name = shortName.value;
     allowed.updated_at = new Date().toISOString();
     const { data, error } = await supabase.from('teams').update(allowed).eq('id', id).select('*').single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
@@ -798,7 +806,7 @@ export async function joinTeamByCode(req: Request, res: Response) {
     if (!join_code) return res.status(400).json({ error: 'join_code is required' });
     const { data: team } = await supabase
       .from('teams')
-      .select('id, name, sport_id, join_policy, deleted_at')
+      .select('id, name, short_name, sport_id, join_policy, deleted_at')
       .eq('join_code', join_code.toUpperCase())
       .maybeSingle();
     if (!team) return res.status(404).json({ error: 'Invalid team code' });

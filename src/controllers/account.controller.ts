@@ -464,7 +464,7 @@ export async function exportData(req: Request, res: Response) {
     ['followers', exportAll('follow_relationships', 'follower_id, created_at', (q) => q.eq('following_id', userId))],
     ['following', exportAll('follow_relationships', 'following_id, created_at', (q) => q.eq('follower_id', userId))],
     // #6: a disbanded team stays in your export, marked (team.deleted_at).
-    ['teams', exportAll('team_members', 'team_id, role, joined_at, team:teams(id, name, sport_id, deleted_at)', (q) => q.eq('user_id', userId))],
+    ['teams', exportAll('team_members', 'team_id, role, joined_at, team:teams(id, name, short_name, sport_id, deleted_at)', (q) => q.eq('user_id', userId))],
     ['notifications', exportAll('notifications', 'id, type, title, body, read, created_at', (q) => q.eq('user_id', userId))],
     ['gifts_sent', exportAll('gift_transactions', '*', (q) => q.eq('sender_id', userId))],
     ['gifts_received', exportAll('gift_transactions', '*', (q) => q.eq('receiver_id', userId))],

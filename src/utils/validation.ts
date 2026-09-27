@@ -72,6 +72,22 @@ export function isPostType(v: unknown): v is PostType {
   return typeof v === 'string' && (POST_TYPES as readonly string[]).includes(v);
 }
 
+/**
+ * A team's short name — the scorecard code (migration 110). Trimmed and
+ * upper-cased; blank clears it (null). `undefined` = not sent, leave as is.
+ * Over the limit, or not a string → an error message for a 400.
+ */
+export const SHORT_NAME_MAX = 3;
+export function normalizeShortName(v: unknown): { value?: string | null; error?: string } {
+  if (v === undefined) return {};
+  if (v === null) return { value: null };
+  if (typeof v !== 'string') return { error: 'Short name must be text.' };
+  const t = v.trim().toUpperCase();
+  if (t.length === 0) return { value: null };
+  if ([...t].length > SHORT_NAME_MAX) return { error: `Short name must be ${SHORT_NAME_MAX} characters or fewer.` };
+  return { value: t };
+}
+
 export function tooManyItems(v: unknown, max: number): boolean {
   return Array.isArray(v) && v.length > max;
 }

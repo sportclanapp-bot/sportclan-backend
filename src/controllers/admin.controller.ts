@@ -4,6 +4,7 @@ import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { orIlikeContains } from '../utils/likeSearch'; // SC-237
 import axios from 'axios';
+import crypto from 'crypto';
 import { getLastOtpSend } from './auth.controller';
 import {
   ModeratedType, commentForWrite, isModeratorRemoval, moderatorRemoveWallItem, postForWrite, profileCommentForWrite,
@@ -41,12 +42,14 @@ export async function getStats(_req: Request, res: Response) {
 
     // Run all counts in parallel; tolerate individual failures.
     const [users, posts, matches, tournaments, reports, newUsers] = await Promise.all([
-      safeCount(supabase.from('users').select('id', { count: 'exact', head: true })),
+      // Phase 3 B12-F10: live accounts and posts only — deleted ones aren't users or posts.
+      safeCount(supabase.from('users').select('id', { count: 'exact', head: true }).is('deleted_at', null)),
       safeCount(
         supabase
           .from('community_posts')
           .select('id', { count: 'exact', head: true })
-          .gte('created_at', oneWeekAgoIso),
+          .gte('created_at', oneWeekAgoIso)
+          .is('deleted_at', null),
       ),
       safeCount(
         supabase
@@ -72,7 +75,8 @@ export async function getStats(_req: Request, res: Response) {
         supabase
           .from('users')
           .select('id', { count: 'exact', head: true })
-          .gte('created_at', oneWeekAgoIso),
+          .gte('created_at', oneWeekAgoIso)
+          .is('deleted_at', null),
       ),
     ]);
 
@@ -110,7 +114,10 @@ export async function getReports(req: Request, res: Response) {
       .eq('resolved', actioned)
       .order(actioned ? 'resolved_at' : 'created_at', { ascending: false })
       .range(p.from, p.to);
-    if (error) return res.json({ reports: [], ...pageMeta(0, p) }); // table may not exist yet
+    // Phase 3 B12-F6: a failed query is a failure — an empty 200 read as "the
+    // queue is clear" during an outage. A page past the end is still empty.
+    if (error && !isRangeError(error)) return res.status(500).json({ error: 'Could not load reports.' });
+    if (error) return res.json({ reports: [], ...pageMeta(count, p) });
     const rows = reports ?? [];
     if (rows.length === 0) return res.json({ reports: [], ...pageMeta(count, p) });
 
@@ -229,7 +236,7 @@ export async function getReports(req: Request, res: Response) {
     });
     return res.json({ reports: enriched, ...pageMeta(count, p) });
   } catch {
-    return res.json({ reports: [], ...pageMeta(0, p) });
+    return res.status(500).json({ error: 'Could not load reports.' });
   }
 }
 
@@ -244,7 +251,7 @@ export async function getReports(req: Request, res: Response) {
 //   restore → a moderator's removal undone: the content is live everywhere
 //             again, and the reports that removed it read 'restored'. An
 //             author's own delete can't be restored here — it was their choice.
-// Every remove and restore is also written to admin_actions (who, when, via).
+// Every remove, restore and dismiss is also written to admin_actions (who, when, via).
 export async function resolveReport(req: Request, res: Response) {
   const { id } = req.params;
   const raw = (req.body || {}).action;
@@ -318,6 +325,7 @@ export async function resolveReport(req: Request, res: Response) {
 
     const { error: updErr } = await supabase.from('content_reports').update(resolution('dismissed')).eq('id', id);
     if (updErr) return res.status(500).json({ error: updErr.message });
+    await logAdminAction(adminId, 'dismiss_report', 'report', id, `${report.target_type} ${report.target_id}`);
     return res.json({ ok: true, action: 'dismiss', contentRemoved: false });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed' });
@@ -325,28 +333,50 @@ export async function resolveReport(req: Request, res: Response) {
 }
 
 // POST /admin/broadcast
-// Body: { title, body }
+// Body: { title, body, confirm? }
 // Inserts one notification row per active user. For now this is a simple
 // fan-out; a future version should batch + use a queue.
+export const BROADCAST_TITLE_MAX = 80;
+export const BROADCAST_BODY_MAX = 500;
+const BROADCAST_PAGE = 1000;
 export async function broadcastAnnouncement(req: Request, res: Response) {
-  const { title, body, confirm } = req.body || {};
-  if (!title || typeof title !== 'string') {
+  const { confirm } = req.body || {};
+  // Phase 3 B12-F13: trimmed and capped (the app caps the body at 280).
+  const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+  const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
+  if (!title) {
     return res.status(400).json({ error: 'title is required' });
   }
-  if (!body || typeof body !== 'string') {
+  if (!body) {
     return res.status(400).json({ error: 'body is required' });
+  }
+  if (title.length > BROADCAST_TITLE_MAX) {
+    return res.status(400).json({ error: `Keep the title to ${BROADCAST_TITLE_MAX} characters or fewer.` });
+  }
+  if (body.length > BROADCAST_BODY_MAX) {
+    return res.status(400).json({ error: `Keep the message to ${BROADCAST_BODY_MAX} characters or fewer.` });
   }
 
   try {
-    // Fetch active users (last 30 days)
+    // Active users (last 30 days), live and not suspended. Paged: a bare select
+    // stops at PostgREST's 1000-row cap, which silently capped the broadcast.
     const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
-    const { data: users, error: usersErr } = await supabase
-      .from('users')
-      .select('id')
-      .gte('last_active_at', cutoff);
-    if (usersErr) return res.status(500).json({ error: usersErr.message });
+    const users: Array<{ id: string }> = [];
+    for (let from = 0; ; from += BROADCAST_PAGE) {
+      const { data: page, error: usersErr } = await supabase
+        .from('users')
+        .select('id')
+        .gte('last_active_at', cutoff)
+        .is('deleted_at', null)
+        .is('suspended_at', null)
+        .order('id')
+        .range(from, from + BROADCAST_PAGE - 1);
+      if (usersErr) return res.status(500).json({ error: usersErr.message });
+      users.push(...((page ?? []) as Array<{ id: string }>));
+      if ((page ?? []).length < BROADCAST_PAGE) break;
+    }
 
-    const rows = (users ?? []).map((u: { id: string }) => ({
+    const rows = users.map((u) => ({
       user_id: u.id,
       type: 'system',
       title,
@@ -377,6 +407,7 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
     // restarts mid-fan-out some recipients are missed. A real job queue
     // (BullMQ/Redis or a Supabase edge cron) is the proper long-term solution.
     res.json({ ok: true, recipients: rows.length, queued: true });
+    await logAdminAction(req.userId!, 'broadcast', 'broadcast', req.userId!, `"${title}" to ${rows.length} users`);
 
     void (async () => {
       for (let i = 0; i < rows.length; i += 500) {
@@ -435,10 +466,14 @@ export async function adminUpdateUser(req: Request, res: Response) {
   // Fetch the target up front — needed to enforce the last-admin guard (ADM-002).
   const { data: existing } = await supabase
     .from('users')
-    .select('id, is_admin')
+    .select('id, is_admin, deleted_at')
     .eq('id', id)
     .maybeSingle();
   if (!existing) return res.status(404).json({ error: 'User not found' });
+  // Phase 3 B12-F9: a deleted account has nothing to manage.
+  if (existing.deleted_at) {
+    return res.status(409).json({ error: 'This account is deleted.', code: 'ACCOUNT_DELETED' });
+  }
 
   const patch: Record<string, unknown> = {};
   if (typeof suspended === 'boolean') {
@@ -461,7 +496,10 @@ export async function adminUpdateUser(req: Request, res: Response) {
     const { count } = await supabase
       .from('users')
       .select('id', { count: 'exact', head: true })
-      .eq('is_admin', true);
+      .eq('is_admin', true)
+      // Phase 3 B12-F14: only admins who can still sign in count.
+      .is('deleted_at', null)
+      .is('suspended_at', null);
     if ((count ?? 0) <= 1) {
       return res.status(400).json({ error: 'Cannot remove the last remaining admin' });
     }
@@ -485,6 +523,13 @@ export async function adminUpdateUser(req: Request, res: Response) {
         .update({ revoked: true })
         .eq('user_id', id)
         .eq('revoked', false);
+    }
+    // Phase 3 B12-F3: every account change an admin makes is on the record.
+    if ('suspended_at' in patch) {
+      await logAdminAction(req.userId!, patch.suspended_at ? 'suspend_user' : 'unsuspend_user', 'user', id, null);
+    }
+    if (typeof patch.is_admin === 'boolean') {
+      await logAdminAction(req.userId!, patch.is_admin ? 'grant_admin' : 'revoke_admin', 'user', id, null);
     }
     return res.json({ user: data });
   } catch (err: any) {
@@ -524,7 +569,8 @@ export async function otpDiagnostics(_req: Request, res: Response) {
   ]);
   return res.json({
     configured: true,
-    keyFingerprint: `${apiKey.slice(0, 4)}…${apiKey.slice(-4)}`, // confirms WHICH key is live, without exposing it
+    // Which key is live, without any of it (Phase 3 B12-F12: it showed 8 characters).
+    keyFingerprint: crypto.createHash('sha256').update(apiKey).digest('hex').slice(0, 12),
     balances: { sms, voice, addon },
     lastSend: getLastOtpSend(),
   });

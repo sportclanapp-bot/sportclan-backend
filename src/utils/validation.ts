@@ -53,6 +53,25 @@ export const ARRAY_LIMITS = {
   sportIds: 30,
 } as const;
 
+/**
+ * N320 side finding 4: community_posts.post_type was stored as sent — a post
+ * with post_type 'text' saved and the feed printed "text" on its card. The
+ * types the app knows how to show; anything else is refused.
+ */
+export const POST_TYPES = [
+  'general',
+  'match_announcement',
+  'achievement',
+  'poll',
+  'looking_for_team',
+  'looking_for_player',
+  'match_result',
+] as const;
+export type PostType = (typeof POST_TYPES)[number];
+export function isPostType(v: unknown): v is PostType {
+  return typeof v === 'string' && (POST_TYPES as readonly string[]).includes(v);
+}
+
 export function tooManyItems(v: unknown, max: number): boolean {
   return Array.isArray(v) && v.length > max;
 }

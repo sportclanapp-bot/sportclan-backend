@@ -9,7 +9,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
-import { LIMITS, ARRAY_LIMITS, tooManyItems, firstDisallowedImageUrl } from '../utils/validation';
+import { LIMITS, ARRAY_LIMITS, tooManyItems, firstDisallowedImageUrl, isPostType, POST_TYPES } from '../utils/validation';
 import { excludeDeleted } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
@@ -456,6 +456,12 @@ export async function createPost(req: Request, res: Response) {
   if (!bodyContent || bodyContent.trim().length === 0) {
     return res.status(400).json({ error: 'Content is required' });
   }
+  // N320 side finding 4: only a type the app can show.
+  for (const t of [type, post_type]) {
+    if (t !== undefined && t !== null && !isPostType(t)) {
+      return res.status(400).json({ error: `Unknown post type. Use one of: ${POST_TYPES.join(', ')}.`, code: 'INVALID_POST_TYPE' });
+    }
+  }
   // Length cap (SC-40) — over-length previously hit the DB CHECK and 500'd.
   if (bodyContent.length > LIMITS.postTextMax) {
     return res.status(400).json({ error: `Post must be ${LIMITS.postTextMax} characters or fewer` });
@@ -684,6 +690,11 @@ export async function updatePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
   const { content, sport_id, city_id, post_type, link_url, media_urls, scheduled_at } = req.body;
+
+  // N320 side finding 4: an edit can't set an unknown type either.
+  if (post_type !== undefined && post_type !== null && !isPostType(post_type)) {
+    return res.status(400).json({ error: `Unknown post type. Use one of: ${POST_TYPES.join(', ')}.`, code: 'INVALID_POST_TYPE' });
+  }
 
   if (content) {
     if (content.length > LIMITS.postTextMax) {

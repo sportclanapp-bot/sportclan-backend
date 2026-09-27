@@ -310,7 +310,7 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
 
 // Columns surfaced to the admin user-management list/detail.
 const ADMIN_USER_FIELDS =
-  'id, name, username, phone, email, is_admin, suspended_at, coin_balance, created_at';
+  'id, name, username, phone, email, is_admin, suspended_at, deleted_at, coin_balance, created_at';
 
 // GET /admin/users?q=&limit=
 // Search users by name / username / phone (substring). No query → most recent.

@@ -52,3 +52,9 @@ describe('resolveSportId', () => {
     expect(await resolveSportId('kabaddi-xyz')).toBeUndefined();
   });
 });
+
+describe('admin user list (admin device check)', () => {
+  test('carries deleted_at so the app can mark a deleted account inside its 30-day window', () => {
+    expect(code('controllers/admin.controller.ts')).toMatch(/const ADMIN_USER_FIELDS =\s*'[^']*\bdeleted_at\b[^']*'/);
+  });
+});

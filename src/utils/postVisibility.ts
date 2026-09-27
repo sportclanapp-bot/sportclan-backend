@@ -165,9 +165,16 @@ export async function softDeleteComment(
 // ── Hard-delete list #3 (27 Sep 2026) · a moderator's removal can be undone ──
 
 const CONTENT = {
-  post:    { table: 'community_posts', key: 'post_id' },
-  comment: { table: 'post_comments',   key: 'comment_id' },
+  post:            { table: 'community_posts',       key: 'post_id' },
+  comment:         { table: 'post_comments',         key: 'comment_id' },
+  // Wall posts and comments (reportable since migration 108) send no
+  // notifications, so a restore has none to show again.
+  profile_post:    { table: 'profile_posts',         key: null },
+  profile_comment: { table: 'profile_post_comments', key: null },
 } as const;
+
+/** Content a moderator can remove and restore. */
+export type ModeratedType = keyof typeof CONTENT;
 
 /**
  * Restore a post or comment a MODERATOR removed. An author's own delete is not
@@ -177,7 +184,7 @@ const CONTENT = {
  * its timestamp — are shown again. A comment that was deleted separately
  * keeps its own notifications hidden.
  */
-export async function restoreRemovedContent(type: 'post' | 'comment', id: string): Promise<boolean> {
+export async function restoreRemovedContent(type: ModeratedType, id: string): Promise<boolean> {
   const c = CONTENT[type];
   const { data: row } = await supabase
     .from(c.table)
@@ -194,12 +201,41 @@ export async function restoreRemovedContent(type: 'post' | 'comment', id: string
     .select('id');
   if (error) throw error;
   if (!data || data.length === 0) return false;
-  await supabase
-    .from('notifications')
-    .update({ hidden_at: null })
-    .eq(`data->>${c.key}`, id)
-    .eq('hidden_at', r.deleted_at as string);
+  if (c.key) {
+    await supabase
+      .from('notifications')
+      .update({ hidden_at: null })
+      .eq(`data->>${c.key}`, id)
+      .eq('hidden_at', r.deleted_at as string);
+  }
   return true;
+}
+
+// ── Wall posts and comments are reportable (27 Sep 2026, migration 108) ──
+
+/** A wall comment's author, wall post and whether it is deleted / removed. */
+export async function profileCommentForWrite(id: string): Promise<{ author_id: string; post_id: string; deleted: boolean; removed: boolean } | null> {
+  const { data } = await supabase
+    .from('profile_post_comments')
+    .select('author_id, post_id, deleted_at, deleted_reason')
+    .eq('id', id)
+    .maybeSingle();
+  if (!data) return null;
+  const row = data as { author_id: string; post_id: string; deleted_at?: string | null; deleted_reason?: string | null };
+  return { author_id: row.author_id, post_id: row.post_id, deleted: !!row.deleted_at, removed: isModeratorRemoval(row) };
+}
+
+/** A moderator removes a wall post or wall comment — the #3 soft delete with
+ *  deleted_reason 'moderator'. False when there was nothing live to remove. */
+export async function moderatorRemoveWallItem(type: 'profile_post' | 'profile_comment', id: string, by: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from(CONTENT[type].table)
+    .update({ deleted_at: new Date().toISOString(), deleted_by: by, deleted_reason: 'moderator' })
+    .eq('id', id)
+    .is('deleted_at', null)
+    .select('id');
+  if (error) throw error;
+  return !!data && data.length > 0;
 }
 
 // ── Hard-delete list #4 (27 Sep 2026) · wall posts, the #1 way (migration 104) ──
@@ -243,7 +279,7 @@ export async function softDeleteProfilePost(id: string, authorId: string): Promi
 // its place in the thread: "This comment was deleted" / "Removed by the wall
 // owner". Wall comments have no replies, likes, edits or notifications.
 
-export type WallCommentDeletedReason = 'author' | 'wall_owner';
+export type WallCommentDeletedReason = 'author' | 'wall_owner' | 'moderator';
 
 /** Mark a wall-post comment deleted. False when there was no live comment. */
 export async function softDeleteProfileComment(
@@ -271,5 +307,6 @@ export function asDeletedWallComment<T extends Record<string, unknown>>(row: T):
     author: null,
     deleted: true,
     removed_by_wall_owner: row.deleted_reason === 'wall_owner',
+    removed_by_moderator: row.deleted_reason === 'moderator',
   };
 }

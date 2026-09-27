@@ -1,5 +1,6 @@
 import {
   asDeletedPlaceholder, commentForWrite, commentGone, isDeletedPost, livePosts, postForWrite, postGone,
+  profileCommentForWrite, profilePostForWrite,
   softDeleteComment, softDeletePost,
 } from '../utils/postVisibility';
 import { isAdminUser } from '../middleware/admin.middleware';
@@ -1242,11 +1243,12 @@ export async function reportContent(req: Request, res: Response) {
   if (!reason) return res.status(400).json({ error: 'Reason is required' });
 
   // SC-209: 'message' is now reportable alongside post/comment/user.
-  let resolvedType: 'post' | 'comment' | 'user' | 'message' | null = null;
+  // 27 Sep 2026 (migration 108): so are wall posts and wall comments.
+  let resolvedType: 'post' | 'comment' | 'user' | 'message' | 'profile_post' | 'profile_comment' | null = null;
   let resolvedId: string | null = null;
   if (target_type && target_id) {
-    if (!['post', 'comment', 'user', 'message'].includes(target_type)) {
-      return res.status(400).json({ error: 'target_type must be post, comment, user, or message' });
+    if (!['post', 'comment', 'user', 'message', 'profile_post', 'profile_comment'].includes(target_type)) {
+      return res.status(400).json({ error: 'target_type must be post, comment, user, message, profile_post or profile_comment' });
     }
     resolvedType = target_type;
     resolvedId = target_id;
@@ -1281,6 +1283,17 @@ export async function reportContent(req: Request, res: Response) {
     const cpostRow = cpost ? await postForWrite(cpost) : null;
     if (cpostRow?.deleted) return res.status(410).json(postGone(cpostRow));
     exists = !!t; ownerId = (t as { author_id?: string } | null)?.author_id ?? null;
+  } else if (resolvedType === 'profile_post') {
+    // A wall post: gone (deleted or removed) can't be reported; its reports stay.
+    const t = await profilePostForWrite(resolvedId);
+    if (t?.deleted) return res.status(410).json(postGone(t));
+    exists = !!t; ownerId = t?.author_id ?? null;
+  } else if (resolvedType === 'profile_comment') {
+    const t = await profileCommentForWrite(resolvedId);
+    if (t?.deleted) return res.status(410).json(commentGone(t));
+    const wall = t ? await profilePostForWrite(t.post_id) : null;
+    if (wall?.deleted) return res.status(410).json(postGone(wall));
+    exists = !!t; ownerId = t?.author_id ?? null;
   } else if (resolvedType === 'message') {
     const { data: t } = await supabase.from('messages').select('sender_id').eq('id', resolvedId).maybeSingle();
     exists = !!t; ownerId = (t as { sender_id?: string } | null)?.sender_id ?? null;

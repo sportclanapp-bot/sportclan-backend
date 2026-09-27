@@ -6,7 +6,8 @@ import { orIlikeContains } from '../utils/likeSearch'; // SC-237
 import axios from 'axios';
 import { getLastOtpSend } from './auth.controller';
 import {
-  commentForWrite, isModeratorRemoval, postForWrite, restoreRemovedContent, softDeleteComment, softDeletePost,
+  ModeratedType, commentForWrite, isModeratorRemoval, moderatorRemoveWallItem, postForWrite, profileCommentForWrite,
+  profilePostForWrite, restoreRemovedContent, softDeleteComment, softDeletePost,
 } from '../utils/postVisibility';
 import { logAdminAction } from '../utils/tournamentAuth';
 
@@ -117,6 +118,22 @@ export async function getReports(req: Request, res: Response) {
     const commentIds = [...new Set(rows.filter((r) => r.target_type === 'comment').map((r) => r.target_id))];
     const messageIds = [...new Set(rows.filter((r) => r.target_type === 'message').map((r) => r.target_id))];
     const userTargetIds = rows.filter((r) => r.target_type === 'user').map((r) => r.target_id);
+    // Wall posts and wall comments (migration 108) — deleted ones included too.
+    const wallPostIds = [...new Set(rows.filter((r) => r.target_type === 'profile_post').map((r) => r.target_id))];
+    const wallCommentIds = [...new Set(rows.filter((r) => r.target_type === 'profile_comment').map((r) => r.target_id))];
+    type Held = { id: string; content: string; author_id: string; deleted_at?: string | null; deleted_by?: string | null; deleted_reason?: string | null };
+    const [wallPostsRes, wallCommentsRes] = await Promise.all([
+      wallPostIds.length
+        ? supabase.from('profile_posts').select('id, content, author_id, deleted_at, deleted_by, deleted_reason').in('id', wallPostIds)
+        : Promise.resolve({ data: [] as any[] }),
+      wallCommentIds.length
+        ? supabase.from('profile_post_comments').select('id, content, author_id, deleted_at, deleted_by, deleted_reason').in('id', wallCommentIds)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+    const wallMap = new Map<string, Held>([
+      ...((wallPostsRes.data ?? []) as Held[]).map((w) => [`profile_post:${w.id}`, w] as [string, Held]),
+      ...((wallCommentsRes.data ?? []) as Held[]).map((w) => [`profile_comment:${w.id}`, w] as [string, Held]),
+    ]);
 
     // Fetch reported posts/comments/messages first so we can also resolve authors.
     const [postsRes, commentsRes, messagesRes] = await Promise.all([
@@ -143,6 +160,7 @@ export async function getReports(req: Request, res: Response) {
       ...posts.map((p) => p.author_id),
       ...comments.map((c) => c.author_id),
       ...messages.map((m) => m.sender_id),
+      ...[...wallMap.values()].map((w) => w.author_id),
     ].filter(Boolean))];
     const usersRes = userIds.length
       ? await supabase.from('users').select('id, name, username').in('id', userIds)
@@ -178,6 +196,14 @@ export async function getReports(req: Request, res: Response) {
         content_deleted_at = c?.deleted_at ?? null;
         content_removed_by_moderator = isModeratorRemoval(c);
         content_deleted_by_author = !!c?.deleted_at && !content_removed_by_moderator && c.deleted_by === c.author_id;
+      } else if (r.target_type === 'profile_post' || r.target_type === 'profile_comment') {
+        const w = wallMap.get(`${r.target_type}:${r.target_id}`);
+        content_exists = !!w;
+        content_preview = w ? String(w.content ?? '').slice(0, 240) || '(photo)' : null;
+        if (w) content_author = { id: w.author_id, name: userMap.get(w.author_id)?.name ?? null };
+        content_deleted_at = w?.deleted_at ?? null;
+        content_removed_by_moderator = isModeratorRemoval(w);
+        content_deleted_by_author = !!w?.deleted_at && !content_removed_by_moderator && w.deleted_by === w.author_id;
       } else if (r.target_type === 'message') {
         const m = messageMap.get(r.target_id);
         content_exists = !!m;
@@ -235,8 +261,8 @@ export async function resolveReport(req: Request, res: Response) {
     if (!report) return res.status(404).json({ error: 'Report not found' });
 
     const now = new Date().toISOString();
-    const isContent = report.target_type === 'post' || report.target_type === 'comment';
-    const type = report.target_type as 'post' | 'comment';
+    const isContent = ['post', 'comment', 'profile_post', 'profile_comment'].includes(report.target_type);
+    const type = report.target_type as ModeratedType;
     const resolution = (resolved_action: 'dismissed' | 'removed' | 'restored') =>
       ({ resolved: true, resolved_at: now, resolved_by: adminId, resolved_action });
 
@@ -258,7 +284,10 @@ export async function resolveReport(req: Request, res: Response) {
     }
 
     if (action === 'remove' && isContent) {
-      const target = type === 'post' ? await postForWrite(report.target_id) : await commentForWrite(report.target_id);
+      const target = type === 'post' ? await postForWrite(report.target_id)
+        : type === 'comment' ? await commentForWrite(report.target_id)
+        : type === 'profile_post' ? await profilePostForWrite(report.target_id)
+        : await profileCommentForWrite(report.target_id);
       if (!target) return res.status(404).json({ error: 'Reported content not found' });
       if (target.deleted && !target.removed) {
         // Its author already deleted it; there is nothing left to remove.
@@ -267,7 +296,9 @@ export async function resolveReport(req: Request, res: Response) {
       if (!target.deleted) {
         const removed = type === 'post'
           ? await softDeletePost(report.target_id, adminId, { reason: 'moderator' })
-          : await softDeleteComment(report.target_id, adminId, { reason: 'moderator' });
+          : type === 'comment'
+            ? await softDeleteComment(report.target_id, adminId, { reason: 'moderator' })
+            : await moderatorRemoveWallItem(type, report.target_id, adminId);
         if (removed) await logAdminAction(adminId, `remove_${type}`, type, report.target_id, `via report ${id}`);
       }
       // This report, then the other open ones on the same content — kept, and

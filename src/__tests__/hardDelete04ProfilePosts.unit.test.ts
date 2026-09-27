@@ -90,10 +90,9 @@ describe('nothing can be done to it', () => {
     ['deleteProfilePostComment', /parentPost\?\.deleted\) return res\.status\(410\)/],
     ['updateProfilePost', /current\.deleted_at\) return res\.status\(410\)[\s\S]*?\.is\('deleted_at', null\)/],
   ])('%s refuses', (name, re) => expect(fnBody(P, name as string)).toMatch(re as RegExp));
-  test('report: wall posts are not a report target at all (control: community posts are)', () => {
+  test('report: a deleted wall post can\'t be reported (wall posts became reportable on 27 Sep 2026, migration 108)', () => {
     const f = fnBody('controllers/community.controller.ts', 'reportContent');
-    expect(f).not.toMatch(/profile_post/);
-    expect(f).toMatch(/resolvedType === 'post'[\s\S]*?postForWrite\(resolvedId\)/);
+    expect(f).toMatch(/resolvedType === 'profile_post'[\s\S]*?t\?\.deleted\) return res\.status\(410\)\.json\(postGone\(t\)\)/);
   });
 });
 

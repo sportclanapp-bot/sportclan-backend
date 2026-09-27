@@ -14,7 +14,12 @@ jest.mock('../utils/supabase', () => ({
       const q: any = {};
       const rec = (op: string) => (...args: unknown[]) => { calls.push({ table, op, args }); return q; };
       q.eq = rec('eq');
-      q.insert = (...args: unknown[]) => { calls.push({ table, op: 'insert', args }); return Promise.resolve({ error: insertError }); };
+      q.select = rec('select');
+      q.update = (...args: unknown[]) => { calls.push({ table, op: 'update', args }); return q; };
+      q.maybeSingle = () => Promise.resolve(table === 'matches'
+        ? { data: { score_summary: { A: { score: 0, points: 3 }, B: { score: 0, points: 1 } } }, error: null }
+        : { data: insertError ? null : { id: 'log1' }, error: insertError });
+      q.insert = (...args: unknown[]) => { calls.push({ table, op: 'insert', args }); return q; };
       q.delete = (...args: unknown[]) => { calls.push({ table, op: 'delete', args }); return q; };
       q.then = (resolve: (v: unknown) => void) => resolve({ error: null });
       return q;
@@ -38,10 +43,13 @@ beforeEach(() => { calls.length = 0; insertError = null; });
 
 describe('logThenDeleteEvent', () => {
   test('writes who, the action and the whole old event — then deletes', async () => {
-    expect(await logThenDeleteEvent(EVENT, 'u1', 'undo')).toEqual({});
+    expect(await logThenDeleteEvent(EVENT, 'u1', 'undo')).toEqual({ auditId: 'log1' });
     const order = calls.filter((c) => c.op === 'insert' || c.op === 'delete').map((c) => `${c.op}:${c.table}`);
     expect(order).toEqual(['insert:match_event_audit', 'delete:match_events']);
-    expect(calls[0].args[0]).toEqual({ event_id: 'e1', match_id: 'm1', changed_by: 'u1', old_payload: EVENT, new_payload: {}, action: 'undo' });
+    expect(calls.find((c) => c.op === 'insert')?.args[0]).toEqual({
+      event_id: 'e1', match_id: 'm1', changed_by: 'u1', old_payload: EVENT, new_payload: {}, action: 'undo',
+      score_before: { A: { score: 0, points: 3 }, B: { score: 0, points: 1 } },
+    });
   });
   test('no log row → nothing deleted', async () => {
     insertError = { message: 'check violation' };
@@ -86,13 +94,13 @@ describe('migration 107', () => {
   });
 });
 
-describe('no view of the log exists yet (not built, as decided)', () => {
-  test('nothing reads match_event_audit (control: two writers)', () => {
+describe('who reads the log', () => {
+  test('only the edit-log endpoint (control: the three writers — edit, undo/delete, score after)', () => {
     const src = path.join(__dirname, '..');
-    const files = ['controllers', 'utils', 'routes'].flatMap((d) =>
-      fs.readdirSync(path.join(src, d)).filter((f) => f.endsWith('.ts')).map((f) => fs.readFileSync(path.join(src, d, f), 'utf8')));
-    const all = files.join('\n');
-    expect(all).not.toMatch(/from\('match_event_audit'\)\s*\.select/);
-    expect((all.match(/from\('match_event_audit'\)\.insert/g) ?? []).length).toBe(2);
+    const all = ['controllers', 'utils', 'routes'].flatMap((d) =>
+      fs.readdirSync(path.join(src, d)).filter((f) => f.endsWith('.ts')).map((f) => fs.readFileSync(path.join(src, d, f), 'utf8'))).join('\n');
+    expect((all.match(/from\('match_event_audit'\)\s*\.select/g) ?? []).length).toBe(1);
+    expect(code('controllers/matchFeatures.controller.ts')).toMatch(/function getScoringEditLog[\s\S]*?from\('match_event_audit'\)\s*\.select/);
+    expect((all.match(/from\('match_event_audit'\)\.(insert|update)/g) ?? []).length).toBe(3);
   });
 });

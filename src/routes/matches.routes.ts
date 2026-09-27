@@ -39,7 +39,7 @@ import {
 } from '../controllers/matchJoinRequests.controller';
 import {
   getMatchMVP, getMatchAvailability, setMatchAvailability,
-  applyDLS, editMatchEvent, deleteMatchEvent, upsertInningsStats,
+  applyDLS, editMatchEvent, deleteMatchEvent, upsertInningsStats, getScoringEditLog,
 } from '../controllers/matchFeatures.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -57,6 +57,8 @@ router.get('/next', authenticateToken, nextMatch);
 router.get('/history', authenticateToken, matchHistory);
 router.get('/nearby', authenticateToken, getNearbyMatches);
 router.get('/:id/commentary', authenticateToken, getCommentary);
+// The scoring edit log — read-only, organiser / scorer / umpire / admin only.
+router.get('/:id/edit-log', authenticateToken, getScoringEditLog);
 router.get('/:id', authenticateToken, getMatch);
 router.patch('/:id', authenticateToken, updateMatch);
 router.delete('/:id', authenticateToken, cancelMatch);

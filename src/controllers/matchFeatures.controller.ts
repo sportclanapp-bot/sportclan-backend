@@ -1,4 +1,7 @@
-import { logThenDeleteEvent } from '../utils/scoringAudit';
+import { isAdminUser } from '../middleware/admin.middleware';
+import { getSport, normSportSlug } from '../utils/sportCache';
+import { AuditRow, LogContext, cricketBallLabels, editLine } from '../utils/editLog';
+import { logEventEdit, logThenDeleteEvent, recordScoreAfter } from '../utils/scoringAudit';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
@@ -447,7 +450,7 @@ export async function editMatchEvent(req: Request, res: Response) {
     // Get current event
     const { data: event } = await supabase
       .from('match_events')
-      .select('id, payload')
+      .select('id, payload, event_type')
       .eq('id', event_id)
       .eq('match_id', id)
       .maybeSingle();
@@ -456,11 +459,13 @@ export async function editMatchEvent(req: Request, res: Response) {
     const oldPayload = event.payload ?? {};
     const newPayload = { ...oldPayload, ...changes };
 
-    // Audit log
-    await supabase.from('match_event_audit').insert({
-      event_id, match_id: id, changed_by: userId,
-      old_payload: oldPayload, new_payload: newPayload, action: 'edit',
+    // Audit log — first, with the score before (scoring edit log). No log
+    // row, no change: the same rule as undo and delete (#7).
+    const logged = await logEventEdit({
+      eventId: event_id, matchId: id, userId,
+      oldPayload, newPayload, eventType: (event as { event_type?: string }).event_type ?? null,
     });
+    if (logged.error) return res.status(500).json({ error: logged.error });
 
     // Update event
     await supabase.from('match_events').update({ payload: newPayload }).eq('id', event_id);
@@ -469,6 +474,7 @@ export async function editMatchEvent(req: Request, res: Response) {
     // scoreboard reflects the edit IMMEDIATELY (was stale until the next event).
     // recomputeSummary is stateless — the same recompute undo/completion use.
     const summary = await recomputeSummary(id);
+    await recordScoreAfter(logged.auditId, summary);
 
     return res.json({ success: true, event: { id: event_id, payload: newPayload }, score_summary: summary });
   } catch {
@@ -514,6 +520,7 @@ export async function deleteMatchEvent(req: Request, res: Response) {
 
     // SC-319: rebuild score_summary from the remaining events (was left stale).
     const summary = await recomputeSummary(id);
+    await recordScoreAfter(removed.auditId, summary);
 
     return res.json({ success: true, score_summary: summary });
   } catch {
@@ -564,6 +571,65 @@ export async function upsertInningsStats(req: Request, res: Response) {
       .select('id');
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ success: true, count: data?.length ?? 0 });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// ─── GET /matches/:id/edit-log ───────────────────────────────────────────────
+// The scoring edit log (27 Sep 2026): every edit, delete and undo of this
+// match's events, newest first, each as a plain line — "Priya undid: Lions
+// point, 3–1 → 2–1". Read-only, and only for the people who run the match —
+// its organiser (the creator, or a tournament organiser), its umpire — and
+// admins. Everyone else is refused.
+export async function getScoringEditLog(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data: match } = await supabase
+      .from('matches')
+      .select('id, sport_id, team_a_name, team_b_name, created_by, umpire_id, tournament_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (!(await canOfficiateMatch(match, userId)) && !(await isAdminUser(userId))) {
+      return res.status(403).json({ error: 'Only the organiser, scorer or umpire can see the scoring log.', code: 'NOT_MATCH_OFFICIAL' });
+    }
+    const { data: rows, error } = await supabase
+      .from('match_event_audit')
+      .select('id, action, changed_by, created_at, event_id, old_payload, new_payload, score_before, score_after')
+      .eq('match_id', id)
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    const list = (rows ?? []) as AuditRow[];
+
+    const people = [...new Set(list.map((r) => r.changed_by).filter(Boolean))];
+    const { data: users } = people.length
+      ? await supabase.from('users').select('id, name').in('id', people)
+      : { data: [] as Array<{ id: string; name: string | null }> };
+    const nameOf = new Map((users ?? []).map((u: { id: string; name: string | null }) => [u.id, u.name || 'Someone']));
+
+    const sport = normSportSlug((await getSport(match.sport_id as string))?.slug);
+    const ctx: LogContext = { sport, teamA: match.team_a_name ?? 'Team A', teamB: match.team_b_name ?? 'Team B' };
+    // Cricket: an edited ball still on the match reads "ball 4.3".
+    let labels = new Map<string, string>();
+    if (sport === 'cricket' && list.some((r) => r.action === 'edit' && r.event_id)) {
+      const { data: events } = await supabase
+        .from('match_events').select('id, event_type, payload').eq('match_id', id)
+        .order('created_at', { ascending: true }).limit(2000);
+      labels = cricketBallLabels((events ?? []) as Array<{ id: string; event_type: string; payload?: Record<string, unknown> | null }>);
+    }
+
+    const entries = list.map((r) => ({
+      id: r.id,
+      action: r.action,
+      at: r.created_at,
+      who: { id: r.changed_by, name: nameOf.get(r.changed_by) ?? 'Someone' },
+      text: editLine(r, nameOf.get(r.changed_by) ?? 'Someone', ctx, r.event_id ? labels.get(r.event_id) : null),
+    }));
+    return res.json({ entries });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

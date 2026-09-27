@@ -1,4 +1,4 @@
-import { logThenDeleteEvent } from '../utils/scoringAudit';
+import { logThenDeleteEvent, recordScoreAfter } from '../utils/scoringAudit';
 import { Request, Response } from 'express';
 import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
@@ -1216,7 +1216,7 @@ export async function undoEvent(req: Request, res: Response) {
     // Recompute the summary from the remaining events so it can't drift out of
     // sync with the event log (the old code left score_summary stale on undo).
     try {
-      await recomputeSummary(matchId);
+      await recordScoreAfter(removed.auditId, await recomputeSummary(matchId));
     } catch {
       // best-effort — the event delete already succeeded
     }

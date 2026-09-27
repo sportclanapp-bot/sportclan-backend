@@ -10,7 +10,8 @@ it('official is a role, and may officiate', () => {
   expect(VALID_ACCOUNT_TYPES).toContain('official');
   expect(OFFICIATING_TYPES).toContain('official');
   expect(code('controllers/matches.controller.ts')).toMatch(/\.in\('account_type', \[\.\.\.OFFICIATING_TYPES\]\)/);
-  expect(code('controllers/search.controller.ts')).toMatch(/\.in\('account_type', \[\.\.\.OFFICIATING_TYPES\]\)/);
+  // Phase 3 B02-F1: filtered in the query now (user_account_types!inner).
+  expect(code('controllers/search.controller.ts')).toMatch(/searchByAccountTypes\(res, q, \[\.\.\.OFFICIATING_TYPES\]/);
   expect(code('controllers/users.controller.ts')).toMatch(/new Set\(\['umpire', 'official', 'organiser'\]\)/);
 });
 

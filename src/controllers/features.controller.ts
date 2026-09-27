@@ -10,6 +10,7 @@ import { formatTimeIst } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCounts';
 import { plural } from '../utils/plural';
+import { deletedIdSet } from '../utils/activeUser';
 
 // ────────────────────────────────────────────────────────────────────────────
 // TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
@@ -497,7 +498,10 @@ export async function getPlayerOfWeek(req: Request, res: Response) {
     const testIds = hide ? await testUserIdSet([...new Set(profiles.map((p) => p.user_id as string))]) : new Set<string>();
 
     // Score = wins×3 + matches_played×1 + rating×0.01
-    const scored = profiles.filter((p) => !testIds.has(p.user_id as string)).map((p) => ({
+    // B02-F6: deleted accounts go before the per-sport pick too — dropped after
+    // it, a sport whose top scorer had deleted their account lost its card.
+    const deletedIds = await deletedIdSet([...new Set(profiles.map((p) => p.user_id as string))]);
+    const scored = profiles.filter((p) => !testIds.has(p.user_id as string) && !deletedIds.has(p.user_id as string)).map((p) => ({
       ...p,
       score: (p.wins ?? 0) * 3 + (p.matches_played ?? 0) * 1 + (p.rating ?? 0) * 0.01,
     }));

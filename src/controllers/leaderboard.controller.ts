@@ -74,6 +74,8 @@ export async function getLeaderboard(req: Request, res: Response) {
 
     const rawSport = req.query.sport_id as string | undefined;
     if (!rawSport) return res.status(400).json({ error: 'sport_id is required' });
+    // B02-F3: a repeated ?sport_id= is an array — a 500 inside resolveSportId.
+    if (typeof rawSport !== 'string') return res.status(400).json({ error: 'sport_id must be given once' });
     // Resolve UUID-or-slug up front; an unknown sport is a client error (400),
     // not a Postgres "invalid uuid" 500 (SC-6).
     const sportId = await resolveSportId(rawSport);
@@ -103,8 +105,10 @@ export async function getLeaderboard(req: Request, res: Response) {
       if (cityUserIds.length === 0) return res.json({ leaderboard: [], me: null, ...pageMeta(0, p) });
     }
 
-    // ---- MONTHLY: rank by current-month rating delta (kept in JS; the
-    // rating_history month window is small relative to all-time profiles). ----
+    // ---- MONTHLY: players with a rated match this month, ranked by their
+    // rating after this month's latest change (kept in JS; the rating_history
+    // month window is small relative to all-time profiles). B02-F7: it said
+    // "delta", and took whichever row came back last as the rating. ----
     if (period === 'monthly') {
       const now = new Date();
       // SC-91: IST calendar month (was server-local/UTC).
@@ -117,7 +121,9 @@ export async function getLeaderboard(req: Request, res: Response) {
         .select('user_id, delta, new_rating, match:matches!inner(id, voided_at)')
         .eq('sport_id', sportId)
         .is('match.voided_at', null)
-        .gte('created_at', startOfMonth);
+        .gte('created_at', startOfMonth)
+        // B02-F7: oldest first, so the last row a player gets is their latest rating.
+        .order('created_at', { ascending: true });
       if (dErr) return res.status(500).json({ error: dErr.message });
 
       const agg = new Map<string, Row>();
@@ -152,11 +158,13 @@ export async function getLeaderboard(req: Request, res: Response) {
       const total = ranked.length;
       const pageRows = ranked.slice(p.offset, p.offset + p.limit);
       const userMap = await fetchUserMap(pageRows.map((r) => r.user_id));
-      const leaderboard = pageRows.map((r, i) => toEntry(r, compRank[p.offset + i], userMap.get(r.user_id)));
+      // B02-F7: rating_history carries no result, so monthly wins aren't known —
+      // null says so; a 0 on every row read as "nobody won anything".
+      const leaderboard = pageRows.map((r, i) => ({ ...toEntry(r, compRank[p.offset + i], userMap.get(r.user_id)), wins: null }));
 
       const myIndex = ranked.findIndex((r) => r.user_id === userId);
       const me = myIndex >= 0
-        ? { rank: compRank[myIndex], user_id: userId, rating: ranked[myIndex].rating, matches_played: ranked[myIndex].matches_played, wins: ranked[myIndex].wins }
+        ? { rank: compRank[myIndex], user_id: userId, rating: ranked[myIndex].rating, matches_played: ranked[myIndex].matches_played, wins: null }
         : null;
       return res.json({ leaderboard, me, ...pageMeta(total, p) });
     }

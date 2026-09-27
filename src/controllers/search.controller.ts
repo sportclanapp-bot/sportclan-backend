@@ -9,6 +9,7 @@ import { hideTestFor, excludeTest, excludeTestEmbed } from '../utils/testContent
 const noTest = <Q>(q: Q, hide: boolean): Q => (hide ? excludeTest(q) : q);
 import { parsePagination, Pagination } from '../utils/pagination'; // SC-303
 import { OFFICIATING_TYPES } from '../constants/accountTypes';
+import { resolveSportId } from '../utils/sportId';
 
 // ─── UNIFIED SEARCH ─────────────────────────────────────────────────────────
 export async function search(req: Request, res: Response) {
@@ -18,9 +19,16 @@ export async function search(req: Request, res: Response) {
   // it) were unreachable. `has_more` (length-based) drives the FE's onEndReached.
   const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 20, maxLimit: 50 });
 
+  // B02-F3: a repeated ?q= arrives as an array (a 500 at .trim()), and a
+  // sport_id that is neither a uuid nor a known slug was a 500 at the uuid column.
+  for (const [name, v] of [['q', q], ['tab', tab], ['sport_id', sport_id]] as const) {
+    if (v !== undefined && typeof v !== 'string') return res.status(400).json({ error: `${name} must be given once` });
+  }
   if (!q || (q as string).trim().length === 0) {
     return res.json({ data: [], has_more: false });
   }
+  const sportId = sport_id ? await resolveSportId(sport_id as string) : undefined;
+  if (sport_id && !sportId) return res.status(400).json({ error: 'Unknown sport' });
 
   // V014 (visual review): people type handles the way the app shows them —
   // "@qadev_b" — and got nothing back, while "qadev_b" found the user. A
@@ -33,17 +41,17 @@ export async function search(req: Request, res: Response) {
 
   switch (activeTab) {
     case 'players':
-      return searchPlayers(res, query, sport_id as string, p, callerId, hide);
+      return searchPlayers(res, query, sportId, p, callerId, hide);
     case 'teams':
-      return searchTeams(res, query, sport_id as string, p, hide);
+      return searchTeams(res, query, sportId, p, hide);
     case 'tournaments':
-      return searchTournaments(res, query, sport_id as string, p, hide);
+      return searchTournaments(res, query, sportId, p, hide);
     case 'umpires':
-      return searchUmpires(res, query, sport_id as string, p, callerId, hide);
+      return searchUmpires(res, query, sportId, p, callerId, hide);
     case 'coaches':
       return searchByAccountType(res, query, 'coach', p, callerId, hide);
     case 'posts':
-      return searchPosts(res, query, sport_id as string, p, callerId, hide);
+      return searchPosts(res, query, sportId, p, callerId, hide);
     case 'businesses':
       return searchBusinesses(res, query, p, callerId, hide);
     case 'associations':
@@ -168,36 +176,7 @@ async function searchTournaments(res: Response, q: string, sportId: string | und
 
 async function searchUmpires(res: Response, q: string, sportId: string | undefined, p: Pagination, callerId?: string, hide = false) {
   // SC-434: every umpire, not only the ones who had paid.
-  const blocked = await blockedUserIds(callerId); // SC-82
-  const { data, error } = await excludeIds(noTest(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked + B03 test
-    .from('users')
-    .select(`
-      id, name, username, profile_picture_url,
-      city:cities!city_id(id, name)
-    `)
-    .or(orIlikeContains(['username', 'name'], q))
-    .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
-    .range(p.from, p.to)), hide), 'id', blocked);
-
-  if (error) return res.status(500).json({ error: error.message });
-
-  // has_more from the RAW page (the account-type post-filter may shrink it, but
-  // more raw rows can still remain to scan on the next page).
-  const hasMore = (data || []).length === p.limit;
-  // Filter to only umpire/referee account types
-  const userIds = (data || []).map((u) => u.id);
-  if (userIds.length === 0) return res.json({ data: [], has_more: hasMore });
-
-  const { data: accountTypes } = await supabase
-    .from('user_account_types')
-    .select('user_id, account_type')
-    .in('user_id', userIds)
-    .in('account_type', [...OFFICIATING_TYPES]);
-
-  const umpireIds = new Set((accountTypes || []).map((a) => a.user_id));
-  const filtered = (data || []).filter((u) => umpireIds.has(u.id));
-
-  return res.json({ data: filtered, has_more: hasMore });
+  return searchByAccountTypes(res, q, [...OFFICIATING_TYPES], p, callerId, hide, { orderByName: false });
 }
 
 async function searchPosts(res: Response, q: string, sportId: string | undefined, p: Pagination, callerId?: string, hide = false) {
@@ -233,34 +212,7 @@ async function searchPosts(res: Response, q: string, sportId: string | undefined
 }
 
 async function searchBusinesses(res: Response, q: string, p: Pagination, callerId?: string, hide = false) {
-  // Businesses are Premium users with Business account type
-  const blocked = await blockedUserIds(callerId); // SC-82
-  const { data: users, error } = await excludeIds(noTest(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked + B03 test
-    .from('users')
-    .select(`
-      id, name, username, profile_picture_url,
-      city:cities!city_id(id, name)
-    `)
-    .or(orIlikeContains(['username', 'name'], q))
-    .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
-    .range(p.from, p.to)), hide), 'id', blocked);
-
-  if (error) return res.status(500).json({ error: error.message });
-
-  const hasMore = (users || []).length === p.limit; // raw-page based (post-filter shrinks)
-  const userIds = (users || []).map((u) => u.id);
-  if (userIds.length === 0) return res.json({ data: [], has_more: hasMore });
-
-  const { data: accountTypes } = await supabase
-    .from('user_account_types')
-    .select('user_id, account_type')
-    .in('user_id', userIds)
-    .eq('account_type', 'business');
-
-  const bizIds = new Set((accountTypes || []).map((a) => a.user_id));
-  const filtered = (users || []).filter((u) => bizIds.has(u.id));
-
-  return res.json({ data: filtered, has_more: hasMore });
+  return searchByAccountTypes(res, q, ['business'], p, callerId, hide, { orderByName: false });
 }
 
 // Generic account-type search — Coaches, Associations, Leagues, Other.
@@ -270,28 +222,32 @@ async function searchBusinesses(res: Response, q: string, p: Pagination, callerI
 // intentionally NOT premium-gated — every pro is discoverable here; premium
 // only gates the richer Services directory. Premium just ranks first.
 async function searchByAccountType(res: Response, q: string, accountType: string, p: Pagination, callerId?: string, hide = false) {
+  return searchByAccountTypes(res, q, [accountType], p, callerId, hide, { orderByName: true });
+}
+
+/**
+ * B02-F1: the account type is filtered IN the query (an inner join on
+ * user_account_types) before the page is cut. It used to page through every
+ * user by name and filter the page in JS — so page 1 of Clubs for "an" was
+ * empty and the first club sat on page 29, while the app said "No matches".
+ */
+async function searchByAccountTypes(
+  res: Response, q: string, types: string[], p: Pagination, callerId: string | undefined, hide: boolean,
+  opts: { orderByName: boolean },
+) {
   const blocked = await blockedUserIds(callerId); // SC-82
-  const { data: users, error } = await excludeIds(noTest(excludeDeleted(supabase // SC-77 deleted + SC-82 blocked + B03 test
+  let query = supabase
     .from('users')
-    .select('id, name, username, profile_picture_url, bio, city:cities!city_id(id, name)')
-    .or(orIlikeContains(['username', 'name'], q))
-    .order('name', { ascending: true })
+    .select('id, name, username, profile_picture_url, bio, city:cities!city_id(id, name), acct:user_account_types!inner(account_type)')
+    .or(orIlikeContains(['username', 'name'], q));
+  query = types.length === 1 ? query.eq('acct.account_type', types[0]) : query.in('acct.account_type', types);
+  if (opts.orderByName) query = query.order('name', { ascending: true });
+  const { data: users, error } = await excludeIds(noTest(excludeDeleted(query // SC-77 deleted + SC-82 blocked + B03 test
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
     .range(p.from, p.to)), hide), 'id', blocked);
   if (error) return res.status(500).json({ error: error.message });
-
-  const hasMore = (users || []).length === p.limit; // raw-page based (post-filter shrinks)
-  const userIds = (users || []).map((u) => u.id);
-  if (userIds.length === 0) return res.json({ data: [], has_more: hasMore });
-
-  const { data: accountTypes } = await supabase
-    .from('user_account_types')
-    .select('user_id')
-    .in('user_id', userIds)
-    .eq('account_type', accountType);
-
-  const matchIds = new Set((accountTypes || []).map((a) => a.user_id));
-  return res.json({ data: (users || []).filter((u) => matchIds.has(u.id)), has_more: hasMore });
+  const rows = (users || []).map(({ acct, ...u }: any) => u);
+  return res.json({ data: rows, has_more: rows.length === p.limit });
 }
 
 // (searchClubs removed — clubs now route through searchByAccountType('club'),

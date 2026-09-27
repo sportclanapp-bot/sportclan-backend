@@ -5,6 +5,8 @@ import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCoun
 
 // ── Scorer Leaderboard ──────────────────────────────────────────────────────
 
+const SCORER_PAGE = 1000;
+
 export async function getScorerLeaderboard(req: Request, res: Response) {
   try {
     // B03 (V245, D3): test scorers don't rank for a real viewer — dropped before
@@ -12,50 +14,59 @@ export async function getScorerLeaderboard(req: Request, res: Response) {
     // nor do test matches (a real scorer's QA matches counted) — skipped here.
     const hideTest = await hideTestFor(req.userId);
 
-    // Count matches per scorer (created_by on matches)
-    let mq = supabase
-      .from('matches')
-      .select('created_by')
-      .eq('status', 'completed')
-      .is('voided_at', null); // SC-424
-    if (hideTest) mq = excludeTest(mq);
-    const { data: matches } = await mq;
+    // Count matches per scorer (created_by on matches). B02-F8: paged in
+    // 1000s — one unpaged select stopped at PostgREST's row cap and undercounted.
+    const matches: Array<{ created_by: string | null }> = [];
+    for (let from = 0; ; from += SCORER_PAGE) {
+      let mq = supabase
+        .from('matches')
+        .select('id, created_by')
+        .eq('status', 'completed')
+        .is('voided_at', null) // SC-424
+        .order('id', { ascending: true });
+      if (hideTest) mq = excludeTest(mq);
+      const { data, error } = await mq.range(from, from + SCORER_PAGE - 1);
+      if (error) return res.status(500).json({ error: 'Internal server error' });
+      matches.push(...((data ?? []) as Array<{ created_by: string | null }>));
+      if (!data || data.length < SCORER_PAGE) break;
+    }
 
     const testScorers = hideTest
-      ? await testUserIdSet([...new Set((matches ?? []).map((m) => m.created_by as string).filter(Boolean))])
+      ? await testUserIdSet([...new Set(matches.map((m) => m.created_by as string).filter(Boolean))])
       : new Set<string>();
     const countMap = new Map<string, number>();
-    for (const m of matches ?? []) {
+    for (const m of matches) {
       if (!m.created_by || testScorers.has(m.created_by as string)) continue;
       countMap.set(m.created_by, (countMap.get(m.created_by) ?? 0) + 1);
     }
 
     // Simple SQS = matches_scored × 10
-    const scorers = Array.from(countMap.entries())
+    const ranked = Array.from(countMap.entries())
       .map(([userId, count]) => ({ userId, matchesScored: count, sqs: count * 10 }))
-      .sort((a, b) => b.sqs - a.sqs)
-      .slice(0, 20);
+      .sort((a, b) => b.sqs - a.sqs || (a.userId < b.userId ? -1 : 1));
 
-    // Enrich with user info
-    const userIds = scorers.map((s) => s.userId);
-    if (userIds.length === 0) return res.json({ scorers: [] });
+    // B02-F8: deleted scorers drop out BEFORE the top 20 is cut (it used to be
+    // after, leaving a short list). Walk the ranking in chunks until 20 live.
+    const scorers: typeof ranked = [];
+    const userMap = new Map<string, any>();
+    for (let i = 0; i < ranked.length && scorers.length < 20; i += 40) {
+      const chunk = ranked.slice(i, i + 40);
+      const { data: users } = await supabase
+        .from('users')
+        .select('id, name, username, profile_picture_url, city_id')
+        .in('id', chunk.map((s) => s.userId))
+        .is('deleted_at', null); // SC-78: exclude soft-deleted scorers
+      for (const u of users ?? []) userMap.set((u as any).id, u);
+      for (const s of chunk) if (userMap.has(s.userId) && scorers.length < 20) scorers.push(s);
+    }
+    if (scorers.length === 0) return res.json({ scorers: [] });
 
-    const { data: users } = await supabase
-      .from('users')
-      .select('id, name, username, profile_picture_url, city_id')
-      .in('id', userIds)
-      .is('deleted_at', null); // SC-78: exclude soft-deleted scorers
-    const userMap = new Map((users ?? []).map((u: any) => [u.id, u]));
-
-    // SC-78: drop scorers whose account is soft-deleted (no user in the map).
-    const result = scorers
-      .filter((s) => userMap.has(s.userId))
-      .map((s, i) => ({
-        rank: i + 1,
-        user: userMap.get(s.userId) ?? null,
-        matchesScored: s.matchesScored,
-        sqs: s.sqs,
-      }));
+    const result = scorers.map((s, i) => ({
+      rank: i + 1,
+      user: userMap.get(s.userId) ?? null,
+      matchesScored: s.matchesScored,
+      sqs: s.sqs,
+    }));
 
     return res.json({ scorers: result });
   } catch {

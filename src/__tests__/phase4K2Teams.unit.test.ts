@@ -158,3 +158,18 @@ describe('K2-49b · malformed ids are a 400, a missing user a 404 — never a 50
     expect(mockLog.filter((q) => q[0].startsWith('from:'))).toHaveLength(0);
   });
 });
+
+describe('K2-65a · the team header gets its W/L/D record (SC-293/290)', () => {
+  it('K2-65a (340ef3d): getTeam returns record from computeTeamRecord', async () => {
+    const { computeTeamRecord } = jest.requireMock('../utils/teamRecord');
+    (computeTeamRecord as jest.Mock).mockResolvedValueOnce({ played: 3, wins: 2, losses: 1, draws: 0, win_rate: 67 });
+    mockNext = (q) => (q[0] === 'from:teams' ? { data: { id: TEAM, name: 'P4 XI', is_public: true, deleted_at: null } } : { data: [], count: 0 });
+    const r = await call(getTeam, { params: { id: TEAM } });
+    expect(r.body.team.record).toEqual({ played: 3, wins: 2, losses: 1, draws: 0, win_rate: 67 });
+  });
+  it('K2-65a (340ef3d): computeTeamRecord counts wins / losses / draws by winner_team_id', async () => {
+    const { computeTeamRecord } = jest.requireActual('../utils/teamRecord');
+    mockNext = () => ({ data: [{ winner_team_id: TEAM }, { winner_team_id: TEAM }, { winner_team_id: D }, { winner_team_id: null }] });
+    expect(await computeTeamRecord(TEAM)).toEqual({ played: 4, wins: 2, losses: 1, draws: 1, win_rate: 50 });
+  });
+});

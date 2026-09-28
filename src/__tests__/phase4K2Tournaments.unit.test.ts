@@ -43,7 +43,7 @@ jest.mock('../utils/notify', () => ({
 }));
 
 // eslint-disable-next-line import/first
-import { joinByCode, generateFixtures, updateTournament } from '../controllers/tournaments.controller';
+import { joinByCode, generateFixtures, updateTournament, advanceTournamentWinner, getBracket, getTournament } from '../controllers/tournaments.controller';
 // eslint-disable-next-line import/first
 import { notifyUsers } from '../utils/notify';
 
@@ -186,5 +186,47 @@ describe('K2-47a · cancelling a tournament abandons its matches and tells the e
     const ab = mockLog.find((q) => q[0] === 'from:matches' && has(q, '"status":"abandoned"'))!;
     expect(ab).toEqual(expect.arrayContaining([`eq:["tournament_id","${T}"]`, 'in:["status",["scheduled","live"]]']));
     expect(notifyUsers).toHaveBeenCalledWith([STRANGER, FIX], expect.objectContaining({ type: 'tournament_cancelled' }), { actorId: ME });
+  });
+});
+
+describe('K2-53a · a round-robin / league crowns the standings leader (SC-255)', () => {
+  const TC = '88888888-8888-4888-8888-888888888888';
+  it.each(['round_robin', 'league'])('K2-53a (84f7a93): %s — the last match’s winner is NOT crowned; the table leader is', async (format) => {
+    mockNext = (q) => {
+      if (q[0] === 'from:matches' && has(q, '{"count":"exact","head":true}')) return { count: 0 };
+      if (q[0] === 'from:matches' && has(q, 'maybeSingle')) return { data: { id: 'm3', tournament_id: T, winner_team_id: TB, round: 1, group_label: null, next_match_id: null } };
+      if (q[0] === 'from:matches') {
+        return { data: [
+          { team_a_id: TEAM, team_b_id: TB, winner_team_id: TEAM, status: 'completed', score_summary: {} },
+          { team_a_id: TEAM, team_b_id: TC, winner_team_id: TEAM, status: 'completed', score_summary: {} },
+          { team_a_id: TB, team_b_id: TC, winner_team_id: TB, status: 'completed', score_summary: {} }, // the last match
+        ] };
+      }
+      if (q[0] === 'from:tournaments' && has(q, 'update:')) return { data: { id: T, name: 'P4 Cup' } };
+      if (q[0] === 'from:tournaments') return { data: { format, tiebreaker_rules: [] } };
+      if (q[0] === 'from:tournament_entries') return { data: [{ team_id: TEAM, team: { name: 'A' } }, { team_id: TB, team: { name: 'B' } }, { team_id: TC, team: { name: 'C' } }] };
+      return { data: [] };
+    };
+    await advanceTournamentWinner('m3');
+    const crown = mockLog.find((q) => q[0] === 'from:tournaments' && has(q, 'champion_team_id'))!;
+    expect(crown.find((c) => c.startsWith('update:'))).toContain(`"champion_team_id":"${TEAM}"`);
+  });
+});
+
+describe('K2-55 · the bracket / fixture list carries each match’s ground and venue (SC-264)', () => {
+  it('K2-55 (eca309b): getBracket forwards ground_label and venue', async () => {
+    mockNext = (q) => (q[0] === 'from:tournaments' ? { data: { id: T, name: 'P4', format: 'league' } }
+      : q[0] === 'from:matches' ? { data: [{ id: 'm1', round: 1, match_no: 0, status: 'scheduled', scheduled_at: '2026-10-05T04:00:00Z', ground_label: 'Ground 2', venue: 'Oval', score_summary: {} }] } : { data: [] });
+    const r = await call(getBracket, {});
+    expect(r.body.rounds[0].matches[0]).toMatchObject({ ground_label: 'Ground 2', venue: 'Oval' });
+  });
+});
+
+describe('K2-65b · the tournament overview gets a server fixture count (SC-293/289)', () => {
+  it('K2-65b (340ef3d): getTournament returns fixtures_count from a count of its matches', async () => {
+    mockNext = (q) => (q[0] === 'from:tournaments' ? { data: { id: T, name: 'P4', status: 'live', created_by: STRANGER } }
+      : q[0] === 'from:matches' && has(q, '{"count":"exact","head":true}') ? { count: 6 } : { data: [] });
+    const r = await call(getTournament, {});
+    expect((r.body.tournament ?? r.body).fixtures_count).toBe(6);
   });
 });

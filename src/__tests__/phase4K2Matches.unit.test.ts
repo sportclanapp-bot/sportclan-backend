@@ -57,7 +57,7 @@ jest.mock('../utils/notify', () => ({
 // eslint-disable-next-line import/first
 import { getSport } from '../utils/sportCache';
 // eslint-disable-next-line import/first
-import { addParticipants, getMatchChat, rateMatchHandler, getCommentary, completeMatch, createMatch, updateMatch, getMatch } from '../controllers/matches.controller';
+import { addParticipants, getMatchChat, rateMatchHandler, getCommentary, completeMatch, createMatch, updateMatch, getMatch, abandonMatch } from '../controllers/matches.controller';
 // eslint-disable-next-line import/first
 import { decideMatchJoinRequest } from '../controllers/matchJoinRequests.controller';
 // eslint-disable-next-line import/first
@@ -261,5 +261,40 @@ describe('K2-64 · getMatch tells the app whether the viewer can officiate (SC-2
     const r = await call(getMatch, {});
     (canOfficiateMatch as jest.Mock).mockImplementation(async () => true);
     expect((r.body.match ?? r.body).can_officiate).toBe(v);
+  });
+});
+
+describe('K2-54 · bracket-only guards key off the tournament FORMAT, not round (SC-257/258)', () => {
+  const T = '66666666-6666-4666-8666-666666666666';
+  const fixture = (format: string, status = 'live') => (q: Q) => {
+    if (q[0] === 'from:tournaments') return { data: { format } };
+    if (q[0] === 'from:matches') return { data: matchRow({ status, tournament_id: T, round: 1, group_label: null, is_ranked: false, score_summary: { A: { score: 1 }, B: { score: 1 } } }) };
+    if (q[0] === 'from:match_participants') return { data: [{ user_id: ME, team_side: 'A' }, { user_id: OTHER, team_side: 'B' }] };
+    return { data: null };
+  };
+  beforeEach(() => { (getSport as jest.Mock).mockImplementation(async () => ({ slug: 'football', allows_draw: true })); });
+  afterEach(() => { (getSport as jest.Mock).mockImplementation(async () => ({ slug: 'cricket' })); });
+  it.each(['round_robin', 'league'])('K2-54a (c9f484c): a level %s fixture completes as a draw (no BRACKET_NEEDS_WINNER)', async (fmt) => {
+    mockNext = fixture(fmt);
+    mockRpc = (n) => (n === 'finalize_match' ? { data: { applied: true, match: { id: MATCH, status: 'completed' } } } : {});
+    const r = await call(completeMatch, { body: {} });
+    expect(r.body?.code).not.toBe('BRACKET_NEEDS_WINNER');
+    expect(mockRpcCalls.map(([n]) => n)).toContain('finalize_match');
+  });
+  it('K2-54a (c9f484c): a level KNOCKOUT fixture still needs a winner', async () => {
+    mockNext = fixture('knockout');
+    const r = await call(completeMatch, { body: {} });
+    expect(r.body.code).toBe('BRACKET_NEEDS_WINNER');
+  });
+  it.each(['round_robin', 'league'])('K2-54b (c9f484c): abandoning a %s fixture needs no advancing team — it just goes abandoned', async (fmt) => {
+    mockNext = fixture(fmt, 'scheduled');
+    const r = await call(abandonMatch, { body: {} });
+    expect(r.body?.code).not.toBe('WALKOVER_TEAM_REQUIRED');
+    expect(mockLog.some((q) => q[0] === 'from:matches' && q.some((c) => c.startsWith('update:') && c.includes('"status":"abandoned"')))).toBe(true);
+  });
+  it('K2-54b (c9f484c): a knockout fixture abandon still requires the advancing team', async () => {
+    mockNext = fixture('knockout', 'scheduled');
+    const r = await call(abandonMatch, { body: {} });
+    expect([r.statusCode, r.body.code]).toEqual([400, 'WALKOVER_TEAM_REQUIRED']);
   });
 });

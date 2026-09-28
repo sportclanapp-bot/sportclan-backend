@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import rateLimit from 'express-rate-limit';
+import { RedisRateLimitStore } from '../utils/rateLimitStore';
 import { authenticateToken } from '../middleware/auth.middleware';
 import {
   deleteAccount, getSessions, revokeSession,
@@ -23,6 +24,7 @@ const exportLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => (req as { userId?: string }).userId ?? req.ip ?? 'anon',
   message: { error: 'Too many export requests. Please try again later.' },
+  store: new RedisRateLimitStore('export', 'blocking'),
 });
 
 router.post('/delete', authenticateToken, deleteAccount);

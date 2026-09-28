@@ -13,6 +13,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { RedisRateLimitStore } from './utils/rateLimitStore';
 
 import authRoutes from './routes/auth.routes';
 import citiesRoutes from './routes/cities.routes';
@@ -122,6 +123,14 @@ const PER_IP_MAX = 200;
  *  a full team on one Wi-Fi never reaches it. */
 const PER_IP_AUTHED_CEILING = 4000;
 
+/*
+ * 29 Sep: every limiter counts in Upstash Redis (utils/rateLimitStore), so a
+ * limit holds across instances. The two that run on every request use the
+ * 'async' mode (the local count decides; Redis is updated in the background and
+ * its shared total folded back in), so ordinary requests never wait on Redis.
+ * The auth-sensitive ones wait for Redis and are exact. If Redis is down, each
+ * falls back to this instance's own count.
+ */
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: (req) => (verifiedUserId(req) ? PER_USER_MAX : PER_IP_MAX),
@@ -129,6 +138,7 @@ const globalLimiter = rateLimit({
   skip: rateLimitBypassed,
   standardHeaders: true,
   legacyHeaders: false,
+  store: new RedisRateLimitStore('global', 'async'),
 });
 
 const ipCeilingLimiter = rateLimit({
@@ -138,6 +148,7 @@ const ipCeilingLimiter = rateLimit({
   skip: (req) => rateLimitBypassed(req) || !verifiedUserId(req),
   standardHeaders: false,
   legacyHeaders: false,
+  store: new RedisRateLimitStore('ipc', 'async'),
 });
 
 app.use(globalLimiter);
@@ -151,6 +162,7 @@ const authLimiter = rateLimit({
   skip: rateLimitBypassed,
   standardHeaders: true,
   legacyHeaders: false,
+  store: new RedisRateLimitStore('auth', 'blocking'),
 });
 
 /**
@@ -167,6 +179,7 @@ const resetCheckIpLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many attempts. Try again in a few minutes.', code: 'RATE_LIMITED' },
+  store: new RedisRateLimitStore('rip', 'blocking'),
 });
 const resetCheckNumberLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -180,6 +193,7 @@ const resetCheckNumberLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many attempts for this number. Try again later.', code: 'RATE_LIMITED' },
+  store: new RedisRateLimitStore('rnum', 'blocking'),
 });
 
 const sendOtpLimiter = rateLimit({
@@ -188,6 +202,7 @@ const sendOtpLimiter = rateLimit({
   skip: rateLimitBypassed,
   standardHeaders: true,
   legacyHeaders: false,
+  store: new RedisRateLimitStore('sendotp', 'blocking'),
 });
 
 app.get('/', (_req: Request, res: Response) => {

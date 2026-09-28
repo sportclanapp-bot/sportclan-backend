@@ -678,7 +678,7 @@ export async function login(req: Request, res: Response) {
 
   let query = supabase
     .from('users')
-    .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, coin_balance, is_admin, created_at');
+    .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, coin_balance, is_admin, created_at, deleted_at');
 
   if (email) {
     query = query.ilike('email', escapeLike(email.trim())); // B01-F11: `_` is a literal
@@ -688,6 +688,16 @@ export async function login(req: Request, res: Response) {
 
   const { data: user } = await query.maybeSingle();
   if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+  // Decision 12 (29 Sep 2026): the app's password form now signs in by mobile
+  // too. Deletion clears the password, so a held number used to answer "OTP
+  // login only". It gets the same refusal send-otp gives that number (which
+  // already says so without a password); past the 30-day hold it's no account.
+  if (!email && user.deleted_at) {
+    const held = holdUntil(user.deleted_at);
+    return held
+      ? res.status(403).json(deletedResponse(held))
+      : res.status(401).json({ error: 'Invalid credentials' });
+  }
   if (!user.password_hash) return res.status(401).json({ error: 'Account uses OTP login only' });
   const ok = await bcrypt.compare(password, user.password_hash);
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
@@ -700,7 +710,7 @@ export async function login(req: Request, res: Response) {
   const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
   await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
-  const { password_hash: _ph, ...safe } = user;
+  const { password_hash: _ph, deleted_at: _da, ...safe } = user;
   return res.json({ user: safe, accessToken, refreshToken });
 }
 

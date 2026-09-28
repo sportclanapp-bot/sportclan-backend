@@ -11,6 +11,7 @@ import {
   profilePostForWrite, restoreRemovedContent, softDeleteComment, softDeletePost,
 } from '../utils/postVisibility';
 import { logAdminAction } from '../utils/tournamentAuth';
+import { sendPushToTokens } from '../utils/expoPush';
 
 /**
  * Admin controller · stats + moderation + broadcast.
@@ -339,6 +340,19 @@ export async function resolveReport(req: Request, res: Response) {
 export const BROADCAST_TITLE_MAX = 80;
 export const BROADCAST_BODY_MAX = 500;
 const BROADCAST_PAGE = 1000;
+/** Decision 14: push one broadcast chunk to every device those users have. Never throws. */
+export async function pushBroadcastChunk(userIds: string[], title: string, body: string): Promise<number> {
+  try {
+    const { data: tokens } = await supabase.from('push_tokens').select('token').in('user_id', userIds);
+    const list = (tokens ?? []).map((t: { token: string }) => t.token);
+    if (list.length === 0) return 0;
+    return await sendPushToTokens(list, { title, body, data: { type: 'system', broadcast: 'true' } });
+  } catch (err: any) {
+    console.error('[broadcast] push failed for a chunk:', err?.message ?? err);
+    return 0;
+  }
+}
+
 export async function broadcastAnnouncement(req: Request, res: Response) {
   const { confirm } = req.body || {};
   // Phase 3 B12-F13: trimmed and capped (the app caps the body at 280).
@@ -410,6 +424,7 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
     await logAdminAction(req.userId!, 'broadcast', 'broadcast', req.userId!, `"${title}" to ${rows.length} users`);
 
     void (async () => {
+      let pushed = 0;
       for (let i = 0; i < rows.length; i += 500) {
         const chunk = rows.slice(i, i + 500);
         const { error: insertErr } = await supabase.from('notifications').insert(chunk);
@@ -417,8 +432,13 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
           console.error(`[broadcast] insert failed at offset ${i}/${rows.length}:`, insertErr.message);
           return;
         }
+        // Decision 14 (Dipak, 29 Sep 2026): a real push too, not only the
+        // in-app row (B12-F2). One token read and one Expo send (chunked to
+        // 100 by the SDK) per 500 recipients. An announcement is type 'system',
+        // which no notification switch gates — same as the in-app row.
+        pushed += await pushBroadcastChunk(chunk.map((r) => r.user_id), title, body);
       }
-      console.log(`[broadcast] delivered "${title}" to ${rows.length} users`);
+      console.log(`[broadcast] delivered "${title}" to ${rows.length} users, push accepted for ${pushed} devices`);
     })();
     return;
   } catch (err: any) {

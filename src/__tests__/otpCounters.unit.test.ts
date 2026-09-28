@@ -14,7 +14,7 @@ jest.mock('@upstash/redis', () => ({
     incr: jest.fn(async (k: string) => { const n = (redis.get(k) ?? 0) + 1; redis.set(k, n); return n; }),
     expire: jest.fn(async (k: string, ttl: number) => { expires[k] = ttl; return 1; }),
   })),
-}), { virtual: true });
+}));
 jest.mock('../utils/supabase', () => {
   // otp_codes missing → the store falls through to memory
   const missing = { data: null, error: { code: '42P01' } };

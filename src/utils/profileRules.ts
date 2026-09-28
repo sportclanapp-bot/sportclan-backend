@@ -29,6 +29,14 @@ export const EMAIL_RE = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
 
 export const USERNAME_RE = /^[a-zA-Z0-9_]{3,30}$/;
 
+/**
+ * The genders a profile may store — users_gender_check (migration 111, applied
+ * 29 Sep 2026). "Prefer not to say" is its own value so Edit profile can show
+ * it as chosen; null still means "never answered".
+ */
+export const GENDERS = ['male', 'female', 'other', 'prefer_not_to_say'] as const;
+export const GENDER_ERROR = 'gender must be male, female, other, or prefer_not_to_say';
+
 export interface RuleProblem { status: number; error: string; code?: string }
 
 /** Why a date of birth is refused, or null (the rule updateMe applies, SC-248). */

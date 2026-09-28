@@ -341,6 +341,15 @@ export async function resolveReport(req: Request, res: Response) {
 export const BROADCAST_TITLE_MAX = 80;
 export const BROADCAST_BODY_MAX = 500;
 const BROADCAST_PAGE = 1000;
+/**
+ * Decision 14b (Dipak, 29 Sep 2026): the "Announcements" switch in Notification
+ * settings. Opt-out like every other category — only an explicit false skips
+ * the PUSH; the in-app notification still reaches everyone.
+ */
+export const ANNOUNCEMENTS_PREF = 'announcements';
+export function wantsAnnouncementPush(prefs: unknown): boolean {
+  return !(prefs && typeof prefs === 'object' && (prefs as Record<string, unknown>)[ANNOUNCEMENTS_PREF] === false);
+}
 /** Decision 14: push one broadcast chunk to every device those users have. Never throws. */
 export async function pushBroadcastChunk(userIds: string[], title: string, body: string): Promise<number> {
   try {
@@ -376,18 +385,18 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
     // Active users (last 30 days), live and not suspended. Paged: a bare select
     // stops at PostgREST's 1000-row cap, which silently capped the broadcast.
     const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
-    const users: Array<{ id: string }> = [];
+    const users: Array<{ id: string; notification_preferences?: unknown }> = [];
     for (let from = 0; ; from += BROADCAST_PAGE) {
       const { data: page, error: usersErr } = await supabase
         .from('users')
-        .select('id')
+        .select('id, notification_preferences')
         .gte('last_active_at', cutoff)
         .is('deleted_at', null)
         .is('suspended_at', null)
         .order('id')
         .range(from, from + BROADCAST_PAGE - 1);
       if (usersErr) return res.status(500).json({ error: usersErr.message });
-      users.push(...((page ?? []) as Array<{ id: string }>));
+      users.push(...((page ?? []) as Array<{ id: string; notification_preferences?: unknown }>));
       if ((page ?? []).length < BROADCAST_PAGE) break;
     }
 
@@ -402,6 +411,8 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
     if (rows.length === 0) {
       return res.json({ ok: true, recipients: 0 });
     }
+    // 14b: who gets the push as well as the in-app row.
+    const pushTo = new Set(users.filter((u) => wantsAnnouncementPush(u.notification_preferences)).map((u) => u.id));
 
     // SC-214: a bare POST used to blast every active user (~10k) with no
     // preview or confirmation — one fat-finger = mass notification. Require an
@@ -411,6 +422,7 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
       return res.status(400).json({
         error: `This will notify ${rows.length} users. Pass confirm:true to send.`,
         recipients: rows.length,
+        push_recipients: pushTo.size,
         needsConfirm: true,
       });
     }
@@ -435,9 +447,10 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
         }
         // Decision 14 (Dipak, 29 Sep 2026): a real push too, not only the
         // in-app row (B12-F2). One token read and one Expo send (chunked to
-        // 100 by the SDK) per 500 recipients. An announcement is type 'system',
-        // which no notification switch gates — same as the in-app row.
-        pushed += await pushBroadcastChunk(chunk.map((r) => r.user_id), title, body);
+        // 100 by the SDK) per 500 recipients. 14b: the push skips anyone who
+        // turned "Announcements" off; the in-app row above went to everyone.
+        const pushIds = chunk.map((r) => r.user_id).filter((id) => pushTo.has(id));
+        if (pushIds.length > 0) pushed += await pushBroadcastChunk(pushIds, title, body);
       }
       console.log(`[broadcast] delivered "${title}" to ${rows.length} users, push accepted for ${pushed} devices`);
     })();

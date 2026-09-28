@@ -34,7 +34,10 @@ export async function searchVenues(req: Request, res: Response) {
     // the tiebreak (the SC-138 rule).
     .order('use_count', { ascending: false })
     .order('id', { ascending: true })
-    .range(offset, offset + limit - 1);
+    .range(offset, offset + limit - 1)
+    // Decision 7 (migration 112): a deleted venue leaves the directory and the
+    // match form's picker. The row stays.
+    .is('deleted_at', null);
   if (city_id) query = query.eq('city_id', city_id);
   if (q && q.trim().length > 0) {
     // Phase 3 B10-F7: `%` and `_` in the search are literal characters.
@@ -124,6 +127,29 @@ export async function createVenue(req: Request, res: Response) {
   return res.json({ venue: updated });
 }
 
+/**
+ * The live venue with this name (and city, when given), or null. Decision 7:
+ * deleted venues don't count, so a deleted venue's name can be added again.
+ *
+ * venue_find_exact (migration 079) returns ONE row with no ordering and knows
+ * nothing of deleted_at, so a deleted twin can hide a live venue. Only then do
+ * we ask again with a live-only filter (an unindexed ILIKE, but it runs just
+ * for names that have a deleted venue).
+ */
+export async function findLiveVenue(name: string, cityId: string | null): Promise<{ row: any | null; failed: boolean }> {
+  const clean = name.trim();
+  const { data: found, error } = await supabase.rpc('venue_find_exact', { p_name: clean, p_city_id: cityId }).limit(1);
+  if (error) return { row: null, failed: true };
+  const first: any = Array.isArray(found) ? found[0] ?? null : (found ?? null);
+  if (!first) return { row: null, failed: false };
+  if (!first.deleted_at) return { row: first, failed: false };
+  let q = supabase.from('venues').select('*').ilike('name', escapeLike(clean)).is('deleted_at', null);
+  if (cityId) q = q.eq('city_id', cityId);
+  const { data: live, error: liveError } = await q.limit(1);
+  if (liveError) return { row: null, failed: true };
+  return { row: (live ?? [])[0] ?? null, failed: false };
+}
+
 // Shared helper used by createMatch to increment use_count on an existing
 // venue name or insert a new row. Best-effort — never throws.
 export async function upsertVenue(
@@ -149,13 +175,11 @@ export async function upsertVenue(
     //
     // Matching semantics are unchanged: case-insensitive, trimmed, and the city
     // filter applies only when a city is supplied.
-    const { data: found, error: rpcError } = await supabase
-      .rpc('venue_find_exact', { p_name: clean, p_city_id: cityId })
-      .limit(1);
     // The temporary ILIKE fallback for the pre-migration window is gone (079 is
     // applied). A failure here is now a real failure, not a missing function.
-    if (rpcError) return null;
-    const existing: any = Array.isArray(found) ? found[0] ?? null : (found ?? null);
+    // Decision 7: deleted venues are skipped (findLiveVenue).
+    const { row: existing, failed } = await findLiveVenue(clean, cityId);
+    if (failed) return null;
     if (existing) {
       if (!countUse) return existing;
       await supabase
@@ -190,7 +214,7 @@ export async function updateVenue(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const { id } = req.params;
   if (!isUuid(id)) return res.status(400).json({ error: 'Unknown venue.', code: 'INVALID_ID' });
-  const { data: venue } = await supabase.from('venues').select('id, name, city_id, created_by').eq('id', id).maybeSingle();
+  const { data: venue } = await supabase.from('venues').select('id, name, city_id, created_by').eq('id', id).is('deleted_at', null).maybeSingle();
   if (!venue) return res.status(404).json({ error: 'Venue not found.' });
   if (venue.created_by !== userId && !(await isAdminUser(userId))) {
     return res.status(403).json({ error: 'Only the person who added this venue (or an admin) can edit it.' });
@@ -225,11 +249,37 @@ export async function updateVenue(req: Request, res: Response) {
   const newName = (update.name as string | undefined) ?? venue.name;
   const newCity = 'city_id' in update ? (update.city_id as string | null) : venue.city_id;
   if (update.name !== undefined || 'city_id' in update) {
-    const { data: found } = await supabase.rpc('venue_find_exact', { p_name: newName, p_city_id: newCity }).limit(5);
-    const clash = (Array.isArray(found) ? found : found ? [found] : []).some((v: any) => v?.id && v.id !== id);
+    const { row: other } = await findLiveVenue(newName, newCity);
+    const clash = !!other?.id && other.id !== id;
     if (clash) return res.status(409).json({ error: 'Another venue already has that name here.', code: 'VENUE_NAME_TAKEN' });
   }
   const { data, error } = await supabase.from('venues').update(update).eq('id', id).select('*').single();
   if (error || !data) return res.status(500).json({ error: 'Could not save the venue.' });
   return res.json({ venue: data });
+}
+
+// DELETE /venues/:id
+// Decision 7 (migration 112): the venue's creator, or an admin, may delete it.
+// Soft: deleted_at / deleted_by are set and the row stays. It leaves the
+// directory and the match form's picker, and its name can be added again as a
+// new venue. Matches store the venue's name, so their text is untouched.
+export async function deleteVenue(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  if (!isUuid(id)) return res.status(400).json({ error: 'Unknown venue.', code: 'INVALID_ID' });
+  const { data: venue } = await supabase.from('venues').select('id, created_by').eq('id', id).is('deleted_at', null).maybeSingle();
+  if (!venue) return res.status(404).json({ error: 'Venue not found.' });
+  if (venue.created_by !== userId && !(await isAdminUser(userId))) {
+    return res.status(403).json({ error: 'Only the person who added this venue (or an admin) can delete it.' });
+  }
+  const { data, error } = await supabase
+    .from('venues')
+    .update({ deleted_at: new Date().toISOString(), deleted_by: userId })
+    .eq('id', id)
+    .is('deleted_at', null)
+    .select('id');
+  if (error) return res.status(500).json({ error: 'Could not delete the venue.' });
+  if (!data || data.length === 0) return res.status(404).json({ error: 'Venue not found.' });
+  return res.json({ deleted: true, id });
 }

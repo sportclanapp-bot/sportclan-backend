@@ -8,7 +8,7 @@ import { inviteFreshCutoffIso } from './invites.controller';
 import { resolveSportId } from '../utils/sportId';
 import { isSportInactive } from '../utils/sports';
 import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
-import { RESERVED_USERNAMES, EMAIL_RE } from '../utils/profileRules';
+import { RESERVED_USERNAMES, EMAIL_RE, GENDERS, GENDER_ERROR } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
@@ -483,8 +483,8 @@ export async function updateMe(req: Request, res: Response) {
   }
   // B04-F1: these went to the DB unchecked, so a bad value was a 500 (a CHECK,
   // a uuid cast or a missing FK) instead of a worded 400.
-  if ('gender' in patch && patch.gender !== null && !['male', 'female', 'other'].includes(String(patch.gender))) {
-    return res.status(400).json({ error: 'gender must be male, female, or other', code: 'INVALID_GENDER' });
+  if ('gender' in patch && patch.gender !== null && !(GENDERS as readonly string[]).includes(String(patch.gender))) {
+    return res.status(400).json({ error: GENDER_ERROR, code: 'INVALID_GENDER' });
   }
   for (const k of ['is_available', 'show_dob'] as const) {
     if (k in patch && typeof patch[k] !== 'boolean') {

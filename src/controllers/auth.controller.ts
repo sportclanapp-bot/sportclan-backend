@@ -14,7 +14,7 @@ import {
 } from '../utils/jwt';
 import { setOtp, getOtp, deleteOtp, bumpCounter, readCounter } from '../utils/otpStore';
 import { normalizeAccountTypes } from '../constants/accountTypes';
-import { signupProfileProblem, USERNAME_RE, RESERVED_USERNAMES } from '../utils/profileRules';
+import { signupProfileProblem, USERNAME_RE, RESERVED_USERNAMES, GENDERS, GENDER_ERROR } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { awardCoins } from '../utils/coins';
 import { denySessions } from '../utils/sessionDeny';
@@ -517,8 +517,8 @@ export async function register(req: Request, res: Response) {
     .from('users').select('id').ilike('username', escapeLike(username.trim())).limit(1).maybeSingle(); // B01-F11
   if (existingUsername) return res.status(409).json({ error: 'Username already taken' });
 
-  if (gender && !['male', 'female', 'other'].includes(gender)) {
-    return res.status(400).json({ error: 'gender must be male, female, or other' });
+  if (gender && !(GENDERS as readonly string[]).includes(gender)) {
+    return res.status(400).json({ error: GENDER_ERROR });
   }
 
   // Validate + normalize account types against the shared whitelist — the same

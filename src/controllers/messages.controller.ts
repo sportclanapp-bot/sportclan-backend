@@ -460,6 +460,30 @@ async function mendDm<T extends { id: string; deleted_at?: string | null }>(chat
   return { ...chat, deleted_at: null };
 }
 
+// Decision 5 (Dipak, 29 Sep 2026): "Who can message you" also decides who can
+// add you to a group — being added used to get round it. Same meaning as
+// dmSendGate: nobody → no one; followers → only people who follow them.
+// Returns the refusal for the first person the adder may not add, or null.
+async function groupAddRefusal(adderId: string, targetIds: string[]): Promise<{ error: string; code: string } | null> {
+  if (targetIds.length === 0) return null;
+  const [{ data: users }, { data: follows }] = await Promise.all([
+    supabase.from('users').select('id, name, message_privacy').in('id', targetIds),
+    supabase.from('follow_relationships').select('following_id').eq('follower_id', adderId).in('following_id', targetIds),
+  ]);
+  const followed = new Set((follows ?? []).map((f: { following_id: string }) => f.following_id));
+  for (const u of (users ?? []) as Array<{ id: string; name: string | null; message_privacy: string | null }>) {
+    const who = u.name?.trim() || 'This person';
+    const privacy = u.message_privacy ?? 'everyone';
+    if (privacy === 'nobody') {
+      return { error: `${who} isn’t accepting messages, so they can’t be added to a group.`, code: 'MESSAGE_PRIVACY' };
+    }
+    if (privacy === 'followers' && !followed.has(u.id)) {
+      return { error: `${who} only accepts messages from people who follow them, so you can’t add them to a group.`, code: 'MESSAGE_PRIVACY' };
+    }
+  }
+  return null;
+}
+
 // ─── CREATE GROUP CHAT ──────────────────────────────────────────────────────
 export async function createGroup(req: Request, res: Response) {
   const userId = req.userId!;
@@ -497,6 +521,8 @@ export async function createGroup(req: Request, res: Response) {
   if ((blocks ?? []).length > 0) {
     return res.status(403).json({ error: 'Can’t create this group — a block exists between some of its members.', code: 'BLOCKED_FROM_GROUP' });
   }
+  const privacyRefusal = await groupAddRefusal(userId, member_ids);
+  if (privacyRefusal) return res.status(403).json(privacyRefusal);
 
   const { data: chat, error } = await supabase
     .from('chats')
@@ -641,6 +667,8 @@ export async function addMember(req: Request, res: Response) {
   // 098: a current member is left alone; someone who left is rejoined on the
   // same row (left_at cleared) rather than a second row inserted.
   if (await isActiveMember(id, user_id)) return res.json({ success: true }); // already a member
+  const privacyRefusal = await groupAddRefusal(userId, [user_id]);
+  if (privacyRefusal) return res.status(403).json(privacyRefusal);
   await joinChat(id, [{ user_id, role: 'member' }]);
   // The system line only for a join that happened.
   if (!(await isActiveMember(id, user_id))) {
@@ -1036,11 +1064,10 @@ export async function sendMessage(req: Request, res: Response) {
 export async function deleteMessage(req: Request, res: Response) {
   const userId = req.userId!;
   const { messageId } = req.params;
-  // SC-71: a bodyless DELETE leaves req.body undefined; guard the destructure so
-  // it defaults to a plain "delete this message" (for_everyone falsy) instead of
-  // throwing → 500. Auth behaviour is unchanged (non-sender still 403).
-  const { for_everyone } = req.body ?? {};
-
+  // Decision 3 (Dipak, 29 Sep 2026): a sender can delete their message for
+  // everyone at any age — the app asks first ("Delete for everyone?") and the
+  // bubble says "This message was deleted". The old 5-minute `for_everyone`
+  // window (never sent by the app) is gone; the flag is accepted and ignored.
   const { data: msg } = await supabase
     .from('messages')
     .select('sender_id, created_at')
@@ -1057,12 +1084,6 @@ export async function deleteMessage(req: Request, res: Response) {
   // non-sender cannot delete.
   if (msg.sender_id !== userId) {
     return res.status(403).json({ error: 'Only the sender can delete this message' });
-  }
-  if (for_everyone) {
-    const elapsed = Date.now() - new Date(msg.created_at).getTime();
-    if (elapsed > 5 * 60 * 1000) {
-      return res.status(403).json({ error: '5-minute window has passed' });
-    }
   }
 
   const { data: updated, error } = await supabase

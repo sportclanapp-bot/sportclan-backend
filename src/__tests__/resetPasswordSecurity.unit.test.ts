@@ -25,10 +25,11 @@ let updatedRows: Array<{ id: string }> = [];
 const calls: string[] = [];
 jest.mock('../utils/supabase', () => {
   const chain: any = {};
-  for (const m of ['from', 'update', 'in', 'is', 'eq', 'not', 'limit', 'maybeSingle']) chain[m] = jest.fn((...a: unknown[]) => { calls.push(`${m}:${JSON.stringify(a)}`); return chain; });
+  for (const m of ['from', 'update', 'delete', 'in', 'is', 'eq', 'not', 'limit', 'maybeSingle']) chain[m] = jest.fn((...a: unknown[]) => { calls.push(`${m}:${JSON.stringify(a)}`); return chain; });
   chain.select = jest.fn(async () => ({ data: updatedRows, error: null }));
   return { supabase: chain };
 });
+jest.mock('../utils/sessionRevocation', () => ({ revokeSessionsNow: jest.fn(async () => Date.now()) })); // decision 8: a reset signs devices out
 jest.mock('bcryptjs', () => ({ hash: jest.fn(async () => 'hash') }), { virtual: true });
 jest.mock('bcrypt', () => ({ hash: jest.fn(async () => 'hash') }), { virtual: true });
 

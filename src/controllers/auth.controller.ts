@@ -18,6 +18,7 @@ import { signupProfileProblem, USERNAME_RE, RESERVED_USERNAMES } from '../utils/
 import { escapeLike } from '../utils/likeSearch';
 import { awardCoins } from '../utils/coins';
 import { insertRefreshToken } from '../utils/sessionDevice';
+import { revokeSessionsNow } from '../utils/sessionRevocation';
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
 /** Codes sent to one number (28 Sep): per hour and per day, whoever asks. */
@@ -797,6 +798,17 @@ export async function resetPassword(req: Request, res: Response) {
   await deleteOtp(p);
   if (!updated || updated.length === 0) {
     return res.status(404).json({ error: 'No SportClan account uses this number.', code: 'PHONE_NOT_REGISTERED' });
+  }
+  // Decision 8 (Dipak, 29 Sep 2026): a reset signs every device out — a reset
+  // is often because someone else got in. The device resetting isn't signed in,
+  // so nothing is kept: refresh tokens go (no renewing), the access tokens
+  // already out stop on their next request (SC-384), and no more pushes.
+  for (const { id } of updated as Array<{ id: string }>) {
+    await supabase.from('refresh_tokens').delete().eq('user_id', id);
+    await revokeSessionsNow(id);
+    try {
+      await supabase.from('push_tokens').delete().eq('user_id', id);
+    } catch { /* best-effort: the password is already changed */ }
   }
   return res.json({ success: true });
 }

@@ -3,8 +3,9 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
-import { parsePagination, pageMeta } from '../utils/pagination'; // SC-306
+import { parsePagination, pageMeta, isRangeError } from '../utils/pagination'; // SC-306
 import { isBlockedBetween } from '../utils/blocks';
+import { isUuid } from '../utils/uuid';
 import { awardBadgesSafe } from './badges.controller';
 
 // SC-316: re-evaluate the sender's Gift Giver badge after a genuine send.
@@ -12,6 +13,9 @@ import { awardBadgesSafe } from './badges.controller';
 function awardGiftBadge(senderId: string): Promise<void> {
   return awardBadgesSafe(senderId);
 }
+
+/** Phase 3 B10-F14: the app caps a gift message at 140; the server now does too. */
+export const GIFT_MESSAGE_MAX = 140;
 
 // ─── Change #7 CRITICAL: ALL 10 PRD gifts ──────────────────────────────────────
 const GIFT_CATALOGUE = [
@@ -64,6 +68,17 @@ export async function sendGift(req: Request, res: Response) {
 
   if (!receiverId || !giftId) return res.status(400).json({ error: 'receiverId and giftId required' });
   if (senderId === receiverId) return res.status(400).json({ error: 'Cannot send gift to yourself' });
+  if (!isUuid(receiverId)) return res.status(404).json({ error: 'This account no longer exists.' });
+  // Phase 3 B10-F14: the message was passed to the RPC unchecked — a 300-char
+  // one was silently cut to 260 by the column, and a number or object went
+  // straight to the database. Text only, trimmed, capped; blank means none.
+  if (message != null && typeof message !== 'string') {
+    return res.status(400).json({ error: 'The message must be text.' });
+  }
+  const note = typeof message === 'string' && message.trim() ? message.trim() : null;
+  if (note && note.length > GIFT_MESSAGE_MAX) {
+    return res.status(400).json({ error: `Keep the message under ${GIFT_MESSAGE_MAX} characters.` });
+  }
 
   // SC-207: block gate — a blocked user must not be able to reach the blocker via
   // a gift (the last user→user channel missing this; mirrors the DM gate). Checked
@@ -93,9 +108,11 @@ export async function sendGift(req: Request, res: Response) {
     });
   }
 
-  // Check receiver exists
-  const { data: receiver } = await supabase.from('users').select('id').eq('id', receiverId).single();
-  if (!receiver) return res.status(404).json({ error: 'Receiver not found' });
+  // Check receiver exists — and is a live account (Phase 3 B10-F16): a stale
+  // profile link or gift-history row could charge the sender for a gift a
+  // deleted account will never see. Checked before any coins move.
+  const { data: receiver } = await supabase.from('users').select('id').eq('id', receiverId).is('deleted_at', null).maybeSingle();
+  if (!receiver) return res.status(404).json({ error: 'This account no longer exists.' });
 
   const senderName = ((sender as { name?: string; username?: string }).name
     || (sender as { username?: string }).username || 'Someone') as string;
@@ -112,7 +129,7 @@ export async function sendGift(req: Request, res: Response) {
     p_emoji: gift.emoji,
     p_name: gift.name,
     p_cost: gift.cost,
-    p_message: message || null,
+    p_message: note,
     // SC-179: coerce a non-UUID key to null so a malformed key can't 500 send_gift.
     p_client_key: normalizeClientKey(idempotency_key),
   });
@@ -133,7 +150,7 @@ export async function sendGift(req: Request, res: Response) {
         gift_emoji: gift.emoji,
         gift_name: gift.name,
         coin_cost: gift.cost,
-        message: message || null,
+        message: note,
       })
       .select()
       .single();
@@ -170,9 +187,12 @@ export async function sendGift(req: Request, res: Response) {
   });
 }
 
-// GET /gifts/received?userId=
+// GET /gifts/received — the caller's own received gifts.
+// Phase 3 B10-F1: this took `?userId=` in place of the caller, so anyone signed
+// in could read anyone's received gifts, private messages included. The app
+// never sent it; the parameter is now ignored.
 export async function getReceivedGifts(req: Request, res: Response) {
-  const userId = (req.query.userId as string) || req.userId!;
+  const userId = req.userId!;
   const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 50, maxLimit: 100 }); // SC-306
 
   const { data, error, count } = await supabase
@@ -183,6 +203,8 @@ export async function getReceivedGifts(req: Request, res: Response) {
     .order('id', { ascending: false }) // stable tiebreaker for offset paging
     .range(p.from, p.to);
 
+  // An offset past the end is an empty last page, not a 500 (Phase 3 B10-F2).
+  if (isRangeError(error)) return res.json({ gifts: [], ...pageMeta(count ?? 0, p), has_more: false });
   if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.json({ gifts: data ?? [], ...pageMeta(count ?? 0, p) });
 }
@@ -200,6 +222,8 @@ export async function getSentGifts(req: Request, res: Response) {
     .order('id', { ascending: false }) // stable tiebreaker
     .range(p.from, p.to);
 
+  // An offset past the end is an empty last page, not a 500 (Phase 3 B10-F2).
+  if (isRangeError(error)) return res.json({ gifts: [], ...pageMeta(count ?? 0, p), has_more: false });
   if (error) return res.status(500).json({ error: sanitizeError(error) });
   return res.json({ gifts: data ?? [], ...pageMeta(count ?? 0, p) });
 }

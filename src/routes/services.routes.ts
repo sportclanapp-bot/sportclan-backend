@@ -5,6 +5,7 @@ import { VALID_ACCOUNT_TYPES } from '../constants/accountTypes';
 import { parsePagination, pageMeta } from '../utils/pagination';
 import { authenticateToken } from '../middleware/auth.middleware';
 import { blockedUserIds, excludeIds } from '../utils/blocks';
+import { queryText } from '../utils/validation';
 
 const router = Router();
 
@@ -35,7 +36,8 @@ const SERVICE_TYPES = new Set(VALID_ACCOUNT_TYPES.filter((t) => t !== 'player'))
 // consistency wins. Safe to gate — every caller (ServicesHub / ServiceList /
 // VenuesList) lives inside MainStack, which only mounts when authenticated.
 router.get('/', authenticateToken, async (req: Request, res: Response) => {
-  const type = ((req.query.type as string) || '').trim().toLowerCase();
+  // Phase 3 B10-F2: `?type=a&type=b` arrived as an array and `.trim()` 500'd.
+  const type = (queryText(req.query.type) ?? '').trim().toLowerCase();
   if (!SERVICE_TYPES.has(type as never)) {
     return res.status(400).json({
       error: `type must be one of ${[...SERVICE_TYPES].join(', ')}`,

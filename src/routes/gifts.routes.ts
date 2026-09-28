@@ -17,8 +17,10 @@ const noStore = (_req: Request, res: Response, next: NextFunction) => {
 };
 
 router.get('/catalogue', getCatalogue);                // Public + shared-cacheable (static)
-router.post('/send', authenticateToken, noStore, sendGift);
-router.get('/received', authenticateToken, noStore, getReceivedGifts);
-router.get('/sent', authenticateToken, noStore, getSentGifts);
+// Phase 3 B10-F15: noStore goes BEFORE the auth check — after it, a 401 still
+// carried the mount's `public, max-age=3600`.
+router.post('/send', noStore, authenticateToken, sendGift);
+router.get('/received', noStore, authenticateToken, getReceivedGifts);
+router.get('/sent', noStore, authenticateToken, getSentGifts);
 
 export default router;

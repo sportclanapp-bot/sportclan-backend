@@ -180,3 +180,15 @@ export function normaliseVenue(raw: unknown): string | null | typeof VENUE_TOO_L
   if (clean.length > LIMITS.venueMax) return VENUE_TOO_LONG;
   return clean;
 }
+
+/**
+ * Phase 3 B10-F2: a query parameter as one string. `?q=a&q=b` arrives as an
+ * array and `?q[x]=1` as an object; calling `.trim()` on either was a 500. A
+ * repeated parameter keeps its first value; anything else that isn't text is
+ * treated as not sent.
+ */
+export function queryText(v: unknown): string | undefined {
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v) && typeof v[0] === 'string') return v[0];
+  return undefined;
+}

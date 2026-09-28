@@ -1,7 +1,9 @@
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
-import { LIMITS, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
+import { LIMITS, normaliseVenue, VENUE_TOO_LONG, queryText } from '../utils/validation';
+import { isUuid } from '../utils/uuid';
+import { escapeLike } from '../utils/likeSearch';
 import { parsePagination } from '../utils/pagination';
 import { resolveSportId } from '../utils/sportId';
 
@@ -9,7 +11,11 @@ import { resolveSportId } from '../utils/sportId';
 // * q present → case-insensitive prefix match on name, ordered by use_count desc
 // * q empty   → top 5 most-used venues for the given city
 export async function searchVenues(req: Request, res: Response) {
-  const { city_id, q } = req.query as Record<string, string | undefined>;
+  // Phase 3 B10-F2: a repeated `q` arrived as an array (`.trim()` 500'd) and a
+  // non-uuid city_id reached a uuid column (22P02 → 500).
+  const q = queryText(req.query.q);
+  const city_id = queryText(req.query.city_id);
+  if (city_id && !isUuid(city_id)) return res.status(400).json({ error: 'Unknown city.' });
   // SC-368: this was a hardcoded limit of 10 with no offset, so the venues
   // directory could only ever show 10 rows out of 200+ and had no way to reach
   // the rest — the same list-cap class as SC-303..308.
@@ -30,7 +36,8 @@ export async function searchVenues(req: Request, res: Response) {
     .range(offset, offset + limit - 1);
   if (city_id) query = query.eq('city_id', city_id);
   if (q && q.trim().length > 0) {
-    query = query.ilike('name', `%${q.trim()}%`);
+    // Phase 3 B10-F7: `%` and `_` in the search are literal characters.
+    query = query.ilike('name', `%${escapeLike(q.trim())}%`);
   }
   // B03 (V091/V245, D3): test venues ("S2 probe ground") are hidden from real viewers.
   if (await hideTestFor(req.userId)) query = excludeTest(query);
@@ -92,9 +99,16 @@ export async function createVenue(req: Request, res: Response) {
     });
   }
   if (!clean) return res.status(400).json({ error: 'name is required' });
+  // Phase 3 B10-F2: an unchecked city_id made the insert fail, answered as a
+  // 500 "Could not save that venue." It must be a real city, or not sent.
+  if (city_id != null && city_id !== '') {
+    if (!isUuid(city_id)) return res.status(400).json({ error: 'Unknown city.' });
+    const { data: city } = await supabase.from('cities').select('id').eq('id', city_id).maybeSingle();
+    if (!city) return res.status(400).json({ error: 'Unknown city.' });
+  }
   const details = await venueDetails(req.body);
   if ('error' in details) return res.status(400).json({ error: details.error, code: 'BAD_VENUE_DETAIL' });
-  const row = await upsertVenue(clean, city_id ?? null, userId);
+  const row = await upsertVenue(clean, city_id || null, userId);
   if (!row) return res.status(500).json({ error: 'Could not save that venue.' });
   // The same venue may already exist (upsert by name + city). Its details are
   // filled in where empty — never overwritten, since someone else may have

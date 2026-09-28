@@ -90,7 +90,7 @@ export async function getStats(req: Request, res: Response) {
 
   const { data: me } = await supabase
     .from('users')
-    .select('referral_code')
+    .select('referral_code, referred_by')
     .eq('id', userId)
     .maybeSingle();
 
@@ -126,5 +126,8 @@ export async function getStats(req: Request, res: Response) {
     referralCode: me?.referral_code ?? null,
     referralCount: referralCount ?? 0,
     totalCoinsEarned,
+    // Phase 3 B10-F18: the app hides "Have a friend's code?" once one is used —
+    // it only learned that on submit ("Referral already applied").
+    alreadyApplied: !!me?.referred_by,
   });
 }

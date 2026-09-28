@@ -174,7 +174,9 @@ export async function getMe(req: Request, res: Response) {
       .from('users')
       // SC-200: embed the city so the client gets a real city_name (the codebase's
       // established join idiom; see search/community controllers). Flattened below.
-      .select(`${PUBLIC_FIELDS}, city:cities!city_id(id, name)`)
+      // Phase 3 B10-F3: plus the check-in state, so Wallet can open on "Done
+      // today" instead of offering a check-in the server will refuse. Own row only.
+      .select(`${PUBLIC_FIELDS}, last_checkin_date, checkin_streak, city:cities!city_id(id, name)`)
       .eq('id', userId)
       .maybeSingle(),
     // SC-365: the sports you play, so Edit profile can seed its selector. Own
@@ -242,6 +244,8 @@ export async function getMe(req: Request, res: Response) {
       sport_ids: sportRows,
       is_admin,
       officiated_count,
+      // The IST calendar day decides, the same rule the check-in itself uses.
+      checked_in_today: (data as any).last_checkin_date === istDay(),
     },
   });
 }

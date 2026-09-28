@@ -41,10 +41,11 @@ jest.mock('../utils/supabase', () => {
   };
 });
 let mockBlocked = false;
+let mockBlockedIds: string[] = [];
 jest.mock('../utils/blocks', () => ({
   ...jest.requireActual('../utils/blocks'),
   isBlockedBetween: jest.fn(async () => mockBlocked),
-  blockedUserIds: jest.fn(async () => []),
+  blockedUserIds: jest.fn(async () => new Set(mockBlockedIds)),
 }));
 const mockNotify = jest.fn(async (..._a: unknown[]) => undefined);
 jest.mock('../utils/notify', () => ({
@@ -62,6 +63,8 @@ import { sendKudos } from '../controllers/kudos.controller';
 import { likePost, reactToComment, votePoll, reportContent } from '../controllers/community.controller';
 // eslint-disable-next-line import/first
 import { followUser, submitReview } from '../controllers/users.controller';
+// eslint-disable-next-line import/first
+import { addMember } from '../controllers/messages.controller';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const THEM = '22222222-2222-4222-8222-222222222222';
@@ -80,6 +83,7 @@ beforeEach(() => {
   mockWrites = [];
   mockRpcs = [];
   mockBlocked = false;
+  mockBlockedIds = [];
   mockNotify.mockClear();
 });
 
@@ -141,6 +145,23 @@ describe('block gates (SC-207, SC-96s, a7f0fe6)', () => {
     expect([review.statusCode, review.body]).toEqual([403, { error: 'You can’t review this user.' }]);
     const kudos = await call(sendKudos, { body: { toUserId: THEM, matchId: POST } });
     expect([kudos.statusCode, kudos.body]).toEqual([403, { error: 'You can’t send kudos to this user.' }]);
+    expect(mockWrites).toEqual([]);
+  });
+});
+
+describe('group add (SC-96s, a7f0fe6)', () => {
+  test('SC-96s (a7f0fe6): adding someone to a group where a member blocked them → 403 BLOCKED_FROM_GROUP', async () => {
+    const OTHER = '44444444-4444-4444-8444-444444444444';
+    mockBlockedIds = [OTHER];
+    mockTable = {
+      chats: { data: { is_group: true } },
+      users: { data: [{ id: THEM }] },
+      chat_participants: (log) => (log.some((c) => c.includes('"role"')) ? { data: { role: 'admin' } }
+        : log.some((c) => c.includes('"count"')) ? { data: null, count: 3 }
+        : { data: [{ user_id: ME }, { user_id: OTHER }] }),
+    };
+    const r = await call(addMember, { params: { id: POST }, body: { user_id: THEM } });
+    expect([r.statusCode, r.body.code]).toEqual([403, 'BLOCKED_FROM_GROUP']);
     expect(mockWrites).toEqual([]);
   });
 });

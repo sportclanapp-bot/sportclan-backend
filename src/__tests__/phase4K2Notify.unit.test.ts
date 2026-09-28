@@ -33,7 +33,7 @@ jest.mock('../utils/activeUser', () => ({
 jest.mock('../utils/expoPush', () => ({ sendPushToTokens: jest.fn(async () => undefined) }));
 
 // eslint-disable-next-line import/first
-import { notifyUsers } from '../utils/notify';
+import { notifyUsers, allowedRecipients } from '../utils/notify';
 
 const ACTOR = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const U = (i: number) => `bbbbbbbb-bbbb-4bbb-8bbb-${String(i).padStart(12, '0')}`;
@@ -79,5 +79,12 @@ describe('K2-21 · notifyUsers fan-out filters (SC-134/135/136/137)', () => {
     mockNext = (q) => (q[0] === 'from:notifications' ? { error: { message: 'insert denied' } } : { data: null });
     await notifyUsers([U(1)], payload);
     expect(err.mock.calls.some((c) => String(c[0]).includes('fanout TOTAL FAILURE (0/1)'))).toBe(true);
+  });
+});
+
+describe('K2-42 · rating_change obeys the Milestones toggle (SC-232)', () => {
+  it('K2-42 (16ccd07): a user with milestones off gets no rating_change; others do', async () => {
+    mockNext = (q) => (q[0] === 'from:users' ? { data: [{ id: U(1), notification_preferences: { milestones: false } }, { id: U(2), notification_preferences: {} }] } : { data: null });
+    expect(await allowedRecipients([U(1), U(2)], 'rating_change')).toEqual([U(2)]);
   });
 });

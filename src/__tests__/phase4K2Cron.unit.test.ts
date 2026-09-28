@@ -38,7 +38,7 @@ jest.mock('../utils/notify', () => ({
 }));
 
 // eslint-disable-next-line import/first
-import { runSmartMatchNotifications, runReEngagement, runWeeklyDigest } from '../controllers/features.controller';
+import { runSmartMatchNotifications, runReEngagement, runWeeklyDigest, checkRatingMilestone } from '../controllers/features.controller';
 
 const U = (i: number) => `bbbbbbbb-bbbb-4bbb-8bbb-${String(i).padStart(12, '0')}`;
 const CITY = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -184,5 +184,27 @@ describe('K2-35 · weekly digest counts THIS week; re-engagement has a cooldown 
     await runReEngagement();
     expect(notifRows().map((r) => r.user_id)).toEqual([U(2)]);
     expect(mockLog.find((q) => q[0] === 'from:users')).toContain('order:["last_active_at",{"ascending":true}]');
+  });
+});
+
+describe('K2-38 · direct-insert notification sites go through notifyUser (prefs-gated, single row)', () => {
+  it('K2-38a (14c2633): crossing a rating milestone → ONE notifyUser(rating_milestone), no direct notifications insert', async () => {
+    mockNext = (q) => (q[0] === 'from:sports' ? { data: { name: 'Cricket' } } : { data: null });
+    await checkRatingMilestone(U(1), 'sport-1', 1190, 1210);
+    expect(mockNotifyUser).toHaveBeenCalledTimes(1);
+    expect(mockNotifyUser.mock.calls[0][0]).toMatchObject({ userId: U(1), type: 'rating_milestone', data: { milestone: '1200' } });
+    expect(mockLog.filter((q) => isInsert(q, 'notifications'))).toHaveLength(0);
+  });
+  // The other sites are private helpers; their bodies are read instead.
+  const src = (f: string) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+  const body = (text: string, head: string) => { const i = text.indexOf(head); expect(i).toBeGreaterThan(-1); return text.slice(i, text.indexOf('\n}\n', i)); };
+  it.each([
+    ['controllers/invites.controller.ts', 'async function notifyInviteReceived('],
+    ['controllers/notifications.controller.ts', 'export async function weeklyDigest('],
+    ['controllers/users.controller.ts', 'async function runSmartNotifications('],
+  ])('K2-38b (14c2633): %s — %s notifies via notifyUser, never a raw notifications insert', (f, head) => {
+    const b = body(src(f), head);
+    expect(b).toContain('notifyUser(');
+    expect(b).not.toMatch(/from\('notifications'\)\s*\.insert/);
   });
 });

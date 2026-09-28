@@ -41,7 +41,7 @@ const mockNotifyUsers = jest.fn(async (..._a: unknown[]) => undefined);
 jest.mock('../utils/notify', () => ({ notifyUsers: (...a: unknown[]) => mockNotifyUsers(...a) }));
 
 // eslint-disable-next-line import/first
-import { createEvent, recordEventIdempotent } from '../controllers/scoring.controller';
+import { createEvent, recordEventIdempotent, validateScoringEvent } from '../controllers/scoring.controller';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const MATCH = '22222222-2222-4222-8222-222222222222';
@@ -151,5 +151,24 @@ describe('K2-22 · a deduplicated event does not notify again (SC-133)', () => {
     expect(await recordEventIdempotent({ matchId: MATCH, createdBy: ME, eventType: 'ball' })).toEqual({ event: { id: 'e9' }, error: null, wasNew: false });
     mockRpc = () => ({ data: { id: 'e8' } });
     expect((await recordEventIdempotent({ matchId: MATCH, createdBy: ME, eventType: 'ball' })).wasNew).toBe(true);
+  });
+});
+
+describe('K2-39a · scoring inputs are range-checked (SC-228)', () => {
+  const m = { id: MATCH, status: 'live', is_ranked: false };
+  it.each([
+    ['period 2001', { event_type: 'score', period: 2001, payload: { team_side: 'A', value: 1 } }, 'period must be an integer between 0 and 2000'],
+    ['period 1.5', { event_type: 'score', period: 1.5, payload: { team_side: 'A', value: 1 } }, 'period must be an integer between 0 and 2000'],
+    ['clock -1', { event_type: 'score', clock_seconds: -1, payload: { team_side: 'A', value: 1 } }, 'clock_seconds must be an integer between 0 and 86400'],
+    ['clock 86401', { event_type: 'score', clock_seconds: 86401, payload: { team_side: 'A', value: 1 } }, 'clock_seconds must be an integer between 0 and 86400'],
+    ['value 4', { event_type: 'score', payload: { team_side: 'A', value: 4 } }, 'value must be an integer between 1 and 3'],
+    ['value -2', { event_type: 'score', payload: { team_side: 'A', value: -2 } }, 'value must be an integer between 1 and 3'],
+    ['runs 8', { event_type: 'ball', payload: { team_side: 'A', runs: 8 } }, 'runs must be an integer between 0 and 7'],
+  ])('K2-39a (e2a1101): %s → 400', async (_n, ev, error) => {
+    const out = await validateScoringEvent(MATCH, m, ev as any);
+    expect(out).toEqual({ status: 400, body: { error } });
+  });
+  it('K2-39a (e2a1101): in-range values pass', async () => {
+    expect(await validateScoringEvent(MATCH, m, { event_type: 'score', period: 2, clock_seconds: 600, payload: { team_side: 'B', value: 3 } })).toBeNull();
   });
 });

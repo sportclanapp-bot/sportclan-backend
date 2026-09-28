@@ -53,6 +53,9 @@ jest.mock('../utils/notify', () => ({
 }));
 
 // eslint-disable-next-line import/first
+// eslint-disable-next-line import/first
+import { getSport } from '../utils/sportCache';
+// eslint-disable-next-line import/first
 import { addParticipants, getMatchChat, rateMatchHandler, getCommentary, completeMatch } from '../controllers/matches.controller';
 
 const ME = '11111111-1111-4111-8111-111111111111';
@@ -164,5 +167,28 @@ describe('K2-12 · completion persists through the atomic finalize_match RPC (SC
     mockRpc = (n) => (n === 'finalize_match' ? { data: { applied: false, match: { id: MATCH, status: 'completed' } } } : {});
     const r = await call(completeMatch, { body: {} });
     expect([r.statusCode, r.body.error]).toEqual([400, 'Match already completed']);
+  });
+});
+
+describe('K2-39b / K2-40 · a decisive sport can’t be completed level without a winner (SC-227, now SC-268 allows_draw)', () => {
+  const level = (q: Q) => {
+    if (q[0] === 'from:matches') return { data: matchRow({ status: 'live', is_ranked: false, sport_id: 'sport-bb', score_summary: { A: { points: 80 }, B: { points: 80 } } }) };
+    if (q[0] === 'from:match_participants') return { data: [{ user_id: ME, team_side: 'A' }, { user_id: OTHER, team_side: 'B' }] };
+    return { data: null };
+  };
+  beforeEach(() => { (getSport as jest.Mock).mockImplementation(async () => ({ slug: 'basketball', allows_draw: false })); });
+  afterEach(() => { (getSport as jest.Mock).mockImplementation(async () => ({ slug: 'cricket' })); });
+  it('K2-39b (e2a1101): basketball 80–80, no winner → 400, never completed', async () => {
+    mockNext = level;
+    const r = await call(completeMatch, { body: {} });
+    expect([r.statusCode, r.body.code]).toEqual([400, 'NEEDS_DECISIVE_WINNER']);
+    expect(mockRpcCalls.map(([n]) => n)).not.toContain('finalize_match');
+  });
+  it('K2-40 (9f72efb): the same level score WITH a declared winner (forfeit / record-result) is allowed', async () => {
+    mockNext = level;
+    mockRpc = (n) => (n === 'finalize_match' ? { data: { applied: true, match: { id: MATCH, status: 'completed' } } } : {});
+    const r = await call(completeMatch, { body: { winner_team_id: TA } });
+    expect(r.body.code).not.toBe('NEEDS_DECISIVE_WINNER');
+    expect(mockRpcCalls.map(([n]) => n)).toContain('finalize_match');
   });
 });

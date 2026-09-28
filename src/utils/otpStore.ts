@@ -49,7 +49,32 @@ function otpKey(phone: string): string {
 let _redis: unknown | null = null;
 let _redisChecked = false;
 
+/**
+ * Redis gets a tight budget (29 Sep 2026): one attempt, REDIS_TIMEOUT_MS, and
+ * after any failure it's skipped for REDIS_COOLDOWN_MS, so the Postgres and
+ * memory fallbacks answer straight away. Live, a failing Upstash with the SDK's
+ * default retries (Math.exp(n) * 50 ms, 5 tries) cost ~4.3 s per call: a send
+ * took ~19 s and a code check ~15 s. Same rule as utils/sessionDeny.
+ */
+export const REDIS_TIMEOUT_MS = 300;
+export const REDIS_COOLDOWN_MS = 60_000;
+let _redisDownUntil = 0;
+
+/** Run one Redis call within the budget; a failure starts the cooldown and rethrows. */
+async function redisCall<T>(op: () => Promise<T>): Promise<T> {
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`timed out after ${REDIS_TIMEOUT_MS} ms`)), REDIS_TIMEOUT_MS);
+      op().then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+    });
+  } catch (err) {
+    _redisDownUntil = Date.now() + REDIS_COOLDOWN_MS;
+    throw err;
+  }
+}
+
 function redisClient(): { set: Function; get: Function; del: Function; incr: Function; expire: Function } | null {
+  if (Date.now() < _redisDownUntil) return null;
   if (_redisChecked) return _redis as never;
   _redisChecked = true;
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -62,7 +87,7 @@ function redisClient(): { set: Function; get: Function; del: Function; incr: Fun
     // Required lazily so an unconfigured deploy never even loads the SDK.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Redis } = require('@upstash/redis');
-    _redis = new Redis({ url, token });
+    _redis = new Redis({ url, token, retry: false });
   } catch {
     _redis = null;
   }
@@ -109,7 +134,7 @@ export async function setOtp(
   const r = redisClient();
   if (r) {
     try {
-      await r.set(otpKey(phone), JSON.stringify(payload), { ex: ttlSeconds });
+      await redisCall(() => r.set(otpKey(phone), JSON.stringify(payload), { ex: ttlSeconds }));
       return 'redis';
     } catch {
       /* fall through — a Redis outage must not block login */
@@ -136,7 +161,7 @@ export async function getOtp(phone: string): Promise<OtpData | null> {
   const r = redisClient();
   if (r) {
     try {
-      const raw = await r.get(otpKey(phone));
+      const raw = await redisCall(() => r.get(otpKey(phone)));
       if (raw) {
         const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
         return parsed as OtpData;
@@ -174,7 +199,7 @@ export async function deleteOtp(phone: string): Promise<void> {
   const r = redisClient();
   if (r) {
     try {
-      await r.del(otpKey(phone));
+      await redisCall(() => r.del(otpKey(phone)));
     } catch {
       /* fall through — still clear the other backends */
     }
@@ -205,8 +230,8 @@ export async function bumpCounter(key: string, ttlSeconds: number): Promise<numb
   const r = redisClient();
   if (r) {
     try {
-      const n = Number(await r.incr(ctrKey(key)));
-      if (n === 1) await r.expire(ctrKey(key), ttlSeconds);
+      const n = Number(await redisCall(() => r.incr(ctrKey(key))));
+      if (n === 1) await redisCall(() => r.expire(ctrKey(key), ttlSeconds));
       return n;
     } catch {
       /* fall through */
@@ -240,7 +265,7 @@ export async function readCounter(key: string): Promise<number> {
   const r = redisClient();
   if (r) {
     try {
-      return Number(await r.get(ctrKey(key))) || 0;
+      return Number(await redisCall(() => r.get(ctrKey(key)))) || 0;
     } catch {
       /* fall through */
     }
@@ -263,7 +288,7 @@ export async function clearCounter(key: string): Promise<void> {
   const r = redisClient();
   if (r) {
     try {
-      await r.del(ctrKey(key));
+      await redisCall(() => r.del(ctrKey(key)));
     } catch {
       /* fall through */
     }
@@ -279,6 +304,7 @@ export async function clearCounter(key: string): Promise<void> {
 export function __resetOtpStoreForTests(): void {
   _redis = null;
   _redisChecked = false;
+  _redisDownUntil = 0;
   _pgMissing = false;
   _mem.clear();
   _ctrMem.clear();

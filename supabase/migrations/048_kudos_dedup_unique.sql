@@ -47,14 +47,25 @@ BEGIN
   --     recreated the very duplicate migration 080 exists to remove. Now it only
   --     fires if the triple has no unique protection at all, which is the case
   --     this migration was actually written for.
+  --     Phase 4: the check used to accept ANY unique constraint, or any index
+  --     whose definition contains "UNIQUE" — and the primary key's own index
+  --     (kudos_pkey) matches that. So a kudos table with a primary key but no
+  --     rule on the triple skipped the add. It now looks for a full (not
+  --     partial) unique index on exactly (from_user_id, to_user_id, match_id);
+  --     a UNIQUE constraint on the triple is backed by one, so it counts too.
   IF NOT EXISTS (
     SELECT 1
-    FROM pg_constraint
-    WHERE conrelid = 'kudos'::regclass
-      AND contype = 'u'
-  ) AND NOT EXISTS (
-    SELECT 1 FROM pg_indexes
-    WHERE tablename = 'kudos' AND indexdef LIKE '%UNIQUE%'
+    FROM pg_index i
+    WHERE i.indrelid = 'public.kudos'::regclass
+      AND i.indisunique
+      AND i.indpred IS NULL
+      AND i.indnatts = 3
+      AND (
+        SELECT array_agg(a.attname::text ORDER BY a.attname::text)
+        FROM pg_attribute a
+        WHERE a.attrelid = i.indrelid
+          AND a.attnum = ANY (i.indkey::smallint[])
+      ) = ARRAY['from_user_id', 'match_id', 'to_user_id']
   ) THEN
     CREATE UNIQUE INDEX IF NOT EXISTS uq_kudos_from_to_match
       ON kudos (from_user_id, to_user_id, match_id);

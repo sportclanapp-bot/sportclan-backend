@@ -2443,6 +2443,18 @@ export async function completeMatch(req: Request, res: Response) {
       // already holds. Callers that don't opt in keep the old 400, so the manual
       // "Complete match" button still tells a human they were too late.
       if (idempotent) {
+        // FORMATS (28 Sep, live): a completion cut off after the result was
+        // written but before the tournament step (a restart mid-request) left
+        // the winner un-advanced, or the last league fixture un-crowned, and
+        // every retry answered "already completed" without finishing it. The
+        // retry now finishes it; advancing and crowning are both idempotent.
+        if (match.tournament_id && !match.voided_at) {
+          try {
+            await advanceTournamentWinner(id);
+          } catch (advErr) {
+            console.error('bracket advancement on replay failed:', advErr instanceof Error ? advErr.message : advErr);
+          }
+        }
         return res.json({ match, already_completed: true });
       }
       return res.status(400).json({ error: 'Match already completed' });

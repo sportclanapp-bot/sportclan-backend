@@ -28,7 +28,7 @@ import { getTournamentStandings } from '../controllers/features.controller';
 
 const T = 't1';
 const m = (id: string, a: string, b: string, winner: string, group: string | null) =>
-  ({ id, tournament_id: T, team_a_id: a, team_b_id: b, winner_team_id: winner, status: 'completed', voided_at: null, group_label: group, score_summary: { team_a_score: 2, team_b_score: 1 }, overs: null });
+  ({ id, tournament_id: T, team_a_id: a, team_b_id: b, winner_team_id: winner, status: 'completed', voided_at: null, group_label: group, round: group ? 0 : 1, score_summary: { team_a_score: 2, team_b_score: 1 }, overs: null });
 const entry = (id: string, g: string) => ({ tournament_id: T, team_id: id, group_label: g, status: 'approved', team: { id, name: id, short_name: null } });
 
 beforeEach(() => {

@@ -47,7 +47,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     // Get completed matches
     const { data: allMatches } = await supabase
       .from('matches')
-      .select('id, team_a_id, team_b_id, winner_team_id, score_summary, status, overs, group_label')
+      .select('id, team_a_id, team_b_id, winner_team_id, score_summary, status, overs, group_label, round')
       .eq('tournament_id', id)
       .eq('status', 'completed')
       .is('voided_at', null); // SC-424: a voided fixture is not a played fixture
@@ -55,8 +55,9 @@ export async function getTournamentStandings(req: Request, res: Response) {
     // every completed match, so once the knockout began a team's semi-final and
     // final added to its group played/won/points, while the order (ranked on
     // group matches only) no longer matched the numbers beside it.
+    const isKnockoutMatch = (m: any) => !m.group_label && Number(m.round) >= 1;
     const matches = tournament.format === 'groups_knockout'
-      ? (allMatches ?? []).filter((m: any) => m.group_label)
+      ? (allMatches ?? []).filter((m: any) => !isKnockoutMatch(m))
       : allMatches;
 
     // Check if cricket for NRR

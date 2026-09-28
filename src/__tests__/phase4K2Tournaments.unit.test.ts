@@ -144,3 +144,27 @@ describe('K2-14 · a crash-stuck fixture generation can recover (SC-128)', () =>
     expect(fixtureInserts()).toHaveLength(0);
   });
 });
+
+describe('K2-37b · a league is a double round-robin (SC-221)', () => {
+  const TC = '88888888-8888-4888-8888-888888888888';
+  const gen = (format: string) => (q: Q) => {
+    if (q[0] === 'from:tournaments' && has(q, 'update:')) return { data: [{ id: T }] };
+    if (q[0] === 'from:tournaments') return { data: { id: T, status: 'upcoming', sport_id: CRICKET, format, start_date: '2026-10-05', created_by: ME } };
+    if (q[0] === 'from:tournament_entries') return { data: [{ team_id: TEAM, team: { name: 'A' } }, { team_id: TB, team: { name: 'B' } }, { team_id: TC, team: { name: 'C' } }] };
+    if (q[0] === 'from:matches' && has(q, 'insert:')) return { data: [] };
+    return { data: null };
+  };
+  const pairs = () => mockLog.filter((q) => q[0] === 'from:matches' && has(q, 'insert:'))
+    .flatMap((q) => JSON.parse(q.find((c) => c.startsWith('insert:'))!.slice(7)))
+    .map((m: any) => `${m.team_a_id.slice(0, 1)}-${m.team_b_id.slice(0, 1)}`).sort();
+  it('K2-37b (6dcd12a): 3 teams in a league → 6 fixtures, every pair home and away', async () => {
+    mockNext = gen('league');
+    await call(generateFixtures, {});
+    expect(pairs()).toEqual(['3-4', '3-8', '4-3', '4-8', '8-3', '8-4']);
+  });
+  it('K2-37b (6dcd12a): a round robin stays single-leg (3 fixtures)', async () => {
+    mockNext = gen('round_robin');
+    await call(generateFixtures, {});
+    expect(pairs()).toHaveLength(3);
+  });
+});

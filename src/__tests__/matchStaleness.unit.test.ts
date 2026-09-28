@@ -148,6 +148,7 @@ describe('SC-443 · completed lists order by finish time', () => {
   test('the history scopings still bypass the voided filter', () => {
     // M5's new routes rely on this: a voided match must stay reachable from a
     // team's history and from your own, which is what makes it correctable.
-    expect(body).toContain('shouldHideVoided({ status, teamScoped: !!team_id, mine: mine === \'1\' })');
+    // FORMATS (28 Sep): one tournament's fixtures are history too.
+    expect(body).toContain('shouldHideVoided({ status, teamScoped: !!team_id, mine: mine === \'1\', tournamentScoped: !!tournament_id })');
   });
 });

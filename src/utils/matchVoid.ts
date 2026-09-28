@@ -84,8 +84,15 @@ export function shouldHideVoided(opts: {
   status?: string | null;
   teamScoped?: boolean;
   mine?: boolean;
+  /**
+   * FORMATS (28 Sep): one tournament's fixtures are that competition's record,
+   * not discovery. Treated like a team's list, a tournament-scoped read hid its
+   * own voided fixtures and, through the discovery cutoff, every fixture
+   * scheduled more than 6 hours ago (a day's first fixtures by the evening).
+   */
+  tournamentScoped?: boolean;
 }): boolean {
-  if (opts.teamScoped || opts.mine) return false;
+  if (opts.teamScoped || opts.mine || opts.tournamentScoped) return false;
   if (!opts.status) return true; // an unscoped list is discovery
   return (HIDE_VOIDED_FOR_STATUSES as readonly string[]).includes(opts.status);
 }

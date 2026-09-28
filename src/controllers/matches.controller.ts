@@ -1203,7 +1203,7 @@ export async function listMatches(req: Request, res: Response) {
     // Deliberately NOT a blanket filter: decision D2 keeps a voided match readable
     // from team history, your own match list and past results. shouldHideVoided
     // states that distinction once.
-    if (shouldHideVoided({ status, teamScoped: !!team_id, mine: mine === '1' })) {
+    if (shouldHideVoided({ status, teamScoped: !!team_id, mine: mine === '1', tournamentScoped: !!tournament_id })) {
       query = notVoided(query);
       // SC-441 (M3): the same reads that must not show a voided match must not
       // show a match whose start time has long passed. Decision D2 gives a 6h

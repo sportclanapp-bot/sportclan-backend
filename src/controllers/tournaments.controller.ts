@@ -1849,7 +1849,11 @@ async function hasUnplayedFixtures(tournamentId: string): Promise<boolean> {
     .from('matches')
     .select('id', { count: 'exact', head: true })
     .eq('tournament_id', tournamentId)
-    .in('status', ['scheduled', 'live']);
+    .in('status', ['scheduled', 'live'])
+    // FORMATS (28 Sep): a voided fixture is not going to be played. Counting it
+    // kept a round robin whose last fixture was voided "live" forever, with no
+    // champion (found on live: P3 FMT Football RR 5).
+    .is('voided_at', null);
   return (count ?? 0) > 0;
 }
 
@@ -1917,10 +1921,22 @@ export async function recrownAfterVoidChange(matchId: string): Promise<void> {
   try {
     const { data: m } = await supabase
       .from('matches').select('tournament_id, next_match_id, group_label').eq('id', matchId).maybeSingle();
-    if (!m?.tournament_id || m.next_match_id || m.group_label) return;
+    if (!m?.tournament_id) return;
     const { data: t } = await supabase
       .from('tournaments').select('status, format, champion_team_id').eq('id', m.tournament_id).maybeSingle();
-    if (!t || t.status !== 'completed') return;
+    if (!t) return;
+    // FORMATS (28 Sep): voiding the last fixture still to play finishes that
+    // stage, but only a completed result used to move a competition on. So a
+    // round robin or league whose remaining fixture was voided never crowned,
+    // and a group stage never seeded its knockout. Both checks wait for every
+    // unvoided fixture, so they're no-ops until the void really was the last.
+    if (t.status === 'upcoming' || t.status === 'live') {
+      if (m.group_label) await maybeSeedKnockout(m.tournament_id as string);
+      else if (t.format === 'league' || t.format === 'round_robin') await crownLeagueChampion(m.tournament_id as string);
+      return;
+    }
+    if (m.next_match_id || m.group_label) return;
+    if (t.status !== 'completed') return;
     if (t.format === 'league' || t.format === 'round_robin') return;
     const champ = await championOf(m.tournament_id as string);
     const next = champ?.id ?? null;

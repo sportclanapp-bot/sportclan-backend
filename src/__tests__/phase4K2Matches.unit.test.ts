@@ -46,6 +46,7 @@ jest.mock('../utils/sportCache', () => ({
   ...jest.requireActual('../utils/sportCache'),
   getSport: jest.fn(async () => ({ slug: 'cricket' })),
 }));
+jest.mock('../utils/sports', () => ({ ...jest.requireActual('../utils/sports'), validateSportForCreate: jest.fn(async () => null), isSportInactive: jest.fn(async () => false) }));
 jest.mock('../utils/sportId', () => ({ resolveSportId: jest.fn(async (s?: string) => (s === 'cricket' ? 'sport-cricket' : undefined)) }));
 jest.mock('../utils/notify', () => ({
   notifyUser: jest.fn(), notifyUsers: jest.fn(), notifyUnlessBlocked: jest.fn(),
@@ -56,7 +57,13 @@ jest.mock('../utils/notify', () => ({
 // eslint-disable-next-line import/first
 import { getSport } from '../utils/sportCache';
 // eslint-disable-next-line import/first
-import { addParticipants, getMatchChat, rateMatchHandler, getCommentary, completeMatch } from '../controllers/matches.controller';
+import { addParticipants, getMatchChat, rateMatchHandler, getCommentary, completeMatch, createMatch, updateMatch, getMatch } from '../controllers/matches.controller';
+// eslint-disable-next-line import/first
+import { decideMatchJoinRequest } from '../controllers/matchJoinRequests.controller';
+// eslint-disable-next-line import/first
+import { canOfficiateMatch } from '../utils/tournamentAuth';
+// eslint-disable-next-line import/first
+import { notifyUsers } from '../utils/notify';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const MATCH = '22222222-2222-4222-8222-222222222222';
@@ -64,7 +71,7 @@ const TA = '33333333-3333-4333-8333-333333333333';
 const TB = '44444444-4444-4444-8444-444444444444';
 const OTHER = '55555555-5555-4555-8555-555555555555';
 const res = () => {
-  const r: any = { statusCode: 200, body: null, setHeader: jest.fn(), set: jest.fn(), on: jest.fn() };
+  const r: any = { statusCode: 200, body: null, setHeader: jest.fn(), set: jest.fn(), on: jest.fn(), once: jest.fn() };
   r.status = jest.fn((c: number) => { r.statusCode = c; return r; });
   r.json = jest.fn((b: unknown) => { r.body = b; return r; });
   return r;
@@ -190,5 +197,69 @@ describe('K2-39b / K2-40 · a decisive sport can’t be completed level without 
     const r = await call(completeMatch, { body: { winner_team_id: TA } });
     expect(r.body.code).not.toBe('NEEDS_DECISIVE_WINNER');
     expect(mockRpcCalls.map(([n]) => n)).toContain('finalize_match');
+  });
+});
+
+describe('K2-50 · a team can’t play itself (SC-245)', () => {
+  it('K2-50 (ba48a6f): createMatch with team_a_id === team_b_id → 400 SAME_TEAM, nothing inserted', async () => {
+    mockNext = (q) => (q[0] === 'from:teams' ? { data: [{ id: TA, name: 'A', sport_id: 'cricket' }] } : { data: null });
+    const r = await call(createMatch, { body: { sport_id: 'cricket', team_a_id: TA, team_b_id: TA, scheduled_at: '2026-10-05T10:00:00Z', venue: 'Oval' } });
+    expect([r.statusCode, r.body.code]).toEqual([400, 'SAME_TEAM']);
+    expect(mockLog.filter((q) => q[0] === 'from:matches' && q.some((c) => c.startsWith('insert:')))).toHaveLength(0);
+  });
+  it('K2-50 (ba48a6f): updateMatch setting only team_b_id to the current team_a_id → 400 SAME_TEAM', async () => {
+    mockNext = (q) => (q[0] === 'from:matches' ? { data: matchRow() } : q[0] === 'from:teams' ? { data: [{ id: TA, sport_id: 'sport-cricket' }] } : { data: null });
+    const r = await call(updateMatch, { body: { team_b_id: TA } });
+    expect([r.statusCode, r.body.code]).toEqual([400, 'SAME_TEAM']);
+    expect(writes()).toHaveLength(0);
+  });
+});
+
+describe('K2-62 · an open match’s creator is in its line-up (SC-281)', () => {
+  it('K2-62 (57cf537): createMatch is_open → the creator is inserted as a participant on side A', async () => {
+    mockNext = (q) => (q[0] === 'from:matches' && q.some((c) => c.startsWith('insert:')) ? { data: { id: MATCH, is_open: true } } : { data: null });
+    const r = await call(createMatch, { body: { sport_id: 'cricket', team_a_name: 'Lions', is_open: true, players_needed: 3, scheduled_at: '2026-10-05T10:00:00Z', venue: 'Oval' } });
+    expect(r.statusCode).toBeLessThan(300);
+    const seed = mockLog.find((q) => q[0] === 'from:match_participants' && q.some((c) => c.startsWith('insert:')))!;
+    expect(seed.find((c) => c.startsWith('insert:'))).toBe(`insert:${JSON.stringify({ match_id: MATCH, user_id: ME, team_side: 'A' })}`);
+  });
+});
+
+describe('K2-52 · the umpire-rating prompt fires for casual matches too (SC-249)', () => {
+  it('K2-52 (691b9a1): a casual umpired match prompts every participant except the umpire', async () => {
+    (notifyUsers as jest.Mock).mockClear();
+    mockNext = (q) => {
+      if (q[0] === 'from:matches') return { data: matchRow({ status: 'live', is_ranked: false, umpire_id: OTHER, team_a_id: null, team_b_id: null, score_summary: { A: { score: 2 }, B: { score: 1 } } }) };
+      // A one-player casual line-up (plus the umpire): no ELO and no casual
+      // attribution run, so allPlayerIds stays empty — the case SC-249 fixed.
+      if (q[0] === 'from:match_participants') return { data: [{ user_id: ME, team_side: 'A' }, { user_id: OTHER, team_side: 'B' }].filter((p) => p.user_id === ME) };
+      return { data: null };
+    };
+    mockRpc = (n) => (n === 'finalize_match' ? { data: { applied: true, match: { id: MATCH, status: 'completed' } } } : {});
+    await call(completeMatch, { body: {} });
+    await new Promise((x) => setTimeout(x, 20));
+    const c = (notifyUsers as jest.Mock).mock.calls.find((a) => a[1]?.type === 'umpire_rating_prompt');
+    expect(c?.[0]).toEqual([ME]);
+  });
+});
+
+describe('K2-61 · a join request can’t be approved onto a started match (SC-280)', () => {
+  it.each(['live', 'completed'])('K2-61 (d9e7927): approving on a %s match → 409 MATCH_NOT_JOINABLE, nothing written', async (status) => {
+    mockNext = (q) => (q[0] === 'from:matches' ? { data: { created_by: ME, sport_id: 's', status } }
+      : q[0] === 'from:match_join_requests' ? { data: { id: 'r1', status: 'pending' } } : { data: null });
+    const r = await call(decideMatchJoinRequest, { params: { id: MATCH, userId: OTHER }, body: { status: 'approved' } });
+    expect([r.statusCode, r.body.code]).toEqual([409, 'MATCH_NOT_JOINABLE']);
+    expect(writes()).toHaveLength(0);
+    expect(mockRpcCalls).toHaveLength(0);
+  });
+});
+
+describe('K2-64 · getMatch tells the app whether the viewer can officiate (SC-287)', () => {
+  it.each([true, false])('K2-64 (db37769): can_officiate mirrors canOfficiateMatch (%s)', async (v) => {
+    (canOfficiateMatch as jest.Mock).mockImplementation(async () => v);
+    mockNext = (q) => (q[0] === 'from:matches' ? { data: matchRow({ created_by: OTHER }) } : { data: null });
+    const r = await call(getMatch, {});
+    (canOfficiateMatch as jest.Mock).mockImplementation(async () => true);
+    expect((r.body.match ?? r.body).can_officiate).toBe(v);
   });
 });

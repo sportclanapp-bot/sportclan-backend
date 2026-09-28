@@ -43,11 +43,29 @@ function redis(): RedisLike | null {
     // Lazily, like otpStore: an unconfigured deploy never loads the SDK.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Redis } = require('@upstash/redis');
-    _redis = new Redis({ url, token });
+    // No SDK retries: its default backoff (Math.exp(n) * 50 ms, 5 tries) held
+    // every authenticated request ~4.3 s whenever Redis failed (live, 29 Sep).
+    _redis = new Redis({ url, token, retry: false });
   } catch {
     _redis = null;
   }
   return _redis;
+}
+
+/**
+ * The deny check sits in front of every authenticated request, so Redis gets a
+ * tight budget: one attempt, REDIS_TIMEOUT_MS, and after any failure Redis is
+ * skipped for REDIS_COOLDOWN_MS (the check fails open meanwhile, as below).
+ */
+export const REDIS_TIMEOUT_MS = 300;
+export const REDIS_COOLDOWN_MS = 60_000;
+let redisDownUntil = 0;
+
+function withTimeout<T>(p: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out after ${REDIS_TIMEOUT_MS} ms`)), REDIS_TIMEOUT_MS);
+    p.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+  });
 }
 
 /** Kept a minute past the token's life, so clock skew can't reopen it. */
@@ -83,10 +101,11 @@ export async function denySessions(sids: Array<string | null | undefined>): Prom
     cleared.delete(sid);
   }
   const r = redis();
-  if (!r) return;
+  if (!r || now < redisDownUntil) return;
   try {
-    await Promise.all(ids.map((sid) => r.set(key(sid), '1', { ex: DENY_SECONDS })));
+    await withTimeout(Promise.all(ids.map((sid) => r.set(key(sid), '1', { ex: DENY_SECONDS }))));
   } catch (err) {
+    redisDownUntil = Date.now() + REDIS_COOLDOWN_MS;
     warn('deny write', err);
   }
 }
@@ -101,11 +120,11 @@ export async function isSessionDenied(sid: string | null | undefined): Promise<b
     denied.delete(sid);
   }
   const r = redis();
-  if (!r) return false;
+  if (!r || now < redisDownUntil) return false;
   const at = cleared.get(sid);
   if (at !== undefined && now - at < CHECK_TTL_MS) return false;
   try {
-    const v = await r.get(key(sid));
+    const v = await withTimeout(r.get(key(sid)));
     if (v != null) {
       denied.set(sid, now + DENY_SECONDS * 1000);
       return true;
@@ -114,6 +133,7 @@ export async function isSessionDenied(sid: string | null | undefined): Promise<b
     sweep(now);
     return false;
   } catch (err) {
+    redisDownUntil = Date.now() + REDIS_COOLDOWN_MS;
     warn('deny check', err);
     return false;
   }
@@ -126,4 +146,5 @@ export function __resetSessionDeny(): void {
   _redis = null;
   _redisChecked = false;
   lastWarnAt = 0;
+  redisDownUntil = 0;
 }

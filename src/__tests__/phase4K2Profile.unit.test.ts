@@ -36,10 +36,16 @@ jest.mock('../utils/testContent', () => ({
 }));
 jest.mock('../utils/sportId', () => ({ resolveSportId: jest.fn(async (s?: string) => (s ? '99999999-9999-4999-8999-999999999999' : undefined)) }));
 jest.mock('../utils/sports', () => ({ ...jest.requireActual('../utils/sports'), isSportInactive: jest.fn(async () => false) }));
+jest.mock('../utils/matchCounts', () => ({
+  ...jest.requireActual('../utils/matchCounts'),
+  countParticipantsByMatch: jest.fn(async (ids: string[]) => new Map(ids.map((i) => [i, 2]))),
+}));
 jest.mock('../utils/notify', () => ({ notifyUser: jest.fn(async () => undefined), notifyUsers: jest.fn(async () => undefined), notifyUnlessBlocked: jest.fn(async () => undefined) }));
 
 // eslint-disable-next-line import/first
-import { getRival, getUserById, updateMe } from '../controllers/users.controller';
+import { getRival, getUserById, updateMe, getActivityHeatmap } from '../controllers/users.controller';
+// eslint-disable-next-line import/first
+import { getUserInsights } from '../controllers/insights.controller';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -114,5 +120,50 @@ describe('K2-51 · profile privacy and validation (SC-246/247/248)', () => {
   ])('K2-51c (32b4ff4): updateMe dob %s → 400', async (dob, error) => {
     const r = await call(updateMe, { body: { dob } });
     expect([r.statusCode, r.body.error]).toEqual([400, error]);
+  });
+});
+
+describe('K2-59 / K2-60 / K2-63 · insights form, streaks and wins', () => {
+  const TA = 'aaaaaaaa-0000-4000-8000-00000000000a';
+  const TB = 'aaaaaaaa-0000-4000-8000-00000000000b';
+  const row = (id: string, day: number, side: 'A' | 'B', m: object) => ({
+    team_side: side,
+    match: { id, status: 'completed', is_ranked: true, winner_team_id: null, team_a_id: TA, team_b_id: TB, score_summary: {}, created_at: `2026-09-${String(day).padStart(2, '0')}T10:00:00Z`, voided_at: null, ...m },
+  });
+  const insights = (rows: object[]) => (q: Q) => {
+    if (q[0] === 'from:match_participants') {
+      // PostgREST can't order parents by a to-one embed — the old query errored.
+      if (has(q, 'order:["match.created_at"')) return { data: null, error: { message: 'failed to parse order' } };
+      return { data: rows };
+    }
+    return { data: [] };
+  };
+  const get = async (rows: object[]) => { mockNext = insights(rows); return (await call(getUserInsights, { params: { id: ME } })).body.insights; };
+  it('K2-59 (fb53fa2): the participation query works (no embedded order) — totals and form are filled', async () => {
+    const i = await get([row('m1', 1, 'A', { winner_team_id: TA }), row('m2', 2, 'A', { winner_team_id: TB })]);
+    expect(i.totalMatches).toBe(2);
+    expect(i.formTrend).toEqual(['L', 'W']); // newest first
+  });
+  it('K2-59 (fb53fa2): the current streak counts back from the MOST RECENT match', async () => {
+    const i = await get([row('m1', 1, 'A', { winner_team_id: TB }), row('m2', 2, 'A', { winner_team_id: TA }), row('m3', 3, 'A', { winner_team_id: TA })]);
+    expect([i.currentWinStreak, i.bestWinStreak]).toEqual([2, 2]);
+  });
+  it('K2-60 (ab04535): my side with no team and no winner is a draw, not a null===null win', async () => {
+    const i = await get([row('m1', 1, 'A', { team_a_id: null, team_b_id: null, winner_team_id: null })]);
+    expect(i.formTrend).toEqual(['D']);
+    expect(i.currentWinStreak).toBe(0);
+  });
+  it('K2-63a (b683504): a teamless pickup won by my side (score_summary.winner_side) is a W in insights', async () => {
+    const i = await get([row('m1', 1, 'B', { team_a_id: null, team_b_id: null, score_summary: { winner_side: 'B' } }), row('m2', 2, 'B', { team_a_id: null, team_b_id: null, score_summary: { winner_side: 'A' } })]);
+    expect(i.formTrend).toEqual(['L', 'W']);
+  });
+  it('K2-63b (b683504): …and a win on the activity heatmap', async () => {
+    const now = new Date().toISOString();
+    mockNext = (q) => (q[0] === 'from:users' ? { data: { id: ME } } : q[0] === 'from:match_participants'
+      ? { data: [{ team_side: 'A', match: { id: 'm1', status: 'completed', completed_at: now, winner_team_id: null, team_a_id: null, team_b_id: null, score_summary: { winner_side: 'A' }, voided_at: null } }] }
+      : { data: [] });
+    const r = await call(getActivityHeatmap, { params: { id: ME } });
+    const today = r.body.heatmap[r.body.heatmap.length - 1];
+    expect([today.matches, today.wins, today.type]).toEqual([1, 1, 'won']);
   });
 });

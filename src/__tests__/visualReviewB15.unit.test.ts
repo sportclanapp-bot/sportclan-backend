@@ -29,7 +29,7 @@ describe('V072 · sessions', () => {
   it('every sign-in stores the device; a refresh marks last used; the list hides signed-out sessions', () => {
     const a = code('controllers/auth.controller.ts');
     expect((a.match(/await insertRefreshToken\(user\.id, refreshToken, req\);/g) ?? []).length).toBe(3);
-    expect(a).toMatch(/update\(\{ last_used_at: new Date\(\)\.toISOString\(\) \}\)\.eq\('id', row\.id\)/);
+    expect(a).toMatch(/update\(\{ last_used_at: new Date\(\)\.toISOString\(\), \.\.\.refreshedDeviceFields\(req\) \}\)\.eq\('id', row\.id\)/);
     const s = code('controllers/account.controller.ts');
     expect((s.match(/\.eq\('revoked', false\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });

@@ -18,7 +18,7 @@ import { signupProfileProblem, USERNAME_RE, RESERVED_USERNAMES, GENDERS, GENDER_
 import { escapeLike } from '../utils/likeSearch';
 import { awardCoins } from '../utils/coins';
 import { denySessions } from '../utils/sessionDeny';
-import { insertRefreshToken } from '../utils/sessionDevice';
+import { insertRefreshToken, refreshedDeviceFields } from '../utils/sessionDevice';
 import { revokeSessionsNow } from '../utils/sessionRevocation';
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
@@ -738,7 +738,7 @@ export async function refresh(req: Request, res: Response) {
     // B15 (D17): "last active" on Active sessions. Best-effort; a missing
     // column (before migration 100) must not fail a refresh.
     void Promise.resolve(
-      supabase.from('refresh_tokens').update({ last_used_at: new Date().toISOString() }).eq('id', row.id),
+      supabase.from('refresh_tokens').update({ last_used_at: new Date().toISOString(), ...refreshedDeviceFields(req) }).eq('id', row.id),
     ).catch(() => undefined);
     const accessToken = generateAccessToken(payload.userId, row.id); // decision 15: this sign-in's sid
     return res.json({ accessToken });

@@ -24,6 +24,18 @@ export function deviceFields(req: Pick<Request, 'headers'>): { device_name: stri
 }
 
 /**
+ * The device fields a refresh brings, only those actually sent: an app update
+ * keeps its sign-in, so without this Active sessions went on showing the
+ * version it signed in with (found in the 2.6.0 device pass: "SportClan 2.5.0
+ * (7)" on a phone running 2.6.0). An older app that sends no headers leaves
+ * the stored values alone.
+ */
+export function refreshedDeviceFields(req: Pick<Request, 'headers'>): Partial<ReturnType<typeof deviceFields>> {
+  const f = deviceFields(req);
+  return Object.fromEntries(Object.entries(f).filter(([, v]) => v !== null));
+}
+
+/**
  * Store a new refresh token with its device. If migration 100 has not been
  * applied yet (the columns are missing), store it the old way — a sign-in
  * must never fail over a label.

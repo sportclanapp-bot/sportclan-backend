@@ -52,6 +52,7 @@ import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { rankTeams, computeStats } from '../utils/standings';
+import { crossGroupFirstRound } from '../utils/koFirstRound';
 import {
   buildSchedule, timeToMinutes, keyOf, formatSlotIst,
   type SchedulingConfig, type FixtureShape, type SlotAssign,
@@ -2195,7 +2196,10 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
     for (const t of tier) seeds.push({ id: t.id, name: t.name });
   }
   if (seeds.length < 2) return;
-  const round1 = seededRound1(seeds, ko1.length * 2);
+  // FORMATS (28 Sep): cross-pair, so group mates don't meet straight away.
+  const groupOfTeam = new Map<string, string>();
+  for (const label of labels) for (const id of groupTeams[label]) groupOfTeam.set(id, label);
+  const round1 = crossGroupFirstRound(seededRound1(seeds, ko1.length * 2), (id) => groupOfTeam.get(id));
 
   for (let m = 0; m < ko1.length; m++) {
     const mu = round1[m] ?? { a: null, b: null };

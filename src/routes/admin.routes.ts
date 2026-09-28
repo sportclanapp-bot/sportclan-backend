@@ -8,6 +8,8 @@ import {
   broadcastAnnouncement,
   adminListUsers,
   adminUpdateUser,
+  adminListFeedback,
+  adminUpdateFeedback,
 } from '../controllers/admin.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 import { requireAdmin } from '../middleware/admin.middleware';
@@ -27,5 +29,8 @@ router.patch('/reports/:id', resolveReport);
 router.post('/broadcast', broadcastAnnouncement);
 router.get('/users', adminListUsers);
 router.patch('/users/:id', adminUpdateUser);
+// Decision 10: Admin › Feedback.
+router.get('/feedback', adminListFeedback);
+router.patch('/feedback/:id', adminUpdateFeedback);
 
 export default router;

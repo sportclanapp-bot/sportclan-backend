@@ -6,6 +6,7 @@ import { isUuid } from '../utils/uuid';
 import { escapeLike } from '../utils/likeSearch';
 import { parsePagination } from '../utils/pagination';
 import { resolveSportId } from '../utils/sportId';
+import { isAdminUser } from '../middleware/admin.middleware';
 
 // GET /venues?city_id=&q=
 // * q present → case-insensitive prefix match on name, ordered by use_count desc
@@ -27,7 +28,7 @@ export async function searchVenues(req: Request, res: Response) {
     .from('venues')
     // B07 (migration 099): the details the Add venue form collects, and the
     // city by name — the directory rows show address, surface and city.
-    .select('id, name, city_id, use_count, created_at, address, sport_id, surface, image_url, city:cities!city_id(name), sport:sports!sport_id(slug)')
+    .select('id, name, city_id, use_count, created_at, created_by, address, sport_id, surface, image_url, city:cities!city_id(name), sport:sports!sport_id(slug)')
     // use_count DESC alone is not a total order — ties (every venue with
     // use_count 1) could shuffle between pages and duplicate/skip rows. id is
     // the tiebreak (the SC-138 rule).
@@ -108,7 +109,9 @@ export async function createVenue(req: Request, res: Response) {
   }
   const details = await venueDetails(req.body);
   if ('error' in details) return res.status(400).json({ error: details.error, code: 'BAD_VENUE_DETAIL' });
-  const row = await upsertVenue(clean, city_id || null, userId);
+  // Decision 7: adding a venue that already exists is not a use of it — only
+  // a match created there counts (createMatch passes countUse).
+  const row = await upsertVenue(clean, city_id || null, userId, { countUse: false });
   if (!row) return res.status(500).json({ error: 'Could not save that venue.' });
   // The same venue may already exist (upsert by name + city). Its details are
   // filled in where empty — never overwritten, since someone else may have
@@ -127,7 +130,12 @@ export async function upsertVenue(
   name: string,
   cityId: string | null,
   createdBy: string,
+  opts: { countUse?: boolean } = {},
 ): Promise<any | null> {
+  // Decision 7: use_count is the venue's rank in the directory, and it counts
+  // matches created there. A repeat "Add venue" with a name that exists
+  // returns that venue untouched, and a venue added by hand starts at 0.
+  const countUse = opts.countUse ?? true;
   try {
     const clean = name.trim();
     if (!clean) return null;
@@ -149,6 +157,7 @@ export async function upsertVenue(
     if (rpcError) return null;
     const existing: any = Array.isArray(found) ? found[0] ?? null : (found ?? null);
     if (existing) {
+      if (!countUse) return existing;
       await supabase
         .from('venues')
         .update({ use_count: (existing.use_count ?? 0) + 1 })
@@ -160,7 +169,7 @@ export async function upsertVenue(
       .insert({
         name: clean,
         city_id: cityId,
-        use_count: 1,
+        use_count: countUse ? 1 : 0,
         created_by: createdBy,
       })
       .select('*')
@@ -169,4 +178,58 @@ export async function upsertVenue(
   } catch {
     return null;
   }
+}
+
+// PATCH /venues/:id  { name?, city_id?, address?, sport_id?, surface?, image_url? }
+// Decision 7: the venue's creator, or an admin, may edit it. Present fields
+// only; an empty string clears an optional detail. Renaming onto another
+// venue's name (in the same city) is refused — it would make a duplicate that
+// the "Add venue" upsert could never tell apart.
+export async function updateVenue(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  if (!isUuid(id)) return res.status(400).json({ error: 'Unknown venue.', code: 'INVALID_ID' });
+  const { data: venue } = await supabase.from('venues').select('id, name, city_id, created_by').eq('id', id).maybeSingle();
+  if (!venue) return res.status(404).json({ error: 'Venue not found.' });
+  if (venue.created_by !== userId && !(await isAdminUser(userId))) {
+    return res.status(403).json({ error: 'Only the person who added this venue (or an admin) can edit it.' });
+  }
+  const body = req.body || {};
+  const update: Record<string, unknown> = {};
+  if ('name' in body) {
+    const clean = normaliseVenue(body.name);
+    if (clean === VENUE_TOO_LONG) {
+      return res.status(400).json({ error: `Venue name must be ${LIMITS.venueMax} characters or fewer.`, code: 'VENUE_TOO_LONG' });
+    }
+    if (!clean) return res.status(400).json({ error: 'A venue needs a name.' });
+    update.name = clean;
+  }
+  if ('city_id' in body) {
+    const c = body.city_id;
+    if (c === null || c === '') update.city_id = null;
+    else {
+      if (!isUuid(c)) return res.status(400).json({ error: 'Unknown city.' });
+      const { data: city } = await supabase.from('cities').select('id').eq('id', c).maybeSingle();
+      if (!city) return res.status(400).json({ error: 'Unknown city.' });
+      update.city_id = c;
+    }
+  }
+  const details = await venueDetails(body);
+  if ('error' in details) return res.status(400).json({ error: details.error, code: 'BAD_VENUE_DETAIL' });
+  Object.assign(update, details.fields);
+  for (const k of ['address', 'surface', 'image_url', 'sport_id']) {
+    if (k in body && (body[k] === '' || body[k] === null)) update[k] = null;
+  }
+  if (Object.keys(update).length === 0) return res.status(400).json({ error: 'Nothing to change.' });
+  const newName = (update.name as string | undefined) ?? venue.name;
+  const newCity = 'city_id' in update ? (update.city_id as string | null) : venue.city_id;
+  if (update.name !== undefined || 'city_id' in update) {
+    const { data: found } = await supabase.rpc('venue_find_exact', { p_name: newName, p_city_id: newCity }).limit(5);
+    const clash = (Array.isArray(found) ? found : found ? [found] : []).some((v: any) => v?.id && v.id !== id);
+    if (clash) return res.status(409).json({ error: 'Another venue already has that name here.', code: 'VENUE_NAME_TAKEN' });
+  }
+  const { data, error } = await supabase.from('venues').update(update).eq('id', id).select('*').single();
+  if (error || !data) return res.status(500).json({ error: 'Could not save the venue.' });
+  return res.json({ venue: data });
 }

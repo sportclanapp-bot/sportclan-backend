@@ -575,3 +575,49 @@ export async function otpDiagnostics(_req: Request, res: Response) {
     lastSend: getLastOtpSend(),
   });
 }
+
+/** Decision 10: the two states an admin moves feedback between. */
+export const FEEDBACK_STATUSES = ['open', 'resolved'] as const;
+
+// GET /admin/feedback?status=open|resolved&limit&offset
+// Decision 10 (B11-F11): nothing read the feedback table. Newest first, with
+// who sent it. The default is every message.
+export async function adminListFeedback(req: Request, res: Response) {
+  const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 30, maxLimit: 100 });
+  const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+  if (status !== undefined && !(FEEDBACK_STATUSES as readonly string[]).includes(status)) {
+    return res.status(400).json({ error: `status must be one of: ${FEEDBACK_STATUSES.join(', ')}` });
+  }
+  let q = supabase
+    .from('feedback')
+    .select('id, user_id, category, message, rating, email, status, created_at', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: true })
+    .range(p.from, p.to);
+  if (status) q = q.eq('status', status);
+  const { data, error, count } = await q;
+  if (error && !isRangeError(error)) return res.status(500).json({ error: 'Could not load feedback.' });
+  const rows = error ? [] : (data ?? []);
+  const userIds = [...new Set(rows.map((r: any) => r.user_id).filter(Boolean))];
+  const users = new Map<string, { id: string; name: string | null; username: string | null }>();
+  if (userIds.length) {
+    const { data: us } = await supabase.from('users').select('id, name, username').in('id', userIds);
+    for (const u of (us ?? []) as Array<{ id: string; name: string | null; username: string | null }>) users.set(u.id, u);
+  }
+  const feedback = rows.map((r: any) => ({ ...r, user: users.get(r.user_id) ?? null }));
+  return res.json({ feedback, ...pageMeta(count, p) });
+}
+
+// PATCH /admin/feedback/:id  { status: 'open' | 'resolved' }
+export async function adminUpdateFeedback(req: Request, res: Response) {
+  const { id } = req.params;
+  const { status } = req.body || {};
+  if (!(FEEDBACK_STATUSES as readonly unknown[]).includes(status)) {
+    return res.status(400).json({ error: `status must be one of: ${FEEDBACK_STATUSES.join(', ')}` });
+  }
+  const { data, error } = await supabase.from('feedback').update({ status }).eq('id', id).select('id, status').maybeSingle();
+  if (error) return res.status(500).json({ error: 'Could not update that feedback.' });
+  if (!data) return res.status(404).json({ error: 'Feedback not found.' });
+  await logAdminAction(req.userId!, status === 'resolved' ? 'resolve_feedback' : 'reopen_feedback', 'feedback', id, null);
+  return res.json({ feedback: data });
+}

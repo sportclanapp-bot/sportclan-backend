@@ -462,7 +462,7 @@ export async function createMatch(req: Request, res: Response) {
     // Best-effort venue upsert — tracks frequently-used venues for the
     // autocomplete in CreateMatchScreen. Errors are swallowed.
     if (cleanVenue) {
-      void upsertVenue(cleanVenue, city_id ?? null, userId);
+      void upsertVenue(cleanVenue, city_id ?? null, userId, { countUse: true });
     }
 
     return res.json({ match: data });

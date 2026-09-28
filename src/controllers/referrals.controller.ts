@@ -4,6 +4,18 @@ import { awardCoins } from '../utils/coins';
 
 const REFERRAL_COINS = 20;
 
+/**
+ * Decision 9 (B10-D1): a friend's code is for new accounts — it can be applied
+ * only within 30 days of sign-up. Before this, two long-standing friends could
+ * apply each other's codes and both bank the coins.
+ */
+export const REFERRAL_WINDOW_DAYS = 30;
+export function referralApplyUntil(createdAt: string | null | undefined): string | null {
+  if (!createdAt) return null;
+  const t = new Date(createdAt).getTime();
+  return Number.isFinite(t) ? new Date(t + REFERRAL_WINDOW_DAYS * 86400000).toISOString() : null;
+}
+
 // Generates an 8-char referral code like "SCK3P9QA". Caller must check
 // uniqueness against users.referral_code.
 export function generateReferralCode(): string {
@@ -39,12 +51,19 @@ export async function applyReferral(req: Request, res: Response) {
 
   const { data: me } = await supabase
     .from('users')
-    .select('id, referred_by')
+    .select('id, referred_by, created_at')
     .eq('id', userId)
     .maybeSingle();
   if (!me) return res.status(404).json({ error: 'User not found' });
   if (me.referred_by) {
     return res.status(400).json({ error: 'Referral already applied' });
+  }
+  const until = referralApplyUntil(me.created_at);
+  if (!until || Date.parse(until) <= Date.now()) {
+    return res.status(403).json({
+      error: `A friend’s code can only be used within ${REFERRAL_WINDOW_DAYS} days of joining.`,
+      code: 'REFERRAL_WINDOW_CLOSED',
+    });
   }
 
   // SC-383: claim the referral ATOMICALLY (the SC-48 pattern). The check above
@@ -90,7 +109,7 @@ export async function getStats(req: Request, res: Response) {
 
   const { data: me } = await supabase
     .from('users')
-    .select('referral_code, referred_by')
+    .select('referral_code, referred_by, created_at')
     .eq('id', userId)
     .maybeSingle();
 
@@ -129,5 +148,7 @@ export async function getStats(req: Request, res: Response) {
     // Phase 3 B10-F18: the app hides "Have a friend's code?" once one is used —
     // it only learned that on submit ("Referral already applied").
     alreadyApplied: !!me?.referred_by,
+    // Decision 9: when this account's window to use a friend's code closes.
+    applyUntil: referralApplyUntil(me?.created_at),
   });
 }

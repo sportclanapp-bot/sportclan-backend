@@ -574,5 +574,7 @@ export async function submitFeedback(req: Request, res: Response) {
   });
 
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ success: true, message: 'Feedback submitted. We reply within 48h.' });
+  // Decision 10 (B11-F11): "We reply within 48h" wasn't a promise anyone could
+  // keep — the form has no reply path. Admins read it in Admin › Feedback.
+  return res.json({ success: true, message: 'Thanks — we read every message.' });
 }

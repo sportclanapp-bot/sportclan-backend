@@ -213,7 +213,10 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
 // TOURNAMENT OFFICIALS
 // ────────────────────────────────────────────────────────────────────────────
 
-export const OFFICIAL_ROLES = ['umpire', 'referee', 'scorer', 'commentator', 'organiser'];
+// Must match the tournament_officials.role CHECK (migration 036). 'organiser'
+// was listed here too, but the CHECK refuses it, so adding one passed this
+// check and then 500'd on the insert. Organisers are co-organisers (064).
+export const OFFICIAL_ROLES = ['umpire', 'referee', 'scorer', 'commentator'];
 
 export async function addTournamentOfficial(req: Request, res: Response) {
   const userId = req.userId;
@@ -223,7 +226,7 @@ export async function addTournamentOfficial(req: Request, res: Response) {
     const { user_id, role } = req.body || {};
     if (!user_id || !role) return res.status(400).json({ error: 'user_id and role required' });
     // Phase 3 B08-F11: a bad id or an unknown person 500'd, and the role took
-    // any text (3000 characters, an object). The app offers these five.
+    // any text (3000 characters, an object). The app offers these four.
     if (!isUuid(user_id)) return res.status(400).json({ error: 'user_id must be a valid person.' });
     if (typeof role !== 'string' || !OFFICIAL_ROLES.includes(role)) {
       return res.status(400).json({ error: `role must be one of: ${OFFICIAL_ROLES.join(', ')}` });

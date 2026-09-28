@@ -34,7 +34,8 @@ describe('V072 · sessions', () => {
     expect((s.match(/\.eq\('revoked', false\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
   it('a sign-in never fails over a label (falls back before migration 100)', () => {
-    expect(code('utils/sessionDevice.ts')).toMatch(/if \(error\) await supabase\.from\('refresh_tokens'\)\.insert\(\{ user_id: userId, token \}\);/);
+    // Decision 15: the fallback also reads the row's id back (the session id).
+    expect(code('utils/sessionDevice.ts')).toMatch(/if \(!first\.error\) return[\s\S]*?await supabase\.from\('refresh_tokens'\)\.insert\(\{ user_id: userId, token \}\)\.select\('id'\)/);
   });
   it('migration 100 adds the four columns', () => {
     const m = fs.readFileSync(path.join(__dirname, '../../supabase/migrations/100_session_device_info.sql'), 'utf8');

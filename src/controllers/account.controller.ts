@@ -4,6 +4,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { revokeSessionsNow } from '../utils/sessionRevocation';
 import { generateAccessTokenAt } from '../utils/jwt';
+import { denySessions } from '../utils/sessionDeny';
 import { sessionLabel } from '../utils/sessionDevice';
 
 // POST /account/delete — FINAL delete: immediate PII scrub + login lockout,
@@ -355,6 +356,9 @@ export async function revokeSession(req: Request, res: Response) {
   if (!deleted || deleted.length === 0) {
     return res.status(404).json({ error: 'Session not found' });
   }
+  // Decision 15: that device can't renew any more, and the access token it
+  // already holds is refused from its next request instead of in 15 minutes.
+  await denySessions((deleted as Array<{ id: string }>).map((r) => r.id));
   return res.json({ success: true });
 }
 
@@ -398,7 +402,15 @@ export async function revokeAllSessions(req: Request, res: Response) {
   // in the SAME second and is ambiguous; stamping it with the next whole second
   // means every other token from that second is still revoked. Returning it
   // keeps the promise the UI makes — other devices out, this one still signed in.
-  const accessToken = generateAccessTokenAt(userId, Math.floor(cutoffMs / 1000) + 1);
+  // Decision 15: the replacement stays tied to this device's sign-in, so this
+  // device can later be signed out on its own like any other.
+  let sid: string | null = null;
+  if (currentRefreshToken) {
+    const { data: mine } = await supabase
+      .from('refresh_tokens').select('id').eq('user_id', userId).eq('token', currentRefreshToken).maybeSingle();
+    sid = (mine as { id?: string } | null)?.id ?? null;
+  }
+  const accessToken = generateAccessTokenAt(userId, Math.floor(cutoffMs / 1000) + 1, sid);
   return res.json({
     success: true,
     message: 'All other sessions revoked',

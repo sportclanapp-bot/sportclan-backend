@@ -1,4 +1,4 @@
-import { hideTestFor } from '../utils/testContent';
+import { hideTestFor, testFlagReady } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { notifyUsers } from '../utils/notify';
@@ -66,11 +66,15 @@ export async function getCurrentSeason(req: Request, res: Response) {
 
       // Rank = number of profiles with strictly higher rating + 1.
       // B03 (V245, D3): test accounts don't count above a real player.
+      // Decision 17 (29 Sep 2026): nor do deleted accounts or profiles with no
+      // match played — the leaderboard's rule, so the two ranks agree.
       let higherQ = supabase
         .from('user_sport_profiles')
-        .select(hideTest ? 'id, tu:users!user_id!inner(is_test_seed)' as string : 'id', { count: 'exact', head: true })
+        .select(hideTest ? 'id, tu:users!user_id!inner(deleted_at, is_test_seed)' as string : 'id, tu:users!user_id!inner(deleted_at)', { count: 'exact', head: true })
         .eq('sport_id', p.sport_id)
-        .gt('rating', p.rating);
+        .gt('matches_played', 0)
+        .gt('rating', p.rating)
+        .is('tu.deleted_at', null);
       if (hideTest) higherQ = higherQ.eq('tu.is_test_seed', false);
       const { count: higher } = await higherQ;
 
@@ -153,18 +157,27 @@ export async function endSeason(req: Request, res: Response) {
   if (!season) return res.status(404).json({ error: 'No active season' });
 
   // Top 3 per sport — iterate sports, rank profiles, insert medals.
+  // Decision 17 (Dipak, 29 Sep 2026 · B02-F9): only live, real players are
+  // eligible. A deleted account or a test account never takes a medal — the
+  // filter is in the query, before the top-3 limit, so the next real player
+  // moves up instead of a podium spot going empty.
+  const testFlag = await testFlagReady();
   const { data: sports } = await supabase.from('sports').select('id, name');
   const insertRows: Array<{ user_id: string; season_id: string; sport_id: string; medal_type: string }> = [];
   for (const sport of sports ?? []) {
-    const { data: top } = await supabase
+    let topQ = supabase
       .from('user_sport_profiles')
-      .select('user_id, rating')
+      .select(testFlag ? 'user_id, rating, u:users!user_id!inner(deleted_at, is_test_seed)' as string : 'user_id, rating, u:users!user_id!inner(deleted_at)')
       .eq('sport_id', sport.id)
       .gt('matches_played', 0)
+      .is('u.deleted_at', null);
+    if (testFlag) topQ = topQ.eq('u.is_test_seed', false);
+    const { data: topRows } = await topQ
       .order('rating', { ascending: false })
       .limit(3);
+    const top = (topRows ?? []) as unknown as Array<{ user_id: string; rating: number }>;
     const medalMap = ['gold', 'silver', 'bronze'];
-    (top ?? []).forEach((row, idx) => {
+    top.forEach((row, idx) => {
       insertRows.push({
         user_id: row.user_id,
         season_id: season.id,

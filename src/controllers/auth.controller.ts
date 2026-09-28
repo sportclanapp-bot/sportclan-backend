@@ -17,6 +17,7 @@ import { normalizeAccountTypes } from '../constants/accountTypes';
 import { signupProfileProblem, USERNAME_RE, RESERVED_USERNAMES } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { awardCoins } from '../utils/coins';
+import { denySessions } from '../utils/sessionDeny';
 import { insertRefreshToken } from '../utils/sessionDevice';
 import { revokeSessionsNow } from '../utils/sessionRevocation';
 
@@ -610,9 +611,9 @@ export async function register(req: Request, res: Response) {
       .from('users').select('coin_balance').eq('id', user.id).maybeSingle();
     if (fb) Object.assign(user, fb);
   }
-  const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
-  await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
+  const sid = await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
+  const accessToken = generateAccessToken(user.id, sid); // decision 15: tied to this sign-in
   return res.json({ user, accessToken, refreshToken, isNewUser: true });
 }
 
@@ -659,9 +660,9 @@ export async function otpLogin(req: Request, res: Response) {
   delete (user as { deleted_at?: unknown }).deleted_at;
 
   await deleteOtp(p);
-  const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
-  await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
+  const sid = await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
+  const accessToken = generateAccessToken(user.id, sid); // decision 15: tied to this sign-in
   return res.json({ user, accessToken, refreshToken, isNewUser: false });
 }
 
@@ -707,9 +708,9 @@ export async function login(req: Request, res: Response) {
   if (await isDeleted(user.id)) {
     return res.status(403).json({ error: 'This account has been deleted.', code: 'ACCOUNT_DELETED' });
   }
-  const accessToken = generateAccessToken(user.id);
   const refreshToken = generateRefreshToken(user.id);
-  await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
+  const sid = await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
+  const accessToken = generateAccessToken(user.id, sid); // decision 15: tied to this sign-in
   const { password_hash: _ph, deleted_at: _da, ...safe } = user;
   return res.json({ user: safe, accessToken, refreshToken });
 }
@@ -739,7 +740,7 @@ export async function refresh(req: Request, res: Response) {
     void Promise.resolve(
       supabase.from('refresh_tokens').update({ last_used_at: new Date().toISOString() }).eq('id', row.id),
     ).catch(() => undefined);
-    const accessToken = generateAccessToken(payload.userId);
+    const accessToken = generateAccessToken(payload.userId, row.id); // decision 15: this sign-in's sid
     return res.json({ accessToken });
   } catch {
     return res.status(401).json({ error: 'Invalid refresh token' });
@@ -750,7 +751,9 @@ export async function refresh(req: Request, res: Response) {
 export async function logout(req: Request, res: Response) {
   const { refreshToken, pushToken } = req.body || {};
   if (refreshToken) {
-    await supabase.from('refresh_tokens').update({ revoked: true }).eq('token', refreshToken);
+    const { data: signedOut } = await supabase.from('refresh_tokens').update({ revoked: true }).eq('token', refreshToken).select('id');
+    // Decision 15: the access token this phone still holds stops now too.
+    await denySessions(((signedOut ?? []) as Array<{ id: string }>).map((r) => r.id));
   }
   // Phase 3 B09-F2: a signed-out phone stops getting this account's pushes. The
   // token itself is the proof — only the phone that holds it can send it.

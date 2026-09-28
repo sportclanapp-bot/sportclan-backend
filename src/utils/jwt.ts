@@ -22,11 +22,28 @@ export interface TokenPayload {
   /** Issued-at, seconds since epoch. Signed by jsonwebtoken; SC-384 compares it
    *  against users.sessions_revoked_at to reject pre-revocation tokens. */
   iat?: number;
+  /** Decision 15: the sign-in (refresh_tokens.id) this access token belongs to,
+   *  so signing out that one device can stop it (utils/sessionDeny). Tokens
+   *  minted before this shipped have none and run out their 15 minutes. */
+  sid?: string;
 }
 
-export function generateAccessToken(userId: string): string {
-  return jwt.sign({ userId }, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRES });
+/** `{ sid }` when there is one — a token never carries `sid: undefined`. */
+const sidClaim = (sid?: string | null) => (sid ? { sid } : {});
+
+export function generateAccessToken(userId: string, sid?: string | null): string {
+  return jwt.sign({ userId, ...sidClaim(sid) }, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRES });
 }
+
+/**
+ * How long an access token lives, in seconds — read off a real token so it
+ * follows JWT_ACCESS_EXPIRES_IN whatever form it's written in ('15m', '900').
+ * A signed-out session has to stay refused at least this long.
+ */
+export const ACCESS_TOKEN_TTL_SECONDS: number = (() => {
+  const d = jwt.decode(jwt.sign({}, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRES })) as { iat: number; exp: number };
+  return d.exp - d.iat;
+})();
 
 /**
  * SC-384: an access token stamped with an explicit issued-at.
@@ -42,8 +59,8 @@ export function generateAccessToken(userId: string): string {
  * `expiresIn` is computed from the supplied iat, so the token's lifetime is
  * unchanged — it simply starts a fraction of a second later.
  */
-export function generateAccessTokenAt(userId: string, iatSeconds: number): string {
-  return jwt.sign({ userId, iat: iatSeconds }, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRES });
+export function generateAccessTokenAt(userId: string, iatSeconds: number, sid?: string | null): string {
+  return jwt.sign({ userId, iat: iatSeconds, ...sidClaim(sid) }, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRES });
 }
 
 export function generateRefreshToken(userId: string): string {

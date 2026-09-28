@@ -266,7 +266,12 @@ app.use('/seasons', seasonsRoutes);
 app.use('/kudos', kudosRoutes);
 app.use('/venues', venuesRoutes);
 app.use('/referrals', referralsRoutes);
-app.use('/dev', devRoutes);
+// Decision 19 (Dipak, 29 Sep 2026 · B12-F15): /dev seeds ~150 fake users and
+// re-runs jobs on demand. Any admin (or a leaked admin token) could reach it on
+// prod, so it only exists outside production. The jobs themselves stay reachable
+// on prod through /internal/jobs (cron secret). Note .env.local-check runs as
+// production too, so the local check server has no /dev either.
+if (process.env.NODE_ENV !== 'production') app.use('/dev', devRoutes);
 app.use('/internal/jobs', jobsRoutes);
 app.use('/admin', adminRoutes);
 

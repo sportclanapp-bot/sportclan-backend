@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken } from '../utils/jwt';
 import { supabase } from '../utils/supabase';
 import { isTokenRevoked } from '../utils/sessionRevocation';
+import { isSessionDenied } from '../utils/sessionDeny';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -27,7 +28,9 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
   // hands, which stays valid for its full 15-minute life — so "sign out other
   // devices" left a signed-out device with full API access for that long.
   // Reject anything minted before the user last revoked.
-  if (await isTokenRevoked(payload.userId, payload.iat)) {
+  // Decision 15: …and one device signed out on its own (Active sessions,
+  // Log out) is refused from its next request, by the session id it carries.
+  if (await isTokenRevoked(payload.userId, payload.iat) || await isSessionDenied(payload.sid)) {
     return res.status(401).json({ error: 'Session revoked. Please sign in again.', code: 'SESSION_REVOKED' });
   }
   req.userId = payload.userId;

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { revokeSessionsNow } from '../utils/sessionRevocation';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { orIlikeContains } from '../utils/likeSearch'; // SC-237
@@ -543,6 +544,9 @@ export async function adminUpdateUser(req: Request, res: Response) {
         .update({ revoked: true })
         .eq('user_id', id)
         .eq('revoked', false);
+      // Decision 15: and the access tokens already out stop on their next
+      // request (SC-384's per-account cutoff), not up to 15 minutes later.
+      await revokeSessionsNow(id);
     }
     // Phase 3 B12-F3: every account change an admin makes is on the record.
     if ('suspended_at' in patch) {

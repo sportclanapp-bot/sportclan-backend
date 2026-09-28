@@ -172,9 +172,8 @@ describe('F8 · only people in a completed, counted match rate it', () => {
   });
 });
 
-describe('F2 · PATCH /matches/:id checks every key with create’s rules (result keys stay: D1)', () => {
+describe('F2 · PATCH /matches/:id checks every key with create’s rules', () => {
   test.each([
-    [{ status: 'banana' }, 'BAD_STATUS'],
     [{ scheduled_at: 'garbage' }, 'BAD_SCHEDULED_AT'],
     [{ scheduled_at: '2020-01-01T00:00:00Z' }, 'SCHEDULED_IN_PAST'],
     [{ scheduled_at: '9999-12-31T00:00:00Z' }, 'SCHEDULED_TOO_FAR'],
@@ -182,8 +181,6 @@ describe('F2 · PATCH /matches/:id checks every key with create’s rules (resul
     [{ team_a_name: 'x'.repeat(300) }, 'TEAM_NAME_TOO_LONG'],
     [{ overs: 'abc' }, 'BAD_OVERS'],
     [{ format: 'x'.repeat(1000) }, 'BAD_FORMAT'],
-    [{ winner_team_id: OTHER }, 'BAD_WINNER'],
-    [{ score_summary: 'nope' }, 'BAD_SCORE_SUMMARY'],
     [{ venue: '' }, 'VENUE_REQUIRED'],
   ])('%j → 400 %s, nothing written', async (body, code) => {
     mockNext = onMatch(matchRow({ team_a_id: null, team_b_id: null }));
@@ -203,9 +200,43 @@ describe('F2 · PATCH /matches/:id checks every key with create’s rules (resul
   });
   test('valid edits still go through; names are stored trimmed', async () => {
     mockNext = onMatch(matchRow({ team_a_id: null, team_b_id: null }));
-    const r = await call(updateMatch, { body: { team_a_name: '  Pune XI  ', status: 'completed', winner_team_id: null } });
+    const r = await call(updateMatch, { body: { team_a_name: '  Pune XI  ' } });
     expect(r.statusCode).toBe(200);
     expect(writes()[0].join()).toContain('"team_a_name":"Pune XI"');
+  });
+});
+
+describe('Decision 18 · PATCH /matches/:id sets no result (B05-D1)', () => {
+  test.each([
+    [{ status: 'completed' }, 'status'],
+    [{ status: 'live' }, 'status'],
+    [{ status: 'banana' }, 'status'],
+    [{ winner_team_id: TA }, 'winner_team_id'],
+    [{ winner_team_id: null }, 'winner_team_id'],
+    [{ score_summary: { A: { runs: 99 } } }, 'score_summary'],
+    [{ venue: 'Ground 2', score_summary: null }, 'score_summary'],
+  ])('%j → 400 RESULT_NOT_EDITABLE naming %s, pointing at /complete, nothing written', async (body, field) => {
+    mockNext = onMatch(matchRow());
+    const r = await call(updateMatch, { body });
+    expect([r.statusCode, r.body.code, r.body.field]).toEqual([400, 'RESULT_NOT_EDITABLE', field]);
+    expect(r.body.error).toContain('/matches/:id/complete');
+    expect(writes()).toHaveLength(0);
+  });
+  test('a stranger is still refused first (403, not a hint about the fields)', async () => {
+    mockNext = onMatch(matchRow({ created_by: OTHER }));
+    const r = await call(updateMatch, { body: { status: 'completed' } });
+    expect(r.statusCode).toBe(403);
+  });
+  test('status "cancelled" still goes through, as do the other fields', async () => {
+    mockNext = onMatch(matchRow());
+    const r = await call(updateMatch, { body: { status: 'cancelled', venue: 'Ground 2' } });
+    expect(r.statusCode).toBe(200);
+    expect(writes()[0].join()).toContain('"status":"cancelled"');
+  });
+  test('the app never calls this route with a result (it has no call to PATCH /matches/:id at all)', () => {
+    const app = path.join(__dirname, '../../../sportclan-v2/src/api/matches.ts');
+    if (!fs.existsSync(app)) return; // the app repo isn't beside this one (CI)
+    expect(fs.readFileSync(app, 'utf8')).not.toMatch(/client\.patch[^(]*\(\s*`\/matches\/\$\{id\}`\s*,/);
   });
 });
 

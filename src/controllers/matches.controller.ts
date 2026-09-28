@@ -1628,6 +1628,8 @@ export async function getMatch(req: Request, res: Response) {
 }
 
 const MATCH_STATUSES = ['scheduled', 'live', 'completed', 'cancelled', 'abandoned'];
+/** Decision 18: a result is set by /complete only, never by PATCH /matches/:id. */
+export const RESULT_KEYS_NOT_EDITABLE = ['winner_team_id', 'score_summary'] as const;
 const isDateOrNull = (v: unknown) => v === null || (typeof v === 'string' && !Number.isNaN(Date.parse(v)));
 
 /**
@@ -1734,10 +1736,26 @@ export async function updateMatch(req: Request, res: Response) {
           : 'Only the creator or umpire can update',
       });
     }
+    // Decision 18 (Dipak, 29 Sep 2026 · B05-D1): this route no longer sets a
+    // result. Through it a creator could mark a match completed with any winner
+    // and score — no toss, no line-up, no events. /complete is the one way to
+    // finish a match; the only status an edit may set is 'cancelled'.
+    {
+      const body = req.body || {};
+      const refused = RESULT_KEYS_NOT_EDITABLE.find((k) => k in body)
+        ?? ('status' in body && body.status !== 'cancelled' ? 'status' : null);
+      if (refused) {
+        return res.status(400).json({
+          error: refused === 'status'
+            ? 'A match’s status can’t be set here, except to cancel it. Finish a match with POST /matches/:id/complete.'
+            : `${refused} can’t be set here. Finish a match with POST /matches/:id/complete.`,
+          code: 'RESULT_NOT_EDITABLE',
+          field: refused,
+        });
+      }
+    }
     const allowedKeys = [
       'status',
-      'score_summary',
-      'winner_team_id',
       'squad_locked_at',
       'scorecard_locked_at',
       'scheduled_at',

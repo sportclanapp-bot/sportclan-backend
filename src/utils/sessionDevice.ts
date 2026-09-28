@@ -27,11 +27,17 @@ export function deviceFields(req: Pick<Request, 'headers'>): { device_name: stri
  * Store a new refresh token with its device. If migration 100 has not been
  * applied yet (the columns are missing), store it the old way — a sign-in
  * must never fail over a label.
+ *
+ * Returns the row's id — the session id (`sid`) the access tokens for this
+ * sign-in carry (decision 15) — or null if it couldn't be read back, in which
+ * case the tokens simply go without one.
  */
-export async function insertRefreshToken(userId: string, token: string, req: Pick<Request, 'headers'>): Promise<void> {
+export async function insertRefreshToken(userId: string, token: string, req: Pick<Request, 'headers'>): Promise<string | null> {
   const now = new Date().toISOString();
-  const { error } = await supabase.from('refresh_tokens').insert({ user_id: userId, token, ...deviceFields(req), last_used_at: now });
-  if (error) await supabase.from('refresh_tokens').insert({ user_id: userId, token });
+  const first = await supabase.from('refresh_tokens').insert({ user_id: userId, token, ...deviceFields(req), last_used_at: now }).select('id').maybeSingle();
+  if (!first.error) return (first.data as { id?: string } | null)?.id ?? null;
+  const fallback = await supabase.from('refresh_tokens').insert({ user_id: userId, token }).select('id').maybeSingle();
+  return (fallback.data as { id?: string } | null)?.id ?? null;
 }
 
 /** "Pixel 7 · Android 14 · SportClan 2.0.0 (3)", or "Unknown device" for an old session. */

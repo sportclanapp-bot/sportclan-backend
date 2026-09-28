@@ -566,8 +566,12 @@ export async function register(req: Request, res: Response) {
       // V048 (D19): a new account's date of birth is private until they choose
       // to show it (Settings › Privacy). Existing accounts keep their setting.
       show_dob: false,
+      // A new account is "Available to play" from the start, so it shows up for
+      // people looking for players (Dipak, 28 Sep). The column still defaults
+      // to false until migration 113 runs; existing accounts keep their setting.
+      is_available: true,
     })
-    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, referral_code, created_at')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, referral_code, is_available, created_at')
     .single();
   if (error || !user) {
     return res.status(500).json({ error: error?.message || 'Failed to create user' });

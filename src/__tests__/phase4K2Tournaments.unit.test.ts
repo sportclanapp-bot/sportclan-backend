@@ -43,7 +43,9 @@ jest.mock('../utils/notify', () => ({
 }));
 
 // eslint-disable-next-line import/first
-import { joinByCode, generateFixtures } from '../controllers/tournaments.controller';
+import { joinByCode, generateFixtures, updateTournament } from '../controllers/tournaments.controller';
+// eslint-disable-next-line import/first
+import { notifyUsers } from '../utils/notify';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const T = '22222222-2222-4222-8222-222222222222';
@@ -166,5 +168,23 @@ describe('K2-37b · a league is a double round-robin (SC-221)', () => {
     mockNext = gen('round_robin');
     await call(generateFixtures, {});
     expect(pairs()).toHaveLength(3);
+  });
+});
+
+describe('K2-47a · cancelling a tournament abandons its matches and tells the entrants (SC-239)', () => {
+  it('K2-47a (9479798): upcoming → cancelled: scheduled/live matches abandoned; every registered captain notified', async () => {
+    (notifyUsers as jest.Mock).mockClear();
+    mockNext = (q) => {
+      if (q[0] === 'from:tournaments' && has(q, 'update:')) return { data: { id: T, status: 'cancelled' } };
+      if (q[0] === 'from:tournaments') return { data: { created_by: ME, status: 'upcoming', name: 'P4 Cup', start_date: '2026-10-05', end_date: '2026-10-07' } };
+      if (q[0] === 'from:tournament_entries') return { data: [{ team_id: TEAM }, { team_id: TB }], count: 2 };
+      if (q[0] === 'from:team_members') return { data: [{ user_id: STRANGER }, { user_id: FIX }] };
+      return { data: null, count: 0 };
+    };
+    await call(updateTournament, { body: { status: 'cancelled' } });
+    await new Promise((x) => setTimeout(x, 0));
+    const ab = mockLog.find((q) => q[0] === 'from:matches' && has(q, '"status":"abandoned"'))!;
+    expect(ab).toEqual(expect.arrayContaining([`eq:["tournament_id","${T}"]`, 'in:["status",["scheduled","live"]]']));
+    expect(notifyUsers).toHaveBeenCalledWith([STRANGER, FIX], expect.objectContaining({ type: 'tournament_cancelled' }), { actorId: ME });
   });
 });

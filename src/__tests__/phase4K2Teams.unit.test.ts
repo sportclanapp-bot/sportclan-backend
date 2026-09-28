@@ -20,7 +20,7 @@ jest.mock('../utils/supabase', () => {
     };
     return chain;
   };
-  return { supabase: { from: jest.fn(start), rpc: jest.fn(async () => ({ data: null, error: null })) } };
+  return { supabase: { from: jest.fn(start), rpc: jest.fn(async (n: string, a: unknown) => { mockLog.push([`rpc:${n}`, JSON.stringify(a)]); return { data: null, error: null }; }) } };
 });
 let mockBlocked = new Set<string>();
 jest.mock('../utils/blocks', () => ({ ...jest.requireActual('../utils/blocks'), blockedUserIds: jest.fn(async () => mockBlocked) }));
@@ -36,7 +36,7 @@ jest.mock('../utils/sports', () => ({ validateSportForCreate: jest.fn(async () =
 jest.mock('../utils/teamRecord', () => ({ computeTeamRecord: jest.fn(async () => ({ played: 0, won: 0, lost: 0 })) }));
 
 // eslint-disable-next-line import/first
-import { joinTeamByCode, addTeamMember, getTeam } from '../controllers/teams.controller';
+import { joinTeamByCode, addTeamMember, getTeam, removeTeamMember } from '../controllers/teams.controller';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const TEAM = '22222222-2222-4222-8222-222222222222';
@@ -121,5 +121,40 @@ describe('K2-2i · a private team is readable by members only (SC-107)', () => {
     mockNext = team(false, true);
     const r = await call(getTeam, { params: { id: TEAM } });
     expect(r.statusCode).toBe(200);
+  });
+});
+
+describe('K2-49a · a captain leaving hands the team on first (SC-243)', () => {
+  const E = '55555555-5555-4555-8555-555555555555';
+  it('K2-49a (ba1d194): captaincy moves to the heir BEFORE the ex-captain’s row is deleted', async () => {
+    mockNext = (q) => (q[0] === 'from:team_members' && q.some((c) => c.startsWith('neq:'))
+      ? { data: [{ user_id: E, role: 'player', joined_at: '2026-01-01' }, { user_id: D, role: 'vice_captain', joined_at: '2026-02-01' }] }
+      : { data: null });
+    const r = await call(removeTeamMember, { params: { id: TEAM, userId: ME } });
+    expect(r.body).toEqual({ removed: true, captaincy_transferred_to: D }); // the co-captain is preferred
+    const rpcAt = mockLog.findIndex((q) => q[0] === 'rpc:transfer_team_captaincy');
+    const delAt = mockLog.findIndex((q) => q[0] === 'from:team_members' && q.some((c) => c.startsWith('delete:')));
+    expect(rpcAt).toBeGreaterThan(-1);
+    expect(JSON.parse(mockLog[rpcAt][1])).toEqual({ p_team_id: TEAM, p_actor_id: ME, p_target_id: D });
+    expect(delAt).toBeGreaterThan(rpcAt);
+  });
+});
+
+describe('K2-49b · malformed ids are a 400, a missing user a 404 — never a 500 (SC-244)', () => {
+  it('K2-49b (ba1d194): addTeamMember user_id "abc" → 400; a well-formed unknown user → 404, nothing inserted', async () => {
+    expect((await call(addTeamMember, { params: { id: TEAM }, body: { user_id: 'abc' } })).body).toEqual({ error: 'Invalid user_id' });
+    const r = await call(addTeamMember, { params: { id: TEAM }, body: { user_id: D } });
+    expect([r.statusCode, r.body.error]).toEqual([404, 'User not found']);
+    expect(inserts('team_members')).toHaveLength(0);
+  });
+  it.each([
+    ['getTeam', getTeam, { params: { id: 'abc' } }],
+    ['removeTeamMember (team)', removeTeamMember, { params: { id: 'abc', userId: ME } }],
+    ['removeTeamMember (user)', removeTeamMember, { params: { id: TEAM, userId: 'abc' } }],
+    ['addTeamMember (team)', addTeamMember, { params: { id: 'abc' }, body: { user_id: D } }],
+  ])('K2-49b (ba1d194): %s with a non-uuid → 400, no query', async (_n, fn, req) => {
+    const r = await call(fn, req);
+    expect(r.statusCode).toBe(400);
+    expect(mockLog.filter((q) => q[0].startsWith('from:'))).toHaveLength(0);
   });
 });

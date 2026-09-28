@@ -140,3 +140,59 @@ describe('K2-10c · forward and batch-read arrays are capped (AUDIT-5)', () => {
     expect(mockLog).toHaveLength(0);
   });
 });
+
+describe('K2-48 · a block / privacy setting also gates an EXISTING 1:1 thread (SC-241) and reactions need membership (SC-242)', () => {
+  const dm = (extra: (q: Q) => any = () => null) => (q: Q) => extra(q)
+    ?? (q[0] === 'from:chats' ? { data: { is_group: false } }
+      : q[0] === 'from:chat_participants' ? { data: [{ user_id: D }] }
+        : q[0] === 'from:messages' && q.some((c) => c.startsWith('maybeSingle')) ? { data: { id: MSG, chat_id: CHAT, reactions: {} } }
+          : { data: null });
+  const inserts = () => mockLog.filter((q) => q[0] === 'from:messages' && q.some((c) => c.startsWith('insert:')));
+  it('K2-48a (e816964): sending into an existing DM with a blocked counterpart → 403, nothing stored', async () => {
+    mockBlockedPair = true;
+    mockNext = dm();
+    const r = await call(msgs.sendMessage, { params: { id: CHAT }, body: { text: 'hi' } });
+    expect([r.statusCode, r.body.error]).toEqual([403, 'You can’t message this user.']);
+    expect(inserts()).toHaveLength(0);
+  });
+  it('K2-48a (e816964): the recipient’s message_privacy "nobody" → 403; "followers" and I don’t follow → 403', async () => {
+    mockNext = dm((q) => (q[0] === 'from:users' ? { data: { message_privacy: 'nobody' } } : null));
+    expect((await call(msgs.sendMessage, { params: { id: CHAT }, body: { text: 'hi' } })).statusCode).toBe(403);
+    mockNext = dm((q) => (q[0] === 'from:users' ? { data: { message_privacy: 'followers' } } : q[0] === 'from:follow_relationships' ? { data: null } : null));
+    expect((await call(msgs.sendMessage, { params: { id: CHAT }, body: { text: 'hi' } })).statusCode).toBe(403);
+    expect(inserts()).toHaveLength(0);
+  });
+  it('K2-48a (e816964): a GROUP chat is not gated by a block between two members', async () => {
+    mockBlockedPair = true;
+    mockNext = (q) => (q[0] === 'from:chats' ? { data: { is_group: true } }
+      : q[0] === 'from:messages' && q.some((c) => c.startsWith('insert:')) ? { data: { id: MSG, sender: { name: 'D' } } } : { data: null });
+    expect((await call(msgs.sendMessage, { params: { id: CHAT }, body: { text: 'hi' } })).statusCode).toBe(201);
+  });
+  it.each([['getMessages', 'getMessages'], ['markAsRead', 'markAsRead']])('K2-48b (e816964): %s on a blocked 1:1 → 403', async (_n, fn) => {
+    mockBlockedPair = true;
+    mockNext = dm();
+    const r = await call((msgs as any)[fn], { params: { id: CHAT } });
+    expect(r.statusCode).toBe(403);
+  });
+  it('K2-48b (e816964): batchMarkRead drops a blocked 1:1 chat from the set it marks', async () => {
+    mockBlocked = new Set([D]);
+    mockNext = (q) => (q[0] === 'from:chat_participants' && q.some((c) => c.startsWith('neq:')) ? { data: [{ chat_id: CHAT, user_id: D }] }
+      : q[0] === 'from:chat_participants' ? { data: [{ chat_id: CHAT }] } : { data: [] });
+    const r = await call(msgs.batchMarkRead, { body: { messageIds: [MSG] } });
+    expect(r.body).toEqual({ success: true, updated: 0 });
+    expect(mockLog.filter((q) => q[0] === 'from:messages')).toHaveLength(0);
+  });
+  it('K2-48c (e816964): reacting to a message in a chat I’m not in → 403, nothing written', async () => {
+    mockMember = false;
+    mockNext = dm();
+    const r = await call(msgs.reactToMessage, { params: { messageId: MSG }, body: { emoji: '👍' } });
+    expect([r.statusCode, r.body.error]).toEqual([403, 'Not a member of this chat']);
+    expect(mockLog.filter((q) => q.some((c) => c.startsWith('update:')))).toHaveLength(0);
+  });
+  it('K2-48c (e816964): reacting in a blocked 1:1 → 403', async () => {
+    mockBlockedPair = true;
+    mockNext = dm();
+    const r = await call(msgs.reactToMessage, { params: { messageId: MSG }, body: { emoji: '👍' } });
+    expect(r.statusCode).toBe(403);
+  });
+});

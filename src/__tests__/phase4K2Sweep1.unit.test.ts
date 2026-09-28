@@ -242,3 +242,19 @@ describe('K2-56 · /sports is cached for 5 minutes, not a day (SC-269)', () => {
     expect(mount).toMatch(/cacheFor\(300\)/);
   });
 });
+
+describe('K2-77b · uploaded photos are auto-oriented from EXIF (SC-350)', () => {
+  it('K2-77b (d0d25d3): a 600×300 JPEG tagged orientation=6 is stored upright as 300×600', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const sharp = require('sharp');
+    const src = await sharp({ create: { width: 600, height: 300, channels: 3, background: { r: 200, g: 50, b: 50 } } })
+      .jpeg().withMetadata({ orientation: 6 }).toBuffer();
+    const { uploadBuffer } = jest.requireMock('../utils/r2');
+    (uploadBuffer as jest.Mock).mockClear();
+    const r = await call(uploadProfilePhoto, { body: { base64: src.toString('base64'), mime: 'image/jpeg' } });
+    expect(r.statusCode).toBe(200);
+    const stored: Buffer = (uploadBuffer as jest.Mock).mock.calls[0][1];
+    const meta = await sharp(stored).metadata();
+    expect([meta.width, meta.height]).toEqual([300, 600]);
+  });
+});

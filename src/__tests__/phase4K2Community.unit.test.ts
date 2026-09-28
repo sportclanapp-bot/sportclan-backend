@@ -149,3 +149,17 @@ describe('K2-43 · poll my_vote on reads + post mentions notify (SC-234 / SC-235
     expect(c[2]).toEqual({ actorId: ME });
   });
 });
+
+describe('K2-77a · every attached image is kept, not just the first (SC-350)', () => {
+  it('K2-77a (d0d25d3): createPost with 3 media_urls stores image_url = #1 and media_urls = all 3', async () => {
+    process.env.R2_PUBLIC_BASE_URL = 'https://media.sportclan.test';
+    const urls = ['https://media.sportclan.test/1.jpg', 'https://media.sportclan.test/2.jpg', 'https://media.sportclan.test/3.jpg'];
+    mockRpc = (n) => (n === 'create_post_capped' ? { data: { id: POST } } : {});
+    const r = await call(createPost, { body: { content: 'three photos', media_urls: urls } });
+    expect(r.statusCode).toBe(201);
+    expect(mockRpcCalls.find(([n]) => n === 'create_post_capped')![1].p_image_url).toBe(urls[0]);
+    const upd = mockLog.find((q) => q[0] === 'from:community_posts' && q.some((c) => c.startsWith('update:') && c.includes('media_urls')))!;
+    expect(upd).toContain(`update:${JSON.stringify([{ media_urls: urls }])}`);
+    expect(upd).toContain(`eq:["id","${POST}"]`);
+  });
+});

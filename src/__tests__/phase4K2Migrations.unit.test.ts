@@ -240,3 +240,17 @@ describe('K2-16 · post + comment idempotency (053, create_post_capped as of 091
     expect(out[12].error).toBeUndefined();
   });
 });
+
+describe('K2-77d · migration 074 adds media_urls (SC-350)', () => {
+  it('K2-77d (d0d25d3): community_posts gains a text[] media_urls; existing single images are carried into it', () => {
+    const out = pg([
+      "CREATE TABLE community_posts (id serial PRIMARY KEY, image_url text); INSERT INTO community_posts (image_url) VALUES ('https://x/1.jpg'), (NULL), ('')",
+      mig('074_post_media_urls.sql'),
+      'SELECT id, media_urls FROM community_posts ORDER BY id',
+      "UPDATE community_posts SET media_urls = ARRAY['a','b','c','d'] WHERE id = 2",
+      mig('074_post_media_urls.sql'),
+    ]);
+    expect(ok(out)).toEqual([]);
+    expect(out[2].rows).toEqual([{ id: 1, media_urls: ['https://x/1.jpg'] }, { id: 2, media_urls: null }, { id: 3, media_urls: null }]);
+  });
+});

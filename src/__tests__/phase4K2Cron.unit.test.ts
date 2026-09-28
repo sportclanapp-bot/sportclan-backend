@@ -39,7 +39,7 @@ jest.mock('../utils/notify', () => ({
 }));
 
 // eslint-disable-next-line import/first
-import { runSmartMatchNotifications, runReEngagement, runWeeklyDigest, checkRatingMilestone, runMatchReminderSweep } from '../controllers/features.controller';
+import { runSmartMatchNotifications, runReEngagement, runWeeklyDigest, checkRatingMilestone, runMatchReminderSweep, runPublishScheduledPosts } from '../controllers/features.controller';
 
 const U = (i: number) => `bbbbbbbb-bbbb-4bbb-8bbb-${String(i).padStart(12, '0')}`;
 const CITY = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -225,5 +225,17 @@ describe('K2-58 · the 15-minute reminder reaches the entrant teams (SC-272)', (
     // K2-66c (db350b5): the body names the IST kick-off time.
     expect((mockNotifyUser.mock.calls[0][0] as any).body).toMatch(/starts at \d{2}:\d{2} \(~15 min\)/);
     mockAudience.mockImplementation(async () => []);
+  });
+});
+
+describe('K2-77c · a scheduled post enters the feed when it publishes (SC-350)', () => {
+  it('K2-77c (d0d25d3): the publish job stamps created_at = now along with clearing scheduled_at', async () => {
+    jest.useFakeTimers({ now: new Date('2026-09-28T10:00:00.000Z'), doNotFake: ['setImmediate', 'nextTick'] });
+    mockNext = (q) => (q[0] === 'from:community_posts' ? { data: [{ id: 'p1' }] } : { data: null });
+    const out = await runPublishScheduledPosts();
+    jest.useRealTimers();
+    expect(out.published).toBe(1);
+    const upd = mockLog.find((q) => q[0] === 'from:community_posts')!;
+    expect(upd).toContain('update:[{"scheduled_at":null,"created_at":"2026-09-28T10:00:00.000Z"}]');
   });
 });

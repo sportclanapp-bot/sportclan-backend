@@ -36,6 +36,8 @@ jest.mock('../utils/testContent', () => ({
 }));
 jest.mock('../utils/sportId', () => ({ resolveSportId: jest.fn(async (s?: string) => (s ? '99999999-9999-4999-8999-999999999999' : undefined)) }));
 jest.mock('../utils/sports', () => ({ ...jest.requireActual('../utils/sports'), isSportInactive: jest.fn(async () => false) }));
+let mockSlug = 'cricket';
+jest.mock('../utils/sportCache', () => ({ ...jest.requireActual('../utils/sportCache'), getSport: jest.fn(async () => ({ slug: mockSlug })) }));
 jest.mock('../utils/matchCounts', () => ({
   ...jest.requireActual('../utils/matchCounts'),
   countParticipantsByMatch: jest.fn(async (ids: string[]) => new Map(ids.map((i) => [i, 2]))),
@@ -43,9 +45,11 @@ jest.mock('../utils/matchCounts', () => ({
 jest.mock('../utils/notify', () => ({ notifyUser: jest.fn(async () => undefined), notifyUsers: jest.fn(async () => undefined), notifyUnlessBlocked: jest.fn(async () => undefined) }));
 
 // eslint-disable-next-line import/first
-import { getRival, getUserById, updateMe, getActivityHeatmap } from '../controllers/users.controller';
+import { getRival, getUserById, updateMe, getActivityHeatmap, getSportProfile } from '../controllers/users.controller';
 // eslint-disable-next-line import/first
 import { getUserInsights } from '../controllers/insights.controller';
+// eslint-disable-next-line import/first
+import { getSeasonRecap } from '../controllers/features.controller';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -165,5 +169,47 @@ describe('K2-59 / K2-60 / K2-63 · insights form, streaks and wins', () => {
     const r = await call(getActivityHeatmap, { params: { id: ME } });
     const today = r.body.heatmap[r.body.heatmap.length - 1];
     expect([today.matches, today.wins, today.type]).toEqual([1, 1, 'won']);
+  });
+});
+
+describe('K2-72 · the 90-day recap’s W/L/D come from the same 90 days (SC-320)', () => {
+  it('K2-72 (067de6f): lifetime profile totals don’t leak in; winner_side, then winner_team_id → side, else draw', async () => {
+    const TA = 'aaaaaaaa-0000-4000-8000-00000000000a';
+    const m = (id: string, extra: object) => ({ id, status: 'completed', is_ranked: true, team_a_id: TA, team_b_id: null, winner_team_id: null, score_summary: {}, created_at: '2026-09-20T10:00:00Z', voided_at: null, ...extra });
+    mockNext = (q) => {
+      if (q[0] === 'from:user_sport_profiles') return { data: [{ sport_id: 's1', rating: 1400, matches_played: 80, wins: 50, losses: 25, draws: 5 }] };
+      if (q[0] === 'from:match_participants') return { data: [
+        { team_side: 'A', match: m('m1', { score_summary: { winner_side: 'A' } }) },
+        { team_side: 'A', match: m('m2', { winner_team_id: 'bbbbbbbb-0000-4000-8000-00000000000b', team_b_id: 'bbbbbbbb-0000-4000-8000-00000000000b' }) },
+        { team_side: 'A', match: m('m3', {}) },
+      ] };
+      return { data: [], count: 0 };
+    };
+    const r = await call(getSeasonRecap, { params: { id: ME } });
+    expect(r.body.recap).toMatchObject({ totalMatches: 3, wins: 1, losses: 1, draws: 1 });
+  });
+});
+
+describe('K2-74b · the orphan sport-agnostic city_rank is gone from profile reads (SC-328)', () => {
+  it('K2-74b (3408218): getUserById returns no city_rank', async () => {
+    mockNext = (q) => (q[0] === 'from:users' ? { data: { id: A, name: 'A' } } : { data: null });
+    const r = await call(getUserById, { params: { id: A } });
+    expect(r.statusCode).toBe(200);
+    expect('city_rank' in r.body.user).toBe(false);
+  });
+});
+
+describe('K2-75 · Table Tennis’ slug is normalised for its per-sport stats (SC-343)', () => {
+  afterEach(() => { mockSlug = 'cricket'; });
+  it('K2-75 (e329caf): slug "table-tennis" gets the serve/point sportStats block', async () => {
+    mockSlug = 'table-tennis';
+    mockNext = (q) => {
+      if (q[0] === 'from:user_sport_profiles' && has(q, 'maybeSingle')) return { data: { rating: 1200, matches_played: 2, wins: 1, losses: 1, draws: 0 } };
+      if (q[0] === 'from:match_participants' && has(q, 'aces')) return { data: [{ aces: 3, double_faults: 1, first_serve_in: 8, first_serve_total: 10, break_points_won: 1, break_points_faced: 2 }] };
+      if (q[0] === 'from:match_participants') return { data: [{ match_id: 'm1', match: { id: 'm1' } }] };
+      return { data: [], count: 0 };
+    };
+    const r = await call(getSportProfile, { params: { id: ME, sportId: 'table-tennis' } });
+    expect(r.body.profile.sportStats).toMatchObject({ total_aces: 3, total_double_faults: 1, first_serve_pct: 80 });
   });
 });

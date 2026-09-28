@@ -140,3 +140,20 @@ describe('SC-376 · the score recorded with the result', () => {
     expect(text).not.toMatch(/0\s*[-–]\s*0/);
   });
 });
+
+describe('SC-392 · the activity streak is stamped with the IST day', () => {
+  it('K3-37 (47daf3f): a match finished at 01:30 IST stamps last_match_date with that IST day', async () => {
+    jest.useFakeTimers({ now: Date.parse('2026-08-01T20:00:00Z'), doNotFake: ['setImmediate', 'setTimeout', 'setInterval', 'nextTick', 'queueMicrotask', 'clearTimeout', 'clearInterval', 'clearImmediate'] });
+    try {
+      mockNext = (q) => {
+        if (q[0] === 'from:match_participants') return { data: [{ user_id: 'p1', team_side: 'A' }, { user_id: 'p2', team_side: 'B' }] };
+        if (q[0] === 'from:users' && q.some((c) => c.startsWith('select:') && c.includes('streak_count'))) return { data: [{ id: 'p1', streak_count: 0, last_match_date: null }] };
+        return base(matchRow())(q);
+      };
+      await call({ winner_team_id: TA });
+      for (let i = 0; i < 30; i++) await new Promise((ok) => setImmediate(ok));
+      const u = mockLog.find((q) => q[0] === 'from:users' && q.some((c) => c.startsWith('update:') && c.includes('last_match_date')));
+      expect(u?.join()).toContain('"last_match_date":"2026-08-02"');
+    } finally { jest.useRealTimers(); }
+  });
+});

@@ -68,3 +68,36 @@ describe('SC-368 · a from-scratch rebuild creates the drifted tables', () => {
     expect(r.dupe).toBe('refused');
   });
 });
+
+describe('B4 · the community post count caches cannot go negative (migration 093)', () => {
+  const setup = `
+    await db.exec(\`
+      CREATE TABLE community_posts (id int PRIMARY KEY, likes_count int NOT NULL DEFAULT 0, comments_count int NOT NULL DEFAULT 0);
+      CREATE TABLE post_likes (id serial PRIMARY KEY, post_id int, user_id int);
+      CREATE TABLE post_comments (id serial PRIMARY KEY, post_id int);
+      INSERT INTO community_posts (id, likes_count, comments_count) VALUES (1, 0, 0), (2, 7, -3);
+      INSERT INTO post_likes (post_id, user_id) VALUES (1, 10);
+    \`);
+    await db.exec(mig('093_post_counts_floor.sql'));
+    await db.exec(\`
+      CREATE TRIGGER t_likes AFTER INSERT OR DELETE ON post_likes FOR EACH ROW EXECUTE FUNCTION update_post_likes_count();
+      CREATE TRIGGER t_comments AFTER INSERT OR DELETE ON post_comments FOR EACH ROW EXECUTE FUNCTION update_post_comments_count();
+    \`);`;
+  it('K3-76 (ce8ac8d): the migration recounts drifted caches from the source rows', () => {
+    const r = pg(`${setup}
+      out.rows = (await db.query('SELECT id, likes_count, comments_count FROM community_posts ORDER BY id')).rows;`);
+    expect(r.error).toBeUndefined();
+    expect(r.rows).toEqual([{ id: 1, likes_count: 1, comments_count: 0 }, { id: 2, likes_count: 0, comments_count: 0 }]);
+  });
+  it('K3-76 (ce8ac8d): removing a like or comment from a post already at 0 leaves 0, not -1', () => {
+    const r = pg(`${setup}
+      await db.exec("UPDATE community_posts SET likes_count = 0 WHERE id = 1");
+      await db.exec("DELETE FROM post_likes WHERE post_id = 1");
+      await db.exec("INSERT INTO post_comments (post_id) VALUES (2)");
+      await db.exec("UPDATE community_posts SET comments_count = 0 WHERE id = 2");
+      await db.exec("DELETE FROM post_comments WHERE post_id = 2");
+      out.rows = (await db.query('SELECT id, likes_count, comments_count FROM community_posts ORDER BY id')).rows;`);
+    expect(r.error).toBeUndefined();
+    expect(r.rows).toEqual([{ id: 1, likes_count: 0, comments_count: 0 }, { id: 2, likes_count: 0, comments_count: 0 }]);
+  });
+});

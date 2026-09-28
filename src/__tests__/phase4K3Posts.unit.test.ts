@@ -40,7 +40,7 @@ jest.mock('../utils/notify', () => ({ notifyUsers: jest.fn(), notifyUnlessBlocke
 jest.mock('../utils/coins', () => ({ awardCoins: jest.fn(async () => undefined) }));
 
 // eslint-disable-next-line import/first
-import { listPosts, createPost, getMyPostCount } from '../controllers/community.controller';
+import { listPosts, createPost, getMyPostCount, unlikePost } from '../controllers/community.controller';
 // eslint-disable-next-line import/first
 import { updateProfilePost } from '../controllers/profilePosts.controller';
 
@@ -109,5 +109,21 @@ describe('SC-357 · the quota display counts both post types', () => {
     mockNext = (q) => (q[0] === 'from:community_posts' ? { count: 3 } : q[0] === 'from:profile_posts' ? { count: 2 } : {});
     const r = await call(getMyPostCount, {});
     expect(r.body.count).toBe(5);
+  });
+});
+
+describe('B4 · the like that left', () => {
+  it('K3-76 (ce8ac8d): unliking the last like deletes the "liked your post" notification', async () => {
+    mockNext = (q) => {
+      if (q[0] === 'from:community_posts' && q.includes('maybeSingle')) return { data: { id: POST, author_id: OTHER, deleted_at: null, scheduled_at: null } };
+      if (q[0] === 'from:post_likes' && q.some((c) => c.includes('"count":"exact"'))) return { count: 0 };
+      if (q[0] === 'from:notifications' && q.some((c) => c.startsWith('select:'))) return { data: [{ id: 'n1', data: { post_id: POST }, read: true }] };
+      return { data: null };
+    };
+    const r = await call(unlikePost, { params: { id: POST } });
+    expect(r.body).toEqual({ liked: false });
+    for (let i = 0; i < 20; i++) await new Promise((ok) => setImmediate(ok));
+    const del = mockLog.find((q) => q[0] === 'from:notifications' && q.some((c) => c.startsWith('delete:')));
+    expect(del?.join()).toContain('in:["id",["n1"]]');
   });
 });

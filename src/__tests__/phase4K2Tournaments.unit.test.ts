@@ -43,9 +43,9 @@ jest.mock('../utils/notify', () => ({
 }));
 
 // eslint-disable-next-line import/first
-import { joinByCode, generateFixtures, updateTournament, advanceTournamentWinner, getBracket, getTournament } from '../controllers/tournaments.controller';
+import { joinByCode, generateFixtures, updateTournament, advanceTournamentWinner, getBracket, getTournament, updateFixtures } from '../controllers/tournaments.controller';
 // eslint-disable-next-line import/first
-import { notifyUsers } from '../utils/notify';
+import { notifyUsers, matchAudienceIds } from '../utils/notify';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const T = '22222222-2222-4222-8222-222222222222';
@@ -228,5 +228,19 @@ describe('K2-65b · the tournament overview gets a server fixture count (SC-293/
       : q[0] === 'from:matches' && has(q, '{"count":"exact","head":true}') ? { count: 6 } : { data: [] });
     const r = await call(getTournament, {});
     expect((r.body.tournament ?? r.body).fixtures_count).toBe(6);
+  });
+});
+
+describe('K2-57c · a rescheduled fixture tells the entrant teams (SC-270)', () => {
+  it('K2-57c (6c38300): updateFixtures moving a slot asks matchAudienceIds(fixture, team_a, team_b)', async () => {
+    (matchAudienceIds as jest.Mock).mockClear();
+    mockNext = (q) => {
+      if (q[0] === 'from:tournaments') return { data: { id: T, created_by: ME, status: 'upcoming', name: 'P4', start_date: '2026-10-05', end_date: '2026-10-07' } };
+      if (q[0] === 'from:matches' && has(q, 'update:')) return { data: { id: FIX, scheduled_at: '2026-10-06T04:00:00.000Z', ground_label: null, team_a_id: TEAM, team_b_id: TB } };
+      if (q[0] === 'from:matches' && has(q, `eq:["id","${FIX}"]`)) return { data: { scheduled_at: '2026-10-05T04:00:00.000Z', ground_label: null, venue: null, team_a_id: TEAM, team_b_id: TB } };
+      return { data: [] };
+    };
+    await call(updateFixtures, { body: { updates: [{ id: FIX, scheduled_at: '2026-10-06T04:00:00.000Z' }] } });
+    expect(matchAudienceIds).toHaveBeenCalledWith(FIX, TEAM, TB);
   });
 });

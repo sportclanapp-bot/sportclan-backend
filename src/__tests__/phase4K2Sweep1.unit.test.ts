@@ -232,3 +232,13 @@ describe('K2-11 / K2-13 · the temporary fault-injection probes stay removed', (
     expect(hits).toEqual([]);
   });
 });
+
+describe('K2-56 · /sports is cached for 5 minutes, not a day (SC-269)', () => {
+  // index.ts mounts routes at import time with side effects (listen, timers),
+  // so the mount line is read rather than executed.
+  it('K2-56 (82a6398): the /sports mount uses cacheFor(300)', () => {
+    const index = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
+    const mount = index.split('\n').find((l) => /app\.use\('\/sports'/.test(l));
+    expect(mount).toMatch(/cacheFor\(300\)/);
+  });
+});

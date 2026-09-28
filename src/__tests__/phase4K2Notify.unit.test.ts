@@ -33,7 +33,7 @@ jest.mock('../utils/activeUser', () => ({
 jest.mock('../utils/expoPush', () => ({ sendPushToTokens: jest.fn(async () => undefined) }));
 
 // eslint-disable-next-line import/first
-import { notifyUsers, allowedRecipients } from '../utils/notify';
+import { notifyUsers, allowedRecipients, matchAudienceIds } from '../utils/notify';
 
 const ACTOR = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const U = (i: number) => `bbbbbbbb-bbbb-4bbb-8bbb-${String(i).padStart(12, '0')}`;
@@ -86,5 +86,16 @@ describe('K2-42 · rating_change obeys the Milestones toggle (SC-232)', () => {
   it('K2-42 (16ccd07): a user with milestones off gets no rating_change; others do', async () => {
     mockNext = (q) => (q[0] === 'from:users' ? { data: [{ id: U(1), notification_preferences: { milestones: false } }, { id: U(2), notification_preferences: {} }] } : { data: null });
     expect(await allowedRecipients([U(1), U(2)], 'rating_change')).toEqual([U(2)]);
+  });
+});
+
+describe('K2-57a · a match’s audience is its line-up PLUS both entrant teams (SC-270)', () => {
+  it('K2-57a (6c38300): matchAudienceIds = participants ∪ team_a/team_b members, deduped', async () => {
+    const TA = 'a0000000-0000-4000-8000-000000000001';
+    const TB = 'a0000000-0000-4000-8000-000000000002';
+    mockNext = (q) => (q[0] === 'from:match_participants' ? { data: [{ user_id: U(1) }] }
+      : q[0] === 'from:team_members' ? { data: [{ user_id: U(1) }, { user_id: U(2) }, { user_id: U(3) }] } : { data: null });
+    expect((await matchAudienceIds('m1', TA, TB)).sort()).toEqual([U(1), U(2), U(3)]);
+    expect(mockLog.find((q) => q[0] === 'from:team_members')).toContain(`in:["team_id",["${TA}","${TB}"]]`);
   });
 });

@@ -28,17 +28,18 @@ jest.mock('../utils/supabase', () => {
   return { supabase: { from: jest.fn(start), rpc: jest.fn(async () => ({ data: null, error: null })) } };
 });
 let mockOptedOut = new Set<string>();
+const mockAudience = jest.fn(async (..._a: unknown[]) => [] as string[]);
 const mockNotifyUser = jest.fn(async (..._a: unknown[]) => undefined);
 jest.mock('../utils/notify', () => ({
   notifyUser: (...a: unknown[]) => mockNotifyUser(...a),
   notifyUnlessBlocked: jest.fn(),
   allowedRecipients: jest.fn(async (ids: string[]) => ids.filter((i) => !mockOptedOut.has(i))),
   sendPushToUsers: jest.fn(async () => undefined),
-  matchAudienceIds: jest.fn(async () => []),
+  matchAudienceIds: (...a: unknown[]) => mockAudience(...a),
 }));
 
 // eslint-disable-next-line import/first
-import { runSmartMatchNotifications, runReEngagement, runWeeklyDigest, checkRatingMilestone } from '../controllers/features.controller';
+import { runSmartMatchNotifications, runReEngagement, runWeeklyDigest, checkRatingMilestone, runMatchReminderSweep } from '../controllers/features.controller';
 
 const U = (i: number) => `bbbbbbbb-bbbb-4bbb-8bbb-${String(i).padStart(12, '0')}`;
 const CITY = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -206,5 +207,21 @@ describe('K2-38 · direct-insert notification sites go through notifyUser (prefs
     const b = body(src(f), head);
     expect(b).toContain('notifyUser(');
     expect(b).not.toMatch(/from\('notifications'\)\s*\.insert/);
+  });
+});
+
+describe('K2-58 · the 15-minute reminder reaches the entrant teams (SC-272)', () => {
+  it('K2-58 (af5b627): recipients = matchAudienceIds(match, team_a, team_b) + the umpire, one reminder each', async () => {
+    const TA = 'a0000000-0000-4000-8000-000000000001';
+    const TB = 'a0000000-0000-4000-8000-000000000002';
+    mockAudience.mockImplementation(async () => [U(1), U(2)]);
+    mockNext = (q) => (q[0] === 'from:matches'
+      ? { data: [{ id: 'm1', team_a_name: 'A', team_b_name: 'B', team_a_id: TA, team_b_id: TB, scheduled_at: new Date(Date.now() + 600000).toISOString(), umpire_id: U(9), status: 'scheduled' }] }
+      : { data: null });
+    const out = await runMatchReminderSweep();
+    expect(mockAudience).toHaveBeenCalledWith('m1', TA, TB);
+    expect(mockNotifyUser.mock.calls.map((c) => (c[0] as any).userId).sort()).toEqual([U(1), U(2), U(9)]);
+    expect(out.sent).toBe(3);
+    mockAudience.mockImplementation(async () => []);
   });
 });

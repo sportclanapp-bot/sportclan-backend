@@ -57,13 +57,13 @@ jest.mock('../utils/notify', () => ({
 // eslint-disable-next-line import/first
 import { getSport } from '../utils/sportCache';
 // eslint-disable-next-line import/first
-import { addParticipants, getMatchChat, rateMatchHandler, getCommentary, completeMatch, createMatch, updateMatch, getMatch, abandonMatch } from '../controllers/matches.controller';
+import { addParticipants, getMatchChat, rateMatchHandler, getCommentary, completeMatch, createMatch, updateMatch, getMatch, abandonMatch, cancelMatch } from '../controllers/matches.controller';
 // eslint-disable-next-line import/first
 import { decideMatchJoinRequest } from '../controllers/matchJoinRequests.controller';
 // eslint-disable-next-line import/first
 import { canOfficiateMatch } from '../utils/tournamentAuth';
 // eslint-disable-next-line import/first
-import { notifyUsers } from '../utils/notify';
+import { notifyUsers, matchAudienceIds } from '../utils/notify';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const MATCH = '22222222-2222-4222-8222-222222222222';
@@ -296,5 +296,28 @@ describe('K2-54 · bracket-only guards key off the tournament FORMAT, not round 
     mockNext = fixture('knockout', 'scheduled');
     const r = await call(abandonMatch, { body: {} });
     expect([r.statusCode, r.body.code]).toEqual([400, 'WALKOVER_TEAM_REQUIRED']);
+  });
+});
+
+describe('K2-57b · cancel / abandon reach the entrant teams, not only the line-up (SC-270)', () => {
+  beforeEach(() => {
+    (notifyUsers as jest.Mock).mockClear();
+    (matchAudienceIds as jest.Mock).mockClear();
+    (matchAudienceIds as jest.Mock).mockImplementation(async () => [ME, TB, OTHER]);
+  });
+  afterEach(() => (matchAudienceIds as jest.Mock).mockImplementation(async () => []));
+  it('K2-57b (6c38300): abandon → matchAudienceIds(match, team_a, team_b), everyone but me notified', async () => {
+    mockNext = (q) => (q[0] === 'from:matches' ? { data: matchRow({ status: 'live' }) } : { data: null });
+    await call(abandonMatch, { body: {} });
+    expect(matchAudienceIds).toHaveBeenCalledWith(MATCH, TA, TB);
+    const c = (notifyUsers as jest.Mock).mock.calls.find((a) => a[1]?.type === 'match_abandoned')!;
+    expect(c[0]).toEqual([TB, OTHER]);
+  });
+  it('K2-57b (6c38300): cancel → the same audience is told', async () => {
+    mockNext = (q) => (q[0] === 'from:matches' ? { data: matchRow({ status: 'scheduled' }) } : { data: null });
+    await call(cancelMatch, {});
+    expect(matchAudienceIds).toHaveBeenCalledWith(MATCH, TA, TB);
+    const c = (notifyUsers as jest.Mock).mock.calls.find((a) => a[1]?.type === 'match_cancelled')!;
+    expect(c[0]).toEqual([ME, TB, OTHER]);
   });
 });

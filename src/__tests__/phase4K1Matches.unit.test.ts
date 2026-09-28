@@ -50,7 +50,7 @@ jest.mock('../controllers/matchFeatures.controller', () => ({
 }));
 
 // eslint-disable-next-line import/first
-import { completeMatch } from '../controllers/matches.controller';
+import { completeMatch, setMatchTossHandler } from '../controllers/matches.controller';
 // eslint-disable-next-line import/first
 import { supabase } from '../utils/supabase';
 
@@ -98,5 +98,18 @@ describe('K1-18 (89dd9dc) · a match with no participants can still be completed
     const ups = matchUpdates();
     // K1-28 (4241ece): the winner is recorded BY SIDE when there are no team ids.
     expect(ups.some((u) => u.score_summary?.winner_side === 'A')).toBe(true);
+  });
+});
+
+describe('K1-28c (4241ece, L-003) · the toss winner is stored BY SIDE for free-text teams', () => {
+  test('K1-28c (4241ece): no team ids, tossWinnerSide B → score_summary.toss_winner_side = "B" on the toss write', async () => {
+    mockNext = (q) => (q[0] === 'from:matches' && q.some((c) => c.startsWith('maybeSingle'))
+      ? { data: { ...casual, status: 'scheduled' } }
+      : q[0] === 'from:matches' && q.some((c) => c.startsWith('single')) ? { data: { id: MATCH } } : { data: null });
+    const r = await call(setMatchTossHandler, { body: { tossChoice: 'bowl', tossWinnerSide: 'B' } });
+    expect(r.statusCode).toBe(200);
+    const toss = matchUpdates().find((u) => u.toss_choice === 'bowl')!;
+    expect(toss.toss_winner_team_id).toBeNull();
+    expect(toss.score_summary.toss_winner_side).toBe('B');
   });
 });

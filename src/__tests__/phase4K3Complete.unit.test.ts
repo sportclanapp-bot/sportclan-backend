@@ -157,3 +157,23 @@ describe('SC-392 · the activity streak is stamped with the IST day', () => {
     } finally { jest.useRealTimers(); }
   });
 });
+
+describe('M1 · one result sentence, cricket-correct', () => {
+  it('K3-63 / K3-71 (af3ca47, 383a6ae): a successful chase is "won by N wickets" — toss_choice is loaded and reaches the derivation', async () => {
+    mockSport = { slug: 'cricket' };
+    // A won the toss and chose to BAT, so B chased 150 and got there 3 down.
+    mockCanonical = { A: { runs: 150, score: 150, wickets: 6, balls: 120 }, B: { runs: 151, score: 151, wickets: 3, balls: 100 }, toss_winner_side: 'A' };
+    mockNext = base(matchRow({ toss_choice: 'bat', overs: 20, format: 'T20', score_summary: { toss_winner_side: 'A' } }));
+    await call({ winner_team_id: TB });
+    expect(resultPatch().score_summary.result).toBe('Mumbai XI won by 7 wickets');
+    const sel = mockLog.find((q) => q[0] === 'from:matches' && q.includes('maybeSingle'))!.join();
+    expect(sel).toContain('toss_choice');
+  });
+  it('K3-63 (af3ca47): defending a total is still "won by N runs"', async () => {
+    mockSport = { slug: 'cricket' };
+    mockCanonical = { A: { runs: 150, score: 150, wickets: 6, balls: 120 }, B: { runs: 140, score: 140, wickets: 10, balls: 110 }, toss_winner_side: 'A' };
+    mockNext = base(matchRow({ toss_choice: 'bat', overs: 20, format: 'T20', score_summary: { toss_winner_side: 'A' } }));
+    await call({ winner_team_id: TA });
+    expect(resultPatch().score_summary.result).toBe('Pune XI won by 10 runs');
+  });
+});

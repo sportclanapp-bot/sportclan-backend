@@ -27,8 +27,8 @@ jest.mock('../utils/chatMembership', () => ({
   isActiveMember: jest.fn(async () => mockMember),
   activeMembership: jest.fn(async () => (mockMember ? { role: 'admin' } : null)),
   joinChat: jest.fn(async () => undefined),
-  leaveChat: jest.fn(async () => undefined),
-  softDeleteChat: jest.fn(async () => undefined),
+  leaveChat: jest.fn(async () => { mockLog.push(['leaveChat']); }),
+  softDeleteChat: jest.fn(async () => { mockLog.push(['softDeleteChat']); }),
 }));
 let mockBlocked = new Set<string>();
 let mockBlockedPair = false;
@@ -194,5 +194,36 @@ describe('K2-48 · a block / privacy setting also gates an EXISTING 1:1 thread (
     mockNext = dm();
     const r = await call(msgs.reactToMessage, { params: { messageId: MSG }, body: { emoji: '👍' } });
     expect(r.statusCode).toBe(403);
+  });
+});
+
+describe('K2-67 · chat list page metadata and a group never left without an admin (SC-299/301)', () => {
+  it('K2-67a (9761183): listChats reports total / has_more for the page', async () => {
+    mockNext = (q) => (q[0] === 'from:chat_participants' ? { data: [{ chat_id: CHAT }, { chat_id: MSG }, { chat_id: D }] }
+      : q[0] === 'from:chats' ? { data: [{ id: CHAT }], count: 3 } : { data: [] });
+    const r = await call(msgs.listChats, { query: { limit: '1', offset: '0' } });
+    expect(r.body).toMatchObject({ total: 3, limit: 1, offset: 0, has_more: true });
+  });
+  it('K2-67b (9761183): the only admin leaving promotes the oldest member BEFORE leaving', async () => {
+    mockNext = (q) => {
+      if (q[0] === 'from:chats') return { data: { is_group: true } };
+      if (q[0] === 'from:chat_participants' && q.some((c) => c.startsWith('eq:["role","admin"]'))) return { data: [] };
+      if (q[0] === 'from:chat_participants' && q.some((c) => c.startsWith('order:["joined_at"'))) return { data: { user_id: D } };
+      if (q[0] === 'from:chat_participants' && q.some((c) => c === `eq:["user_id","${ME}"]`)) return { data: { role: 'admin' } };
+      if (q[0] === 'from:chat_participants' && q.some((c) => c.includes('"head":true'))) return { count: 1 };
+      return { data: null };
+    };
+    await call(msgs.leaveGroup, { params: { id: CHAT } });
+    const promote = mockLog.findIndex((q) => q[0] === 'from:chat_participants' && q.includes('update:[{"role":"admin"}]') && q.includes(`eq:["user_id","${D}"]`));
+    const leave = mockLog.findIndex((q) => q[0] === 'leaveChat');
+    expect(promote).toBeGreaterThan(-1);
+    expect(leave).toBeGreaterThan(promote);
+    expect(mockLog.some((q) => q[0] === 'softDeleteChat')).toBe(false);
+  });
+  it('K2-67b (9761183): the last member leaving removes the empty group', async () => {
+    mockNext = (q) => (q[0] === 'from:chats' ? { data: { is_group: true } }
+      : q[0] === 'from:chat_participants' && q.some((c) => c.includes('"head":true')) ? { count: 0 } : { data: null });
+    await call(msgs.leaveGroup, { params: { id: CHAT } });
+    expect(mockLog.some((q) => q[0] === 'softDeleteChat')).toBe(true);
   });
 });

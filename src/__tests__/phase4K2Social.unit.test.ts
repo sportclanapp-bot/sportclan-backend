@@ -56,6 +56,8 @@ import { updateAvailability } from '../controllers/availability.controller';
 import { addExpense } from '../controllers/teamExpenses.controller';
 // eslint-disable-next-line import/first
 import giftsRouter from '../routes/gifts.routes';
+// eslint-disable-next-line import/first
+import { getReceivedGifts, getSentGifts } from '../controllers/gifts.controller';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const D = '22222222-2222-4222-8222-222222222222';
@@ -171,5 +173,21 @@ describe('K2-8 · per-user gift routes are never shared-cacheable (SC-116)', () 
   it('K2-8 (3944f57): the static catalogue keeps the mount’s public cache', () => {
     const layer = (giftsRouter as any).stack.find((l: any) => l.route?.path === '/catalogue');
     expect(layer.route.stack).toHaveLength(1);
+  });
+});
+
+describe('K2-70 · gift history and follow lists page by offset (SC-306/307)', () => {
+  it.each([['received', getReceivedGifts], ['sent', getSentGifts]])('K2-70a (7bfca78): %s gifts — .range(offset…), id tiebreaker, total/has_more', async (_n, fn) => {
+    mockNext = (q) => (q[0] === 'from:gift_transactions' ? { data: [{ id: 'g1' }], count: 30 } : { data: [] });
+    const r = await call(fn, { query: { limit: '10', offset: '10' } });
+    const q = mockLog.find((x) => x[0] === 'from:gift_transactions')!;
+    expect(q).toContain('range:[10,19]');
+    expect(q).toContain('order:["id",{"ascending":false}]');
+    expect(r.body).toMatchObject({ total: 30, has_more: true });
+  });
+  it('K2-70b (7bfca78): a full followers page says has_more', async () => {
+    mockNext = (q) => (q[0] === 'from:users' ? { data: { id: D } } : q[0] === 'from:follow_relationships' ? { data: [{ users: { id: 'x' } }, { users: { id: 'y' } }] } : { data: [] });
+    const r = await call(getFollowers, { params: { id: D }, query: { limit: '2' } });
+    expect(r.body.has_more).toBe(true);
   });
 });

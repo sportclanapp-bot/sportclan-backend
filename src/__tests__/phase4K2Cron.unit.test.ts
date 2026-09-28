@@ -222,6 +222,8 @@ describe('K2-58 · the 15-minute reminder reaches the entrant teams (SC-272)', (
     expect(mockAudience).toHaveBeenCalledWith('m1', TA, TB);
     expect(mockNotifyUser.mock.calls.map((c) => (c[0] as any).userId).sort()).toEqual([U(1), U(2), U(9)]);
     expect(out.sent).toBe(3);
+    // K2-66c (db350b5): the body names the IST kick-off time.
+    expect((mockNotifyUser.mock.calls[0][0] as any).body).toMatch(/starts at \d{2}:\d{2} \(~15 min\)/);
     mockAudience.mockImplementation(async () => []);
   });
 });

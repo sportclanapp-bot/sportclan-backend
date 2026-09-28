@@ -34,6 +34,10 @@ jest.mock('../utils/expoPush', () => ({ sendPushToTokens: jest.fn(async () => un
 
 // eslint-disable-next-line import/first
 import { notifyUsers, allowedRecipients, matchAudienceIds } from '../utils/notify';
+// eslint-disable-next-line import/first
+import { listNotifications } from '../controllers/notifications.controller';
+// eslint-disable-next-line import/first
+import { formatTimeIst } from '../utils/scheduleFixtures';
 
 const ACTOR = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const U = (i: number) => `bbbbbbbb-bbbb-4bbb-8bbb-${String(i).padStart(12, '0')}`;
@@ -97,5 +101,24 @@ describe('K2-57a · a match’s audience is its line-up PLUS both entrant teams 
       : q[0] === 'from:team_members' ? { data: [{ user_id: U(1) }, { user_id: U(2) }, { user_id: U(3) }] } : { data: null });
     expect((await matchAudienceIds('m1', TA, TB)).sort()).toEqual([U(1), U(2), U(3)]);
     expect(mockLog.find((q) => q[0] === 'from:team_members')).toContain(`in:["team_id",["${TA}","${TB}"]]`);
+  });
+});
+
+describe('K2-66 · notifications page by offset; reminders say the IST kick-off (SC-296 / Z-11)', () => {
+  it('K2-66a (db350b5): listNotifications reads .range(offset…) and reports has_more; unread stays whole-inbox', async () => {
+    mockNext = (q) => (q.some((c) => c.startsWith('range:')) && q.some((c) => c.includes('"count":"exact"}')) ? { data: [{ id: 'n1', type: 'x' }], count: 130 }
+      : q.some((c) => c.includes('"head":true')) ? { count: 7 } : { data: [] });
+    const r: any = { statusCode: 200, body: null };
+    r.status = jest.fn((c: number) => { r.statusCode = c; return r; });
+    r.json = jest.fn((b: unknown) => { r.body = b; return r; });
+    await listNotifications({ userId: ACTOR, query: { limit: '50', offset: '100' } } as any, r);
+    const page = mockLog.find((q) => q.some((c) => c.includes('"count":"exact"}')))!;
+    expect(page).toContain('range:[100,149]');
+    expect(JSON.stringify(r.body)).toContain('"unread');
+  });
+  it('K2-66b (db350b5): formatTimeIst gives the IST wall-clock time', () => {
+    expect(formatTimeIst('2026-10-05T04:00:00Z')).toBe('09:30');
+    expect(formatTimeIst('2026-10-05T18:45:00Z')).toBe('00:15');
+    expect(formatTimeIst(null)).toBeNull();
   });
 });

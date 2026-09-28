@@ -3,6 +3,7 @@ import { guardIdParams } from '../middleware/uuidParams.middleware';
 import rateLimit from 'express-rate-limit';
 import { RedisRateLimitStore } from '../utils/rateLimitStore';
 import { authenticateToken } from '../middleware/auth.middleware';
+import { clientIpKey } from '../middleware/rateLimitKey';
 import {
   deleteAccount, getSessions, revokeSession,
   revokeAllSessions, submitFeedback, exportData,
@@ -22,7 +23,9 @@ const exportLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => (req as { userId?: string }).userId ?? req.ip ?? 'anon',
+  // No user id can't happen after authenticateToken; if it ever did, the
+  // address is grouped IPv6-safely like every other limiter.
+  keyGenerator: (req) => (req as { userId?: string }).userId ?? clientIpKey(req),
   message: { error: 'Too many export requests. Please try again later.' },
   store: new RedisRateLimitStore('export', 'blocking'),
 });

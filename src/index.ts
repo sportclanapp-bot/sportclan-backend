@@ -47,7 +47,7 @@ import devRoutes from './routes/dev.routes';
 import adminRoutes from './routes/admin.routes';
 import jobsRoutes from './routes/jobs.routes';
 import { authenticateToken } from './middleware/auth.middleware';
-import { rateLimitKey, verifiedUserId } from './middleware/rateLimitKey';
+import { clientIpKey, rateLimitKey, verifiedUserId } from './middleware/rateLimitKey';
 import { rateLimitBypassed } from './middleware/rateLimitBypass';
 
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
@@ -144,7 +144,7 @@ const globalLimiter = rateLimit({
 const ipCeilingLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: PER_IP_AUTHED_CEILING,
-  keyGenerator: (req) => `ipc:${req.ip ?? 'unknown'}`,
+  keyGenerator: (req) => `ipc:${clientIpKey(req)}`,
   skip: (req) => rateLimitBypassed(req) || !verifiedUserId(req),
   standardHeaders: false,
   legacyHeaders: false,
@@ -174,7 +174,7 @@ const authLimiter = rateLimit({
 const resetCheckIpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
-  keyGenerator: (req) => `rip:${req.ip ?? 'unknown'}`,
+  keyGenerator: (req) => `rip:${clientIpKey(req)}`,
   skip: rateLimitBypassed,
   standardHeaders: true,
   legacyHeaders: false,
@@ -187,7 +187,7 @@ const resetCheckNumberLimiter = rateLimit({
   keyGenerator: (req) => {
     const raw = (req.body as { phone?: unknown } | undefined)?.phone;
     const p = typeof raw === 'string' ? canonicalisePhone(raw) : null;
-    return p ? `rnum:${p}` : `rip:${req.ip ?? 'unknown'}`;
+    return p ? `rnum:${p}` : `rip:${clientIpKey(req)}`;
   },
   skip: rateLimitBypassed,
   standardHeaders: true,

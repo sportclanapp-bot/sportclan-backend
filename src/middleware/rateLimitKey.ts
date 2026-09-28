@@ -21,7 +21,19 @@
  * hole than the one being fixed. An invalid token simply falls back to IP.
  */
 import type { Request } from 'express';
+import { ipKeyGenerator } from 'express-rate-limit';
 import { verifyAccessToken } from '../utils/jwt';
+
+/**
+ * The address part of a limiter key. IPv6 addresses are grouped by their /56
+ * network (express-rate-limit's ipKeyGenerator), because one IPv6 user usually
+ * holds a whole block: keyed per full address, they could switch addresses and
+ * never hit a per-IP limit. IPv4 addresses are returned unchanged, so existing
+ * counts keep their keys. Every limiter keys on this, never on `req.ip` itself.
+ */
+export function clientIpKey(req: Request): string {
+  return req.ip ? ipKeyGenerator(req.ip) : 'unknown';
+}
 
 /** Verified user id for this request, or null when there isn't one. */
 export function verifiedUserId(req: Request): string | null {
@@ -40,5 +52,5 @@ export function verifiedUserId(req: Request): string | null {
 export function rateLimitKey(req: Request): string {
   const userId = verifiedUserId(req);
   if (userId) return `u:${userId}`;
-  return `ip:${req.ip ?? 'unknown'}`;
+  return `ip:${clientIpKey(req)}`;
 }

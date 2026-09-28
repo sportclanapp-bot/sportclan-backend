@@ -45,6 +45,35 @@ describe('K4-19 (9149fab) · F-14/F-20/F-19 createMatch names its sides through 
   });
 });
 
+describe('K4-66 (05f4db9) · Phase 3 B05 wiring', () => {
+  const matches = code('controllers/matches.controller.ts');
+
+  it('K4-66 (05f4db9): F17 createMatch refuses a bad format with formatRefusal before the insert', () => {
+    const createMatch = fnBody(matches, 'createMatch');
+    const at = createMatch.search(
+      /const fr = formatRefusal\(lengthSlug, format, isCricketMatch \? overs : null\);\s*if \(fr\) return res\.status\(fr\.status\)\.json\(\{ error: fr\.error, code: fr\.code \}\);/,
+    );
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(createMatch.indexOf(".from('matches')\n      .insert("));
+  });
+
+  it('K4-66 (05f4db9): F7 getMatch names its umpire — a live account only', () => {
+    const getMatch = fnBody(matches, 'getMatch');
+    expect(getMatch).toMatch(
+      /match\.umpire_id\s*\?\s*Promise\.resolve\(\s*supabase\.from\('users'\)\.select\('id, name, username'\)\.eq\('id', match\.umpire_id\)\.is\('deleted_at', null\)\.maybeSingle\(\),?\s*\)/,
+    );
+    expect(getMatch).toContain('matchWithRating.umpire = umpire;');
+  });
+});
+
+describe('K4-73 (eaf8a17) · Upstash gets 1.5 s per call, not 300 ms', () => {
+  it('K4-73 (eaf8a17): the OTP store and the session deny check both allow 1.5 s (a cold call from Render took > 300 ms and tripped the cooldown)', () => {
+    for (const f of ['utils/otpStore.ts', 'utils/sessionDeny.ts']) {
+      expect(code(f)).toMatch(/export const REDIS_TIMEOUT_MS = 1500;/);
+    }
+  });
+});
+
 describe('K4-46 (62a4213) · V203 chess result reasons read as words, one style', () => {
   it('K4-46 (62a4213): every reason label is words only — no emoji, no ½, no keycap digits', () => {
     const labels = [...CHESS_RESULT_REASONS.decisive, ...CHESS_RESULT_REASONS.draw].map((r) => r.label);

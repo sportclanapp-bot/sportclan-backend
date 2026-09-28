@@ -1380,14 +1380,20 @@ export async function reportContent(req: Request, res: Response) {
     return res.status(400).json({ error: 'You can’t report your own content.' });
   }
 
-  // SC-208: dedup — same reporter + same target = one report (no duplicate rows in
-  // the moderation queue). Return the existing report instead of a new row.
+  // SC-208: dedup — same reporter + same target while their report is still OPEN
+  // = one report (no duplicate rows in the moderation queue); return it instead.
+  // Decided 29 Sep 2026: once that report has been handled (dismissed, removed,
+  // restored), a fresh report opens a new row — a restored post can be flagged
+  // again. It used to match handled reports too, so a re-report never reached
+  // the queue.
   const { data: existingReport } = await supabase
     .from('content_reports')
     .select('*')
     .eq('reporter_id', userId)
     .eq('target_type', resolvedType)
     .eq('target_id', resolvedId)
+    .eq('resolved', false)
+    .limit(1)
     .maybeSingle();
   if (existingReport) {
     return res.status(200).json({ data: existingReport, alreadyReported: true });

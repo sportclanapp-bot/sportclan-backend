@@ -5,6 +5,8 @@
  */
 type Q = string[];
 let mockLog: Q[] = [];
+let mockRpcCalls: Array<[string, any]> = [];
+let mockRpc: (name: string, args: any) => { data?: unknown; error?: unknown } = () => ({ data: null, error: null });
 let mockNext: (q: Q) => { data?: unknown; error?: unknown; count?: number } = () => ({ data: null, error: null });
 jest.mock('../utils/supabase', () => {
   const start = (t: string) => {
@@ -20,7 +22,7 @@ jest.mock('../utils/supabase', () => {
     };
     return chain;
   };
-  return { supabase: { from: jest.fn(start), rpc: jest.fn(async () => ({ data: null, error: null })) } };
+  return { supabase: { from: jest.fn(start), rpc: jest.fn(async (n: string, a: any) => { mockRpcCalls.push([n, a]); return { data: null, error: null, ...mockRpc(n, a) }; }) } };
 });
 let mockBlocked = new Set<string>();
 jest.mock('../utils/blocks', () => ({ ...jest.requireActual('../utils/blocks'), blockedUserIds: jest.fn(async () => mockBlocked) }));
@@ -51,7 +53,7 @@ jest.mock('../utils/notify', () => ({
 }));
 
 // eslint-disable-next-line import/first
-import { addParticipants, getMatchChat, rateMatchHandler, getCommentary } from '../controllers/matches.controller';
+import { addParticipants, getMatchChat, rateMatchHandler, getCommentary, completeMatch } from '../controllers/matches.controller';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const MATCH = '22222222-2222-4222-8222-222222222222';
@@ -78,6 +80,8 @@ const onMatch = (m: object) => (q: Q) => (q[0] === 'from:matches' ? { data: m } 
 
 beforeEach(() => {
   mockLog = [];
+  mockRpcCalls = [];
+  mockRpc = () => ({ data: null, error: null });
   mockNext = () => ({ data: null, error: null });
   mockBlocked = new Set();
   mockPending = false;
@@ -135,5 +139,30 @@ describe('K2-6c · commentary reads a bounded event log (SC-117)', () => {
     await call(getCommentary, {});
     const ev = mockLog.find((q) => q[0] === 'from:match_events')!;
     expect(ev).toContain('limit:[2000]');
+  });
+});
+
+describe('K2-12 · completion persists through the atomic finalize_match RPC (SC-126)', () => {
+  const live = (q: Q) => {
+    if (q[0] === 'from:matches') return { data: matchRow({ status: 'live', is_ranked: false, team_a_id: null, team_b_id: null, score_summary: { A: { score: 2 }, B: { score: 1 } } }) };
+    if (q[0] === 'from:match_participants') return { data: [{ user_id: ME, team_side: 'A' }, { user_id: OTHER, team_side: 'B' }] };
+    return { data: null };
+  };
+  const completedWrites = () => mockLog.filter((q) => q[0] === 'from:matches' && q.some((c) => c.startsWith('update:') && c.includes('"status":"completed"')));
+  it('K2-12 (d010d90): a failing RPC → 500 with no sequential fallback writes (match stays retryable)', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockNext = live;
+    mockRpc = (n) => (n === 'finalize_match' ? { error: { code: '57014', message: 'statement timeout' } } : {});
+    const r = await call(completeMatch, { body: {} });
+    expect(mockRpcCalls.map(([n]) => n)).toContain('finalize_match');
+    expect(r.statusCode).toBe(500);
+    expect(completedWrites()).toHaveLength(0);
+    expect(mockLog.filter((q) => ['from:user_sport_profiles', 'from:rating_history'].includes(q[0]) && q.some((c) => /^(insert|upsert|update):/.test(c)))).toHaveLength(0);
+  });
+  it('K2-12 (d010d90): the RPC answering applied:false (already completed) → 400, not a second apply', async () => {
+    mockNext = live;
+    mockRpc = (n) => (n === 'finalize_match' ? { data: { applied: false, match: { id: MATCH, status: 'completed' } } } : {});
+    const r = await call(completeMatch, { body: {} });
+    expect([r.statusCode, r.body.error]).toEqual([400, 'Match already completed']);
   });
 });

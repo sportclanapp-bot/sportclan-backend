@@ -122,3 +122,121 @@ describe('K2-10 · migration 050 indexes scheduled posts (AUDIT-7)', () => {
     expect(out[2].rows![0].indexdef).toMatch(/\(scheduled_at\) WHERE \(scheduled_at IS NOT NULL\)/);
   });
 });
+
+describe('K2-12 / K2-18 · finalize_match (migrations 051 → 054)', () => {
+  const SP = '66666666-6666-4666-8666-666666666666';
+  const M2 = '77777777-7777-4777-8777-777777777777';
+  const M3 = '88888888-8888-4888-8888-888888888888';
+  const SCHEMA = `
+    CREATE TABLE matches (id uuid PRIMARY KEY, status text NOT NULL DEFAULT 'live', winner_team_id uuid, updated_at timestamptz);
+    CREATE TABLE user_sport_profiles (user_id uuid, sport_id uuid, rating numeric NOT NULL DEFAULT 1000, matches_played int NOT NULL DEFAULT 0,
+      wins int NOT NULL DEFAULT 0, losses int NOT NULL DEFAULT 0, draws int NOT NULL DEFAULT 0, last_match_at timestamptz, updated_at timestamptz,
+      UNIQUE (user_id, sport_id));
+    CREATE TABLE rating_history (id serial PRIMARY KEY, user_id uuid, sport_id uuid, match_id uuid REFERENCES matches(id), old_rating numeric, new_rating numeric, delta numeric);
+    INSERT INTO matches (id) VALUES ('${M1}'), ('${M2}'), ('${M3}');`;
+  // Absolute fields carry a STALE read (both say 1005 / 1 match) — only the deltas may count.
+  const prof = (delta: number, win: number) => `{"user_id":"${U1}","sport_id":"${SP}","rating":1005,"matches_played":1,"wins":1,"losses":0,"draws":0,"rating_delta":${delta},"win_inc":${win},"loss_inc":${1 - win},"draw_inc":0}`;
+  const fin = (m: string, delta: number, win: number) => `SELECT finalize_match('${m}', '{"winner_team_id":null,"profiles":[${prof(delta, win)}]}'::jsonb) AS r`;
+  const profile = `SELECT rating::float AS rating, matches_played, wins, losses FROM user_sport_profiles WHERE user_id = '${U1}'`;
+  let out: Step[];
+  beforeAll(() => {
+    out = pg([
+      SCHEMA, mig('051_finalize_match_atomic.sql'), mig('054_finalize_match_atomic_deltas.sql'),
+      fin(M1, 10, 1), fin(M2, 5, 0), profile, // 3,4,5: two completions build on each other
+      `SELECT old_rating::float AS o, new_rating::float AS n FROM rating_history WHERE match_id = '${M2}'`, // 6
+      fin(M1, 10, 1), profile, // 7,8: a retried completion is a no-op
+      `CREATE FUNCTION boom() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'rh write failed'; END $$;
+       CREATE TRIGGER rh_boom BEFORE INSERT ON rating_history FOR EACH ROW EXECUTE FUNCTION boom();`, // 9
+      fin(M3, 7, 1), profile, `SELECT status FROM matches WHERE id = '${M3}'`, // 10,11,12: a mid-transaction failure
+    ]);
+  });
+  it('K2-12/K2-18: the migrations apply', () => expect(ok(out.slice(0, 3))).toEqual([]));
+  it('K2-18 (6d1e7db): deltas apply additively to the CURRENT row, not the stale absolute values', () => {
+    expect(out[5].rows![0]).toEqual({ rating: 1015, matches_played: 2, wins: 1, losses: 1 });
+    expect(out[6].rows![0]).toEqual({ o: 1010, n: 1015 }); // history records the exact pre-update rating
+  });
+  it('K2-12 (d010d90): completing an already-completed match is applied:false and changes nothing', () => {
+    expect(out[7].rows![0].r.applied).toBe(false);
+    expect(out[8].rows![0]).toEqual({ rating: 1015, matches_played: 2, wins: 1, losses: 1 });
+  });
+  it('K2-12 (d010d90): a failure mid-way rolls EVERYTHING back — no rating change, status not completed', () => {
+    expect(out[10].error).toMatch(/rh write failed/);
+    expect(out[11].rows![0]).toEqual({ rating: 1015, matches_played: 2, wins: 1, losses: 1 });
+    expect(out[12].rows![0].status).toBe('live');
+  });
+});
+
+describe('K2-15 · send_gift (migration 052)', () => {
+  const G = (key: string | null, cost = 10, gift = 'gold_trophy') => `SELECT send_gift('${U1}','${U2}','${gift}','🏆','Gold Trophy',${cost},NULL,${key ? `'${key}'` : 'NULL'}) AS r`;
+  let out: Step[];
+  beforeAll(() => {
+    out = pg([
+      `CREATE TABLE users (id uuid PRIMARY KEY, coin_balance int NOT NULL DEFAULT 0);
+       CREATE TABLE gift_transactions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), sender_id uuid, receiver_id uuid, gift_id text, gift_emoji text,
+         gift_name text, coin_cost int, message text, created_at timestamptz NOT NULL DEFAULT now());
+       CREATE TABLE transactions (id serial PRIMARY KEY, user_id uuid, type text, coins int, description text, reference_id text, status text);
+       INSERT INTO users VALUES ('${U1}', 25), ('${U2}', 0);`,
+      mig('052_send_gift_idempotent.sql'),
+      G(K1), G(K1), // 2,3: a lost-response re-tap with the same key
+      'SELECT (SELECT coin_balance FROM users WHERE id = ' + `'${U1}'` + ') AS bal, (SELECT count(*)::int FROM gift_transactions) AS gifts, (SELECT count(*)::int FROM transactions) AS ledger', // 4
+      G(K2, 999), 'SELECT (SELECT count(*)::int FROM gift_transactions) AS gifts, (SELECT coin_balance FROM users WHERE id = ' + `'${U1}'` + ') AS bal', // 5,6: insufficient
+      G(null, 1, 'rose'), G(null, 1, 'rose'), 'SELECT count(*)::int AS gifts FROM gift_transactions', // 7,8,9: no-key double send within the backstop
+    ]);
+  });
+  it('K2-15: the migration applies', () => expect(ok(out.slice(0, 2))).toEqual([]));
+  it('K2-15 (3bcb64b): the same key twice → one gift, one deduct, one ledger pair; the retry says duplicate', () => {
+    expect(out[2].rows![0].r.status).toBe('sent');
+    expect(out[3].rows![0].r.status).toBe('duplicate');
+    expect(out[3].rows![0].r.gift.id).toBe(out[2].rows![0].r.gift.id);
+    expect(out[4].rows![0]).toEqual({ bal: 15, gifts: 1, ledger: 2 });
+  });
+  it('K2-15 (3bcb64b): insufficient coins → no gift row left behind, balance untouched', () => {
+    expect(out[5].rows![0].r).toEqual({ status: 'insufficient' });
+    expect(out[6].rows![0]).toEqual({ gifts: 1, bal: 15 });
+  });
+  it('K2-15 (3bcb64b): with no key, an identical send inside the backstop window is a duplicate', () => {
+    expect(out[7].rows![0].r.status).toBe('sent');
+    expect(out[8].rows![0].r.status).toBe('duplicate');
+    expect(out[9].rows![0].gifts).toBe(2);
+  });
+});
+
+describe('K2-16 · post + comment idempotency (053, create_post_capped as of 091)', () => {
+  const postFn = () => {
+    const m = /CREATE OR REPLACE FUNCTION create_post_capped\([\s\S]*?\$\$ LANGUAGE plpgsql;/.exec(mig('091_drop_premium_leftovers.sql'));
+    if (!m) throw new Error('create_post_capped not found in 091');
+    return m[0];
+  };
+  const P = (content: string, key: string | null) =>
+    `SELECT id FROM create_post_capped(p_author_id => '${U1}', p_content => '${content}', p_image_url => NULL, p_link_url => NULL, p_sport_id => NULL,
+      p_city_id => NULL, p_post_type => 'general', p_mentions => NULL, p_poll_options => NULL, p_scheduled_at => NULL, p_client_key => ${key ? `'${key}'::uuid` : 'NULL'})`;
+  let out: Step[];
+  beforeAll(() => {
+    out = pg([
+      `CREATE TABLE community_posts (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), author_id uuid, content text, image_url text, link_url text, sport_id uuid,
+         city_id uuid, post_type text, mentions uuid[], poll_options jsonb, scheduled_at timestamptz, match_id uuid, created_at timestamptz NOT NULL DEFAULT now());
+       CREATE TABLE post_comments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), post_id uuid, author_id uuid, content text, created_at timestamptz NOT NULL DEFAULT now());`,
+      mig('053_post_comment_idempotent.sql'),
+      postFn(),
+      P('gg', K1), P('gg', K1), `UPDATE community_posts SET created_at = now() - interval '1 hour'`, P('gg', K1), // 3,4,5,6
+      P('new one', null), P('new one', null), 'SELECT count(*)::int AS n FROM community_posts', // 7,8,9
+      `INSERT INTO post_comments (post_id, author_id, content, client_key) VALUES ('${M1}','${U1}','nice','${K1}')`,
+      `INSERT INTO post_comments (post_id, author_id, content, client_key) VALUES ('${M1}','${U1}','nice','${K1}')`, // 11
+      `INSERT INTO post_comments (post_id, author_id, content) VALUES ('${M1}','${U1}','nice'), ('${M1}','${U1}','nice')`, // 12: no key → no constraint
+    ]);
+  });
+  it('K2-16: 053 and the current create_post_capped apply', () => expect(ok(out.slice(0, 3))).toEqual([]));
+  it('K2-16d (abe1ffc): a same-key post retry — even an hour later — returns the original post', () => {
+    expect(out[4].rows![0].id).toBe(out[3].rows![0].id);
+    expect(out[6].rows![0].id).toBe(out[3].rows![0].id);
+  });
+  it('K2-16d (abe1ffc): a no-key identical post inside 2s is the same post', () => {
+    expect(out[8].rows![0].id).toBe(out[7].rows![0].id);
+    expect(out[9].rows![0].n).toBe(2);
+  });
+  it('K2-16e (abe1ffc): post_comments refuses a second row with the same (author, client_key); keyless rows are free', () => {
+    expect(out[10].error).toBeUndefined();
+    expect(out[11].error).toMatch(/uq_post_comments_author_client_key/);
+    expect(out[12].error).toBeUndefined();
+  });
+});

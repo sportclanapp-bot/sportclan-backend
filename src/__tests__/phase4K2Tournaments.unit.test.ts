@@ -113,3 +113,34 @@ describe('K2-6e · a concurrent double join-by-code is a clean refusal (SC-119)'
     expect([r.statusCode, r.body.code]).toEqual([400, 'ALREADY_ENTERED']);
   });
 });
+
+describe('K2-14 · a crash-stuck fixture generation can recover (SC-128)', () => {
+  const stuck = (o: { matches: number; recovered: boolean }) => (q: Q) => {
+    if (q[0] === 'from:tournaments' && has(q, 'update:[{"fixtures_generated":true')) return { data: [] }; // claim lost: flag already true
+    if (q[0] === 'from:tournaments' && has(q, 'lt:["updated_at"')) return { data: o.recovered ? [{ id: T }] : [] };
+    if (q[0] === 'from:tournaments') return { data: { id: T, status: 'upcoming', sport_id: CRICKET, format: 'knockout', start_date: '2026-10-05', created_by: ME } };
+    if (q[0] === 'from:matches' && has(q, '{"count":"exact","head":true}')) return { count: o.matches };
+    if (q[0] === 'from:matches' && has(q, 'insert:')) return { data: [{ id: 'm1' }] };
+    if (q[0] === 'from:tournament_entries') return { data: [{ team_id: TEAM, team: { name: 'A' } }, { team_id: TB, team: { name: 'B' } }] };
+    return { data: null };
+  };
+  const fixtureInserts = () => mockLog.filter((q) => q[0] === 'from:matches' && has(q, 'insert:'));
+  it('K2-14 (b633dcd): flag stuck true, 0 matches, stale timestamp → regenerates instead of 409 forever', async () => {
+    mockNext = stuck({ matches: 0, recovered: true });
+    const r = await call(generateFixtures, {});
+    expect(r.statusCode).not.toBe(409);
+    expect(fixtureInserts().length).toBeGreaterThan(0);
+  });
+  it('K2-14 (b633dcd): a real bracket (matches exist) → 409, nothing inserted', async () => {
+    mockNext = stuck({ matches: 3, recovered: true });
+    const r = await call(generateFixtures, {});
+    expect(r.statusCode).toBe(409);
+    expect(fixtureInserts()).toHaveLength(0);
+  });
+  it('K2-14 (b633dcd): 0 matches but a FRESH timestamp (generation in progress) → 409, nothing inserted', async () => {
+    mockNext = stuck({ matches: 0, recovered: false });
+    const r = await call(generateFixtures, {});
+    expect(r.statusCode).toBe(409);
+    expect(fixtureInserts()).toHaveLength(0);
+  });
+});

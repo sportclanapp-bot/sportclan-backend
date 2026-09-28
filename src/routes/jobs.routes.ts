@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { redisDiagnostic } from '../utils/redisDiag'; // TEMPORARY, 29 Sep 2026
 import { requireCronSecret } from '../middleware/cron.middleware';
 import {
   runPublishScheduledPosts,
@@ -22,9 +21,6 @@ import {
 const router = Router();
 
 router.use(requireCronSecret);
-
-// TEMPORARY (29 Sep 2026): Upstash diagnostic — no secrets in the answer. Remove once answered.
-router.post('/redis-diagnostic', async (_req, res) => res.json(await redisDiagnostic()));
 
 router.post('/publish-scheduled-posts', async (_req, res) => {
   try {

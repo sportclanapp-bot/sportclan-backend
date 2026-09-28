@@ -286,9 +286,6 @@ app.use(globalErrorHandler);
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {
-  // TEMPORARY (29 Sep 2026): Upstash diagnostic at startup — no secrets. Remove once answered.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  require('./utils/redisDiag').redisDiagnostic().then((d: unknown) => console.log('[redis-diag]', JSON.stringify(d))).catch(() => {});
   // eslint-disable-next-line no-console
   console.log(`[sportclan-backend] listening on :${PORT}`);
 

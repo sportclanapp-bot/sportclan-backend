@@ -50,13 +50,13 @@ let _redis: unknown | null = null;
 let _redisChecked = false;
 
 /**
- * Redis gets a tight budget (29 Sep 2026): one attempt, REDIS_TIMEOUT_MS, and
+ * Redis gets a tight budget (29 Sep 2026): one attempt, REDIS_TIMEOUT_MS (1.5 s: a call to our Upstash region takes ~235 ms warm and more on a cold connection, so 300 ms kept tripping the cooldown on live), and
  * after any failure it's skipped for REDIS_COOLDOWN_MS, so the Postgres and
  * memory fallbacks answer straight away. Live, a failing Upstash with the SDK's
  * default retries (Math.exp(n) * 50 ms, 5 tries) cost ~4.3 s per call: a send
  * took ~19 s and a code check ~15 s. Same rule as utils/sessionDeny.
  */
-export const REDIS_TIMEOUT_MS = 300;
+export const REDIS_TIMEOUT_MS = 1500;
 export const REDIS_COOLDOWN_MS = 60_000;
 let _redisDownUntil = 0;
 

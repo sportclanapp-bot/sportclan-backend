@@ -24,11 +24,17 @@ export async function redisDiagnostic(): Promise<Record<string, unknown>> {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { Redis } = require('@upstash/redis');
     const r = new Redis({ url, token, retry: false });
-    const pong = await Promise.race([
-      r.ping(),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timed out after 5000 ms')), 5000)),
-    ]);
-    return { ...out, ping: pong, ms: Date.now() - t0 };
+    const times: number[] = [];
+    let pong: unknown = null;
+    for (let i = 0; i < 3; i++) {
+      const t1 = Date.now();
+      pong = await Promise.race([
+        r.ping(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timed out after 5000 ms')), 5000)),
+      ]);
+      times.push(Date.now() - t1);
+    }
+    return { ...out, ping: pong, ms: Date.now() - t0, ping_ms_same_client: times };
   } catch (err) {
     const e = err as Error & { cause?: { code?: string; message?: string } };
     return {

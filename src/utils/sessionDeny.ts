@@ -54,10 +54,10 @@ function redis(): RedisLike | null {
 
 /**
  * The deny check sits in front of every authenticated request, so Redis gets a
- * tight budget: one attempt, REDIS_TIMEOUT_MS, and after any failure Redis is
+ * tight budget: one attempt, REDIS_TIMEOUT_MS (1.5 s: a call to our Upstash region takes ~235 ms warm and more on a cold connection, so 300 ms kept tripping the cooldown on live), and after any failure Redis is
  * skipped for REDIS_COOLDOWN_MS (the check fails open meanwhile, as below).
  */
-export const REDIS_TIMEOUT_MS = 300;
+export const REDIS_TIMEOUT_MS = 1500;
 export const REDIS_COOLDOWN_MS = 60_000;
 let redisDownUntil = 0;
 

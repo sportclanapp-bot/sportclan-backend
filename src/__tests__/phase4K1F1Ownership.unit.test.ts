@@ -44,7 +44,7 @@ import { deleteExpense } from '../controllers/teamExpenses.controller';
 // eslint-disable-next-line import/first
 import { deletePost, deleteComment, updatePost } from '../controllers/community.controller';
 // eslint-disable-next-line import/first
-import { deleteMessage } from '../controllers/messages.controller';
+import { deleteMessage, getOrCreateDM } from '../controllers/messages.controller';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const THEM = '22222222-2222-4222-8222-222222222222';
@@ -124,5 +124,26 @@ describe('K1-38e (5bb2119) · SC-35 only the sender can delete a message', () =>
     const r = await call(deleteMessage, { params: { messageId: X }, body: {} });
     expect(r.statusCode).toBe(200);
     expect(writes()[0].join(' ')).toContain(`eq:["sender_id","${ME}"]`);
+  });
+});
+
+describe('K1-50d (34c2985) · SC-62 one DM per pair', () => {
+  it('K1-50d (34c2985): losing the dm_key race (23505) hands back the winner\'s chat, not a 500', async () => {
+    const [a, b] = [ME, THEM].sort();
+    let keyedLookups = 0;
+    mockNext = (q) => {
+      if (q[0] === 'from:users') return { data: [{ id: THEM }] };
+      if (q[0] === 'from:chats' && q.some((c) => c.startsWith('insert:'))) return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "uq_chats_dm_key"' } };
+      if (q[0] === 'from:chats' && q.some((c) => c.includes('"dm_key"'))) {
+        keyedLookups += 1;
+        return { data: keyedLookups === 1 ? null : { id: 'winner-chat', is_group: false, dm_key: `${a}:${b}`, deleted_at: null } };
+      }
+      return { data: q[0] === 'from:chat_participants' ? [] : null };
+    };
+    const r = await call(getOrCreateDM, { body: { user_id: THEM } });
+    expect(r.statusCode).toBe(200);
+    expect(r.body.chat.id).toBe('winner-chat');
+    const ins = mockLog.find((q) => q[0] === 'from:chats' && q.some((c) => c.startsWith('insert:')))!.join(' ');
+    expect(ins).toContain(`"dm_key":"${a}:${b}"`);
   });
 });

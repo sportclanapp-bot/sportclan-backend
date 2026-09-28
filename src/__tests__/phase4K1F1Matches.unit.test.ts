@@ -48,7 +48,9 @@ jest.mock('../utils/notify', () => ({
 }));
 
 // eslint-disable-next-line import/first
-import { completeMatch, setMatchTossHandler, sweepStaleLiveMatches } from '../controllers/matches.controller';
+import { completeMatch, setMatchTossHandler, sweepStaleLiveMatches, joinOpenMatch } from '../controllers/matches.controller';
+// eslint-disable-next-line import/first
+import { supabase } from '../utils/supabase';
 // eslint-disable-next-line import/first
 import { applyDLS, upsertInningsStats } from '../controllers/matchFeatures.controller';
 // eslint-disable-next-line import/first
@@ -162,5 +164,24 @@ describe('K1-40a (41618ad) · SC-42 a finished match is frozen', () => {
     const r = await call(applyDLS, { body: { team1_score: 150, total_overs: 20, team2_overs_remaining: 5, team2_wickets: 3 } });
     expect(r.statusCode).toBe(403);
     expect(writes()).toHaveLength(0);
+  });
+});
+
+describe('K1-50a (34c2985) · SC-59 joining an open match goes through the atomic RPC', () => {
+  const rpc = supabase.rpc as unknown as jest.Mock;
+  it.each([
+    ['joined', 200, undefined],
+    ['already_joined', 200, undefined],
+    ['full', 409, 'MATCH_FULL'],
+    ['not_found', 404, undefined],
+  ])('K1-50a (34c2985): RPC says %s → %d', async (status, code, errCode) => {
+    mockNext = (q) => (q[0] === 'from:matches' ? { data: { join_policy: 'open', status: 'scheduled', created_by: 'x' } } : { data: [] });
+    rpc.mockResolvedValueOnce({ data: [{ status, players_needed: 0 }], error: null });
+    const r = await call(joinOpenMatch, {});
+    expect(r.statusCode).toBe(code);
+    if (errCode) expect(r.body.code).toBe(errCode);
+    expect(rpc).toHaveBeenLastCalledWith('join_open_match', { p_match_id: MATCH, p_user_id: ME });
+    // the seat is taken inside the RPC, never by a read-then-insert here
+    expect(mockLog.some((q) => q[0] === 'from:match_participants' && q.some((c) => c.startsWith('insert:')))).toBe(false);
   });
 });

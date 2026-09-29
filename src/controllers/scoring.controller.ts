@@ -568,6 +568,7 @@ export async function createEvent(req: Request, res: Response) {
           ]);
           const { title, body } = quarterPush({
             quarter: count ?? 1,
+            regulation: rulesOf('basketball', match).periods ?? null, // BUILD 3.30
             summary: (fresh?.score_summary ?? {}) as never,
             teamAName: fresh?.team_a_name || 'Team A',
             teamBName: fresh?.team_b_name || 'Team B',

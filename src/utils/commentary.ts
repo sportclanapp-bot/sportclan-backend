@@ -5,6 +5,8 @@
  * "Point to Team B" (an own goal too, against the side that CONCEDED it). Cards
  * now name the player when the scorer said who got it.
  */
+import { periodLabelOf } from './basketballRules';
+
 export interface CommentaryContext {
   sport: string;
   teamA: string;
@@ -75,6 +77,8 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     // BUILD 3.17: half-time only between two halves; else the period that ended.
     const count = ctx.regulation ?? (ctx.sport === 'football' ? 2 : 4);
     if (p.kind === 'halftime' || (ctx.sport === 'football' && count === 2)) return 'Half-time';
+    // BUILD 3.30: basketball names its periods from the shared rule (Q, H, P, then OT).
+    if (ctx.sport === 'basketball') return `End of ${periodLabelOf(ctx.period, count)}`;
     if (ctx.sport === 'football' || count !== 4) return `End of period ${ctx.period}`;
     const last = count;
     return ctx.period <= last ? `End of Q${ctx.period}` : `End of OT${ctx.period - last}`;

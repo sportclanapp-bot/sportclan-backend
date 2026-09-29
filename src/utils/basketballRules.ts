@@ -39,9 +39,16 @@ export function canStartNextPeriod(n: number, a: number, b: number): boolean {
 // Separate functions (not an optional argument) so `.map(periodLabel)` can't
 // pass an index in as the regulation.
 
+/** BUILD 3.30: named by the match's periods — Q1–Q4, H1/H2, P1–P3; then OT1, OT2 … */
 export function periodLabelOf(n: number, regulation: number): string {
   const p = Math.max(1, Math.floor(n));
-  return p <= regulation ? `Q${p}` : `OT${p - regulation}`;
+  if (p > regulation) return `OT${p - regulation}`;
+  return regulation === 4 ? `Q${p}` : regulation === 2 ? `H${p}` : `P${p}`;
+}
+
+/** BUILD 3.30: "4 quarters", "2 halves", "3 periods", "1 period". */
+export function periodsNounOf(regulation: number): string {
+  return regulation === 4 ? '4 quarters' : regulation === 2 ? '2 halves' : `${regulation} period${regulation === 1 ? '' : 's'}`;
 }
 
 export function isOvertimeOf(n: number, regulation: number): boolean {

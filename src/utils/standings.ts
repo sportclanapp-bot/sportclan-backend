@@ -107,7 +107,9 @@ export function inningsOf(m: GMatch): { a: SideRuns; b: SideRuns } {
       overs = Number(nested.balls) / 6;
     }
     // All out → charge the full quota (ICC).
-    if (allotted != null && Number(nested?.wickets ?? 0) >= 10) overs = allotted;
+    // BUILD 1.3: all out is the side's own all-out count (line-up − 1), which
+    // the summary records as all_out; 10 wickets stays the rule for older rows.
+    if (allotted != null && (nested?.all_out === true || Number(nested?.wickets ?? 0) >= 10)) overs = allotted;
     return { runs, overs };
   };
 

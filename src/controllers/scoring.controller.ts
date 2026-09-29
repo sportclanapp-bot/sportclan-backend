@@ -989,6 +989,12 @@ export async function recomputeSummary(
       else if (e.event_type === 'declaration') { inn.declared = true; }
       inn.score = inn.runs;
     }
+    // BUILD 1.3: record a side bowled out at ITS all-out count (line-up − 1,
+    // capped at 10), so NRR can charge it the full quota. Standings read this
+    // instead of assuming 10 wickets — a 6-a-side side is all out at 5.
+    for (const s of ['A', 'B'] as const) {
+      if ((sides[s] as { wickets?: number }).wickets! >= allOut[s]) Object.assign(sides[s], { all_out: true });
+    }
   } else if (slug === 'football' || slug === 'hockey') {
     for (const e of events) {
       const p: any = e.payload || {};

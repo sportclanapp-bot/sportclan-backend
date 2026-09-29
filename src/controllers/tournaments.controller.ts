@@ -53,6 +53,8 @@ import { validateSportForCreate } from '../utils/sports';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { rankTeams, computeStats } from '../utils/standings';
 import { crossGroupFirstRound } from '../utils/koFirstRound';
+import { getSport, normSportSlug } from '../utils/sportCache';
+import { DEFAULT_OVERS } from '../utils/cricketRules';
 import {
   buildSchedule, timeToMinutes, keyOf, formatSlotIst,
   type SchedulingConfig, type FixtureShape, type SlotAssign,
@@ -1696,6 +1698,8 @@ interface BracketBase {
   // Fallback timestamp for any bracket slot the scheduler didn't cover (should
   // not happen — the schedule is computed over the full bracket shape).
   fallbackStartIso: string;
+  /** BUILD 1.3: per-match settings every fixture carries (cricket: overs). */
+  fixtureDefaults?: Record<string, unknown>;
 }
 
 function nextPow2(n: number): number {
@@ -1827,6 +1831,7 @@ async function insertSingleElim(
         // the ladder while runs/MVP (ungated) still accrued (the split bug).
         // Forward-only: existing fixtures are untouched (never rewrite settled ELO).
         is_ranked: true,
+        ...(base.fixtureDefaults ?? {}),
       });
     }
     const { data, error } = await supabase.from('matches').insert(rows).select('id, match_no');
@@ -2461,7 +2466,15 @@ export async function generateFixtures(req: Request, res: Response) {
     const dayWindows = await loadDayWindows(id);
     const schedCfg = buildTournamentScheduleConfig(tournament, startDateYmd, dayWindows);
     const format = (tournament.format ?? 'knockout').toLowerCase();
+    // BUILD 1.3: tournament cricket fixtures had no overs, so they played the
+    // 20-over default while NRR never knew the quota (the ICC all-out rule
+    // charges a bowled-out side its full overs). They now carry it.
+    const sportSlug = normSportSlug((await getSport(tournament.sport_id as string))?.slug);
+    const fixtureDefaults: Record<string, unknown> = sportSlug === 'cricket'
+      ? { format: `T${DEFAULT_OVERS}`, overs: DEFAULT_OVERS }
+      : {};
     const base: BracketBase = {
+      fixtureDefaults,
       sport_id: tournament.sport_id,
       tournament_id: id,
       venue: tournament.venue ?? null,
@@ -2537,6 +2550,7 @@ export async function generateFixtures(req: Request, res: Response) {
               round: 1,
               match_no: mno,
               is_ranked: true, // SC-251: round-robin / league matches are ranked too.
+              ...fixtureDefaults,
             });
             mno++;
           }
@@ -2599,6 +2613,7 @@ export async function generateFixtures(req: Request, res: Response) {
               match_no: mno,
               group_label: label,
               is_ranked: true, // SC-251: group-stage matches are ranked too.
+              ...fixtureDefaults,
             });
             mno++;
           }

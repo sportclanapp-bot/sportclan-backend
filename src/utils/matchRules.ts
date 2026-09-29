@@ -377,6 +377,15 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (rally && (!isWhole(r.target) || r.target < rally.target[0] || r.target > rally.target[1])) {
     return refuse(`Points to win a set must be ${rally.target[0]} to ${rally.target[1]}.`, 'target');
   }
+  // BUILD 3.39: a cap — off, or the target to target + span, and never below
+  // the deciding set's target (it couldn't be reached).
+  if (rally?.capSpan != null && r.cap !== null) {
+    const hi = (r.target as number) + rally.capSpan;
+    const lo = Math.max(r.target as number, typeof r.finalTarget === 'number' ? r.finalTarget : 0);
+    if (!isWhole(r.cap) || r.cap < lo || r.cap > hi) {
+      return refuse(lo > hi ? 'A cap can’t fit this deciding set — turn the cap off.' : `The cap must be off, or ${lo} to ${hi}.`, 'cap');
+    }
+  }
   // BUILD 3.38: the deciding set's points (null = the same as the others).
   if (rally?.finalTarget && r.finalTarget !== null && (!isWhole(r.finalTarget) || r.finalTarget < rally.finalTarget[0] || r.finalTarget > rally.finalTarget[1])) {
     return refuse(`The deciding set must be ${rally.finalTarget[0]} to ${rally.finalTarget[1]} points.`, 'finalTarget');
@@ -392,7 +401,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -402,10 +411,11 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
 
 /**
  * BUILD 3.37+ · the rally rules a sport may set (others stay standard):
- * `target` points to win a set / game; `finalTarget` the deciding set's (3.38).
+ * `target` points to win a set / game; `finalTarget` the deciding set's (3.38);
+ * `capSpan` how far above the target a cap may sit (3.39; off = no cap).
  */
-export const RALLY_LIMITS: Record<string, { target: [number, number]; finalTarget?: [number, number] }> = {
-  volleyball: { target: [10, 30], finalTarget: [10, 25] },
+export const RALLY_LIMITS: Record<string, { target: [number, number]; finalTarget?: [number, number]; capSpan?: number }> = {
+  volleyball: { target: [10, 30], finalTarget: [10, 25], capSpan: 10 },
 };
 
 /** BUILD 3.17: the periods and period lengths a timed sport may set (others stay standard). */
@@ -461,6 +471,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (RALLY_LIMITS[key]) {
     const std = SPORT_RULES[key] ?? {};
     if (rules.target != null && rules.target !== std.target) parts.push(`sets to ${rules.target}`);
+    if (rules.cap !== undefined && rules.cap !== std.cap) parts.push(rules.cap == null ? 'no cap' : `cap ${rules.cap}`); // BUILD 3.39
     if (rules.finalTarget !== undefined && rules.finalTarget !== std.finalTarget) parts.push(rules.finalTarget == null ? 'decider the same' : `decider to ${rules.finalTarget}`); // BUILD 3.38
     return parts.length ? parts.join(' · ') : null;
   }

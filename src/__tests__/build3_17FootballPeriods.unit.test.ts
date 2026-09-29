@@ -16,8 +16,8 @@ test('periods, length and half-time', () => {
   expect(fb({ periodMinutes: 46 })?.field).toBe('periodMinutes');
   expect(fb({ halfTimeMinutes: 21 })?.error).toBe('Half-time must be off, or 0 to 20 minutes.');
 });
-test('hockey and basketball periods stay fixed until their items', () => {
-  expect(rulesRefusal('hockey', { ...standardRules('hockey'), periods: 2 })?.field).toBe('periods');
+test('basketball periods stay fixed until 3.30 (hockey opened in 3.25)', () => {
+  expect(rulesRefusal('hockey', { ...standardRules('hockey'), periods: 2 })).toBeNull();
   expect(rulesRefusal('basketball', { ...standardRules('basketball'), periodMinutes: 10 })?.field).toBe('periodMinutes');
   expect(rulesRefusal('hockey', { ...standardRules('hockey'), halfTimeMinutes: 5 })?.field).toBe('halfTimeMinutes');
 });

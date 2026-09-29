@@ -361,6 +361,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
 /** BUILD 3.17: the periods and period lengths a timed sport may set (others stay standard). */
 export const TIMED_LIMITS: Record<string, { periods: [number, number]; minutes: [number, number] }> = {
   football: { periods: [1, 4], minutes: [5, 45] },
+  hockey: { periods: [1, 4], minutes: [5, 35] }, // BUILD 3.25
 };
 export const HALF_TIME_MAX = 20;
 /** BUILD 3.19: extra time's longest half. */

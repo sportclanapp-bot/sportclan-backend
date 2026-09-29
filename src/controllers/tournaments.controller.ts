@@ -774,7 +774,7 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, status, name, start_date, end_date, venue')
+      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -824,6 +824,17 @@ export async function updateTournament(req: Request, res: Response) {
           error: `max_teams must be between ${LIMITS.tournamentMinTeams} and ${LIMITS.tournamentMaxTeams}`,
         });
       }
+    }
+    // BUILD 1.2: the draw is built for the format — a knockout's bracket links,
+    // a league's legs, the groups. Changing the format after fixtures exist left
+    // those matches in place while crowning, draws and walkovers switched to the
+    // new format's rules. The app never offered it; the API allowed it.
+    if (body.format !== undefined && body.format !== (tournament as { format?: string }).format
+        && (tournament as { fixtures_generated?: boolean }).fixtures_generated) {
+      return res.status(409).json({
+        error: 'The fixtures are already drawn for this format, so it can’t change.',
+        code: 'FORMAT_LOCKED',
+      });
     }
     if (body.format !== undefined && !isValidTournamentFormat(body.format)) {
       return res.status(400).json({

@@ -119,19 +119,19 @@ describe('BUILD 2.1 · create', () => {
     expect(r.statusCode).toBeLessThan(300);
     expect(inserted()).toMatchObject({ format: 'box', overs: 6, rules: { style: 'box', overs: 6 } });
   });
-  it('rules the old encoding can’t say → 400 BAD_RULES (until 2.2), nothing inserted', async () => {
+  it('rules outside what’s offered → 400 BAD_RULES naming the field (2.2 validator), nothing inserted', async () => {
     mockNext = onCreate;
     const r = await call(createMatch, { body: body({ rules: { v: 1, overs: 12 } }) });
-    expect([r.statusCode, r.body.code]).toEqual([400, 'BAD_OVERS']); // 12 isn't an offered limited-overs length yet
+    expect([r.statusCode, r.body.code, r.body.field]).toEqual([400, 'BAD_RULES', 'overs']);
     const r2 = await call(createMatch, { body: body({ rules: 'T20' }) });
     expect([r2.statusCode, r2.body.code]).toEqual([400, 'BAD_RULES']);
     expect(inserted()).toBeNull();
   });
-  it('rulesAsLegacy refuses rules outside the old encoding', () => {
-    expect(rulesAsLegacy('cricket', { v: 1, overs: 20, drawAllowed: false })).toBeNull();
+  it('rulesAsLegacy: accepted rules → format / overs; others → the refusal', () => {
+    expect(rulesAsLegacy('cricket', { v: 1, overs: 20, drawAllowed: false })).toMatchObject({ refusal: { field: 'drawAllowed' } });
     expect(rulesAsLegacy('cricket', { v: 1, overs: 20 })).toEqual({ format: 'T20', overs: 20 });
     expect(rulesAsLegacy('badminton', { v: 1, bestOf: 1 })).toEqual({ format: 'bo1', overs: null });
-    expect(rulesAsLegacy('badminton', { v: 1, bestOf: 3, target: 15 })).toBeNull();
+    expect(rulesAsLegacy('badminton', { v: 1, bestOf: 3, target: 15 })).toMatchObject({ refusal: { field: 'target' } });
   });
 });
 

@@ -47,7 +47,8 @@ import { stepTimer } from '../utils/stepTimer';
 import { leaseRefusal } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
-import { rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf } from '../utils/matchRules';
+import { rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal } from '../utils/matchRules';
+import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isDismissal, type UnfinishedEnd } from '../utils/cricketRules';
 import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
@@ -119,17 +120,16 @@ export function oversFromFormat(format: unknown): number | null {
 }
 
 /**
- * BUILD 2.1 · a `rules` object as the format / overs it means, or null when it
- * says something they can't (until the rules validator, BUILD 2.2, widens
- * what's offered). Round-tripped through the shared matchRules so the two
- * encodings can never disagree.
+ * BUILD 2.1 / 2.2 · a `rules` object as the format / overs it means, once the
+ * shared validator (matchRules.rulesRefusal) accepts it.
  */
-export function rulesAsLegacy(sport: string | null | undefined, rules: unknown): { format: string | null; overs: number | null } | null {
-  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) return null;
-  const r = normalizeRules(sport, rules);
-  const legacy = legacyFromRules(sport, r);
-  const back = rulesFromLegacy(sport, legacy.format, legacy.overs);
-  return JSON.stringify(back) === JSON.stringify(r) ? legacy : null;
+export function rulesAsLegacy(
+  sport: string | null | undefined,
+  rules: unknown,
+): { format: string | null; overs: number | null } | { refusal: { error: string; code: string; field: string | null } } {
+  const refusal = rulesRefusal(sport, rules);
+  if (refusal) return { refusal };
+  return legacyFromRules(sport, normalizeRules(sport, rules));
 }
 
 /** The match time: a real date, not in the past, within the next year. */
@@ -339,7 +339,7 @@ export async function createMatch(req: Request, res: Response) {
     let overs = bodyOvers;
     if (bodyRules !== undefined && bodyRules !== null) {
       const legacy = rulesAsLegacy(lengthSlug, bodyRules);
-      if (!legacy) return res.status(400).json({ error: 'Those match rules aren’t offered.', code: 'BAD_RULES' });
+      if ('refusal' in legacy) return res.status(400).json(legacy.refusal);
       format = legacy.format;
       overs = legacy.overs;
     }
@@ -354,12 +354,21 @@ export async function createMatch(req: Request, res: Response) {
       const fr = formatRefusal(lengthSlug, format, isCricketMatch ? overs : null);
       if (fr) return res.status(fr.status).json({ error: fr.error, code: fr.code });
     }
-    const cricketOvers = isCricketMatch ? (overs ?? oversFromFormat(format)) : null; // BUILD 1.9
+    // BUILD 1.9: T<n> without overs takes n. BUILD 2.2: box / pair without
+    // overs take their own standard (6 / 8), not the 20 an old row played.
+    const styleNow = cricketFormatOf(format);
+    const cricketOvers = isCricketMatch
+      ? (overs ?? oversFromFormat(format) ?? (styleNow !== 'limited' ? CRICKET_OVERS[styleNow].standard : null))
+      : null;
     if (isCricketMatch && cricketOvers != null && !isOfferedOvers(cricketFormatOf(format), Number(cricketOvers))) {
       return res.status(400).json({ error: 'Those overs aren’t offered for this format.', code: 'BAD_OVERS' });
     }
     const storedOvers = cricketOvers != null ? Number(cricketOvers) : null;
     const storedFormat = storedBestOf !== null ? formatForBestOf(storedBestOf) : format || null;
+    // BUILD 2.2: whatever way the rules came, the one validator has the last word.
+    const storedRules = rulesFromLegacy(lengthSlug, storedFormat, storedOvers);
+    const rulesBad = rulesRefusal(lengthSlug, storedRules);
+    if (rulesBad) return res.status(400).json(rulesBad);
     // Phase 3 · SINGLES: a one-a-side sport played between two PEOPLE. Validated
     // up front so nothing is written for a bad request. See utils/singles.
     let singlesSides: { aName: string; bName: string; opponentId: string; sportName: string } | null = null;
@@ -426,7 +435,7 @@ export async function createMatch(req: Request, res: Response) {
         format: storedFormat,
         overs: storedOvers,
         // BUILD 2.1: every new match carries its rules as data.
-        rules: rulesFromLegacy(lengthSlug, storedFormat, storedOvers),
+        rules: storedRules,
         status: 'scheduled',
         is_open: singles ? false : !!is_open,
         // F-13: slots and a join policy belong to an open pickup only; they were
@@ -1752,7 +1761,7 @@ export async function updateFieldRefusal(
   if ('rules' in update) {
     const slug = normSportSlug((await getSport(String(match.sport_id)))?.slug);
     const legacy = rulesAsLegacy(slug, update.rules);
-    if (!legacy) return bad('Those match rules aren’t offered.', 'BAD_RULES');
+    if ('refusal' in legacy) return { status: 400, error: legacy.refusal.error, code: legacy.refusal.code };
     delete update.rules;
     update.format = legacy.format;
     if (slug === 'cricket') update.overs = legacy.overs;
@@ -1776,8 +1785,11 @@ export async function updateFieldRefusal(
     }
     const fr = formatRefusal(slug, format, slug === 'cricket' ? overs : null);
     if (fr) return fr;
-    // BUILD 2.1: the rules stay in step with what was just changed.
+    // BUILD 2.1: the rules stay in step with what was just changed — and
+    // (2.2) pass the one validator.
     update.rules = rulesFromLegacy(slug, format as string | null, overs as number | null);
+    const rulesBad = rulesRefusal(slug, update.rules);
+    if (rulesBad) return { status: 400, error: rulesBad.error, code: rulesBad.code };
   }
   return null;
 }

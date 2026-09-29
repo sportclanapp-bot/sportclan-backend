@@ -1,11 +1,7 @@
 /**
- * BUILD 1.9 · a cricket `T<n>` sent without `overs`.
- *
- * It was accepted and stored as `T7` with no overs, and an innings with no
- * overs lasts 20 — the match said seven and played twenty. The overs are now
- * filled from the format and checked like any other overs: `T20` stores 20,
- * `T7` (not offered) is refused. On create and on edit. Supabase is mocked
- * like phase4K2Matches.
+ * BUILD 2.2 · the one rules validator (matchRules.rulesRefusal, shared with the
+ * app) has the last word on create and edit, whichever way the rules came —
+ * as data or as the older format / overs.
  */
 type Q = string[];
 let mockLog: Q[] = [];
@@ -60,7 +56,9 @@ jest.mock('../utils/notify', () => ({
 // eslint-disable-next-line import/first
 // eslint-disable-next-line import/first
 // eslint-disable-next-line import/first
-import { createMatch, updateMatch, oversFromFormat } from '../controllers/matches.controller';
+import { createMatch, updateMatch } from '../controllers/matches.controller';
+// eslint-disable-next-line import/first
+import { getSport } from '../utils/sportCache';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const MATCH = '22222222-2222-4222-8222-222222222222';
@@ -102,54 +100,44 @@ const created = { data: { id: MATCH } };
 const onCreate = (q: Q) => (q[0] === 'from:matches' && q.some((c) => c.startsWith('insert:')) ? created : { data: null });
 const body = (extra: object) => ({ sport_id: 'cricket', team_a_name: 'Lions', team_b_name: 'Tigers', scheduled_at: '2026-10-05T10:00:00Z', venue: 'Oval', ...extra });
 
-describe('BUILD 1.9 · oversFromFormat', () => {
-  it.each([['T20', 20], ['t10', 10], [' T7 ', 7], ['box', null], ['pair', null], ['T', null], [20, null], [null, null]])('%p → %p', (f, n) => {
-    expect(oversFromFormat(f)).toBe(n);
-  });
-});
+const asSport = (slug: string) => (getSport as jest.Mock).mockResolvedValue({ slug });
+afterEach(() => asSport('cricket'));
 
-describe('BUILD 1.9 · create', () => {
-  it('T20 with no overs stores overs 20', async () => {
+describe('BUILD 2.2 · create', () => {
+  it('rules as data outside the limits → 400 BAD_RULES with the field', async () => {
     mockNext = onCreate;
-    const r = await call(createMatch, { body: body({ format: 'T20' }) });
-    expect(r.statusCode).toBeLessThan(300);
-    expect(inserted()).toMatchObject({ format: 'T20', overs: 20 });
-  });
-  it('T7 with no overs → 400 BAD_OVERS, nothing inserted', async () => {
-    mockNext = onCreate;
-    const r = await call(createMatch, { body: body({ format: 'T7' }) });
-    expect([r.statusCode, r.body.code]).toEqual([400, 'BAD_OVERS']);
+    const r = await call(createMatch, { body: body({ rules: { v: 1, overs: 20, drawAllowed: false } }) });
+    expect([r.statusCode, r.body.code, r.body.field]).toEqual([400, 'BAD_RULES', 'drawAllowed']);
     expect(inserted()).toBeNull();
   });
-  it('box with no overs takes the box standard, 6 (BUILD 2.2 — it stored none and played 20)', async () => {
+  it('the older format path is validated too: a chess clock that isn’t offered → 400 (it used to be stored as sent)', async () => {
+    asSport('chess');
     mockNext = onCreate;
-    const r = await call(createMatch, { body: body({ format: 'box' }) });
-    expect(r.statusCode).toBeLessThan(300);
-    expect(inserted()).toMatchObject({ format: 'box', overs: 6 });
+    const r = await call(createMatch, { body: body({ sport_id: 'cricket', format: 'Rapid 10+5' }) });
+    expect([r.statusCode, r.body.code, r.body.field]).toEqual([400, 'BAD_RULES', 'baseMinutes']);
+    const ok = await call(createMatch, { body: body({ sport_id: 'cricket', format: 'Rapid · 15+10' }) });
+    expect(ok.statusCode).toBeLessThan(300);
+    expect(inserted()).toMatchObject({ rules: { baseMinutes: 15, incrementSeconds: 10 } });
   });
-  it('T10 with overs 10 is unchanged', async () => {
+  it('box without overs takes the box standard and passes', async () => {
     mockNext = onCreate;
-    await call(createMatch, { body: body({ format: 'T10', overs: 10 }) });
-    expect(inserted()).toMatchObject({ format: 'T10', overs: 10 });
+    const r = await call(createMatch, { body: body({ format: 'pair' }) });
+    expect(r.statusCode).toBeLessThan(300);
+    expect(inserted()).toMatchObject({ format: 'pair', overs: 8, rules: { style: 'pair', overs: 8 } });
   });
 });
 
-describe('BUILD 1.9 · edit', () => {
-  it('T10 on a match with no overs stores overs 10 too', async () => {
-    mockNext = onMatch(matchRow({ format: null, overs: null }));
-    const r = await call(updateMatch, { body: { format: 'T10' } });
-    expect(r.statusCode).toBe(200);
-    expect(writes()[0]!.join()).toContain('"overs":10');
-  });
-  it('T7 on a match with no overs → 400 BAD_OVERS, nothing written', async () => {
-    mockNext = onMatch(matchRow({ format: null, overs: null }));
-    const r = await call(updateMatch, { body: { format: 'T7' } });
-    expect([r.statusCode, r.body.code]).toEqual([400, 'BAD_OVERS']);
+describe('BUILD 2.2 · edit', () => {
+  it('rules outside the limits → 400 BAD_RULES, nothing written', async () => {
+    mockNext = onMatch(matchRow());
+    const r = await call(updateMatch, { body: { rules: { v: 1, style: 'box', overs: 20 } } });
+    expect([r.statusCode, r.body.code]).toEqual([400, 'BAD_RULES']);
+    expect(r.body.error).toBe('Overs must be 4, 6, 8 or 10 for box cricket.');
     expect(writes()).toHaveLength(0);
   });
-  it('T10 on a 20-over match is still a mismatch', async () => {
+  it('a field the sport doesn’t have → 400', async () => {
     mockNext = onMatch(matchRow());
-    const r = await call(updateMatch, { body: { format: 'T10' } });
-    expect([r.statusCode, r.body.code]).toEqual([400, 'FORMAT_OVERS_MISMATCH']);
+    const r = await call(updateMatch, { body: { rules: { v: 1, overs: 20, bestOf: 3 } } });
+    expect([r.statusCode, r.body.error]).toEqual([400, 'Match length doesn’t apply to this sport.']);
   });
 });

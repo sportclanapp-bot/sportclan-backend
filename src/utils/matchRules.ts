@@ -17,6 +17,7 @@
  * are read back from `format` / `overs` by rulesFromLegacy.
  */
 import { MATCH_LENGTHS, bestOfFor, lengthKey } from './matchLength';
+import { CRICKET_OVERS } from './cricketRules';
 
 export const RULES_VERSION = 1;
 
@@ -168,4 +169,69 @@ export function rulesOf(
   match: { rules?: unknown; format?: string | null; overs?: number | null },
 ): MatchRules {
   return normalizeRules(sport, match.rules ?? null, { format: match.format ?? null, overs: match.overs ?? null });
+}
+
+// ── BUILD 2.2 · the one rules validator ─────────────────────────────────────
+//
+// Used by createMatch, updateMatch, tournament stage rules and the create
+// form. Each field a sport has is either fixed at its standard or limited to
+// the values offered today. The customisation items (Stage 3) widen these one
+// field at a time — here, and nowhere else.
+
+/** Chess clocks offered today, as [base minutes, increment seconds]. */
+export const CHESS_CLOCKS: Array<[number, number]> = [[1, 0], [5, 0], [3, 2], [10, 0], [15, 10], [30, 0]];
+
+type Refusal = { error: string; code: 'BAD_RULES'; field: string | null };
+const refuse = (error: string, field: string | null = null): Refusal => ({ error, code: 'BAD_RULES', field });
+
+const FIELD_NAMES: Record<string, string> = {
+  style: 'Match type', overs: 'Overs', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length',
+  drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
+};
+
+const isWhole = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n);
+const listOf = (ns: number[]) => (ns.length === 1 ? String(ns[0]) : `${ns.slice(0, -1).join(', ')} or ${ns[ns.length - 1]}`);
+
+/**
+ * Why these rules can't be played, or null when they can. `rules` is what was
+ * sent (an object); fields the sport doesn't have are refused, missing ones
+ * take the standard.
+ */
+export function rulesRefusal(sport: string | null | undefined, rules: unknown): Refusal | null {
+  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) return refuse('Match rules must be an object.');
+  const given = rules as Record<string, unknown>;
+  if ('v' in given && given.v !== RULES_VERSION) return refuse('These match rules are from a newer version of the app.', 'v');
+  const key = lengthKey(sport);
+  const std = SPORT_RULES[key];
+  if (!std) return refuse('Match rules aren’t available for this sport.');
+  for (const k of Object.keys(given)) {
+    if (k !== 'v' && !(k in std)) return refuse(`${FIELD_NAMES[k] ?? k} doesn’t apply to this sport.`, k);
+  }
+  const r = normalizeRules(key, given) as unknown as Record<string, unknown>;
+  const stdMap = std as Record<string, unknown>;
+
+  if (key === 'cricket') {
+    if (r.style !== 'limited' && r.style !== 'box' && r.style !== 'pair') return refuse('Match type must be limited overs, box or pair.', 'style');
+    const offered = CRICKET_OVERS[r.style as CricketStyle].options;
+    if (!isWhole(r.overs) || !offered.includes(r.overs)) {
+      return refuse(`Overs must be ${listOf(offered)} for ${r.style === 'limited' ? 'limited overs' : `${r.style} cricket`}.`, 'overs');
+    }
+  }
+  if (MATCH_LENGTHS[key]) {
+    const offered = MATCH_LENGTHS[key]!.options;
+    if (!isWhole(r.bestOf) || !(offered as number[]).includes(r.bestOf)) return refuse(`Match length must be best of ${listOf(offered)}.`, 'bestOf');
+  }
+  if (key === 'chess') {
+    if (!CHESS_CLOCKS.some(([b, i]) => r.baseMinutes === b && r.incrementSeconds === i)) {
+      return refuse(`The clock must be one of ${CHESS_CLOCKS.map(([b, i]) => `${b}+${i}`).join(', ')}.`, 'baseMinutes');
+    }
+  }
+  // Everything else is fixed at the sport's standard for now.
+  const open = new Set(['style', 'overs', 'bestOf', 'baseMinutes', 'incrementSeconds']);
+  for (const k of Object.keys(stdMap)) {
+    if (open.has(k)) continue;
+    if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
+  }
+  return null;
 }

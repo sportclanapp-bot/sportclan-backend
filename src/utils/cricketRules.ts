@@ -268,3 +268,28 @@ export function superOverWinner(a: number, b: number): 'A' | 'B' {
 export function superOverResultText(winnerName: string, so: { A: number; B: number }): string {
   return `${winnerName} won the super over (${Math.max(so.A, so.B)}–${Math.min(so.A, so.B)})`;
 }
+
+/** BUILD 3.10: an innings time cap's range in minutes (off = null). Display and warning only. */
+export const INNINGS_MINUTES_MIN = 10;
+export const INNINGS_MINUTES_MAX = 240;
+
+/**
+ * BUILD 3.10 · how long `side`'s innings has run: from its first delivery to
+ * `now`. Null before it starts. `warn` from 5 minutes before the cap, `over`
+ * once it's reached — the pad says so; nothing is enforced.
+ */
+export function inningsClock(
+  events: ReadonlyArray<{ event_type: string; payload?: unknown; created_at?: string | null }>,
+  side: 'A' | 'B',
+  capMinutes: number | null | undefined,
+  nowMs: number,
+): { elapsed: number; cap: number; warn: boolean; over: boolean } | null {
+  if (!capMinutes) return null;
+  const first = events.find((ev) =>
+    (ev.event_type === 'ball' || ev.event_type === 'extra' || ev.event_type === 'wicket')
+    && ((ev.payload as { team_side?: unknown } | undefined)?.team_side === 'B' ? 'B' : 'A') === side);
+  const start = first?.created_at ? Date.parse(first.created_at) : NaN;
+  if (!Number.isFinite(start)) return null;
+  const elapsed = Math.max(0, Math.floor((nowMs - start) / 60000));
+  return { elapsed, cap: capMinutes, warn: elapsed >= capMinutes - 5, over: elapsed >= capMinutes };
+}

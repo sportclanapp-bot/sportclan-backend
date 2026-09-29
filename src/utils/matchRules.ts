@@ -17,7 +17,7 @@
  * are read back from `format` / `overs` by rulesFromLegacy.
  */
 import { MATCH_LENGTHS, bestOfFor, lengthKey } from './matchLength';
-import { OVERS_MIN, OVERS_MAX, PLAYERS_MIN, PLAYERS_MAX, RETIRE_MIN, RETIRE_MAX, EXTRA_RUNS_MIN, EXTRA_RUNS_MAX, isOfferedOvers } from './cricketRules';
+import { OVERS_MIN, OVERS_MAX, PLAYERS_MIN, PLAYERS_MAX, RETIRE_MIN, RETIRE_MAX, EXTRA_RUNS_MIN, EXTRA_RUNS_MAX, INNINGS_MINUTES_MIN, INNINGS_MINUTES_MAX, isOfferedOvers } from './cricketRules';
 
 export const RULES_VERSION = 1;
 
@@ -43,6 +43,8 @@ export interface MatchRules {
   rebowl?: boolean;
   /** BUILD 3.8: the delivery after a no-ball is a free hit (out only as off a no-ball). */
   freeHit?: boolean;
+  /** BUILD 3.10: minutes an innings should take (display and warning only); null = off. */
+  inningsMinutes?: number | null;
   /** Best-of sports: games / sets / boards the match is best of. */
   bestOf?: number;
   /** Rally and carrom: points to win a game, the hard cap (null = none), the
@@ -67,7 +69,7 @@ export interface MatchRules {
  * cricket default, periods.ts, the chess default clock).
  */
 export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
-  cricket: { style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, drawAllowed: true },
+  cricket: { style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, inningsMinutes: null, drawAllowed: true },
   badminton: { bestOf: 3, target: 21, cap: 30, finalTarget: null, winBy2: true },
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true },
   pickleball: { bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true },
@@ -220,7 +222,7 @@ type Refusal = { error: string; code: 'BAD_RULES'; field: string | null };
 const refuse = (error: string, field: string | null = null): Refusal => ({ error, code: 'BAD_RULES', field });
 
 const FIELD_NAMES: Record<string, string> = {
-  style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
+  style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
   finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
@@ -274,6 +276,9 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     }
     if (typeof r.rebowl !== 'boolean') return refuse('Re-bowl wides and no-balls is on or off.', 'rebowl');
     if (typeof r.freeHit !== 'boolean') return refuse('Free hit is on or off.', 'freeHit');
+    if (r.inningsMinutes !== null && (!isWhole(r.inningsMinutes) || r.inningsMinutes < INNINGS_MINUTES_MIN || r.inningsMinutes > INNINGS_MINUTES_MAX)) {
+      return refuse(`An innings time cap must be off, or ${INNINGS_MINUTES_MIN} to ${INNINGS_MINUTES_MAX} minutes.`, 'inningsMinutes');
+    }
   }
   if (MATCH_LENGTHS[key]) {
     const offered = MATCH_LENGTHS[key]!.options;
@@ -285,7 +290,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     }
   }
   // Everything else is fixed at the sport's standard for now.
-  const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'bestOf', 'baseMinutes', 'incrementSeconds']);
+  const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'bestOf', 'baseMinutes', 'incrementSeconds']);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);

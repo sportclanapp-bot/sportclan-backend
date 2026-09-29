@@ -226,3 +226,26 @@ export function isBallOfOver(eventType: unknown, payload: unknown): boolean {
   if (eventType === 'ball' || eventType === 'wicket') return !p.is_extra;
   return false;
 }
+
+/**
+ * BUILD 3.8 · free hit: is the next delivery of `side`'s innings a free hit?
+ * A no-ball makes it one; a wide bowled again carries it on; any other ball of
+ * the over (the free hit itself) uses it up. `events` in the order bowled.
+ */
+export function freeHitNext(events: ReadonlyArray<{ event_type: string; payload?: unknown }>, side: 'A' | 'B'): boolean {
+  let free = false;
+  for (const ev of events) {
+    const p = (ev.payload ?? {}) as { team_side?: unknown; type?: unknown };
+    if ((p.team_side === 'B' ? 'B' : 'A') !== side) continue;
+    if (ev.event_type === 'extra' && p.type === 'Nb') free = true;
+    else if (isBallOfOver(ev.event_type, ev.payload)) free = false;
+  }
+  return free;
+}
+
+/** BUILD 3.8: a wicket a free hit allows — out only as off a no-ball; a retirement is no delivery, so always. */
+const FREE_HIT_OUTS = new Set(['runout', 'obstructingthefield', 'hittheballtwice', 'handledtheball']);
+export function allowedOnFreeHit(wicketType: unknown): boolean {
+  const k = String(wicketType ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  return FREE_HIT_OUTS.has(k) || !isDismissal(k) || k === 'retiredout';
+}

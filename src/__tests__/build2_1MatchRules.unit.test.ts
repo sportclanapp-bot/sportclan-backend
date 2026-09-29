@@ -111,7 +111,7 @@ describe('BUILD 2.1 · create', () => {
     mockNext = onCreate;
     const r = await call(createMatch, { body: body({ format: 'T10', overs: 10 }) });
     expect(r.statusCode).toBeLessThan(300);
-    expect(inserted()).toMatchObject({ format: 'T10', overs: 10, rules: { v: 1, style: 'limited', overs: 10, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, drawAllowed: true } });
+    expect(inserted()).toMatchObject({ format: 'T10', overs: 10, rules: { v: 1, style: 'limited', overs: 10, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, drawAllowed: true } });
   });
   it('rules only → format / overs are written from them', async () => {
     mockNext = onCreate;
@@ -143,12 +143,12 @@ describe('BUILD 2.1 · edit keeps format / overs and rules in step', () => {
     const w = writes()[0]!.join();
     expect(w).toContain('"format":"T10"');
     expect(w).toContain('"overs":10');
-    expect(w).toContain('"rules":{"v":1,"style":"limited","overs":10,"players":null,"lastManStands":false,"retireAt":null,"bowlerOvers":null,"extraRuns":1,"rebowl":true,"drawAllowed":true}');
+    expect(w).toContain('"rules":{"v":1,"style":"limited","overs":10,"players":null,"lastManStands":false,"retireAt":null,"bowlerOvers":null,"extraRuns":1,"rebowl":true,"freeHit":false,"drawAllowed":true}');
   });
   it('format / overs sent → rules follow', async () => {
     mockNext = onMatch(matchRow());
     await call(updateMatch, { body: { format: 'T50', overs: 50 } });
-    expect(writes()[0]!.join()).toContain('"rules":{"v":1,"style":"limited","overs":50,"players":null,"lastManStands":false,"retireAt":null,"bowlerOvers":null,"extraRuns":1,"rebowl":true,"drawAllowed":true}');
+    expect(writes()[0]!.join()).toContain('"rules":{"v":1,"style":"limited","overs":50,"players":null,"lastManStands":false,"retireAt":null,"bowlerOvers":null,"extraRuns":1,"rebowl":true,"freeHit":false,"drawAllowed":true}');
   });
   it('rules on a started match → 409 RULES_LOCKED', async () => {
     mockNext = onMatch(matchRow({ status: 'live' }));
@@ -161,7 +161,7 @@ describe('BUILD 2.1 · reading', () => {
   it('getMatch fills the rules in for a match stored before them', async () => {
     mockNext = (q) => (q[0] === 'from:matches' ? { data: matchRow({ rules: null, format: 'T7', overs: 7 }) } : { data: null, count: 0 });
     const r = await call(getMatch, {});
-    expect(r.body.match.rules).toEqual({ v: 1, style: 'limited', overs: 7, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, drawAllowed: true });
+    expect(r.body.match.rules).toEqual({ v: 1, style: 'limited', overs: 7, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, drawAllowed: true });
   });
   it('the standards equal the engines’ constants (rally SET_CONFIG, MATCH_LENGTHS)', () => {
     for (const [sport, cfg] of Object.entries(SET_CONFIG)) {

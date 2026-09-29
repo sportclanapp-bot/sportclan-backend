@@ -17,7 +17,7 @@ import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
-import { allOutBySide, bowlerQuotaDone, extraPenaltyOf, isBallOfOver, isDismissal } from '../utils/cricketRules';
+import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal } from '../utils/cricketRules';
 import { rulesOf, setConfigOf, standardRules, winsToWin } from '../utils/matchRules';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
@@ -345,6 +345,22 @@ export async function validateScoringEvent(
         error: 'The batter and the bowler cannot be the same player.',
         code: 'SAME_PLAYER_BOTH_ROLES',
       });
+    }
+
+    // BUILD 3.8: off a free hit the batter is out only as off a no-ball (run
+    // out, obstructing, hit twice). Read from the log — only when the match
+    // plays free hits and the wicket is one a free hit rules out.
+    if (event_type === 'wicket' && payload.is_extra !== true && !allowedOnFreeHit(payload.wicket_type ?? payload.type)
+      && rulesOf('cricket', match).freeHit) {
+      const { data: log } = await supabase
+        .from('match_events').select('event_type, payload')
+        .eq('match_id', matchId).order('created_at', { ascending: true });
+      if (freeHitNext((log ?? []) as never, payload.team_side === 'B' ? 'B' : 'A')) {
+        return refuse(400, {
+          error: 'It’s a free hit — the batter can only be run out (or out obstructing the field or hitting the ball twice).',
+          code: 'FREE_HIT',
+        });
+      }
     }
 
     // BUILD 3.5: a bowler who has bowled the match's max overs can't bowl

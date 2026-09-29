@@ -236,6 +236,21 @@ export async function validateScoringEvent(
     // score a match that counts them otherwise.
     if (wideOrNb) {
       const want = rulesOf('cricket', match).extraRuns ?? 1;
+      // BUILD 3.7: where wides / no-balls aren't bowled again the app marks
+      // each one `rebowl: false` (a ball of the over); an older app can't.
+      const rebowl = rulesOf('cricket', match).rebowl !== false;
+      if (payload.penalty === undefined && !rebowl) {
+        return refuse(409, {
+          error: 'This match counts a wide or no-ball as a ball of the over. Update SportClan to score it.',
+          code: 'EXTRA_RUNS_UPDATE_APP',
+        });
+      }
+      if (payload.penalty !== undefined && (payload.rebowl === false) === rebowl) {
+        return refuse(400, {
+          error: rebowl ? 'A wide or no-ball is bowled again in this match.' : 'A wide or no-ball counts as a ball of the over in this match.',
+          code: 'BAD_REBOWL',
+        });
+      }
       if (payload.penalty === undefined) {
         if (want !== 1) {
           return refuse(409, {

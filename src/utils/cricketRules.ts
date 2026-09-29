@@ -217,11 +217,12 @@ export function extraPenaltyOf(payload: unknown): number {
 
 /**
  * A ball of the over — one the over counts. A ball or a wicket unless marked
- * `is_extra`; a bye or leg-bye; never a wide or a no-ball (re-bowled).
+ * `is_extra`; a bye or leg-bye; a wide or no-ball only when it is not
+ * re-bowled (BUILD 3.7: the event says `rebowl: false`).
  */
 export function isBallOfOver(eventType: unknown, payload: unknown): boolean {
-  const p = (payload ?? {}) as { is_extra?: unknown; type?: unknown };
-  if (eventType === 'extra') return p.type === 'B' || p.type === 'Lb';
+  const p = (payload ?? {}) as { is_extra?: unknown; type?: unknown; rebowl?: unknown };
+  if (eventType === 'extra') return p.type === 'B' || p.type === 'Lb' || ((p.type === 'Wd' || p.type === 'Nb') && p.rebowl === false);
   if (eventType === 'ball' || eventType === 'wicket') return !p.is_extra;
   return false;
 }

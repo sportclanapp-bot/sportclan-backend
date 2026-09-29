@@ -68,12 +68,16 @@ export function tournamentDetailsRefusal(
       && Date.parse(end as string) < Date.parse(start as string)) {
     return { error: 'The end date can’t be before the start date.', code: 'END_BEFORE_START' };
   }
+  // BUILD 1.16: whole rupees. 12.5 passed this check and the int column then
+  // refused it (a 500); a number past the column's range did the same.
   for (const k of ['entry_fee', 'prize_pool'] as const) {
     if (present(body[k])) {
       const n = Number(body[k]);
       if (typeof body[k] === 'boolean' || !Number.isFinite(n) || n < 0) {
         return { error: `${k} must be 0 or more.`, code: 'INVALID_AMOUNT' };
       }
+      if (!Number.isInteger(n)) return { error: `${k} must be whole rupees.`, code: 'INVALID_AMOUNT' };
+      if (n > MONEY_MAX) return { error: `${k} can be at most ₹${MONEY_MAX.toLocaleString('en-IN')}.`, code: 'INVALID_AMOUNT' };
     }
   }
   const ints: Array<[string, number, number]> = [
@@ -94,6 +98,9 @@ export function tournamentDetailsRefusal(
   if (dw) return dw;
   return null;
 }
+
+/** BUILD 1.16: the most an entry fee or prize can be (₹1 crore) — well inside the int column. */
+export const MONEY_MAX = 10_000_000;
 
 export const DAY_WINDOWS_MAX = 60;
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;

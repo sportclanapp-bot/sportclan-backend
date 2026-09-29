@@ -2535,6 +2535,20 @@ export async function completeMatch(req: Request, res: Response) {
         return res.status(400).json({ error: 'The winner has to be the side that won the shootout.', code: 'SHOOTOUT_WINNER_MISMATCH' });
       }
     }
+    // BUILD 1.5: a drawn knockout chess game is decided by a tie-break game
+    // (Armageddon or a playoff). It used to dead-end: a bracket needs a winner
+    // and nothing let the scorer name one. The named winner is the tie-break's.
+    const chessTiebreak = req.body?.chess_tiebreak === true;
+    if (chessTiebreak) {
+      const cs = canonical as { A?: { score?: unknown }; B?: { score?: unknown }; chess?: { result?: unknown } } | null;
+      const drawn = cs?.chess?.result === 'Draw' || Number(cs?.A?.score ?? 0) === Number(cs?.B?.score ?? 0);
+      if (normSportSlug(sportRow?.slug) !== 'chess' || !isBracketMatch || !drawn || !winnerSide) {
+        return res.status(400).json({
+          error: 'A tie-break decides only a drawn knockout chess game, and it needs the tie-break’s winner.',
+          code: 'CHESS_TIEBREAK_NOT_ALLOWED',
+        });
+      }
+    }
     if (isBracketMatch && !winner_team_id) {
       return res.status(400).json({
         error: 'Bracket matches need a decisive winner — pick the winning team (a bracket can\'t advance on a tie).',
@@ -2943,6 +2957,12 @@ export async function completeMatch(req: Request, res: Response) {
           goals: { A: aScore, B: bScore },
           shootout: shootoutScore,
         });
+        resultForNotice = ss.result;
+      }
+      // BUILD 1.5: "Magnus won on tie-break" — the game itself was a draw.
+      if (chessTiebreak && derivedSide) {
+        ss.chess_tiebreak = { winner_side: derivedSide };
+        ss.result = `${derivedSide === 'A' ? aName : bName} won on tie-break`;
         resultForNotice = ss.result;
       }
       // Decision 2026-09-26: an awarded result names the winner with no margin —

@@ -970,7 +970,7 @@ export async function recomputeSummary(
     // A6: a side is all out one short of its line-up (shared cricketRules); a
     // side with no line-up at 10, as before.
     const { data: lineup } = await supabase.from('match_participants').select('team_side').eq('match_id', matchId);
-    const allOut = allOutBySide(lineup ?? [], rulesOf('cricket', match).players); // BUILD 3.2
+    const allOut = allOutBySide(lineup ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands); // BUILD 3.2
     for (const e of events) {
       const p: any = e.payload || {};
       const inn = sides[sideOf(p)];

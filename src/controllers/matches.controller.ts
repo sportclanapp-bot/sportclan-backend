@@ -2730,7 +2730,7 @@ export async function completeMatch(req: Request, res: Response) {
       if (a.balls + b.balls + a.runs + b.runs + a.wickets + b.wickets > 0) {
         const chaser = chasingSide(cs?.toss_winner_side ?? null, match.toss_choice ?? null, cs?.first_batting_side ?? null);
         const firstSide: 'A' | 'B' = chaser === 'A' ? 'B' : 'A';
-        const allOut = allOutBySide(partsRes.data ?? [], rulesOf('cricket', match).players); // BUILD 3.2
+        const allOut = allOutBySide(partsRes.data ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands); // BUILD 3.2
         const dlsTarget = cs?.dls_applied ? Number(cs?.dls_target ?? 0) || null : null;
         const stage = cricketStage({
           first: firstSide === 'A' ? a : b,
@@ -3048,8 +3048,8 @@ export async function completeMatch(req: Request, res: Response) {
         aWickets: Number(ss?.A?.wickets ?? 0),
         bWickets: Number(ss?.B?.wickets ?? 0),
         // A6: "won by N wickets" counts wickets in hand against the side's line-up.
-        aAllOut: allOutBySide(participants ?? [], rulesOf('cricket', match).players).A, // BUILD 3.2
-        bAllOut: allOutBySide(participants ?? [], rulesOf('cricket', match).players).B,
+        aAllOut: allOutBySide(participants ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands).A, // BUILD 3.2
+        bAllOut: allOutBySide(participants ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands).B,
         tossWinnerSide: (ss?.toss_winner_side as 'A' | 'B' | undefined) ?? null,
         // SC-442: read directly, NOT through a cast. This line was
         // `(match as { toss_choice?: string | null }).toss_choice` and the

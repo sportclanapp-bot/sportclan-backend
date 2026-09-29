@@ -31,6 +31,8 @@ export interface MatchRules {
   overs?: number;
   /** BUILD 3.2: players a side (null = the line-up decides); all out one short of it. */
   players?: number | null;
+  /** BUILD 3.3: last man stands — the last batter bats on alone. */
+  lastManStands?: boolean;
   /** Best-of sports: games / sets / boards the match is best of. */
   bestOf?: number;
   /** Rally and carrom: points to win a game, the hard cap (null = none), the
@@ -55,7 +57,7 @@ export interface MatchRules {
  * cricket default, periods.ts, the chess default clock).
  */
 export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
-  cricket: { style: 'limited', overs: 20, players: null, drawAllowed: true },
+  cricket: { style: 'limited', overs: 20, players: null, lastManStands: false, drawAllowed: true },
   badminton: { bestOf: 3, target: 21, cap: 30, finalTarget: null, winBy2: true },
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true },
   pickleball: { bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true },
@@ -208,7 +210,7 @@ type Refusal = { error: string; code: 'BAD_RULES'; field: string | null };
 const refuse = (error: string, field: string | null = null): Refusal => ({ error, code: 'BAD_RULES', field });
 
 const FIELD_NAMES: Record<string, string> = {
-  style: 'Match type', overs: 'Overs', players: 'Players a side', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
+  style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
   finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
@@ -244,6 +246,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (r.players !== null && (!isWhole(r.players) || r.players < PLAYERS_MIN || r.players > PLAYERS_MAX)) {
       return refuse(`Players a side must be a whole number from ${PLAYERS_MIN} to ${PLAYERS_MAX}.`, 'players');
     }
+    if (typeof r.lastManStands !== 'boolean') return refuse('Last man stands is on or off.', 'lastManStands');
   }
   if (MATCH_LENGTHS[key]) {
     const offered = MATCH_LENGTHS[key]!.options;
@@ -255,7 +258,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     }
   }
   // Everything else is fixed at the sport's standard for now.
-  const open = new Set(['style', 'overs', 'players', 'bestOf', 'baseMinutes', 'incrementSeconds']);
+  const open = new Set(['style', 'overs', 'players', 'lastManStands', 'bestOf', 'baseMinutes', 'incrementSeconds']);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);

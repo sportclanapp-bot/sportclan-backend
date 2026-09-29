@@ -59,11 +59,15 @@ export const PLAYERS_MAX = 15;
 export function allOutBySide(
   lineup: Array<{ team_side?: string | null }> | null | undefined,
   playersPerSide?: number | null,
+  lastManStands = false,
 ): { A: number; B: number } {
+  // BUILD 3.3: last man stands — the last batter bats on alone, so a side is
+  // all out one wicket later.
+  const extra = lastManStands ? 1 : 0;
   const n = Number(playersPerSide);
-  if (playersPerSide != null && Number.isInteger(n) && n >= PLAYERS_MIN) return { A: n - 1, B: n - 1 };
+  if (playersPerSide != null && Number.isInteger(n) && n >= PLAYERS_MIN) return { A: n - 1 + extra, B: n - 1 + extra };
   const count = (s: 'A' | 'B') => (lineup ?? []).filter((p) => p.team_side === s).length;
-  return { A: allOutWickets(count('A')), B: allOutWickets(count('B')) };
+  return { A: allOutWickets(count('A')) + extra, B: allOutWickets(count('B')) + extra };
 }
 
 /** The cricket format of a match from its stored `format` ("T20", "box", "pair"). */

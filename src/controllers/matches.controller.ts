@@ -105,6 +105,18 @@ export function formatRefusal(
   return null;
 }
 
+/**
+ * BUILD 1.9 · the overs a cricket `T<n>` format names. `T7` sent without
+ * `overs` was stored as T7 with no overs, and an innings with no overs lasts
+ * 20 — so the match said seven and played twenty. The overs are now filled
+ * from the format and checked like any others (so `T7`, not offered, is
+ * refused). Null for box / pair / anything else.
+ */
+export function oversFromFormat(format: unknown): number | null {
+  const m = typeof format === 'string' ? /^t(\d{1,3})$/i.exec(format.trim()) : null;
+  return m ? Number(m[1]) : null;
+}
+
 /** The match time: a real date, not in the past, within the next year. */
 export function scheduleRefusal(scheduledAt: unknown): { status: number; error: string; code: string } | null {
   if (scheduledAt == null || scheduledAt === '') return null;
@@ -315,10 +327,11 @@ export async function createMatch(req: Request, res: Response) {
       const fr = formatRefusal(lengthSlug, format, isCricketMatch ? overs : null);
       if (fr) return res.status(fr.status).json({ error: fr.error, code: fr.code });
     }
-    if (isCricketMatch && overs != null && !isOfferedOvers(cricketFormatOf(format), Number(overs))) {
+    const cricketOvers = isCricketMatch ? (overs ?? oversFromFormat(format)) : null; // BUILD 1.9
+    if (isCricketMatch && cricketOvers != null && !isOfferedOvers(cricketFormatOf(format), Number(cricketOvers))) {
       return res.status(400).json({ error: 'Those overs aren’t offered for this format.', code: 'BAD_OVERS' });
     }
-    const storedOvers = isCricketMatch && overs != null ? Number(overs) : null;
+    const storedOvers = cricketOvers != null ? Number(cricketOvers) : null;
     const storedFormat = storedBestOf !== null ? formatForBestOf(storedBestOf) : format || null;
     // Phase 3 · SINGLES: a one-a-side sport played between two PEOPLE. Validated
     // up front so nothing is written for a bad request. See utils/singles.
@@ -1702,7 +1715,12 @@ export async function updateFieldRefusal(
   if ('format' in update || 'overs' in update) {
     const slug = normSportSlug((await getSport(String(match.sport_id)))?.slug);
     const format = 'format' in update ? update.format : match.format;
-    const overs = 'overs' in update ? update.overs : match.overs;
+    let overs = 'overs' in update ? update.overs : match.overs;
+    // BUILD 1.9: a `T<n>` that leaves the match without overs takes n.
+    if (slug === 'cricket' && overs == null && oversFromFormat(format) != null) {
+      overs = oversFromFormat(format);
+      update.overs = overs;
+    }
     if (slug !== 'cricket') {
       if ('overs' in update && update.overs != null) return bad('Only cricket has overs.', 'BAD_OVERS');
     } else if (overs != null && !isOfferedOvers(cricketFormatOf(format), Number(overs))) {

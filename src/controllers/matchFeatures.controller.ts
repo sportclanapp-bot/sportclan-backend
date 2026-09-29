@@ -16,6 +16,9 @@ import { viewerCanPlay } from '../utils/viewerCanPlay';
 import { notifyUser } from '../utils/notify';
 import { leaseRefusal } from '../utils/leaseCore';
 import { isUuid } from '../utils/uuid';
+import { rulesOf, legacyFromRules } from '../utils/matchRules';
+import { allOutBySide, inningsFinished, reduceOversRefusal } from '../utils/cricketRules';
+import { chasingSide } from '../utils/matchResult';
 
 /**
  * Shared gate for match-mutating feature endpoints (DLS, event edit/delete,
@@ -427,6 +430,56 @@ export async function applyDLS(req: Request, res: Response) {
     await supabase.from('matches').update({ score_summary: ss }).eq('id', id);
 
     return res.json(result);
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// BUILD 3.12 · POST /matches/:id/reduce-overs { overs } — rain or light cuts a
+// match short: both sides get the same, fewer overs (an equal cut, as local
+// cricket does; a chase-only cut is DLS). The match's own overs change, so the
+// pad, Match Detail, the end-of-match rule and the NRR quota all follow; the
+// original is kept as score_summary.overs_reduced { from, to }.
+export async function reduceOvers(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const gate = await loadScorableMatch(id, userId, deviceIdOf(req));
+    if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg, ...(gate.error.code ? { code: gate.error.code } : {}) });
+    const { data: match } = await supabase
+      .from('matches')
+      .select('id, sport_id, format, overs, rules, score_summary, toss_choice')
+      .eq('id', id)
+      .maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
+    if (slug !== 'cricket') return res.status(400).json({ error: 'Only a cricket match has overs to reduce.', code: 'NOT_CRICKET' });
+    const rules = rulesOf('cricket', match);
+    const from = rules.overs ?? 20;
+    const cs = (match.score_summary ?? {}) as Record<string, any>;
+    const facts = (x: any) => ({ runs: Number(x?.runs ?? 0), wickets: Number(x?.wickets ?? 0), balls: Number(x?.balls ?? 0), declared: x?.declared === true });
+    const chaser = chasingSide(cs.toss_winner_side ?? null, match.toss_choice ?? null, cs.first_batting_side ?? null);
+    const firstSide: 'A' | 'B' = chaser === 'A' ? 'B' : 'A';
+    const first = facts(cs[firstSide]);
+    const chase = facts(cs[firstSide === 'A' ? 'B' : 'A']);
+    const { data: parts } = await supabase.from('match_participants').select('team_side').eq('match_id', id);
+    const allOut = allOutBySide(parts ?? [], rules.players, rules.lastManStands);
+    const to = Number.isFinite(Number(req.body?.overs)) ? Number(req.body.overs) : req.body?.overs;
+    const refusal = reduceOversRefusal({
+      from, to, firstBalls: first.balls, chaseBalls: chase.balls,
+      firstDone: chase.balls > 0 || inningsFinished(first, from, allOut[firstSide]),
+    });
+    if (refusal) return res.status(400).json({ error: refusal, code: 'BAD_REDUCE_OVERS' });
+    // A max-overs-per-bowler above the new overs comes down with them.
+    const next = { ...rules, overs: to as number, bowlerOvers: rules.bowlerOvers != null ? Math.min(rules.bowlerOvers, to as number) : null };
+    const legacy = legacyFromRules('cricket', next);
+    const summary = { ...cs, overs_reduced: { from: cs.overs_reduced?.from ?? from, to } };
+    const { error } = await supabase.from('matches')
+      .update({ rules: next, overs: legacy.overs, format: legacy.format, score_summary: summary, updated_at: new Date().toISOString() })
+      .eq('id', id);
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    return res.json({ overs: to, from: summary.overs_reduced.from, format: legacy.format, rules: next });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

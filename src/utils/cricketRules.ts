@@ -293,3 +293,32 @@ export function inningsClock(
   const elapsed = Math.max(0, Math.floor((nowMs - start) / 60000));
   return { elapsed, cap: capMinutes, warn: elapsed >= capMinutes - 5, over: elapsed >= capMinutes };
 }
+
+/**
+ * BUILD 3.12 · reduce overs mid-match (rain, light): both sides get the same,
+ * fewer overs — an equal cut, as local cricket does, not DLS. Why `to` can't be
+ * the match's new overs, or null. `firstDone`: the first innings is over (the
+ * chase has started); its balls may then be fewer than the cut (all out), but
+ * not more — that is a chase-only cut, which is what DLS is for.
+ */
+export function reduceOversRefusal(args: { from: number; to: unknown; firstBalls: number; firstDone: boolean; chaseBalls: number }): string | null {
+  const { from, to } = args;
+  if (typeof to !== 'number' || !Number.isInteger(to) || to < OVERS_MIN || to >= from) {
+    return `Reduce to a whole number of overs below ${from}.`;
+  }
+  if (args.firstDone && args.firstBalls > to * 6) {
+    return `The first innings already had more than ${to} overs. Both sides must get the same — cut the chase with the DLS calculator instead.`;
+  }
+  const bowled = Math.max(args.firstDone ? 0 : args.firstBalls, args.chaseBalls);
+  if (bowled > to * 6) {
+    const least = Math.ceil(bowled / 6);
+    return `${least === 1 ? 'Part of an over has' : `More than ${least - 1} overs have`} been bowled already — reduce to ${least} or more.`;
+  }
+  return null;
+}
+
+/** BUILD 3.12: the overs a match had before they were reduced, or null. */
+export function oversReducedFrom(summary: unknown): number | null {
+  const from = (summary as { overs_reduced?: { from?: unknown } } | null | undefined)?.overs_reduced?.from;
+  return typeof from === 'number' && from > 0 ? from : null;
+}

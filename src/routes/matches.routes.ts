@@ -39,7 +39,8 @@ import {
 } from '../controllers/matchJoinRequests.controller';
 import {
   getMatchMVP, getMatchAvailability, setMatchAvailability,
-  applyDLS, editMatchEvent, deleteMatchEvent, upsertInningsStats, getScoringEditLog,
+  applyDLS,
+  reduceOvers, editMatchEvent, deleteMatchEvent, upsertInningsStats, getScoringEditLog,
 } from '../controllers/matchFeatures.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -97,6 +98,7 @@ router.get('/:id/mvp', authenticateToken, getMatchMVP);
 router.get('/:id/availability', authenticateToken, getMatchAvailability);
 router.patch('/:id/availability', authenticateToken, setMatchAvailability);
 router.post('/:id/dls', authenticateToken, applyDLS);
+router.post('/:id/reduce-overs', authenticateToken, reduceOvers); // BUILD 3.12
 router.post('/:id/edit-event', authenticateToken, editMatchEvent);
 router.delete('/:id/events/:eventId', authenticateToken, deleteMatchEvent);
 router.post('/:id/innings-stats', authenticateToken, upsertInningsStats);

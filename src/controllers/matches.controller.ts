@@ -1880,11 +1880,22 @@ export async function updateMatch(req: Request, res: Response) {
     // whatever the value): a match's rules are fixed once it has started. format / overs
     // decide who has won (best-of, overs, time control), so changing them on a
     // live or finished match re-decided it on the next recompute.
-    if (match.status !== 'scheduled' && RULE_KEYS.some((k) => k in update)) {
-      return res.status(409).json({
-        error: 'This match has started, so its rules can’t change.',
-        code: 'RULES_LOCKED',
-      });
+    // BUILD 2.6: …or once its first scoring event exists, whatever the status —
+    // a scheduled match can hold events (a serve swap, a QR handoff, an outbox
+    // replay) that were scored under the rules it has now.
+    if (RULE_KEYS.some((k) => k in update)) {
+      let started = match.status !== 'scheduled';
+      if (!started) {
+        const { count } = await supabase
+          .from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id);
+        started = (count ?? 0) > 0;
+      }
+      if (started) {
+        return res.status(409).json({
+          error: 'This match has started, so its rules can’t change.',
+          code: 'RULES_LOCKED',
+        });
+      }
     }
     // Phase 3 B05-F2: every key is checked with create's rules — junk status,
     // time, city, team or overs failed with a 500, and a past time, an empty or

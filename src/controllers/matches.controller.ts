@@ -47,7 +47,7 @@ import { stepTimer } from '../utils/stepTimer';
 import { leaseRefusal } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
-import { rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal } from '../utils/matchRules';
+import { rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isDismissal, type UnfinishedEnd } from '../utils/cricketRules';
 import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
@@ -130,6 +130,18 @@ export function rulesAsLegacy(
   const refusal = rulesRefusal(sport, rules);
   if (refusal) return { refusal };
   return legacyFromRules(sport, normalizeRules(sport, rules));
+}
+
+/**
+ * BUILD 3.2 · `rules` with what format / overs say laid over it — the fields
+ * the legacy encoding carries (style, overs, best-of, the chess clock) — and
+ * every other field kept.
+ */
+export function withLegacy(sport: string | null | undefined, rules: MatchRules, format: string | null, overs: number | null): MatchRules {
+  const lg = rulesFromLegacy(sport, format, overs) as unknown as Record<string, unknown>;
+  const out = { ...rules } as unknown as Record<string, unknown>;
+  for (const k of ['style', 'overs', 'bestOf', 'baseMinutes', 'incrementSeconds']) if (k in lg && k in out) out[k] = lg[k];
+  return out as unknown as MatchRules;
 }
 
 /** The match time: a real date, not in the past, within the next year. */
@@ -366,7 +378,11 @@ export async function createMatch(req: Request, res: Response) {
     const storedOvers = cricketOvers != null ? Number(cricketOvers) : null;
     const storedFormat = storedBestOf !== null ? formatForBestOf(storedBestOf) : format || null;
     // BUILD 2.2: whatever way the rules came, the one validator has the last word.
-    const storedRules = rulesFromLegacy(lengthSlug, storedFormat, storedOvers);
+    // BUILD 3.2: rules sent as data are kept whole (fields format / overs can't
+    // say — players a side — would be lost re-reading them from format).
+    const storedRules = bodyRules != null
+      ? withLegacy(lengthSlug, normalizeRules(lengthSlug, bodyRules), storedFormat, storedOvers)
+      : rulesFromLegacy(lengthSlug, storedFormat, storedOvers);
     const rulesBad = rulesRefusal(lengthSlug, storedRules);
     if (rulesBad) return res.status(400).json(rulesBad);
     // Phase 3 · SINGLES: a one-a-side sport played between two PEOPLE. Validated
@@ -1708,7 +1724,7 @@ const isDateOrNull = (v: unknown) => v === null || (typeof v === 'string' && !Nu
 export async function updateFieldRefusal(
   match: {
     team_a_id?: string | null; team_b_id?: string | null; team_a_name?: string | null; team_b_name?: string | null;
-    sport_id: string; is_open?: boolean | null; format?: string | null; overs?: number | null;
+    sport_id: string; is_open?: boolean | null; format?: string | null; overs?: number | null; rules?: unknown;
   },
   update: Record<string, any>,
   _userId: string,
@@ -1758,10 +1774,12 @@ export async function updateFieldRefusal(
   }
   // BUILD 2.1: rules sent as data are turned into the format / overs they
   // mean, and checked by the same rules below (the validator, 2.2, widens this).
+  let sentRules: MatchRules | null = null;
   if ('rules' in update) {
     const slug = normSportSlug((await getSport(String(match.sport_id)))?.slug);
     const legacy = rulesAsLegacy(slug, update.rules);
     if ('refusal' in legacy) return { status: 400, error: legacy.refusal.error, code: legacy.refusal.code };
+    sentRules = normalizeRules(slug, update.rules);
     delete update.rules;
     update.format = legacy.format;
     if (slug === 'cricket') update.overs = legacy.overs;
@@ -1787,7 +1805,9 @@ export async function updateFieldRefusal(
     if (fr) return fr;
     // BUILD 2.1: the rules stay in step with what was just changed — and
     // (2.2) pass the one validator.
-    update.rules = rulesFromLegacy(slug, format as string | null, overs as number | null);
+    // BUILD 3.2: sent rules as sent; otherwise the match's own rules with the
+    // new format / overs over them (its other fields — players — survive).
+    update.rules = sentRules ?? withLegacy(slug, rulesOf(slug, match), format as string | null, overs as number | null);
     const rulesBad = rulesRefusal(slug, update.rules);
     if (rulesBad) return { status: 400, error: rulesBad.error, code: rulesBad.code };
   }
@@ -1805,7 +1825,7 @@ export async function updateMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id, status, team_a_id, team_b_id, tournament_id, is_ranked, team_a_name, team_b_name, sport_id, is_open, format, overs')
+      .select('created_by, umpire_id, status, team_a_id, team_b_id, tournament_id, is_ranked, team_a_name, team_b_name, sport_id, is_open, format, overs, rules')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -2710,7 +2730,7 @@ export async function completeMatch(req: Request, res: Response) {
       if (a.balls + b.balls + a.runs + b.runs + a.wickets + b.wickets > 0) {
         const chaser = chasingSide(cs?.toss_winner_side ?? null, match.toss_choice ?? null, cs?.first_batting_side ?? null);
         const firstSide: 'A' | 'B' = chaser === 'A' ? 'B' : 'A';
-        const allOut = allOutBySide(partsRes.data ?? []);
+        const allOut = allOutBySide(partsRes.data ?? [], rulesOf('cricket', match).players); // BUILD 3.2
         const dlsTarget = cs?.dls_applied ? Number(cs?.dls_target ?? 0) || null : null;
         const stage = cricketStage({
           first: firstSide === 'A' ? a : b,
@@ -3028,8 +3048,8 @@ export async function completeMatch(req: Request, res: Response) {
         aWickets: Number(ss?.A?.wickets ?? 0),
         bWickets: Number(ss?.B?.wickets ?? 0),
         // A6: "won by N wickets" counts wickets in hand against the side's line-up.
-        aAllOut: allOutBySide(participants ?? []).A,
-        bAllOut: allOutBySide(participants ?? []).B,
+        aAllOut: allOutBySide(participants ?? [], rulesOf('cricket', match).players).A, // BUILD 3.2
+        bAllOut: allOutBySide(participants ?? [], rulesOf('cricket', match).players).B,
         tossWinnerSide: (ss?.toss_winner_side as 'A' | 'B' | undefined) ?? null,
         // SC-442: read directly, NOT through a cast. This line was
         // `(match as { toss_choice?: string | null }).toss_choice` and the

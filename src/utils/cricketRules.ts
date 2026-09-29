@@ -47,8 +47,21 @@ export function allOutWickets(players: number | null | undefined): number {
   return Math.min(n - 1, DEFAULT_ALL_OUT);
 }
 
-/** Per-side all-out from a line-up (rows carrying a team_side). */
-export function allOutBySide(lineup: Array<{ team_side?: string | null }> | null | undefined): { A: number; B: number } {
+/** BUILD 3.2: players a side a match can set (above 11: everyone in the squad bats). */
+export const PLAYERS_MIN = 2;
+export const PLAYERS_MAX = 15;
+
+/**
+ * Per-side all-out. BUILD 3.2: a match that sets its players a side is all out
+ * one wicket short of that number (15 a side → 14); otherwise the line-up
+ * decides, as before (rows carrying a team_side; at most 10).
+ */
+export function allOutBySide(
+  lineup: Array<{ team_side?: string | null }> | null | undefined,
+  playersPerSide?: number | null,
+): { A: number; B: number } {
+  const n = Number(playersPerSide);
+  if (playersPerSide != null && Number.isInteger(n) && n >= PLAYERS_MIN) return { A: n - 1, B: n - 1 };
   const count = (s: 'A' | 'B') => (lineup ?? []).filter((p) => p.team_side === s).length;
   return { A: allOutWickets(count('A')), B: allOutWickets(count('B')) };
 }

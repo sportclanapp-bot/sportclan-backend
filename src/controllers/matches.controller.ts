@@ -1707,6 +1707,9 @@ export async function updateFieldRefusal(
 }
 
 // PATCH /matches/:id — creator or umpire only
+/** BUILD 1.1: the keys that set how a match is decided; locked once it starts. */
+export const RULE_KEYS = ['format', 'overs'] as const;
+
 export async function updateMatch(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1783,6 +1786,16 @@ export async function updateMatch(req: Request, res: Response) {
         });
       }
       update.venue = v;
+    }
+    // BUILD 1.1 (checked before the field rules, so a locked match says so
+    // whatever the value): a match's rules are fixed once it has started. format / overs
+    // decide who has won (best-of, overs, time control), so changing them on a
+    // live or finished match re-decided it on the next recompute.
+    if (match.status !== 'scheduled' && RULE_KEYS.some((k) => k in update)) {
+      return res.status(409).json({
+        error: 'This match has started, so its format and overs can’t change.',
+        code: 'RULES_LOCKED',
+      });
     }
     // Phase 3 B05-F2: every key is checked with create's rules — junk status,
     // time, city, team or overs failed with a 500, and a past time, an empty or

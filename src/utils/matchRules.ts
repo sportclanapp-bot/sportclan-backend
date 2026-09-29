@@ -380,6 +380,8 @@ export const FOOTBALL_PLAYERS_MAX = 11;
 /** BUILD 3.26: a hockey side, 4 (small-sided turf) to 11. */
 export const HOCKEY_PLAYERS_MIN = 4;
 export const HOCKEY_PLAYERS_MAX = 11;
+/** BUILD 3.28: FIH Hockey5s — 5 a side, two halves of 10 minutes. */
+export const HOCKEY5S = { players: 5, periods: 2, periodMinutes: 10 } as const;
 const SIDE_LIMITS: Record<string, [number, number]> = {
   football: [FOOTBALL_PLAYERS_MIN, FOOTBALL_PLAYERS_MAX],
   hockey: [HOCKEY_PLAYERS_MIN, HOCKEY_PLAYERS_MAX],

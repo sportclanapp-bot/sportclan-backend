@@ -1915,7 +1915,9 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
     .eq('tournament_id', tournamentId)
     .is('next_match_id', null)
     .is('group_label', null)
-    .eq('status', 'completed')
+    // BUILD 1.4: a final decided by a withdrawal walkover is abandoned WITH a
+    // winner — it still crowns.
+    .in('status', ['completed', 'abandoned'])
     .is('voided_at', null)
     .not('winner_team_id', 'is', null)
     .order('round', { ascending: false })
@@ -2150,7 +2152,9 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
     // SC-424: a voided group fixture neither blocks seeding nor seeds a team.
     .is('voided_at', null);
   if (!groupMatches || groupMatches.length === 0) return;
-  if (groupMatches.some((g) => g.status !== 'completed')) return;
+  // BUILD 1.4: an abandoned group match is finished too (a no-result or a
+  // walkover). Waiting for it to complete held the knockout back forever.
+  if (groupMatches.some((g) => g.status !== 'completed' && g.status !== 'abandoned')) return;
 
   const { data: ko1 } = await supabase
     .from('matches')

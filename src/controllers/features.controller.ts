@@ -49,7 +49,9 @@ export async function getTournamentStandings(req: Request, res: Response) {
       .from('matches')
       .select('id, team_a_id, team_b_id, winner_team_id, score_summary, status, overs, group_label, round')
       .eq('tournament_id', id)
-      .eq('status', 'completed')
+      // BUILD 1.4: a walkover after a withdrawal is stored abandoned WITH a
+      // winner; it's a win. (A no-winner abandon is skipped by computeStats.)
+      .in('status', ['completed', 'abandoned'])
       .is('voided_at', null); // SC-424: a voided fixture is not a played fixture
     // FORMATS (28 Sep): a groups → knockout table is the GROUP table. It counted
     // every completed match, so once the knockout began a team's semi-final and
@@ -185,7 +187,8 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
       .from('matches')
       .select('id, team_a_id, team_b_id, winner_team_id')
       .eq('tournament_id', id)
-      .eq('status', 'completed')
+      // BUILD 1.4: a walkover (abandoned with a winner) is a win here too.
+      .in('status', ['completed', 'abandoned'])
       // SC-428: missed by the SC-424 sweep — a voided fixture was still counting
       // towards a team's tournament win tally.
       .is('voided_at', null);

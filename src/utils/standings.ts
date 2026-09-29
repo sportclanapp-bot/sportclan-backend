@@ -145,6 +145,12 @@ export function computeStats(teamIds: string[], matches: GMatch[], scope?: Set<s
     // Only decided/played matches count. A completed match with no winner = draw.
     const terminal = m.status === 'completed' || m.status === 'abandoned';
     if (!terminal && !m.winner_team_id) continue;
+    // BUILD 1.4: an abandoned match with no winner is a no-result — not a
+    // played match, no points (the per-sport points template, BUILD 4.1, can
+    // give points for one). It used to count as a 1-1 draw here while the
+    // server's table left it out, so the crowned champion and the table could
+    // disagree. An abandoned match WITH a winner is a walkover: a win.
+    if (m.status === 'abandoned' && !m.winner_team_id) continue;
     const ra = table.get(a)!;
     const rb = table.get(b)!;
     const { a: sa, b: sb } = scoresOf(m);

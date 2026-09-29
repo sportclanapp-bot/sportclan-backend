@@ -34,7 +34,7 @@ describe('V104 · manual Complete crowns the champion', () => {
   it('championOf uses the same rules as the automatic crowning', () => {
     const c = fnBody('championOf');
     expect(c).toMatch(/fmt === 'round_robin' \|\| fmt === 'league'[\s\S]*rankTeams\(/);
-    expect(c).toMatch(/\.is\('next_match_id', null\)\s*\.is\('group_label', null\)\s*\.eq\('status', 'completed'\)\s*\.is\('voided_at', null\)/);
+    expect(c).toMatch(/\.is\('next_match_id', null\)\s*\.is\('group_label', null\)\s*(\/\/[^\n]*\n\s*)*\.in\('status', \['completed', 'abandoned'\]\)\s*\.is\('voided_at', null\)/);
   });
 });
 

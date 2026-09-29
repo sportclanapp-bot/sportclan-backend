@@ -106,7 +106,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true },
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
-  basketball: { periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', drawAllowed: false },
+  basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', drawAllowed: false },
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true },
 };
 
@@ -403,6 +403,9 @@ export const FOOTBALL_PLAYERS_MAX = 11;
 /** BUILD 3.26: a hockey side, 4 (small-sided turf) to 11. */
 export const HOCKEY_PLAYERS_MIN = 4;
 export const HOCKEY_PLAYERS_MAX = 11;
+/** BUILD 3.34: a basketball side, 1 (one-on-one) to 5. */
+export const BASKETBALL_PLAYERS_MIN = 1;
+export const BASKETBALL_PLAYERS_MAX = 5;
 /** BUILD 3.29: a hockey green card's suspension (FIH: 2 minutes). */
 export const HOCKEY_GREEN_MINUTES = 2;
 
@@ -423,6 +426,7 @@ export const HOCKEY5S = { players: 5, periods: 2, periodMinutes: 10 } as const;
 const SIDE_LIMITS: Record<string, [number, number]> = {
   football: [FOOTBALL_PLAYERS_MIN, FOOTBALL_PLAYERS_MAX],
   hockey: [HOCKEY_PLAYERS_MIN, HOCKEY_PLAYERS_MAX],
+  basketball: [BASKETBALL_PLAYERS_MIN, BASKETBALL_PLAYERS_MAX], // BUILD 3.34
 };
 
 /**

@@ -75,7 +75,7 @@ describe('fixtures carry cricket overs', () => {
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) expect([row.format, row.overs]).toEqual(['T20', 20]);
     // BUILD 2.1: and their rules as data.
-    for (const row of rows) expect(row.rules).toEqual({ v: 1, style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, drawAllowed: true });
+    for (const row of rows) expect(row.rules).toEqual({ v: 1, style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, drawAllowed: true });
   });
   test('a football fixture gets no overs', async () => {
     mockSportSlug = 'football';

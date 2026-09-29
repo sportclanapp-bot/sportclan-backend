@@ -35,6 +35,8 @@ export interface MatchRules {
   lastManStands?: boolean;
   /** BUILD 3.4: a batter retires (not out, may return) on reaching this many runs; null = off. */
   retireAt?: number | null;
+  /** BUILD 3.5: the most overs one bowler may bowl in an innings; null = no limit. */
+  bowlerOvers?: number | null;
   /** Best-of sports: games / sets / boards the match is best of. */
   bestOf?: number;
   /** Rally and carrom: points to win a game, the hard cap (null = none), the
@@ -59,7 +61,7 @@ export interface MatchRules {
  * cricket default, periods.ts, the chess default clock).
  */
 export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
-  cricket: { style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, drawAllowed: true },
+  cricket: { style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, drawAllowed: true },
   badminton: { bestOf: 3, target: 21, cap: 30, finalTarget: null, winBy2: true },
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true },
   pickleball: { bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true },
@@ -212,7 +214,7 @@ type Refusal = { error: string; code: 'BAD_RULES'; field: string | null };
 const refuse = (error: string, field: string | null = null): Refusal => ({ error, code: 'BAD_RULES', field });
 
 const FIELD_NAMES: Record<string, string> = {
-  style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
+  style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
   finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
@@ -252,6 +254,14 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (r.retireAt !== null && (!isWhole(r.retireAt) || r.retireAt < RETIRE_MIN || r.retireAt > RETIRE_MAX)) {
       return refuse(`Retire at must be off, or a whole number of runs from ${RETIRE_MIN} to ${RETIRE_MAX}.`, 'retireAt');
     }
+    // BUILD 3.5: off, or 1 to the innings' overs.
+    if (r.bowlerOvers !== null && (!isWhole(r.bowlerOvers) || r.bowlerOvers < 1 || r.bowlerOvers > (r.overs as number))) {
+      return refuse(`Max overs per bowler must be off, or a whole number from 1 to ${String(r.overs)}.`, 'bowlerOvers');
+    }
+    // …and enough of them to bowl the innings, or the pad has nobody to pick.
+    if (r.bowlerOvers !== null && r.players !== null && (r.players as number) * (r.bowlerOvers as number) < (r.overs as number)) {
+      return refuse(`${String(r.players)} players bowling ${String(r.bowlerOvers)} over${r.bowlerOvers === 1 ? '' : 's'} each can’t bowl ${String(r.overs)} overs. Raise the max overs per bowler.`, 'bowlerOvers');
+    }
   }
   if (MATCH_LENGTHS[key]) {
     const offered = MATCH_LENGTHS[key]!.options;
@@ -263,7 +273,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     }
   }
   // Everything else is fixed at the sport's standard for now.
-  const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bestOf', 'baseMinutes', 'incrementSeconds']);
+  const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'bestOf', 'baseMinutes', 'incrementSeconds']);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);

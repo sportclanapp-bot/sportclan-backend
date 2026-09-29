@@ -190,3 +190,13 @@ export function isDismissal(wicketType: unknown): boolean {
 /** BUILD 3.4: a retire-at-N match's range (off = null). */
 export const RETIRE_MIN = 10;
 export const RETIRE_MAX = 100;
+
+/** BUILD 3.5: the limit the form suggests for max overs per bowler — ⌈overs / 5⌉. */
+export function suggestedBowlerOvers(overs: number): number {
+  return Math.max(1, Math.ceil(overs / 5));
+}
+
+/** BUILD 3.5: a bowler who has bowled their quota (legal balls) can't bowl again this innings. */
+export function bowlerQuotaDone(bowlBalls: number | null | undefined, bowlerOvers: number | null | undefined): boolean {
+  return !!bowlerOvers && (bowlBalls ?? 0) >= bowlerOvers * 6;
+}

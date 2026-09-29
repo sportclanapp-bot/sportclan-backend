@@ -17,7 +17,7 @@ import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
-import { allOutBySide, isDismissal } from '../utils/cricketRules';
+import { allOutBySide, bowlerQuotaDone, isDismissal } from '../utils/cricketRules';
 import { rulesOf, setConfigOf, standardRules, winsToWin } from '../utils/matchRules';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
@@ -65,7 +65,7 @@ async function fanoutScoreUpdate(
 export async function authorizeScorer(matchId: string, userId: string, deviceId?: string | null) {
   const { data: match } = await supabase
     .from('matches')
-    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_b_name')
+    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_b_name, format, overs, rules')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return { ok: false as const, status: 404, error: 'Match not found' };
@@ -164,7 +164,7 @@ export async function recordEventIdempotent(args: {
  */
 export async function validateScoringEvent(
   matchId: string,
-  match: { id: string; status?: string | null; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_b_name?: string | null; tournament_id?: string | null },
+  match: { id: string; status?: string | null; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_b_name?: string | null; tournament_id?: string | null; score_summary?: unknown; format?: string | null; overs?: number | null; rules?: unknown },
   ev: { event_type: unknown; period?: unknown; clock_seconds?: unknown; payload?: any },
 ): Promise<{ status: number; body: { error: string; code?: string } } | null> {
   const refuse = (status: number, body: { error: string; code?: string }) => ({ status, body });
@@ -309,6 +309,22 @@ export async function validateScoringEvent(
         error: 'The batter and the bowler cannot be the same player.',
         code: 'SAME_PLAYER_BOTH_ROLES',
       });
+    }
+
+    // BUILD 3.5: a bowler who has bowled the match's max overs can't bowl
+    // again. A delivery of theirs — a ball, a wide, a no-ball, a bye — is
+    // refused; a wicket off no ball (a run-out on a wide, a retirement) is not
+    // their delivery and goes through. The summary's rollup counts their balls.
+    const isDelivery = event_type === 'ball' || event_type === 'extra' || (event_type === 'wicket' && payload.is_extra !== true);
+    if (bowlId && isDelivery) {
+      const limit = rulesOf('cricket', match).bowlerOvers;
+      const bowled = (match.score_summary as { players?: Record<string, { bowl_balls?: number }> } | null)?.players?.[bowlId]?.bowl_balls;
+      if (bowlerQuotaDone(bowled, limit)) {
+        return refuse(409, {
+          error: `This bowler has bowled their ${limit} over${limit === 1 ? '' : 's'} — the most one bowler may bowl in this match.`,
+          code: 'BOWLER_QUOTA_DONE',
+        });
+      }
     }
   }
 

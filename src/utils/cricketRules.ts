@@ -61,9 +61,19 @@ export function cricketFormatOf(format: string | null | undefined): CricketForma
   return 'limited';
 }
 
-/** Is `overs` one the format offers? Anything else is refused at creation. */
-export function isOfferedOvers(format: CricketFormat, overs: number | null | undefined): boolean {
-  return overs == null || CRICKET_OVERS[format].options.includes(Number(overs));
+/** BUILD 3.1: overs are any whole number in this range; the options above are shortcuts. */
+export const OVERS_MIN = 1;
+export const OVERS_MAX = 50;
+
+/**
+ * Can a match be played to `overs`? BUILD 3.1: any whole number 1–50 in every
+ * format (it was the format's chips only, so a 12-over league game couldn't be
+ * set up). The name is kept: it's what create and edit ask.
+ */
+export function isOfferedOvers(_format: CricketFormat, overs: number | null | undefined): boolean {
+  if (overs == null) return true;
+  const n = Number(overs);
+  return Number.isInteger(n) && n >= OVERS_MIN && n <= OVERS_MAX;
 }
 
 /**

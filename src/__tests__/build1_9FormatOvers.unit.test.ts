@@ -4,7 +4,7 @@
  * It was accepted and stored as `T7` with no overs, and an innings with no
  * overs lasts 20 — the match said seven and played twenty. The overs are now
  * filled from the format and checked like any other overs: `T20` stores 20,
- * `T7` (not offered) is refused. On create and on edit. Supabase is mocked
+ * `T7` (not offered then) was refused — BUILD 3.1 made any 1–50 valid. On create and on edit. Supabase is mocked
  * like phase4K2Matches.
  */
 type Q = string[];
@@ -115,9 +115,13 @@ describe('BUILD 1.9 · create', () => {
     expect(r.statusCode).toBeLessThan(300);
     expect(inserted()).toMatchObject({ format: 'T20', overs: 20 });
   });
-  it('T7 with no overs → 400 BAD_OVERS, nothing inserted', async () => {
+  it('T7 with no overs → 7 overs (BUILD 3.1: any 1–50); T51 → 400 BAD_OVERS', async () => {
     mockNext = onCreate;
-    const r = await call(createMatch, { body: body({ format: 'T7' }) });
+    const ok = await call(createMatch, { body: body({ format: 'T7' }) });
+    expect(ok.statusCode).toBeLessThan(300);
+    expect(inserted()).toMatchObject({ format: 'T7', overs: 7 });
+    mockLog = [];
+    const r = await call(createMatch, { body: body({ format: 'T51' }) });
     expect([r.statusCode, r.body.code]).toEqual([400, 'BAD_OVERS']);
     expect(inserted()).toBeNull();
   });
@@ -141,9 +145,9 @@ describe('BUILD 1.9 · edit', () => {
     expect(r.statusCode).toBe(200);
     expect(writes()[0]!.join()).toContain('"overs":10');
   });
-  it('T7 on a match with no overs → 400 BAD_OVERS, nothing written', async () => {
+  it('T51 on a match with no overs → 400 BAD_OVERS, nothing written (BUILD 3.1: T7 is fine now)', async () => {
     mockNext = onMatch(matchRow({ format: null, overs: null }));
-    const r = await call(updateMatch, { body: { format: 'T7' } });
+    const r = await call(updateMatch, { body: { format: 'T51' } });
     expect([r.statusCode, r.body.code]).toEqual([400, 'BAD_OVERS']);
     expect(writes()).toHaveLength(0);
   });

@@ -361,7 +361,7 @@ export async function createMatch(req: Request, res: Response) {
       ? (overs ?? oversFromFormat(format) ?? (styleNow !== 'limited' ? CRICKET_OVERS[styleNow].standard : null))
       : null;
     if (isCricketMatch && cricketOvers != null && !isOfferedOvers(cricketFormatOf(format), Number(cricketOvers))) {
-      return res.status(400).json({ error: 'Those overs aren’t offered for this format.', code: 'BAD_OVERS' });
+      return res.status(400).json({ error: 'Overs must be a whole number from 1 to 50.', code: 'BAD_OVERS' });
     }
     const storedOvers = cricketOvers != null ? Number(cricketOvers) : null;
     const storedFormat = storedBestOf !== null ? formatForBestOf(storedBestOf) : format || null;
@@ -1778,7 +1778,7 @@ export async function updateFieldRefusal(
     if (slug !== 'cricket') {
       if ('overs' in update && update.overs != null) return bad('Only cricket has overs.', 'BAD_OVERS');
     } else if (overs != null && !isOfferedOvers(cricketFormatOf(format), Number(overs))) {
-      return bad('Those overs aren’t offered for this format.', 'BAD_OVERS');
+      return bad('Overs must be a whole number from 1 to 50.', 'BAD_OVERS');
     }
     if ('format' in update && !isAcceptableMatchLength(slug, update.format)) {
       return bad('That match length isn’t offered for this sport.', 'BAD_MATCH_LENGTH');

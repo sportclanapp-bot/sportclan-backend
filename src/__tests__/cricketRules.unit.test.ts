@@ -42,7 +42,11 @@ describe('cricketRules', () => {
     expect(cricketFormatOf('pair')).toBe('pair');
     expect(cricketFormatOf(null)).toBe('limited');
     expect(isOfferedOvers('box', 6)).toBe(true);
-    expect(isOfferedOvers('box', 20)).toBe(false);
+    expect(isOfferedOvers('box', 20)).toBe(true); // BUILD 3.1: any whole number 1–50
+    expect(isOfferedOvers('limited', 12)).toBe(true);
+    expect(isOfferedOvers('limited', 0)).toBe(false);
+    expect(isOfferedOvers('limited', 51)).toBe(false);
+    expect(isOfferedOvers('limited', 7.5)).toBe(false);
     expect(isOfferedOvers('limited', 50)).toBe(true);
     expect(isOfferedOvers('limited', null)).toBe(true);
   });

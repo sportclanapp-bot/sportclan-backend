@@ -80,7 +80,7 @@ describe('BUILD 2.4 · stageRules', () => {
     expect(stageRules('cricket', null, 'knockout')).toEqual({ v: 1, style: 'limited', overs: 20, drawAllowed: true });
   });
   test('each stage is checked by the rules validator', () => {
-    expect(tournamentRulesRefusal('cricket', { group: { overs: 12 } })).toMatchObject({ code: 'BAD_RULES', error: 'Group / league matches: Overs must be 5, 10, 20 or 50 for limited overs.' });
+    expect(tournamentRulesRefusal('cricket', { group: { overs: 0 } })).toMatchObject({ code: 'BAD_RULES', error: 'Group / league matches: Overs must be a whole number from 1 to 50.' });
     expect(tournamentRulesRefusal('cricket', { semi: {} })?.field).toBe('semi');
     expect(tournamentRulesRefusal('cricket', STAGES)).toBeNull();
   });
@@ -131,7 +131,7 @@ describe('BUILD 2.4 · set on create and edit, fixed once drawn', () => {
     const q = mockLog.find((x) => x[0] === 'from:tournaments' && has(x, 'insert:'))!;
     expect(JSON.parse(q.find((c) => c.startsWith('insert:'))!.slice(7)).match_rules).toEqual({ knockout: { v: 1, style: 'limited', overs: 50, drawAllowed: true } });
     mockLog = [];
-    const bad = await run(createTournament, { body: { ...tBody, match_rules: { final: { overs: 7 } } } });
+    const bad = await run(createTournament, { body: { ...tBody, match_rules: { final: { overs: 60 } } } });
     expect([bad.statusCode, bad.body.code]).toEqual([400, 'BAD_RULES']);
     expect(mockLog.some((x) => has(x, 'insert:'))).toBe(false);
   });

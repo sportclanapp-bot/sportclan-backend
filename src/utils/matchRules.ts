@@ -17,7 +17,7 @@
  * are read back from `format` / `overs` by rulesFromLegacy.
  */
 import { MATCH_LENGTHS, bestOfFor, lengthKey } from './matchLength';
-import { CRICKET_OVERS } from './cricketRules';
+import { OVERS_MIN, OVERS_MAX, isOfferedOvers } from './cricketRules';
 
 export const RULES_VERSION = 1;
 
@@ -234,9 +234,9 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
 
   if (key === 'cricket') {
     if (r.style !== 'limited' && r.style !== 'box' && r.style !== 'pair') return refuse('Match type must be limited overs, box or pair.', 'style');
-    const offered = CRICKET_OVERS[r.style as CricketStyle].options;
-    if (!isWhole(r.overs) || !offered.includes(r.overs)) {
-      return refuse(`Overs must be ${listOf(offered)} for ${r.style === 'limited' ? 'limited overs' : `${r.style} cricket`}.`, 'overs');
+    // BUILD 3.1: any whole number of overs 1–50 (it was the format's chips).
+    if (!isWhole(r.overs) || !isOfferedOvers(r.style as CricketStyle, r.overs)) {
+      return refuse(`Overs must be a whole number from ${OVERS_MIN} to ${OVERS_MAX}.`, 'overs');
     }
   }
   if (MATCH_LENGTHS[key]) {

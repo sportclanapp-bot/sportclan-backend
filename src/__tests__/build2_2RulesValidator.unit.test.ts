@@ -130,9 +130,9 @@ describe('BUILD 2.2 · create', () => {
 describe('BUILD 2.2 · edit', () => {
   it('rules outside the limits → 400 BAD_RULES, nothing written', async () => {
     mockNext = onMatch(matchRow());
-    const r = await call(updateMatch, { body: { rules: { v: 1, style: 'box', overs: 20 } } });
+    const r = await call(updateMatch, { body: { rules: { v: 1, style: 'box', overs: 51 } } });
     expect([r.statusCode, r.body.code]).toEqual([400, 'BAD_RULES']);
-    expect(r.body.error).toBe('Overs must be 4, 6, 8 or 10 for box cricket.');
+    expect(r.body.error).toBe('Overs must be a whole number from 1 to 50.');
     expect(writes()).toHaveLength(0);
   });
   it('a field the sport doesn’t have → 400', async () => {

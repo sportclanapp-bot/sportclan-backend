@@ -29,7 +29,7 @@ export interface MatchRules {
   /** Cricket: limited overs / box / pair, and overs per innings. */
   style?: CricketStyle;
   overs?: number;
-  /** BUILD 3.2: players a side (null = the line-up decides); all out one short of it. */
+  /** Players a side. Cricket (3.2): null = the line-up decides; all out one short of it. Football (3.16): 3–11, shown as "7-a-side". */
   players?: number | null;
   /** BUILD 3.3: last man stands — the last batter bats on alone. */
   lastManStands?: boolean;
@@ -81,7 +81,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   volleyball: { bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true },
   tennis: { bestOf: 3 },
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
-  football: { periods: 2, periodMinutes: null, drawAllowed: true },
+  football: { players: null, periods: 2, periodMinutes: null, drawAllowed: true },
   hockey: { periods: 4, periodMinutes: null, drawAllowed: true },
   basketball: { periods: 4, periodMinutes: null, drawAllowed: false },
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true },
@@ -290,6 +290,10 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (typeof r.oneTipOneHand !== 'boolean') return refuse('One tip, one hand is on or off.', 'oneTipOneHand');
     if (typeof r.sixAndOut !== 'boolean') return refuse('Six and out is on or off.', 'sixAndOut');
   }
+  // BUILD 3.16: football's players a side, 3–11 (null = not set).
+  if (key === 'football' && r.players !== null && (!isWhole(r.players) || r.players < FOOTBALL_PLAYERS_MIN || r.players > FOOTBALL_PLAYERS_MAX)) {
+    return refuse(`Players a side must be a whole number from ${FOOTBALL_PLAYERS_MIN} to ${FOOTBALL_PLAYERS_MAX}.`, 'players');
+  }
   if (MATCH_LENGTHS[key]) {
     const offered = MATCH_LENGTHS[key]!.options;
     if (!isWhole(r.bestOf) || !(offered as number[]).includes(r.bestOf)) return refuse(`Match length must be best of ${listOf(offered)}.`, 'bestOf');
@@ -306,6 +310,22 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
   }
   return null;
+}
+
+/** BUILD 3.16: a football side, 3 (futsal-ish) to 11. */
+export const FOOTBALL_PLAYERS_MIN = 3;
+export const FOOTBALL_PLAYERS_MAX = 11;
+
+/**
+ * BUILD 3.16+ · the rules of a timed team sport in words, for the pad and
+ * Match Detail headers ("7-a-side"). Parts the match doesn't set are left out.
+ */
+export function timedRulesLabel(sport: string | null | undefined, rules: MatchRules): string | null {
+  const key = lengthKey(sport);
+  if (key !== 'football' && key !== 'hockey' && key !== 'basketball') return null;
+  const parts: string[] = [];
+  if (rules.players) parts.push(`${rules.players}-a-side`);
+  return parts.length ? parts.join(' · ') : null;
 }
 
 // ── BUILD 2.4 · a tournament's rules per stage ──────────────────────────────

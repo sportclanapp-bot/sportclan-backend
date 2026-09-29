@@ -90,5 +90,44 @@ export function tournamentDetailsRefusal(
     }
   }
   if (present(body.city_id) && !isUuid(body.city_id)) return { error: 'city_id must be a valid city.', code: 'INVALID_CITY' };
+  const dw = dayWindowsRefusal(body.day_windows, start, end);
+  if (dw) return dw;
+  return null;
+}
+
+export const DAY_WINDOWS_MAX = 60;
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+const minutesOf = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+const isRealYmd = (d: string) => {
+  const t = Date.parse(`${d}T00:00:00Z`);
+  return Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === d;
+};
+
+/**
+ * BUILD 1.14 · per-day playing windows. They were stored without a check —
+ * only rows missing a field were dropped, silently — so "25:00", an end before
+ * the start (a day with no slots), a date outside the tournament or the same
+ * day twice all went in. Each is refused now, before anything is saved.
+ */
+export function dayWindowsRefusal(windows: unknown, start?: unknown, end?: unknown): Refusal | null {
+  if (windows === undefined || windows === null) return null;
+  const bad = (error: string): Refusal => ({ error, code: 'INVALID_DAY_WINDOWS' });
+  if (!Array.isArray(windows)) return bad('day_windows must be a list of days.');
+  if (windows.length > DAY_WINDOWS_MAX) return bad(`Set at most ${DAY_WINDOWS_MAX} days' hours.`);
+  const from = present(start) && isDateLike(start) ? String(start).slice(0, 10) : null;
+  const to = present(end) && isDateLike(end) ? String(end).slice(0, 10) : null;
+  const seen = new Set<string>();
+  for (const w of windows as unknown[]) {
+    const r = (w && typeof w === 'object' ? w : {}) as Record<string, unknown>;
+    const d = r.day_date;
+    if (typeof d !== 'string' || !YMD_RE.test(d) || !isRealYmd(d)) return bad('Each day needs a date like 2026-10-05.');
+    if (seen.has(d)) return bad(`${d} is listed twice.`);
+    seen.add(d);
+    for (const k of ['start_time', 'end_time'] as const) {
+      if (!(typeof r[k] === 'string' && TIME_RE.test(r[k] as string))) return bad(`On ${d}, the ${k === 'start_time' ? 'start' : 'end'} must be a time like 09:00.`);
+    }
+    if (minutesOf(r.end_time as string) <= minutesOf(r.start_time as string)) return bad(`On ${d}, play has to end after it starts.`);
+    if ((from && d < from) || (to && d > to)) return bad(`${d} is outside the tournament's dates.`);
+  }
   return null;
 }

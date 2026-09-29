@@ -194,6 +194,7 @@ describe('K1-22 / K1-29c (04ac4a4, 1b1d38b) · is_admin reaches the app on sign-
       ? { data: { id: 'u1', phone: PHONE, password_hash: 'hash', is_admin: true, deleted_at: null } }
       : { data: null });
     const r = await call(auth.login, { phone: '9876543210', password: 'longenough1' });
+    if (r.statusCode !== 200) console.log('DIAG', JSON.stringify(r.body), JSON.stringify(mockLog.filter((q) => q[0] === 'from:users')));
     expect(r.statusCode).toBe(200);
     expect(selects('users').some((s) => s.includes('password_hash') && s.includes('is_admin'))).toBe(true);
     expect(r.body.user.is_admin).toBe(true);

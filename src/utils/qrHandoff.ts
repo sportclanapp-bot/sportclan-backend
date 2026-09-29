@@ -80,6 +80,8 @@ export interface HandoffPayload {
   /** issued-at, epoch ms */
   t: number;
   o: HandoffOp[];
+  /** BUILD 2.5: the rules the scorer's phone played by (absent from older apps). */
+  ru?: Record<string, unknown>;
 }
 
 export interface HandoffEnvelope { p: HandoffPayload; sig: string }
@@ -181,6 +183,7 @@ export function looksWellFormed(env: unknown): env is HandoffEnvelope {
   for (const f of ['m', 'd', 'u', 'n'] as const) if (typeof p[f] !== 'string' || !p[f]) return false;
   if (typeof p.t !== 'number' || !Number.isFinite(p.t)) return false;
   if (!Array.isArray(p.o) || p.o.length === 0 || p.o.length > 500) return false;
+  if (p.ru !== undefined && (p.ru === null || typeof p.ru !== 'object' || Array.isArray(p.ru))) return false;
   return p.o.every(
     (o) => o && typeof o.k === 'string' && UUID_RE.test(o.k) && typeof o.s === 'number'
       && (isEventOp(o) || isResultOp(o)),

@@ -14,6 +14,8 @@ import { completeMatch } from './matches.controller';
 import { authorizeScorer, recordEventIdempotent, recomputeSummary, validateScoringEvent, promoteToLive } from './scoring.controller';
 import { isTerminalMatchStatus } from '../utils/validation';
 import { isSportInactive } from '../utils/sports';
+import { getSport, normSportSlug } from '../utils/sportCache';
+import { normalizeRules, rulesOf } from '../utils/matchRules';
 
 /**
  * POST /devices/signing-key — register (or rotate) this phone's public key.
@@ -90,7 +92,7 @@ export async function uploadHandoff(req: Request, res: Response) {
       ? { data: null }
       : await supabase
         .from('matches')
-        .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at')
+        .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at, format, overs, rules')
         .eq('id', id!).maybeSingle();
     const auth = match ? await authorizeScorer(id!, p.u, p.d) : null;
     const refusal = handoffRefusal({
@@ -114,6 +116,23 @@ export async function uploadHandoff(req: Request, res: Response) {
         });
       }
       return res.status(refusal.status).json({ error: refusal.error, code: refusal.code });
+    }
+
+    // BUILD 2.5: the code says which rules the scorer's phone played by. The
+    // rules are fixed once play starts, so a different set means a phone scoring
+    // the wrong match (or a stale copy of it) — its events would be judged by
+    // rules its scorer never saw. Refused whole, like a bad event; an older app
+    // that sends no rules is taken as before.
+    if (p.ru) {
+      const slug = normSportSlug((await getSport((match as { sport_id: string }).sport_id))?.slug);
+      const theirs = normalizeRules(slug, p.ru);
+      const ours = rulesOf(slug, match as { format?: string | null; overs?: number | null; rules?: unknown });
+      if (JSON.stringify(theirs) !== JSON.stringify(ours)) {
+        return res.status(409).json({
+          error: 'This code was scored to different match rules than this match has. Nothing was applied.',
+          code: 'RULES_MISMATCH',
+        });
+      }
     }
 
     // Replay ledger: the ops themselves are idempotent, so a replay is already a

@@ -16,5 +16,5 @@ test('shown as "7-a-side"; nothing when not set; not for other sports', () => {
   expect(timedRulesLabel('football', { ...standardRules('football'), players: 7 })).toBe('7-a-side');
   expect(timedRulesLabel('football', standardRules('football'))).toBeNull();
   expect(timedRulesLabel('cricket', { ...standardRules('cricket'), players: 7 })).toBeNull();
-  expect(rulesRefusal('hockey', { ...standardRules('hockey'), players: 7 })?.field).toBe('players'); // not hockey's (yet: 3.26)
+  expect(rulesRefusal('hockey', { ...standardRules('hockey'), players: 7 })).toBeNull(); // hockey's too since 3.26
 });

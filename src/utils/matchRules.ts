@@ -95,7 +95,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   tennis: { bestOf: 3 },
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true },
-  hockey: { periods: 4, periodMinutes: null, drawAllowed: true },
+  hockey: { players: null, periods: 4, periodMinutes: null, drawAllowed: true },
   basketball: { periods: 4, periodMinutes: null, drawAllowed: false },
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true },
 };
@@ -303,9 +303,10 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (typeof r.oneTipOneHand !== 'boolean') return refuse('One tip, one hand is on or off.', 'oneTipOneHand');
     if (typeof r.sixAndOut !== 'boolean') return refuse('Six and out is on or off.', 'sixAndOut');
   }
-  // BUILD 3.16: football's players a side, 3–11 (null = not set).
-  if (key === 'football' && r.players !== null && (!isWhole(r.players) || r.players < FOOTBALL_PLAYERS_MIN || r.players > FOOTBALL_PLAYERS_MAX)) {
-    return refuse(`Players a side must be a whole number from ${FOOTBALL_PLAYERS_MIN} to ${FOOTBALL_PLAYERS_MAX}.`, 'players');
+  // BUILD 3.16 / 3.26: players a side — football 3–11, hockey 4–11 (null = not set).
+  const side = SIDE_LIMITS[key];
+  if (side && r.players !== null && (!isWhole(r.players) || r.players < side[0] || r.players > side[1])) {
+    return refuse(`Players a side must be a whole number from ${side[0]} to ${side[1]}.`, 'players');
   }
   // BUILD 3.17: a timed sport's periods, their length and (football) half-time.
   const timed = TIMED_LIMITS[key];
@@ -370,6 +371,13 @@ export const EXTRA_TIME_MAX = 15;
 /** BUILD 3.16: a football side, 3 (futsal-ish) to 11. */
 export const FOOTBALL_PLAYERS_MIN = 3;
 export const FOOTBALL_PLAYERS_MAX = 11;
+/** BUILD 3.26: a hockey side, 4 (small-sided turf) to 11. */
+export const HOCKEY_PLAYERS_MIN = 4;
+export const HOCKEY_PLAYERS_MAX = 11;
+const SIDE_LIMITS: Record<string, [number, number]> = {
+  football: [FOOTBALL_PLAYERS_MIN, FOOTBALL_PLAYERS_MAX],
+  hockey: [HOCKEY_PLAYERS_MIN, HOCKEY_PLAYERS_MAX],
+};
 
 /**
  * BUILD 3.16+ · the rules of a timed team sport in words, for the pad and

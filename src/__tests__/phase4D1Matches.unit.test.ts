@@ -129,14 +129,34 @@ describe('open-match join (4d27cff)', () => {
   test('SC-263 (4d27cff): suggestions leave out your own, full and already-joined matches', async () => {
     mockNext = (q) => {
       if (q[0] === 'from:match_participants') return { data: [{ match_id: 'joined-1' }] };
-      if (q[0] === 'from:matches') return { data: [] };
+      if (q[0] === 'from:matches') return { data: [{ id: 'joined-1' }, { id: 'other' }] };
       return { data: null };
     };
-    await call(listOpenMatches, {});
+    const r = await call(listOpenMatches, {});
     const list = mockLog.find((q) => q[0] === 'from:matches' && has(q, 'is_open'))!;
     expect(list).toContain(`neq:["created_by","${ME}"]`);
     expect(list).toContain('gt:["players_needed",0]');
-    expect(list).toContain('not:["id","in","(joined-1)"]');
+    // BUILD 1.6: the joined match is left out in code — never listed in the URL.
+    expect(list.some((c) => c.startsWith('not:'))).toBe(false);
+    expect(r.body.matches.map((m: { id: string }) => m.id)).toEqual(['other']);
+  });
+
+  test('BUILD 1.6: a player who joined hundreds of matches still gets suggestions (no id list in the URL)', async () => {
+    const many = Array.from({ length: 800 }, (_, i) => ({ match_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}` }));
+    mockNext = (q) => {
+      if (q[0] === 'from:match_participants') return { data: many };
+      if (q[0] === 'from:matches') return { data: [{ id: 'fresh' }] };
+      return { data: null };
+    };
+    const r = await call(listOpenMatches, {});
+    expect(r.statusCode).toBe(200);
+    expect(r.body.matches.map((m: { id: string }) => m.id)).toEqual(['fresh']);
+    // Only joined matches that could still be suggested are read.
+    const joined = mockLog.find((q) => q[0] === 'from:match_participants')!;
+    expect(joined).toEqual(expect.arrayContaining(['eq:["match.status","scheduled"]', 'eq:["match.is_open",true]']));
+    const list = mockLog.find((q) => q[0] === 'from:matches' && has(q, 'is_open'))!;
+    expect(list.join(' ').length).toBeLessThan(2000);
+    expect(list).toContain('limit:[900]');
   });
 });
 

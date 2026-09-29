@@ -582,9 +582,20 @@ export async function listOpenMatches(req: Request, res: Response) {
       supabase.from('user_sport_profiles').select('sport_id, rating').eq('user_id', userId),
     ]);
     contextP.catch(() => undefined);
+    // BUILD 1.6 (found on the device): every match you ever joined went into
+    // the URL as `not id in (…)`, so a regular player's list grew past what the
+    // database accepts and the whole request failed (500). Only a joined match
+    // that could still be suggested matters — scheduled, open, not past — and it
+    // is left out here in code, never in the URL.
+    const cutoffIso = discoveryCutoffIso();
     const { data: joinedRows } = await supabase
-      .from('match_participants').select('match_id').eq('user_id', userId);
-    const joinedIds = Array.from(new Set((joinedRows ?? []).map((r) => r.match_id as string)));
+      .from('match_participants')
+      .select('match_id, match:matches!inner(id)')
+      .eq('user_id', userId)
+      .eq('match.status', 'scheduled')
+      .eq('match.is_open', true)
+      .gte('match.scheduled_at', cutoffIso);
+    const joinedIds = new Set((joinedRows ?? []).map((r) => r.match_id as string));
     let query = supabase
       .from('matches')
       .select('*')
@@ -593,12 +604,12 @@ export async function listOpenMatches(req: Request, res: Response) {
       // SC-441 (M3): never suggest a match whose start time has already passed.
       // There was NO date predicate here at all, so a fixture from two months ago
       // was still being recommended to brand-new users as something to join.
-      .gte('scheduled_at', discoveryCutoffIso())
+      .gte('scheduled_at', cutoffIso)
       .neq('created_by', userId) // not your own
       .gt('players_needed', 0) // not full (also drops null)
       .order('scheduled_at', { ascending: true })
-      .limit(100);
-    if (joinedIds.length > 0) query = query.not('id', 'in', `(${joinedIds.join(',')})`);
+      // Room for the joined ones dropped below, so 100 are still offered.
+      .limit(100 + joinedIds.size);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
     // SC-335: don't suggest an open match in an out-of-scope sport.
@@ -607,7 +618,7 @@ export async function listOpenMatches(req: Request, res: Response) {
     if (await hideTestFor(userId)) query = excludeTest(query); // B03 (V245, D3)
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: sanitizeError(error) });
-    const matches = data ?? [];
+    const matches = (data ?? []).filter((m) => !joinedIds.has(m.id as string)).slice(0, 100);
 
     // SC-273: relevance ranking. A deterministic, EXPLAINABLE weighted sort —
     // not AI/ML. We reorder the open matches by how relevant each is to THIS

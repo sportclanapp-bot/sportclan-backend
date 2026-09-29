@@ -15,6 +15,7 @@
  * tournament stays live for ever (2 teams in 2 groups, say). So: every group
  * needs at least 2 teams, and (BUILD 1.12) none has more than the group size.
  * More qualifiers than a group holds is fine — the empty places are byes.
+ * (BUILD 1.13) A group the organiser put a team in is kept.
  */
 
 export type GroupsConfig = {
@@ -42,21 +43,82 @@ export function minTeamsForDraw(cfg: GroupsConfig = {}): number {
   return cfg.numGroups != null ? 2 * Math.max(1, cfg.numGroups) : 2;
 }
 
+/** A team going into the draw, with the group the organiser put it in, if any. */
+export type GroupEntry = { id: string; label?: string | null };
+
+export type GroupsPlan =
+  | { ok: true; groups: Array<{ label: string; ids: string[] }> }
+  | { ok: false; refusal: string };
+
+const normLabel = (l: string | null | undefined): string | null => {
+  const t = String(l ?? '').trim().toUpperCase();
+  return t.length > 0 ? t : null;
+};
+
 /**
- * Why the groups can't be drawn with `teams` teams, or null when they can.
- * BUILD 1.12: the group size is a cap — no group is drawn bigger than it.
+ * The groups, team by team (the server's draw builds them from this).
+ *
+ * BUILD 1.13: a group the organiser gave a team is kept. The draw dealt every
+ * team round the groups A, B, C… and overwrote it. Teams without one fill the
+ * smallest group, in draw order — with no labels at all that is exactly the
+ * old dealing, so an unlabelled draw comes out the same as before.
+ *
+ * Every group needs at least 2 teams and (BUILD 1.12) no more than the group
+ * size. Labels are compared in capitals, so "a" is group A.
  */
-export function groupsDrawRefusal(teams: number, cfg: GroupsConfig = {}): string | null {
-  if (teams < 2) return 'Need at least 2 approved teams to draw the groups.';
-  const groups = groupCount(teams, cfg);
-  const biggest = Math.ceil(teams / groups);
-  if (cfg.groupSize != null && biggest > cfg.groupSize) {
-    return `${teams} teams in ${groups} groups makes groups of ${biggest}, more than the group size of ${cfg.groupSize}.`;
+export function planGroups(entries: GroupEntry[], cfg: GroupsConfig = {}): GroupsPlan {
+  const teams = entries.length;
+  if (teams < 2) return { ok: false, refusal: 'Need at least 2 approved teams to draw the groups.' };
+  const named = [...new Set(entries.map((e) => normLabel(e.label)).filter((l): l is string => l !== null))].sort();
+  if (cfg.numGroups != null && named.length > cfg.numGroups) {
+    return { ok: false, refusal: `Teams are placed in ${named.length} groups (${named.join(', ')}), but the tournament has ${cfg.numGroups}.` };
   }
-  if (Math.floor(teams / groups) < 2) {
-    return cfg.numGroups != null
-      ? `Each group needs at least 2 teams, so ${groups} groups need at least ${groups * 2} teams (${teams} approved).`
-      : `${teams} teams can't make groups of at most ${cfg.groupSize ?? DEFAULT_GROUP_SIZE} with at least 2 in each.`;
+  const count = Math.max(groupCount(teams, cfg), named.length);
+  const labels = [...named];
+  for (let c = 0; labels.length < count && c < 26; c++) {
+    const l = String.fromCharCode(65 + c);
+    if (!labels.includes(l)) labels.push(l);
   }
-  return null;
+  labels.sort();
+  const groups = labels.map((label) => ({ label, ids: [] as string[] }));
+  const byLabel = new Map(groups.map((g) => [g.label, g]));
+  for (const e of entries) {
+    const l = normLabel(e.label);
+    if (l) byLabel.get(l)!.ids.push(e.id);
+  }
+  for (const e of entries) {
+    if (normLabel(e.label)) continue;
+    let target = groups[0]!;
+    for (const g of groups) if (g.ids.length < target.ids.length) target = g;
+    target.ids.push(e.id);
+  }
+  const cap = cfg.groupSize;
+  const over = cap != null ? groups.find((g) => g.ids.length > cap) : undefined;
+  if (over) {
+    if (named.length === 0) {
+      return { ok: false, refusal: `${teams} teams in ${groups.length} groups makes groups of ${over.ids.length}, more than the group size of ${cap}.` };
+    }
+    return { ok: false, refusal: `Group ${over.label} has ${over.ids.length} teams, more than the group size of ${cap}.` };
+  }
+  const short = groups.find((g) => g.ids.length < 2);
+  if (short) {
+    if (named.length > 0) return { ok: false, refusal: `Group ${short.label} has ${short.ids.length} team${short.ids.length === 1 ? '' : 's'}; every group needs at least 2.` };
+    return {
+      ok: false,
+      refusal: cfg.numGroups != null
+        ? `Each group needs at least 2 teams, so ${groups.length} groups need at least ${groups.length * 2} teams (${teams} approved).`
+        : `${teams} teams can't make groups of at most ${cfg.groupSize ?? DEFAULT_GROUP_SIZE} with at least 2 in each.`,
+    };
+  }
+  return { ok: true, groups };
+}
+
+/**
+ * Why the groups can't be drawn, or null when they can — for a count of
+ * unlabelled teams, or for the entries themselves (with their groups).
+ */
+export function groupsDrawRefusal(teams: number | GroupEntry[], cfg: GroupsConfig = {}): string | null {
+  const entries = typeof teams === 'number' ? Array.from({ length: Math.max(0, teams) }, (_, i) => ({ id: String(i) })) : teams;
+  const plan = planGroups(entries, cfg);
+  return plan.ok ? null : plan.refusal;
 }

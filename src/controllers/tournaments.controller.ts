@@ -55,7 +55,7 @@ import { rankTeams, computeStats, pointsModelFor, type PointsModel } from '../ut
 import { crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { DEFAULT_OVERS } from '../utils/cricketRules';
-import { groupCount, groupsDrawRefusal } from '../utils/groupsPlan';
+import { groupsDrawRefusal, planGroups } from '../utils/groupsPlan';
 import {
   buildSchedule, timeToMinutes, keyOf, formatSlotIst,
   type SchedulingConfig, type FixtureShape, type SlotAssign,
@@ -750,10 +750,16 @@ export async function updateEntry(req: Request, res: Response) {
       if (!isCreator) return res.status(403).json({ error: 'Forbidden' });
     }
 
+    // BUILD 1.13: once the groups are drawn, a team's group is its fixtures'
+    // group — moving it would split the table from the matches it played.
+    if (group_label !== undefined && (tournament as { fixtures_generated?: boolean }).fixtures_generated) {
+      return res.status(409).json({ error: 'The groups are already drawn, so a team can’t change group.', code: 'GROUPS_LOCKED' });
+    }
     const update: Record<string, any> = {};
     if (status !== undefined) update.status = status;
     if (seed !== undefined) update.seed = seed;
-    if (group_label !== undefined) update.group_label = typeof group_label === 'string' ? group_label.trim() : group_label;
+    // Stored in capitals, as the draw reads it ("a" is group A).
+    if (group_label !== undefined) update.group_label = typeof group_label === 'string' ? group_label.trim().toUpperCase() : group_label;
 
     const { data, error } = await supabase
       .from('tournament_entries')
@@ -2451,7 +2457,7 @@ export async function generateFixtures(req: Request, res: Response) {
     // sequence is total and repeatable.
     const { data: entries } = await supabase
       .from('tournament_entries')
-      .select('team_id, seed, entered_at, team:teams!team_id(id, name, short_name)')
+      .select('team_id, seed, entered_at, group_label, team:teams!team_id(id, name, short_name)')
       .eq('tournament_id', id)
       .eq('status', 'approved')
       .order('seed', { ascending: true, nullsFirst: false })
@@ -2461,13 +2467,15 @@ export async function generateFixtures(req: Request, res: Response) {
       id: e.team_id,
       name: (e.team as any)?.name ?? 'TBD',
     }));
+    // BUILD 1.13: the group the organiser put each team in, if any.
+    const groupEntries = (entries ?? []).map((e: any) => ({ id: e.team_id as string, label: (e.group_label as string | null) ?? null }));
 
     if (teams.length < 2) {
       return res.status(400).json({ error: 'At least 2 approved teams required' });
     }
     // BUILD 1.10: a group of one has no matches and the knockout never seeds.
     if (String(tournament.format ?? '').toLowerCase() === 'groups_knockout') {
-      const why = groupsDrawRefusal(teams.length, await getGroupsConfig(id));
+      const why = groupsDrawRefusal(groupEntries, await getGroupsConfig(id));
       if (why) return res.status(400).json({ error: why, code: 'GROUPS_TOO_SMALL' });
     }
 
@@ -2637,14 +2645,18 @@ export async function generateFixtures(req: Request, res: Response) {
       // SC-58: group count + qualifiers-per-group are organizer-configurable
       // (migration 038); fall back to the historical 4-per-group / top-2.
       const gcfg = await getGroupsConfig(id);
-      const numGroups = groupCount(teams.length, gcfg);
+      // BUILD 1.13: groupsPlan keeps a group the organiser set and fills the
+      // rest smallest-first (the old round-robin deal when nothing is set).
+      const plan = planGroups(groupEntries, gcfg);
+      if (!plan.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: plan.refusal, code: 'GROUPS_TOO_SMALL' }); }
+      const numGroups = plan.groups.length;
       const qualsPerGroup = gcfg.qualifiersPerGroup;
-      const groups: TeamSlot[][] = Array.from({ length: numGroups }, () => []);
-      teams.forEach((t, i) => groups[i % numGroups].push(t));
+      const slotOf = new Map(teams.map((t) => [t.id, t]));
+      const groups: TeamSlot[][] = plan.groups.map((g) => g.ids.map((tid) => slotOf.get(tid)!));
 
       let mno = 0;
       for (let g = 0; g < groups.length; g++) {
-        const label = String.fromCharCode(65 + g); // A, B, C…
+        const label = plan.groups[g]!.label;
         for (const t of groups[g]) {
           await supabase.from('tournament_entries').update({ group_label: label }).eq('tournament_id', id).eq('team_id', t.id);
         }

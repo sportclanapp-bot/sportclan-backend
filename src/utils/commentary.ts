@@ -85,6 +85,8 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   }
   if (goalSport && eventType === 'note' && p.kind === 'pen_corner') return `🏑 Penalty corner — ${team}`;
   if (goalSport && eventType === 'note' && p.kind === 'kickoff') return '⏱ Kick-off'; // BUILD 3.22
+  // BUILD 3.35: a basketball foul names who (it read "Foul by Team A").
+  if (ctx.sport === 'basketball' && eventType === 'foul') return `✋ Foul — ${player ? `${player} (${team})` : team}`;
   // Chess: "Move  — game in progress" (no number was ever sent) and a raw
   // result object with a player id in it.
   if (ctx.sport === 'chess' && eventType === 'move') {

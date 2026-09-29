@@ -61,3 +61,35 @@ export function canStartNextPeriodOf(n: number, a: number, b: number, regulation
   // one-period game offered OVERTIME at 0–0 before a basket was scored.
   return a === b && a + b > 0;
 }
+
+/**
+ * BUILD 3.35 · fouls. The current period's team fouls (period = period
+ * changes so far + 1; FIBA's bonus from the 5th team foul in a period), and each
+ * player's fouls in the game — fouled out at `foulOut` (FIBA 5, NBA 6).
+ */
+export const TEAM_FOUL_BONUS = 5;
+export function foulTally(
+  events: ReadonlyArray<{ event_type: string; payload?: unknown }>,
+  foulOut: number,
+): {
+  period: number;
+  team: { A: number; B: number };
+  players: Array<{ id: string; name: string; side: 'A' | 'B'; fouls: number; out: boolean }>;
+} {
+  let period = 1;
+  const team = { A: 0, B: 0 };
+  const byId = new Map<string, { id: string; name: string; side: 'A' | 'B'; fouls: number; out: boolean }>();
+  for (const ev of events) {
+    if (ev.event_type === 'period_change') { period += 1; team.A = 0; team.B = 0; continue; }
+    if (ev.event_type !== 'foul') continue;
+    const p = (ev.payload ?? {}) as { team_side?: unknown; player_id?: unknown; player_name?: unknown };
+    const side: 'A' | 'B' = p.team_side === 'B' ? 'B' : 'A';
+    team[side] += 1;
+    if (typeof p.player_id !== 'string' || !p.player_id) continue;
+    const line = byId.get(p.player_id) ?? { id: p.player_id, name: typeof p.player_name === 'string' && p.player_name ? p.player_name : 'Player', side, fouls: 0, out: false };
+    line.fouls += 1;
+    line.out = line.fouls >= foulOut;
+    byId.set(p.player_id, line);
+  }
+  return { period, team, players: [...byId.values()] };
+}

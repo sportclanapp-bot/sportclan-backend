@@ -896,7 +896,7 @@ export interface GoalPlayerLine {
   /** 2026-09-26: cards credited to this player (the pad asks who got it; optional). */
   yellow_cards?: number; red_cards?: number; green_cards?: number;
 }
-export interface PointPlayerLine { side: 'A' | 'B'; name?: string; points: number; assists: number }
+export interface PointPlayerLine { side: 'A' | 'B'; name?: string; points: number; assists: number; /** BUILD 3.35: only once they've fouled. */ fouls?: number }
 export interface RallyPlayerLine { side: 'A' | 'B'; name?: string; points: number }
 export type PlayerLine = CricketPlayerLine | GoalPlayerLine | PointPlayerLine | RallyPlayerLine;
 
@@ -963,6 +963,11 @@ export function aggregatePointPlayers(events: { event_type: string; payload: any
       const line = (players[id] ??= { side: sideOfPayload(p), points: 0, assists: 0 });
       if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
       line.assists += 1;
+    } else if (e.event_type === 'foul') {
+      // BUILD 3.35: a player's fouls, on the scorecard (and the career stat already counts them).
+      const line = (players[id] ??= { side: sideOfPayload(p), points: 0, assists: 0 });
+      if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
+      line.fouls = (line.fouls ?? 0) + 1;
     }
   }
   return players;

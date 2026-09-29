@@ -1421,7 +1421,7 @@ export async function getCommentary(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, sport_id, team_a_name, team_b_name')
+      .select('id, sport_id, team_a_name, team_b_name, format, overs, rules')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1470,6 +1470,7 @@ export async function getCommentary(req: Request, res: Response) {
       if (ev.event_type === 'move') moves += 1;
       const sportLine = isCricket ? null : sportCommentary(ev.event_type as string, p, {
         sport: slug, teamA, teamB, period: periods - 1, move: moves, clockSeconds: (ev as any).clock_seconds ?? null,
+        regulation: rulesOf(slug, match).periods ?? null, // BUILD 3.17: the match's own periods
       });
       if (sportLine) {
         commentary = sportLine;

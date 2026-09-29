@@ -61,6 +61,8 @@ export interface MatchRules {
   /** Timed team sports: regulation periods, and minutes each (null = untimed). */
   periods?: number;
   periodMinutes?: number | null;
+  /** BUILD 3.17: football's half-time in minutes (display only); null = not set. */
+  halfTimeMinutes?: number | null;
   /** Can the match end level. */
   drawAllowed?: boolean;
   /** Chess: the clock. */
@@ -81,7 +83,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   volleyball: { bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true },
   tennis: { bestOf: 3 },
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
-  football: { players: null, periods: 2, periodMinutes: null, drawAllowed: true },
+  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, drawAllowed: true },
   hockey: { periods: 4, periodMinutes: null, drawAllowed: true },
   basketball: { periods: 4, periodMinutes: null, drawAllowed: false },
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true },
@@ -228,7 +230,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -294,6 +296,19 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'football' && r.players !== null && (!isWhole(r.players) || r.players < FOOTBALL_PLAYERS_MIN || r.players > FOOTBALL_PLAYERS_MAX)) {
     return refuse(`Players a side must be a whole number from ${FOOTBALL_PLAYERS_MIN} to ${FOOTBALL_PLAYERS_MAX}.`, 'players');
   }
+  // BUILD 3.17: a timed sport's periods, their length and (football) half-time.
+  const timed = TIMED_LIMITS[key];
+  if (timed) {
+    if (!isWhole(r.periods) || r.periods < timed.periods[0] || r.periods > timed.periods[1]) {
+      return refuse(`Periods must be a whole number from ${timed.periods[0]} to ${timed.periods[1]}.`, 'periods');
+    }
+    if (r.periodMinutes !== null && (!isWhole(r.periodMinutes) || r.periodMinutes < timed.minutes[0] || r.periodMinutes > timed.minutes[1])) {
+      return refuse(`A period must be off, or ${timed.minutes[0]} to ${timed.minutes[1]} minutes.`, 'periodMinutes');
+    }
+    if ('halfTimeMinutes' in stdMap && r.halfTimeMinutes !== null && (!isWhole(r.halfTimeMinutes) || r.halfTimeMinutes < 0 || r.halfTimeMinutes > HALF_TIME_MAX)) {
+      return refuse(`Half-time must be off, or 0 to ${HALF_TIME_MAX} minutes.`, 'halfTimeMinutes');
+    }
+  }
   if (MATCH_LENGTHS[key]) {
     const offered = MATCH_LENGTHS[key]!.options;
     if (!isWhole(r.bestOf) || !(offered as number[]).includes(r.bestOf)) return refuse(`Match length must be best of ${listOf(offered)}.`, 'bestOf');
@@ -304,13 +319,20 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     }
   }
   // Everything else is fixed at the sport's standard for now.
-  const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds']);
+  const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
   }
   return null;
 }
+
+/** BUILD 3.17: the periods and period lengths a timed sport may set (others stay standard). */
+export const TIMED_LIMITS: Record<string, { periods: [number, number]; minutes: [number, number] }> = {
+  football: { periods: [1, 4], minutes: [5, 45] },
+};
+export const HALF_TIME_MAX = 20;
 
 /** BUILD 3.16: a football side, 3 (futsal-ish) to 11. */
 export const FOOTBALL_PLAYERS_MIN = 3;
@@ -325,6 +347,9 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (key !== 'football' && key !== 'hockey' && key !== 'basketball') return null;
   const parts: string[] = [];
   if (rules.players) parts.push(`${rules.players}-a-side`);
+  // BUILD 3.17: "2 × 25 min", and the half-time when it's set.
+  if (rules.periodMinutes) parts.push(`${rules.periods ?? 1} × ${rules.periodMinutes} min`);
+  if (rules.halfTimeMinutes != null) parts.push(`HT ${rules.halfTimeMinutes} min`);
   return parts.length ? parts.join(' · ') : null;
 }
 

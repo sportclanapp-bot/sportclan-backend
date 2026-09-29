@@ -82,6 +82,6 @@ describe('fixtures carry cricket overs', () => {
     setup('round_robin');
     await call();
     for (const row of inserted().flat()) expect(row.overs).toBeUndefined();
-    for (const row of inserted().flat()) expect(row.rules).toEqual({ v: 1, players: null, periods: 2, periodMinutes: null, drawAllowed: true });
+    for (const row of inserted().flat()) expect(row.rules).toEqual({ v: 1, players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, drawAllowed: true });
   });
 });

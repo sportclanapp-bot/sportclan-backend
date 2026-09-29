@@ -11,6 +11,8 @@ export interface CommentaryContext {
   teamB: string;
   /** Periods seen so far, including this one (quarters / halves). */
   period: number;
+  /** BUILD 3.17: the match's regulation periods, when known (football 1–4). */
+  regulation?: number | null;
   /** Chess: moves so far, including this one. */
   move?: number;
   /** Chess: the mover's clock after the move, in seconds. */
@@ -43,8 +45,11 @@ export function sportCommentary(eventType: string, p: Record<string, any>, ctx: 
     return `${kind} — ${player ? `${player} (${team})` : team}`;
   }
   if (eventType === 'period_change') {
-    if (ctx.sport === 'football' || p.kind === 'halftime') return 'Half-time';
-    const last = ctx.sport === 'basketball' ? 4 : 4;
+    // BUILD 3.17: half-time only between two halves; else the period that ended.
+    const count = ctx.regulation ?? (ctx.sport === 'football' ? 2 : 4);
+    if (p.kind === 'halftime' || (ctx.sport === 'football' && count === 2)) return 'Half-time';
+    if (ctx.sport === 'football' || count !== 4) return `End of period ${ctx.period}`;
+    const last = count;
     return ctx.period <= last ? `End of Q${ctx.period}` : `End of OT${ctx.period - last}`;
   }
   if (goalSport && eventType === 'note' && p.kind === 'pen_corner') return `🏑 Penalty corner — ${team}`;

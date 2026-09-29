@@ -182,5 +182,11 @@ export function awardAllowed(stage: CricketStage, winner: 'A' | 'B' | null | und
  * Every other wicket kind — and an old wicket with no kind — is a dismissal.
  */
 export function isDismissal(wicketType: unknown): boolean {
-  return String(wicketType ?? '').toLowerCase().replace(/[^a-z]/g, '') !== 'retiredhurt';
+  const k = String(wicketType ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  // BUILD 3.4: retired not out (the retire-at-N rule) is not a dismissal either.
+  return k !== 'retiredhurt' && k !== 'retirednotout';
 }
+
+/** BUILD 3.4: a retire-at-N match's range (off = null). */
+export const RETIRE_MIN = 10;
+export const RETIRE_MAX = 100;

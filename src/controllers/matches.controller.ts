@@ -1480,7 +1480,9 @@ export async function getCommentary(req: Request, res: Response) {
         // "OUT! Batter"), and retired hurt is not a wicket (cricketRules.isDismissal).
         const batter = p.batsman_name || p.batsmanName || p.player_name || p.batter || 'Batter';
         if (ev.event_type === 'wicket' && !isDismissal(p.wicket_type ?? p.type)) {
-          commentary = `\uD83E\uDE79 Retired hurt — ${batter}`;
+          commentary = String(p.wicket_type ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'retirednotout'
+            ? `Retired not out — ${batter}` // BUILD 3.4: the retire-at-N rule
+            : `\uD83E\uDE79 Retired hurt — ${batter}`;
         } else {
           isWicket = true;
           const how = wicketWords(p.wicket_type ?? p.type, p.fielder_name, p.bowler_name);

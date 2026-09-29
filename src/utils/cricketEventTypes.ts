@@ -11,7 +11,7 @@ export const CRICKET_EXTRA_TYPES: ReadonlySet<string> = new Set(['Wd', 'Nb', 'B'
  * (case and punctuation ignored: `run_out` = `runout`).
  */
 const WICKET_TYPES = new Set([
-  'bowled', 'caught', 'lbw', 'runout', 'stumped', 'hitwicket', 'retiredhurt', 'retiredout',
+  'bowled', 'caught', 'lbw', 'runout', 'stumped', 'hitwicket', 'retiredhurt', 'retiredout', 'retirednotout',
   'obstructingthefield', 'handledtheball', 'hittheballtwice', 'timedout', 'other',
 ]);
 export function isKnownWicketType(wicketType: unknown): boolean {

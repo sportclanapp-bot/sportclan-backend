@@ -30,7 +30,7 @@ function playerOf(p: P): string | null {
 const EXTRA: Record<string, string> = { Wd: 'wide', Nb: 'no-ball', B: 'bye', Lb: 'leg bye' };
 const WICKET: Record<string, string> = {
   bowled: 'bowled', caught: 'caught', lbw: 'lbw', run_out: 'run out', stumped: 'stumped',
-  hit_wicket: 'hit wicket', retired_hurt: 'retired hurt', retired_out: 'retired out',
+  hit_wicket: 'hit wicket', retired_hurt: 'retired hurt', retired_out: 'retired out', retired_not_out: 'retired not out',
 };
 const CARD: Record<string, string> = { yellow: 'yellow card', red: 'red card', green: 'green card' };
 

@@ -46,8 +46,9 @@ describe('source', () => {
     expect(sc).toContain("else if (e.event_type === 'wicket') { if (isDismissal(p.wicket_type ?? p.type)) inn.wickets = Math.min(allOut[sideOf(p)], inn.wickets + 1);");
   });
   test('the push and the timeline say "retired hurt"', () => {
-    expect(sc).toContain("const title = hurt ? 'Retired hurt' : 'Wicket!';");
-    expect(mc).toContain('commentary = `\\uD83E\\uDE79 Retired hurt — ${batter}`;');
+    // BUILD 3.4 added "retired not out" beside retired hurt.
+    expect(sc).toContain("const title = atLimit ? 'Retired' : hurt ? 'Retired hurt' : 'Wicket!';");
+    expect(mc).toContain(': `\\uD83E\\uDE79 Retired hurt — ${batter}`;');
     expect(mc).toContain('const batter = p.batsman_name || p.batsmanName ||');
   });
 });

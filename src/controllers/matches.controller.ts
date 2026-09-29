@@ -2650,7 +2650,7 @@ export async function completeMatch(req: Request, res: Response) {
     const shootoutScore = shootout ? { A: Number(shootout.A), B: Number(shootout.B) } : null;
     if (shootout) {
       const level = Number(canonical?.A?.score ?? 0) === Number(canonical?.B?.score ?? 0);
-      if (!shootoutApplies(normSportSlug(sportRow?.slug), isBracketMatch) || !level) {
+      if (!shootoutApplies(normSportSlug(sportRow?.slug), isBracketMatch, rulesOf(normSportSlug(sportRow?.slug), match).drawAllowed) || !level) {
         return res.status(400).json({ error: 'A shootout decides only a level knockout football or hockey match.', code: 'SHOOTOUT_NOT_ALLOWED' });
       }
       // BUILD 3.18: the match's kicks each, then sudden death.
@@ -2690,6 +2690,15 @@ export async function completeMatch(req: Request, res: Response) {
       }
       if (superOverWinner(superOverScore!.A, superOverScore!.B) !== winnerSide) {
         return res.status(400).json({ error: 'The winner has to be the side that won the super over.', code: 'SUPER_OVER_WINNER_MISMATCH' });
+      }
+    }
+    // BUILD 3.20: a football match that can't end level (drawAllowed: false)
+    // is decided on penalties — a level end without a winner is refused.
+    {
+      const slugNow = normSportSlug(sportRow?.slug);
+      const levelNow = Number(canonical?.A?.score ?? 0) === Number(canonical?.B?.score ?? 0);
+      if (!walkover && !isBracketMatch && slugNow === 'football' && rulesOf(slugNow, match).drawAllowed === false && levelNow && !winner_team_id && !winnerSide) {
+        return res.status(400).json({ error: 'This match can’t end level — decide it on penalties.', code: 'DRAW_NOT_ALLOWED' });
       }
     }
     if (isBracketMatch && !winner_team_id) {

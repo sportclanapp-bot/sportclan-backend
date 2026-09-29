@@ -21,9 +21,13 @@ export const SHOOTOUT_MAX = 30;
 
 const key = (s: string | null | undefined) => (s ?? '').toLowerCase().replace(/[-_\s]/g, '');
 
-/** Does this match end with a shootout when level? */
-export function shootoutApplies(sport: string | null | undefined, knockout: boolean): boolean {
-  return knockout && (SHOOTOUT_SPORTS as readonly string[]).includes(key(sport));
+/**
+ * Does this match end with a shootout when level? A knockout always; BUILD
+ * 3.20: a league / group match too when the match can't end level (its rules
+ * say drawAllowed: false — turf cups often play it that way).
+ */
+export function shootoutApplies(sport: string | null | undefined, knockout: boolean, drawAllowed: boolean | null | undefined = true): boolean {
+  return (knockout || drawAllowed === false) && (SHOOTOUT_SPORTS as readonly string[]).includes(key(sport));
 }
 
 /**

@@ -317,6 +317,8 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'football' && r.penaltyKicks !== 3 && r.penaltyKicks !== 5) {
     return refuse('Penalty kicks must be 3 or 5 each.', 'penaltyKicks');
   }
+  // BUILD 3.20: whether a league / group match may end level.
+  if (key === 'football' && typeof r.drawAllowed !== 'boolean') return refuse('Draws are allowed or not.', 'drawAllowed');
   // BUILD 3.19: extra time, 0 (none) to 15 minutes a half.
   if (key === 'football' && (!isWhole(r.extraTimeMinutes) || r.extraTimeMinutes < 0 || r.extraTimeMinutes > EXTRA_TIME_MAX)) {
     return refuse(`Extra time must be off, or up to ${EXTRA_TIME_MAX} minutes a half.`, 'extraTimeMinutes');
@@ -332,7 +334,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -366,6 +368,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (rules.halfTimeMinutes != null) parts.push(`HT ${rules.halfTimeMinutes} min`);
   // BUILD 3.18: 3 penalties each is the turf-cup way; 5 is the standard, left unsaid.
   if (rules.extraTimeMinutes) parts.push(`ET 2 × ${rules.extraTimeMinutes} min`); // BUILD 3.19
+  if (key === 'football' && rules.drawAllowed === false) parts.push('no draws'); // BUILD 3.20
   if (rules.penaltyKicks === 3) parts.push('3 pens each');
   return parts.length ? parts.join(' · ') : null;
 }

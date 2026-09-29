@@ -452,6 +452,9 @@ export function cardSuspensions(sport: string | null | undefined, rules: MatchRu
   return {};
 }
 
+/** BUILD 3.41: beach volleyball — 2 a side, sets to 21, a deciding set to 15, best of 3. */
+export const BEACH_VOLLEYBALL = { players: 2, target: 21, finalTarget: 15, bestOf: 3 } as const;
+
 /** BUILD 3.28: FIH Hockey5s — 5 a side, two halves of 10 minutes. */
 export const HOCKEY5S = { players: 5, periods: 2, periodMinutes: 10 } as const;
 const SIDE_LIMITS: Record<string, [number, number]> = {

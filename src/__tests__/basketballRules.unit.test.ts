@@ -24,6 +24,7 @@ describe('basketballRules', () => {
     expect(canStartNextPeriod(4, 81, 80)).toBe(false);
     expect(canStartNextPeriod(5, 90, 90)).toBe(true);
     expect(canStartNextPeriod(5, 92, 90)).toBe(false);
+    expect(canStartNextPeriod(4, 0, 0)).toBe(false); // BUILD 3.33: no overtime before a basket
   });
 
   const here = path.join(__dirname, '..', CORE_REL);

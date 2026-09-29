@@ -82,6 +82,8 @@ export interface MatchRules {
   overtimeMinutes?: number;
   /** BUILD 3.32: basketball's first-to score (7–50) — 3x3's 21, pickup's 11; null = play the periods out. */
   targetScore?: number | null;
+  /** BUILD 3.33: basketball's points: '123' (5v5: FT 1, 2, 3) or '12' (3x3: 1 inside the arc, 2 beyond). */
+  pointSet?: '123' | '12';
   /** Can the match end level. */
   drawAllowed?: boolean;
   /** Chess: the clock. */
@@ -104,7 +106,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true },
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
-  basketball: { periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, drawAllowed: false },
+  basketball: { periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', drawAllowed: false },
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true },
 };
 
@@ -249,7 +251,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -336,6 +338,8 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   // BUILD 3.23: two on/off flags, shown on the match (no effect on scoring).
   if (key === 'football' && typeof r.rollingSubs !== 'boolean') return refuse('Rolling subs is on or off.', 'rollingSubs');
   if (key === 'football' && typeof r.offside !== 'boolean') return refuse('Offside is on or off.', 'offside');
+  // BUILD 3.33: 1-2-3 (5v5) or 1-2 (3x3).
+  if (key === 'basketball' && r.pointSet !== '123' && r.pointSet !== '12') return refuse('Points are 1-2-3 or 1-2.', 'pointSet');
   // BUILD 3.32: first to 7–50, or off.
   if (key === 'basketball' && r.targetScore !== null && (!isWhole(r.targetScore) || r.targetScore < 7 || r.targetScore > 50)) {
     return refuse('First to must be off, or 7 to 50 points.', 'targetScore');
@@ -375,7 +379,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -445,6 +449,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (key === 'hockey' && rules.yellowCardMinutes != null && rules.yellowCardMinutes !== 5) parts.push(`yellow ${rules.yellowCardMinutes} min`); // BUILD 3.29
   if (key === 'basketball' && rules.overtimeMinutes != null && rules.overtimeMinutes !== 5) parts.push(`OT ${rules.overtimeMinutes} min`); // BUILD 3.31
   if (key === 'basketball' && rules.targetScore) parts.push(`first to ${rules.targetScore}`); // BUILD 3.32
+  if (key === 'basketball' && rules.pointSet === '12') parts.push('1s and 2s'); // BUILD 3.33
   if (rules.penaltyKicks === 3) parts.push('3 pens each');
   return parts.length ? parts.join(' · ') : null;
 }

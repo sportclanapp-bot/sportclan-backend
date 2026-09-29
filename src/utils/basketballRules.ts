@@ -57,5 +57,7 @@ export function isOvertimeOf(n: number, regulation: number): boolean {
 
 export function canStartNextPeriodOf(n: number, a: number, b: number, regulation: number): boolean {
   if (Math.floor(n) < regulation) return true;
-  return a === b;
+  // BUILD 3.33 (found on the device): level WITH points on the board — a
+  // one-period game offered OVERTIME at 0–0 before a basket was scored.
+  return a === b && a + b > 0;
 }

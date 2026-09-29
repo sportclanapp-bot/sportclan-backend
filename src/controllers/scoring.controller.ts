@@ -278,6 +278,10 @@ export async function validateScoringEvent(
   // BUILD 3.32: a first-to basketball game is over once a side reaches the
   // target — a basket after it is refused (the app closes its pad there too).
   if (event_type === 'score' && payload && typeof payload === 'object' && /^[123]pt$/.test(String(payload.kind ?? ''))) {
+    // BUILD 3.33: 3x3 scores 1s and 2s — no 3.
+    if (rulesOf('basketball', match).pointSet === '12' && Number(payload.value) === 3) {
+      return refuse(400, { error: 'This game scores 1s and 2s (3x3) — there’s no 3.', code: 'BAD_POINTS' });
+    }
     const target = rulesOf('basketball', match).targetScore;
     const ss = (match.score_summary ?? {}) as { A?: { score?: number; points?: number }; B?: { score?: number; points?: number } };
     const pts = (x?: { score?: number; points?: number }) => Number(x?.score ?? x?.points ?? 0);

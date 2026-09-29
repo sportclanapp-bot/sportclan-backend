@@ -103,7 +103,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   badminton: { bestOf: 3, target: 21, cap: 30, finalTarget: null, winBy2: true },
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true },
   pickleball: { bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true },
-  volleyball: { bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true },
+  volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true },
   tennis: { bestOf: 3 },
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true },
@@ -458,6 +458,7 @@ const SIDE_LIMITS: Record<string, [number, number]> = {
   football: [FOOTBALL_PLAYERS_MIN, FOOTBALL_PLAYERS_MAX],
   hockey: [HOCKEY_PLAYERS_MIN, HOCKEY_PLAYERS_MAX],
   basketball: [BASKETBALL_PLAYERS_MIN, BASKETBALL_PLAYERS_MAX], // BUILD 3.34
+  volleyball: [2, 9], // BUILD 3.40: beach 2, indoor 6, 9-a-side
 };
 
 /**
@@ -470,6 +471,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   // BUILD 3.37+: a rally sport's own points, said when they differ from the standard.
   if (RALLY_LIMITS[key]) {
     const std = SPORT_RULES[key] ?? {};
+    if (rules.players) parts.push(`${rules.players}-a-side`); // BUILD 3.40
     if (rules.target != null && rules.target !== std.target) parts.push(`sets to ${rules.target}`);
     if (rules.cap !== undefined && rules.cap !== std.cap) parts.push(rules.cap == null ? 'no cap' : `cap ${rules.cap}`); // BUILD 3.39
     if (rules.finalTarget !== undefined && rules.finalTarget !== std.finalTarget) parts.push(rules.finalTarget == null ? 'decider the same' : `decider to ${rules.finalTarget}`); // BUILD 3.38

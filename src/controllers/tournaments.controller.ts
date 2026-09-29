@@ -55,6 +55,7 @@ import { rankTeams, computeStats, pointsModelFor, type PointsModel } from '../ut
 import { crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { DEFAULT_OVERS } from '../utils/cricketRules';
+import { rulesFromLegacy } from '../utils/matchRules';
 import { groupsDrawRefusal, planGroups } from '../utils/groupsPlan';
 import {
   buildSchedule, timeToMinutes, keyOf, formatSlotIst,
@@ -1573,6 +1574,8 @@ export async function updateFixtures(req: Request, res: Response) {
       }
       const { data, error } = await query.select('*').maybeSingle();
       if (error || !data) {
+        // eslint-disable-next-line no-console
+        if (error) console.error('[fixtures] update failed', fixtureId, error.message); // was silent (BUILD 2.1 harness)
         skip(error ? 'Couldn’t save this fixture. Try again.' : 'Only a fixture that hasn’t started can be moved.');
         continue;
       }
@@ -2536,9 +2539,15 @@ export async function generateFixtures(req: Request, res: Response) {
     // 20-over default while NRR never knew the quota (the ICC all-out rule
     // charges a bowled-out side its full overs). They now carry it.
     const sportSlug = normSportSlug((await getSport(tournament.sport_id as string))?.slug);
-    const fixtureDefaults: Record<string, unknown> = sportSlug === 'cricket'
+    const legacyDefaults: { format?: string; overs?: number } = sportSlug === 'cricket'
       ? { format: `T${DEFAULT_OVERS}`, overs: DEFAULT_OVERS }
       : {};
+    // BUILD 2.1: every fixture carries its rules as data (the stage rules the
+    // organiser sets, BUILD 2.4, replace these standards).
+    const fixtureDefaults: Record<string, unknown> = {
+      ...legacyDefaults,
+      rules: rulesFromLegacy(sportSlug, legacyDefaults.format ?? null, legacyDefaults.overs ?? null),
+    };
     const base: BracketBase = {
       fixtureDefaults,
       sport_id: tournament.sport_id,

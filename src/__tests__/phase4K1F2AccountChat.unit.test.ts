@@ -72,8 +72,10 @@ describe('K1-56 (ea95435) SC-70 · deletion is final', () => {
       return { data: null };
     };
     const r = await call(login, { body: { email: 'a@b.co', password: 'longenough1' } });
-    expect(r.statusCode).toBe(403);
-    expect(r.body.code).toBe('ACCOUNT_DELETED');
+    // It failed rarely under load (not reproduced alone): the message carries
+    // the response and the users queries, so the next one says why.
+    expect({ status: r.statusCode, code: r.body?.code, body: r.statusCode === 403 ? 'ok' : r.body, users: r.statusCode === 403 ? [] : mockLog.filter((q) => q[0] === 'from:users') })
+      .toEqual({ status: 403, code: 'ACCOUNT_DELETED', body: 'ok', users: [] });
     expect(r.body.accessToken).toBeUndefined();
     expect(mockLog.some((q) => q[0] === 'from:refresh_tokens')).toBe(false);
   });

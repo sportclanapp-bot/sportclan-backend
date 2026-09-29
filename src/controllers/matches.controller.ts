@@ -47,6 +47,7 @@ import { stepTimer } from '../utils/stepTimer';
 import { leaseRefusal } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
+import { rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf } from '../utils/matchRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isDismissal, type UnfinishedEnd } from '../utils/cricketRules';
 import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
@@ -115,6 +116,20 @@ export function formatRefusal(
 export function oversFromFormat(format: unknown): number | null {
   const m = typeof format === 'string' ? /^t(\d{1,3})$/i.exec(format.trim()) : null;
   return m ? Number(m[1]) : null;
+}
+
+/**
+ * BUILD 2.1 · a `rules` object as the format / overs it means, or null when it
+ * says something they can't (until the rules validator, BUILD 2.2, widens
+ * what's offered). Round-tripped through the shared matchRules so the two
+ * encodings can never disagree.
+ */
+export function rulesAsLegacy(sport: string | null | undefined, rules: unknown): { format: string | null; overs: number | null } | null {
+  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) return null;
+  const r = normalizeRules(sport, rules);
+  const legacy = legacyFromRules(sport, r);
+  const back = rulesFromLegacy(sport, legacy.format, legacy.overs);
+  return JSON.stringify(back) === JSON.stringify(r) ? legacy : null;
 }
 
 /** The match time: a real date, not in the past, within the next year. */
@@ -267,8 +282,9 @@ export async function createMatch(req: Request, res: Response) {
       scheduled_at,
       venue,
       city_id,
-      format,
-      overs,
+      format: bodyFormat,
+      overs: bodyOvers,
+      rules: bodyRules,
       tournament_id,
       is_open,
       players_needed,
@@ -316,6 +332,17 @@ export async function createMatch(req: Request, res: Response) {
     // sport's standard length, so every best-of match says what it is.
     const createSport = await getSport(String(sport_id));
     const lengthSlug = normSportSlug(createSport?.slug);
+    // BUILD 2.1: the rules may come as data (`rules`). Until the rules
+    // validator (2.2) they must say what format / overs can — they're turned
+    // into format / overs here and checked by the same rules as below.
+    let format = bodyFormat;
+    let overs = bodyOvers;
+    if (bodyRules !== undefined && bodyRules !== null) {
+      const legacy = rulesAsLegacy(lengthSlug, bodyRules);
+      if (!legacy) return res.status(400).json({ error: 'Those match rules aren’t offered.', code: 'BAD_RULES' });
+      format = legacy.format;
+      overs = legacy.overs;
+    }
     if (!isAcceptableMatchLength(lengthSlug, format)) {
       return res.status(400).json({ error: 'That match length isn’t offered for this sport.', code: 'BAD_MATCH_LENGTH' });
     }
@@ -398,6 +425,8 @@ export async function createMatch(req: Request, res: Response) {
         city_id: city_id || null,
         format: storedFormat,
         overs: storedOvers,
+        // BUILD 2.1: every new match carries its rules as data.
+        rules: rulesFromLegacy(lengthSlug, storedFormat, storedOvers),
         status: 'scheduled',
         is_open: singles ? false : !!is_open,
         // F-13: slots and a join policy belong to an open pickup only; they were
@@ -1642,6 +1671,12 @@ export async function getMatch(req: Request, res: Response) {
     // plainly abandon). Mirrors the server's isKnockoutBracketMatch discriminator;
     // `round` alone can't distinguish them. Null for casual (no tournament).
     if (match.tournament_id) matchWithRating.tournament_format = tournamentFormat;
+    // BUILD 2.1: always the rules as data — read back from format / overs for a
+    // match stored before rules were (it plays exactly as it did).
+    if (!matchWithRating.rules) {
+      const slug = normSportSlug((await getSport(String(match.sport_id)))?.slug);
+      matchWithRating.rules = rulesOf(slug, match);
+    }
     timer.mark('attach');
     res.setHeader('Server-Timing', timer.header());
 
@@ -1712,6 +1747,16 @@ export async function updateFieldRefusal(
     if ('team_a_name' in update) update.team_a_name = sides.a;
     if ('team_b_name' in update) update.team_b_name = sides.b;
   }
+  // BUILD 2.1: rules sent as data are turned into the format / overs they
+  // mean, and checked by the same rules below (the validator, 2.2, widens this).
+  if ('rules' in update) {
+    const slug = normSportSlug((await getSport(String(match.sport_id)))?.slug);
+    const legacy = rulesAsLegacy(slug, update.rules);
+    if (!legacy) return bad('Those match rules aren’t offered.', 'BAD_RULES');
+    delete update.rules;
+    update.format = legacy.format;
+    if (slug === 'cricket') update.overs = legacy.overs;
+  }
   if ('format' in update || 'overs' in update) {
     const slug = normSportSlug((await getSport(String(match.sport_id)))?.slug);
     const format = 'format' in update ? update.format : match.format;
@@ -1731,13 +1776,15 @@ export async function updateFieldRefusal(
     }
     const fr = formatRefusal(slug, format, slug === 'cricket' ? overs : null);
     if (fr) return fr;
+    // BUILD 2.1: the rules stay in step with what was just changed.
+    update.rules = rulesFromLegacy(slug, format as string | null, overs as number | null);
   }
   return null;
 }
 
 // PATCH /matches/:id — creator or umpire only
 /** BUILD 1.1: the keys that set how a match is decided; locked once it starts. */
-export const RULE_KEYS = ['format', 'overs'] as const;
+export const RULE_KEYS = ['format', 'overs', 'rules'] as const;
 
 export async function updateMatch(req: Request, res: Response) {
   const userId = req.userId;
@@ -1795,6 +1842,7 @@ export async function updateMatch(req: Request, res: Response) {
       'city_id',
       'format',
       'overs',
+      'rules', // BUILD 2.1
       'team_a_id',
       'team_b_id',
       'team_a_name',
@@ -1822,7 +1870,7 @@ export async function updateMatch(req: Request, res: Response) {
     // live or finished match re-decided it on the next recompute.
     if (match.status !== 'scheduled' && RULE_KEYS.some((k) => k in update)) {
       return res.status(409).json({
-        error: 'This match has started, so its format and overs can’t change.',
+        error: 'This match has started, so its rules can’t change.',
         code: 'RULES_LOCKED',
       });
     }

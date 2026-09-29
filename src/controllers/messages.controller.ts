@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
+import { chunks, IN_CHUNK } from '../utils/inChunks';
 import { sanitizeError } from '../utils/response';
 import { isBlockedBetween, blockedUserIds, excludeIds } from '../utils/blocks';
 import { deletedIdSet } from '../utils/activeUser';
@@ -135,14 +136,19 @@ async function dmSendGate(
 // hasn't been added to yet), so steady-state polls do ~zero writes.
 async function markDeliveredForUser(chatIds: string[], userId: string): Promise<void> {
   if (chatIds.length === 0) return;
-  const { data: pending } = await supabase
-    .from('messages')
-    .select('id, delivered_to')
-    .in('chat_id', chatIds)
-    .neq('sender_id', userId)
-    .not('delivered_to', 'cs', `{${userId}}`)
-    .limit(500);
-  if (!pending || pending.length === 0) return;
+  const pending: Array<{ id: string; delivered_to: unknown }> = [];
+  for (const part of chunks(chatIds)) { // BUILD 1.13: never one huge id list
+    if (pending.length >= 500) break;
+    const { data } = await supabase
+      .from('messages')
+      .select('id, delivered_to')
+      .in('chat_id', part)
+      .neq('sender_id', userId)
+      .not('delivered_to', 'cs', `{${userId}}`)
+      .limit(500 - pending.length);
+    pending.push(...((data ?? []) as Array<{ id: string; delivered_to: unknown }>));
+  }
+  if (pending.length === 0) return;
   for (const m of pending) {
     const delivered = Array.isArray(m.delivered_to) ? m.delivered_to : [];
     await supabase
@@ -173,16 +179,43 @@ export async function listChats(req: Request, res: Response) {
   await markDeliveredForUser(chatIds, userId);
 
   const lcp = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
-  const { data: chats, error, count: liveTotal } = await supabase
-    .from('chats')
-    // B09-F20: count the chats that are listed — a deleted one made `total` too big.
-    .select('*', { count: 'exact' })
-    .in('id', chatIds)
-    .is('deleted_at', null) // soft-deleted groups (098) are in no list
-    .order('last_message_at', { ascending: false, nullsFirst: false })
-    .range(lcp.from, lcp.to);
-
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  let chats: Array<Record<string, any>> | null;
+  let liveTotal: number | null;
+  if (chatIds.length <= IN_CHUNK) {
+    const r = await supabase
+      .from('chats')
+      // B09-F20: count the chats that are listed — a deleted one made `total` too big.
+      .select('*', { count: 'exact' })
+      .in('id', chatIds)
+      .is('deleted_at', null) // soft-deleted groups (098) are in no list
+      .order('last_message_at', { ascending: false, nullsFirst: false })
+      .range(lcp.from, lcp.to);
+    if (r.error) return res.status(500).json({ error: sanitizeError(r.error) });
+    chats = r.data;
+    liveTotal = r.count ?? null;
+  } else {
+    // BUILD 1.13: too many chats for one id list in the URL (it was a 500).
+    // Read each chunk's order key, order them here as the database would
+    // (newest message first, never-messaged last), then fetch just the page.
+    const heads: Array<{ id: string; last_message_at: string | null }> = [];
+    for (const part of chunks(chatIds)) {
+      const r = await supabase.from('chats').select('id, last_message_at').in('id', part).is('deleted_at', null);
+      if (r.error) return res.status(500).json({ error: sanitizeError(r.error) });
+      heads.push(...((r.data ?? []) as Array<{ id: string; last_message_at: string | null }>));
+    }
+    heads.sort((a, b) => {
+      if (a.last_message_at === b.last_message_at) return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      if (a.last_message_at == null) return 1;
+      if (b.last_message_at == null) return -1;
+      return a.last_message_at < b.last_message_at ? 1 : -1;
+    });
+    const pageIds = heads.slice(lcp.from, lcp.to + 1).map((h) => h.id);
+    const r = pageIds.length > 0 ? await supabase.from('chats').select('*').in('id', pageIds) : { data: [], error: null };
+    if (r.error) return res.status(500).json({ error: sanitizeError(r.error) });
+    const byId = new Map(((r.data ?? []) as Array<Record<string, any>>).map((c) => [c.id as string, c]));
+    chats = pageIds.map((id) => byId.get(id)).filter((c): c is Record<string, any> => !!c);
+    liveTotal = heads.length;
+  }
 
   const blocked = await blockedUserIds(userId);
   // Enrich with participants and last message
@@ -291,10 +324,14 @@ export async function getUnreadCount(req: Request, res: Response) {
   const chatIds = (participations || []).map((p) => p.chat_id);
   if (chatIds.length === 0) return res.json({ unread: 0, chats: 0, capped: false });
 
-  const { data: rows, error } = await unreadQuery(chatIds, userId, blocked, UNREAD_SCAN_CAP);
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
-
-  const candidates = rows || [];
+  // BUILD 1.13: in chunks — hundreds of chat ids in one URL were refused (500).
+  const candidates: Array<{ chat_id: string; sender_id: string }> = [];
+  for (const part of chunks(chatIds)) {
+    if (candidates.length >= UNREAD_SCAN_CAP) break;
+    const { data: rows, error } = await unreadQuery(part, userId, blocked, UNREAD_SCAN_CAP - candidates.length);
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    candidates.push(...((rows || []) as Array<{ chat_id: string; sender_id: string }>));
+  }
   // Soft-deleted senders: one small id-set query (deletedIdSet), not a join, so a
   // missing/odd users row can never drop a legitimate unread message.
   const senderIds = [...new Set(candidates.map((m) => m.sender_id as string))];
@@ -1205,12 +1242,16 @@ export async function batchMarkRead(req: Request, res: Response) {
   // kept (a block between two members doesn't gate the group). One query:
   const blocked = await blockedUserIds(userId);
   if (blocked.size > 0) {
-    const { data: parts } = await supabase
-      .from('chat_participants')
-      .select('chat_id, user_id')
-      .is('left_at', null)
-      .in('chat_id', callerChatIds)
-      .neq('user_id', userId);
+    const parts: Array<{ chat_id: string; user_id: string }> = [];
+    for (const part of chunks(callerChatIds)) { // BUILD 1.13
+      const { data } = await supabase
+        .from('chat_participants')
+        .select('chat_id, user_id')
+        .is('left_at', null)
+        .in('chat_id', part)
+        .neq('user_id', userId);
+      parts.push(...((data ?? []) as Array<{ chat_id: string; user_id: string }>));
+    }
     const counts = new Map<string, number>();
     const blockedDm = new Set<string>();
     for (const p of parts ?? []) {
@@ -1227,12 +1268,15 @@ export async function batchMarkRead(req: Request, res: Response) {
   }
 
   // Pull the rows whose read_by doesn't already contain the caller.
-  const { data: rows, error } = await supabase
+  // BUILD 1.13: only the caller's chats, checked here rather than as a huge
+  // `.in('chat_id', …)` in the URL (the batch itself is capped).
+  const mine = new Set(callerChatIds);
+  const { data: found, error } = await supabase
     .from('messages')
-    .select('id, read_by, sender_id')
-    .in('id', messageIds)
-    .in('chat_id', callerChatIds);
+    .select('id, read_by, sender_id, chat_id')
+    .in('id', messageIds);
   if (error) return res.status(500).json({ error: sanitizeError(error) });
+  const rows = (found ?? []).filter((r) => mine.has(r.chat_id as string));
 
   const updates: Array<{ id: string; read_by: string[] }> = [];
   for (const r of rows ?? []) {

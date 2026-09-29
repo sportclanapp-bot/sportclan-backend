@@ -69,11 +69,20 @@ beforeEach(() => {
 });
 
 describe('K2-2i · batchMarkRead only touches the caller’s chats (SC-107)', () => {
-  it('K2-2i (99ffb16): the messages read is constrained to chat_id ∈ my chats', async () => {
-    mockNext = (q) => (q[0] === 'from:chat_participants' ? { data: [{ chat_id: CHAT }] } : { data: [] });
-    await call(msgs.batchMarkRead, { body: { messageIds: [MSG] } });
-    const m = mockLog.find((q) => q[0] === 'from:messages')!;
-    expect(m).toContain(`in:["chat_id",["${CHAT}"]]`);
+  it('K2-2i (99ffb16): only messages in my chats are marked (BUILD 1.13: checked in code, not a URL id list)', async () => {
+    const OTHER_CHAT = '55555555-5555-4555-8555-555555555555';
+    const MSG2 = '66666666-6666-4666-8666-666666666666';
+    mockNext = (q) => {
+      if (q[0] === 'from:chat_participants') return { data: [{ chat_id: CHAT }] };
+      if (q[0] === 'from:messages' && q.some((c) => c.startsWith('select:'))) {
+        return { data: [{ id: MSG, read_by: [], sender_id: D, chat_id: OTHER_CHAT }, { id: MSG2, read_by: [], sender_id: D, chat_id: CHAT }] };
+      }
+      return { data: [] };
+    };
+    await call(msgs.batchMarkRead, { body: { messageIds: [MSG, MSG2] } });
+    const updates = mockLog.filter((q) => q[0] === 'from:messages' && q.some((c) => c.startsWith('update:'))).map((q) => q.join());
+    expect(updates.some((u) => u.includes(MSG2))).toBe(true);
+    expect(updates.some((u) => u.includes(MSG) && !u.includes(MSG2))).toBe(false);
   });
   it('K2-2i (99ffb16): a caller in no chats marks nothing and never reads messages', async () => {
     const r = await call(msgs.batchMarkRead, { body: { messageIds: [MSG] } });

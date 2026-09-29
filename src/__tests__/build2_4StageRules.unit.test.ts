@@ -77,7 +77,7 @@ describe('BUILD 2.4 · stageRules', () => {
     expect(stageRules('cricket', STAGES, 'final').overs).toBe(50);
     expect(stageRules('cricket', { knockout: { overs: 20 } }, 'final').overs).toBe(20);
     expect(stageRules('cricket', { default: { overs: 5 } }, 'group').overs).toBe(5);
-    expect(stageRules('cricket', null, 'knockout')).toEqual({ v: 1, style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, inningsMinutes: null, drawAllowed: true });
+    expect(stageRules('cricket', null, 'knockout')).toEqual({ v: 1, style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, inningsMinutes: null, powerplayOvers: null, drawAllowed: true });
   });
   test('each stage is checked by the rules validator', () => {
     expect(tournamentRulesRefusal('cricket', { group: { overs: 0 } })).toMatchObject({ code: 'BAD_RULES', error: 'Group / league matches: Overs must be a whole number from 1 to 50.' });
@@ -129,7 +129,7 @@ describe('BUILD 2.4 · set on create and edit, fixed once drawn', () => {
     const ok = await run(createTournament, { body: { ...tBody, match_rules: { knockout: { overs: 50 } } } });
     expect(ok.statusCode).toBeLessThan(300);
     const q = mockLog.find((x) => x[0] === 'from:tournaments' && has(x, 'insert:'))!;
-    expect(JSON.parse(q.find((c) => c.startsWith('insert:'))!.slice(7)).match_rules).toEqual({ knockout: { v: 1, style: 'limited', overs: 50, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, inningsMinutes: null, drawAllowed: true } });
+    expect(JSON.parse(q.find((c) => c.startsWith('insert:'))!.slice(7)).match_rules).toEqual({ knockout: { v: 1, style: 'limited', overs: 50, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, inningsMinutes: null, powerplayOvers: null, drawAllowed: true } });
     mockLog = [];
     const bad = await run(createTournament, { body: { ...tBody, match_rules: { final: { overs: 60 } } } });
     expect([bad.statusCode, bad.body.code]).toEqual([400, 'BAD_RULES']);

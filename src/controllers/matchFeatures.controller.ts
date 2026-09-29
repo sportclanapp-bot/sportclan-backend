@@ -471,8 +471,9 @@ export async function reduceOvers(req: Request, res: Response) {
       firstDone: chase.balls > 0 || inningsFinished(first, from, allOut[firstSide]),
     });
     if (refusal) return res.status(400).json({ error: refusal, code: 'BAD_REDUCE_OVERS' });
-    // A max-overs-per-bowler above the new overs comes down with them.
-    const next = { ...rules, overs: to as number, bowlerOvers: rules.bowlerOvers != null ? Math.min(rules.bowlerOvers, to as number) : null };
+    // A max-overs-per-bowler or a powerplay (3.13) above the new overs comes down with them.
+    const cut = (n: number | null | undefined) => (n != null ? Math.min(n, to as number) : null);
+    const next = { ...rules, overs: to as number, bowlerOvers: cut(rules.bowlerOvers), powerplayOvers: cut(rules.powerplayOvers) };
     const legacy = legacyFromRules('cricket', next);
     const summary = { ...cs, overs_reduced: { from: cs.overs_reduced?.from ?? from, to } };
     const { error } = await supabase.from('matches')

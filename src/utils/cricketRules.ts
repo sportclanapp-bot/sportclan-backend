@@ -322,3 +322,30 @@ export function oversReducedFrom(summary: unknown): number | null {
   const from = (summary as { overs_reduced?: { from?: unknown } } | null | undefined)?.overs_reduced?.from;
   return typeof from === 'number' && from > 0 ? from : null;
 }
+
+/**
+ * BUILD 3.13 · powerplay (display only): the first `overs` overs of an innings.
+ * Where `side`'s innings stands against it — its runs and wickets in those
+ * overs, whether it is running now (and which over), and whether it's done.
+ */
+export function powerplayState(
+  events: ReadonlyArray<{ event_type: string; payload?: unknown }>,
+  side: 'A' | 'B',
+  overs: number | null | undefined,
+): { runs: number; wickets: number; overNow: number; overs: number; running: boolean; done: boolean } | null {
+  if (!overs) return null;
+  const limit = overs * 6;
+  let balls = 0;
+  let runs = 0;
+  let wickets = 0;
+  for (const ev of events) {
+    const p = (ev.payload ?? {}) as { team_side?: unknown; runs?: unknown; wicket_type?: unknown; type?: unknown };
+    if ((p.team_side === 'B' ? 'B' : 'A') !== side) continue;
+    if (ev.event_type !== 'ball' && ev.event_type !== 'extra' && ev.event_type !== 'wicket') continue;
+    if (balls >= limit) break;
+    runs += Math.max(0, Number(p.runs ?? 0) || 0);
+    if (ev.event_type === 'wicket' && isDismissal(p.wicket_type ?? p.type)) wickets += 1;
+    if (isBallOfOver(ev.event_type, ev.payload)) balls += 1;
+  }
+  return { runs, wickets, overNow: Math.min(overs, Math.floor(balls / 6) + 1), overs, running: balls < limit, done: balls >= limit };
+}

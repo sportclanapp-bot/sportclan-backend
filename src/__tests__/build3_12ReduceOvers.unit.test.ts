@@ -136,9 +136,10 @@ test('refused: below what was bowled, a chase-only cut, not fewer, not cricket',
   expect((await call({ overs: 8 })).body.code).toBe('NOT_CRICKET');
 });
 test('a max overs per bowler above the new overs comes down with them', async () => {
-  rules = { v: 1, style: 'limited', overs: 10, bowlerOvers: 4 };
+  rules = { v: 1, style: 'limited', overs: 10, bowlerOvers: 4, powerplayOvers: 6 };
   summary = { A: { balls: 0 }, B: { balls: 0 } };
   setup();
   const r = await call({ overs: 3 });
   expect(r.body.rules.bowlerOvers).toBe(3);
+  expect(r.body.rules.powerplayOvers).toBe(3); // BUILD 3.13
 });

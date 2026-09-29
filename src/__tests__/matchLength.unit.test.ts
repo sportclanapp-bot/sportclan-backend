@@ -15,7 +15,7 @@ describe('matchLength', () => {
     expect(MATCH_LENGTHS.badminton).toEqual({ options: [1, 3], standard: 3, unit: 'game' });
     expect(MATCH_LENGTHS.tabletennis).toEqual({ options: [1, 3, 5, 7], standard: 5, unit: 'game' });
     expect(MATCH_LENGTHS.pickleball).toEqual({ options: [1, 3], standard: 3, unit: 'game' });
-    expect(MATCH_LENGTHS.volleyball).toEqual({ options: [3, 5], standard: 5, unit: 'set' });
+    expect(MATCH_LENGTHS.volleyball).toEqual({ options: [1, 3, 5], standard: 5, unit: 'set' }); // BUILD 3.36
     expect(MATCH_LENGTHS.tennis).toEqual({ options: [1, 3], standard: 3, unit: 'set' });
     expect(MATCH_LENGTHS.carrom).toEqual({ options: [1, 3], standard: 3, unit: 'game' });
     for (const s of ['cricket', 'football', 'hockey', 'basketball', 'chess']) expect(MATCH_LENGTHS[s]).toBeUndefined();
@@ -42,7 +42,8 @@ describe('matchLength', () => {
     expect(isAcceptableMatchLength('badminton', 'badminton')).toBe(true);
     expect(isAcceptableMatchLength('badminton', null)).toBe(true);
     expect(isAcceptableMatchLength('badminton', 'bo7')).toBe(false);
-    expect(isAcceptableMatchLength('volleyball', 'bo1')).toBe(false);
+    expect(isAcceptableMatchLength('volleyball', 'bo1')).toBe(true); // BUILD 3.36
+    expect(isAcceptableMatchLength('volleyball', 'bo7')).toBe(false);
     expect(isAcceptableMatchLength('cricket', 'bo3')).toBe(true); // not a best-of sport
   });
 

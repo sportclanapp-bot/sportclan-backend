@@ -55,6 +55,7 @@ import { rankTeams, computeStats, pointsModelFor, type PointsModel } from '../ut
 import { crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { DEFAULT_OVERS } from '../utils/cricketRules';
+import { groupCount, groupsDrawRefusal } from '../utils/groupsPlan';
 import {
   buildSchedule, timeToMinutes, keyOf, formatSlotIst,
   type SchedulingConfig, type FixtureShape, type SlotAssign,
@@ -2425,6 +2426,11 @@ export async function generateFixtures(req: Request, res: Response) {
     if (teams.length < 2) {
       return res.status(400).json({ error: 'At least 2 approved teams required' });
     }
+    // BUILD 1.10: a group of one has no matches and the knockout never seeds.
+    if (String(tournament.format ?? '').toLowerCase() === 'groups_knockout') {
+      const why = groupsDrawRefusal(teams.length, await getGroupsConfig(id));
+      if (why) return res.status(400).json({ error: why, code: 'GROUPS_TOO_SMALL' });
+    }
 
     // SC-48: DB-level atomic claim to prevent the fixture-generation RACE. The
     // old "count existing matches" guard let two concurrent requests both see 0
@@ -2592,11 +2598,7 @@ export async function generateFixtures(req: Request, res: Response) {
       // SC-58: group count + qualifiers-per-group are organizer-configurable
       // (migration 038); fall back to the historical 4-per-group / top-2.
       const gcfg = await getGroupsConfig(id);
-      const groupSize = gcfg.groupSize ?? 4;
-      const numGroups = Math.min(
-        teams.length,
-        Math.max(1, gcfg.numGroups ?? Math.ceil(teams.length / groupSize)),
-      );
+      const numGroups = groupCount(teams.length, gcfg);
       const qualsPerGroup = gcfg.qualifiersPerGroup;
       const groups: TeamSlot[][] = Array.from({ length: numGroups }, () => []);
       teams.forEach((t, i) => groups[i % numGroups].push(t));

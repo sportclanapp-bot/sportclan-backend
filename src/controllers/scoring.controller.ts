@@ -275,6 +275,17 @@ export async function validateScoringEvent(
     }
   }
 
+  // BUILD 3.32: a first-to basketball game is over once a side reaches the
+  // target — a basket after it is refused (the app closes its pad there too).
+  if (event_type === 'score' && payload && typeof payload === 'object' && /^[123]pt$/.test(String(payload.kind ?? ''))) {
+    const target = rulesOf('basketball', match).targetScore;
+    const ss = (match.score_summary ?? {}) as { A?: { score?: number; points?: number }; B?: { score?: number; points?: number } };
+    const pts = (x?: { score?: number; points?: number }) => Number(x?.score ?? x?.points ?? 0);
+    if (target && (pts(ss.A) >= target || pts(ss.B) >= target)) {
+      return refuse(409, { error: `A side has reached ${target} — the game is over. End the match.`, code: 'TARGET_REACHED' });
+    }
+  }
+
   // Phase 3 · decision 2: a RANKED singles match cannot start until the
   // opponent has accepted. Checked only before the first point (status still
   // scheduled) — once it is live, it was accepted. 409 so the scorer's outbox

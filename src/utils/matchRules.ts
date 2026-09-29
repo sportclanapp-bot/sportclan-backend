@@ -65,6 +65,8 @@ export interface MatchRules {
   halfTimeMinutes?: number | null;
   /** BUILD 3.18: football's penalties, kicks each before sudden death (3 or 5). */
   penaltyKicks?: number;
+  /** BUILD 3.19: a level knockout plays extra time first — minutes each half (0 = straight to penalties). */
+  extraTimeMinutes?: number;
   /** Can the match end level. */
   drawAllowed?: boolean;
   /** Chess: the clock. */
@@ -85,7 +87,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   volleyball: { bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true },
   tennis: { bestOf: 3 },
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
-  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, drawAllowed: true },
+  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, drawAllowed: true },
   hockey: { periods: 4, periodMinutes: null, drawAllowed: true },
   basketball: { periods: 4, periodMinutes: null, drawAllowed: false },
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true },
@@ -232,7 +234,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -315,6 +317,10 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'football' && r.penaltyKicks !== 3 && r.penaltyKicks !== 5) {
     return refuse('Penalty kicks must be 3 or 5 each.', 'penaltyKicks');
   }
+  // BUILD 3.19: extra time, 0 (none) to 15 minutes a half.
+  if (key === 'football' && (!isWhole(r.extraTimeMinutes) || r.extraTimeMinutes < 0 || r.extraTimeMinutes > EXTRA_TIME_MAX)) {
+    return refuse(`Extra time must be off, or up to ${EXTRA_TIME_MAX} minutes a half.`, 'extraTimeMinutes');
+  }
   if (MATCH_LENGTHS[key]) {
     const offered = MATCH_LENGTHS[key]!.options;
     if (!isWhole(r.bestOf) || !(offered as number[]).includes(r.bestOf)) return refuse(`Match length must be best of ${listOf(offered)}.`, 'bestOf');
@@ -326,7 +332,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'football' ? ['penaltyKicks'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -339,6 +345,8 @@ export const TIMED_LIMITS: Record<string, { periods: [number, number]; minutes: 
   football: { periods: [1, 4], minutes: [5, 45] },
 };
 export const HALF_TIME_MAX = 20;
+/** BUILD 3.19: extra time's longest half. */
+export const EXTRA_TIME_MAX = 15;
 
 /** BUILD 3.16: a football side, 3 (futsal-ish) to 11. */
 export const FOOTBALL_PLAYERS_MIN = 3;
@@ -357,6 +365,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (rules.periodMinutes) parts.push(`${rules.periods ?? 1} × ${rules.periodMinutes} min`);
   if (rules.halfTimeMinutes != null) parts.push(`HT ${rules.halfTimeMinutes} min`);
   // BUILD 3.18: 3 penalties each is the turf-cup way; 5 is the standard, left unsaid.
+  if (rules.extraTimeMinutes) parts.push(`ET 2 × ${rules.extraTimeMinutes} min`); // BUILD 3.19
   if (rules.penaltyKicks === 3) parts.push('3 pens each');
   return parts.length ? parts.join(' · ') : null;
 }

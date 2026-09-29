@@ -80,7 +80,7 @@ export function describeEvent(type: string | null | undefined, p: P | null | und
     case 'card': return `${CARD[String(x.kind)] ?? 'card'} — ${who ? `${who}, ` : ''}${team}`;
     case 'sub': return `substitution (${team})`;
     case 'timeout': return `${team} timeout`;
-    case 'period_change': return x.kind === 'halftime' ? 'half-time' : 'end of period';
+    case 'period_change': return x.kind === 'halftime' ? 'half-time' : x.kind === 'extra_time' ? 'extra time' : x.kind === 'et_half' ? 'extra-time half-time' : 'end of period';
     // Chess
     case 'move': return `${x.side === 'B' ? 'Black' : 'White'} move`;
     case 'result': {

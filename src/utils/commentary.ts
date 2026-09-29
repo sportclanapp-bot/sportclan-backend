@@ -45,6 +45,9 @@ export function sportCommentary(eventType: string, p: Record<string, any>, ctx: 
     return `${kind} — ${player ? `${player} (${team})` : team}`;
   }
   if (eventType === 'period_change') {
+    // BUILD 3.19: football's extra time.
+    if (p.kind === 'extra_time') return 'Extra time';
+    if (p.kind === 'et_half') return 'Extra time · half-time';
     // BUILD 3.17: half-time only between two halves; else the period that ended.
     const count = ctx.regulation ?? (ctx.sport === 'football' ? 2 : 4);
     if (p.kind === 'halftime' || (ctx.sport === 'football' && count === 2)) return 'Half-time';

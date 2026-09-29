@@ -395,8 +395,8 @@ describe('F13/F14/F19', () => {
     await call(getTournamentAnalytics, {});
     expect(mockLog.find((q) => q[0] === 'from:tournament_entries')).toContain('eq:["status","approved"]');
   });
-  test('the offline pack carries each entry\'s status', () => {
+  test('the offline pack carries each entry\'s status (and, BUILD 1.7, its group)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'tournamentHub.controller.ts'), 'utf8');
-    expect(src).toContain(".select('id, team_id, status, team:teams(id, name, short_name, logo_url)')");
+    expect(src).toContain(".select('id, team_id, status, group_label, team:teams(id, name, short_name, logo_url)')");
   });
 });

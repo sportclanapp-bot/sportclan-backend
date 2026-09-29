@@ -74,6 +74,28 @@ function generateEntryCode(): string {
 }
 
 // POST /tournaments — Premium required (Change #6)
+/**
+ * BUILD 1.11 · `home_away` says what the format already decides: a league
+ * plays each pair twice (home and away), a round robin once, and knockouts
+ * are single ties (two-legged ties aren't offered). It was stored as sent and
+ * never read, so `home_away: true` on a round robin promised a second leg
+ * nobody would play. Stored from the format now; a value that contradicts it
+ * is refused, pointing at the format.
+ */
+export function homeAwayFor(format: unknown): boolean {
+  return String(format ?? '').toLowerCase() === 'league';
+}
+export function homeAwayRefusal(format: unknown, homeAway: unknown): { error: string; code: string } | null {
+  if (homeAway === undefined || homeAway === null) return null;
+  if (typeof homeAway !== 'boolean' || homeAway !== homeAwayFor(format)) {
+    return {
+      error: 'Home and away comes from the format: a league plays each pair twice, a round robin once. Knockout ties are one match.',
+      code: 'HOME_AWAY_MISMATCH',
+    };
+  }
+  return null;
+}
+
 export async function createTournament(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -133,6 +155,8 @@ export async function createTournament(req: Request, res: Response) {
         error: `Invalid format. Must be one of: ${TOURNAMENT_FORMATS.join(', ')}`,
       });
     }
+    const haBad = homeAwayRefusal(format, home_away);
+    if (haBad) return res.status(400).json(haBad);
     // Bound max_teams (SC-39) — 0/1/absurd values previously created degenerate
     // tournaments.
     const maxTeamsNum = Number(max_teams);
@@ -238,7 +262,7 @@ export async function createTournament(req: Request, res: Response) {
         buffer_minutes: buffer_minutes ?? null,
         ground_count: ground_count ?? null,
         ground_names: Array.isArray(ground_names) && ground_names.length > 0 ? ground_names : null,
-        home_away: !!home_away,
+        home_away: homeAwayFor(format), // BUILD 1.11
         ...groupsConfigFields,
       })
       .select('*')
@@ -906,6 +930,13 @@ export async function updateTournament(req: Request, res: Response) {
       if (req.body && key in req.body) update[key] = req.body[key];
     }
     if (typeof update.name === 'string') update.name = update.name.trim();
+    // BUILD 1.11: home_away follows the format (a new one when it changes).
+    {
+      const fmt = 'format' in update ? update.format : (tournament as { format?: string }).format;
+      const haBad = homeAwayRefusal(fmt, update.home_away);
+      if (haBad) return res.status(400).json(haBad);
+      if ('format' in update || 'home_away' in update) update.home_away = homeAwayFor(fmt);
+    }
     // Empty strings in date/number/city columns mean "clear it", not a cast error.
     for (const k of ['start_date', 'end_date', 'registration_deadline', 'city_id', 'daily_start_time', 'daily_end_time']) {
       if (update[k] === '') update[k] = null;

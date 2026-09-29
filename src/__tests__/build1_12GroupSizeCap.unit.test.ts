@@ -1,8 +1,9 @@
 /**
- * BUILD 1.10 · the groups → knockout draw refuses a group of one (it has no
- * matches, so the knockout never seeds and the tournament never finishes),
- * with the same rule the app gates Generate on (utils/groupsPlan). Two or
- * three teams with the default grouping still draw: one group, then a final.
+ * BUILD 1.12 · `group_size` is a cap. It only chose the group count when no
+ * count was set, and was ignored otherwise — 2 groups with a size of 4 took
+ * 12 teams as two groups of 6. No group is drawn bigger than the size now,
+ * and when the teams can't fit (or can't make groups of 2) the draw is
+ * refused before it's claimed.
  */
 let mockSportSlug = 'cricket';
 type Q = string[];
@@ -46,7 +47,7 @@ jest.mock('../utils/notify', () => ({
 }));
 
 // eslint-disable-next-line import/first
-import { generateFixtures } from '../controllers/tournaments.controller';
+import { generateFixtures, createTournament } from '../controllers/tournaments.controller';
 const T = '22222222-2222-4222-8222-222222222222';
 const has = (q: Q, s: string) => q.some((c) => c.startsWith(s));
 const call = async () => {
@@ -70,25 +71,47 @@ const setup = (teams: number, cfg: object = {}) => {
 };
 const claimed = () => mockLog.some((q) => q[0] === 'from:tournaments' && has(q, 'update:'));
 
-describe('BUILD 1.10 · groups → knockout minimum', () => {
-  test.each([2, 3, 4])('%i teams, default grouping → drawn (one group, then a final)', async (n) => {
-    setup(n);
-    const r = await call();
-    expect(r.statusCode).toBe(200);
-    expect(inserted().flat().filter((row) => row.group_label === 'A').length).toBe((n * (n - 1)) / 2);
-  });
-  test.each([[2, 2], [3, 2]])('%i teams in %i groups → 400 GROUPS_TOO_SMALL, the draw is not claimed', async (n, g) => {
-    setup(n, { num_groups: g });
+const groupSizes = () => {
+  const rows = inserted().flat().filter((row) => row.group_label);
+  const pairs = new Map<string, number>();
+  for (const r of rows) pairs.set(r.group_label, (pairs.get(r.group_label) ?? 0) + 1);
+  // n teams play n(n-1)/2 group matches: recover n from the count.
+  return [...pairs.entries()].sort().map(([, m]) => (1 + Math.sqrt(1 + 8 * m)) / 2);
+};
+
+describe('BUILD 1.12 · group size is a cap', () => {
+  test('12 teams, 2 groups, size 4 → 400 GROUPS_TOO_SMALL (groups of 6), not claimed', async () => {
+    setup(12, { num_groups: 2, group_size: 4 });
     const r = await call();
     expect([r.statusCode, r.body.code]).toEqual([400, 'GROUPS_TOO_SMALL']);
-    expect(r.body.error).toMatch(/Each group needs at least 2 teams/);
+    expect(r.body.error).toBe('12 teams in 2 groups makes groups of 6, more than the group size of 4.');
     expect(claimed()).toBe(false);
-    expect(inserted()).toHaveLength(0);
   });
-  // (BUILD 1.12 made the group size a cap: 5 teams in groups of at most 2 is
-  // refused — see build1_12GroupSizeCap.)
-  test('4 teams in 2 groups → drawn', async () => {
-    setup(4, { num_groups: 2 });
+  test('8 teams, 2 groups, size 4 → two groups of 4', async () => {
+    setup(8, { num_groups: 2, group_size: 4 });
     expect((await call()).statusCode).toBe(200);
+    expect(groupSizes()).toEqual([4, 4]);
+  });
+  test('size 3 alone: 7 teams → 3 groups (3, 2, 2), none above 3', async () => {
+    setup(7, { group_size: 3 });
+    expect((await call()).statusCode).toBe(200);
+    expect(groupSizes()).toEqual([3, 2, 2]);
+  });
+  test('5 teams in groups of at most 2 can’t be drawn → 400', async () => {
+    setup(5, { group_size: 2 });
+    const r = await call();
+    expect([r.statusCode, r.body.code]).toEqual([400, 'GROUPS_TOO_SMALL']);
+  });
+  test('create: max teams above groups × size → 400, nothing inserted', async () => {
+    mockLog = [];
+    mockNext = () => ({ data: null });
+    const r: any = { statusCode: 200, body: null, setHeader: jest.fn() };
+    r.status = jest.fn((c: number) => { r.statusCode = c; return r; });
+    r.json = jest.fn((b: unknown) => { r.body = b; return r; });
+    await createTournament({ userId: 'me', params: {}, query: {}, body: {
+      sport_id: 'sp', name: 'P3 Cap', format: 'groups_knockout', max_teams: 12, entry_fee: 0, start_date: '2026-10-05', num_groups: 2, group_size: 4,
+    } } as any, r);
+    expect([r.statusCode, r.body.code, r.body.error]).toEqual([400, 'GROUPS_TOO_SMALL', 'Max teams (12) is more than 2 groups of 4 can hold (8).']);
+    expect(mockLog.some((q) => q.some((c) => c.startsWith('insert:')))).toBe(false);
   });
 });

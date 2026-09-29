@@ -215,6 +215,14 @@ export async function createTournament(req: Request, res: Response) {
     if (format === 'groups_knockout' && gs !== null && qpg !== null && qpg > gs) {
       return res.status(400).json({ error: 'qualifiers_per_group cannot exceed group_size' });
     }
+    // BUILD 1.12: the group size is a cap — a tournament that takes more teams
+    // than its groups can hold could never be drawn.
+    if (format === 'groups_knockout' && ng !== null && gs !== null && maxTeamsNum > ng * gs) {
+      return res.status(400).json({
+        error: `Max teams (${maxTeamsNum}) is more than ${ng} groups of ${gs} can hold (${ng * gs}).`,
+        code: 'GROUPS_TOO_SMALL',
+      });
+    }
 
     // Generate unique entry code (retry a few times on collision)
     let entry_code = generateEntryCode();

@@ -50,7 +50,7 @@ import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/ma
 import { rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, type UnfinishedEnd } from '../utils/cricketRules';
-import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
+import { shootoutApplies, shootoutKicksOf, shootoutProblem, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
 // U-13: moved to utils/viewerCanPlay (F-24: availability answers use it too).
 export { viewerCanPlay } from '../utils/viewerCanPlay';
@@ -2653,8 +2653,10 @@ export async function completeMatch(req: Request, res: Response) {
       if (!shootoutApplies(normSportSlug(sportRow?.slug), isBracketMatch) || !level) {
         return res.status(400).json({ error: 'A shootout decides only a level knockout football or hockey match.', code: 'SHOOTOUT_NOT_ALLOWED' });
       }
-      if (!validShootout(shootout.A, shootout.B)) {
-        return res.status(400).json({ error: 'A shootout score is two different whole numbers.', code: 'BAD_SHOOTOUT' });
+      // BUILD 3.18: the match's kicks each, then sudden death.
+      const problem = shootoutProblem(shootoutScore!.A, shootoutScore!.B, shootoutKicksOf(rulesOf(normSportSlug(sportRow?.slug), match)));
+      if (problem) {
+        return res.status(400).json({ error: problem, code: 'BAD_SHOOTOUT' });
       }
       if (shootoutWinner(shootoutScore!.A, shootoutScore!.B) !== winnerSide) {
         return res.status(400).json({ error: 'The winner has to be the side that won the shootout.', code: 'SHOOTOUT_WINNER_MISMATCH' });

@@ -63,6 +63,8 @@ export interface MatchRules {
   periodMinutes?: number | null;
   /** BUILD 3.17: football's half-time in minutes (display only); null = not set. */
   halfTimeMinutes?: number | null;
+  /** BUILD 3.18: football's penalties, kicks each before sudden death (3 or 5). */
+  penaltyKicks?: number;
   /** Can the match end level. */
   drawAllowed?: boolean;
   /** Chess: the clock. */
@@ -83,7 +85,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   volleyball: { bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true },
   tennis: { bestOf: 3 },
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
-  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, drawAllowed: true },
+  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, drawAllowed: true },
   hockey: { periods: 4, periodMinutes: null, drawAllowed: true },
   basketball: { periods: 4, periodMinutes: null, drawAllowed: false },
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true },
@@ -230,7 +232,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -309,6 +311,10 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
       return refuse(`Half-time must be off, or 0 to ${HALF_TIME_MAX} minutes.`, 'halfTimeMinutes');
     }
   }
+  // BUILD 3.18: 3 or 5 penalties each, then sudden death.
+  if (key === 'football' && r.penaltyKicks !== 3 && r.penaltyKicks !== 5) {
+    return refuse('Penalty kicks must be 3 or 5 each.', 'penaltyKicks');
+  }
   if (MATCH_LENGTHS[key]) {
     const offered = MATCH_LENGTHS[key]!.options;
     if (!isWhole(r.bestOf) || !(offered as number[]).includes(r.bestOf)) return refuse(`Match length must be best of ${listOf(offered)}.`, 'bestOf');
@@ -320,7 +326,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'football' ? ['penaltyKicks'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -350,6 +356,8 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   // BUILD 3.17: "2 × 25 min", and the half-time when it's set.
   if (rules.periodMinutes) parts.push(`${rules.periods ?? 1} × ${rules.periodMinutes} min`);
   if (rules.halfTimeMinutes != null) parts.push(`HT ${rules.halfTimeMinutes} min`);
+  // BUILD 3.18: 3 penalties each is the turf-cup way; 5 is the standard, left unsaid.
+  if (rules.penaltyKicks === 3) parts.push('3 pens each');
   return parts.length ? parts.join(' · ') : null;
 }
 

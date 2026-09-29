@@ -26,10 +26,30 @@ export function shootoutApplies(sport: string | null | undefined, knockout: bool
   return knockout && (SHOOTOUT_SPORTS as readonly string[]).includes(key(sport));
 }
 
-/** Two whole numbers 0..30 that differ — a shootout cannot end level. */
-export function validShootout(a: unknown, b: unknown): boolean {
+/**
+ * Two whole numbers 0..30 that differ — a shootout cannot end level.
+ * BUILD 3.18: with the match's kicks each (3 or 5), a tally past them went to
+ * sudden death, which ends by exactly one (5–4 after 3 each, not 5–3).
+ */
+export function validShootout(a: unknown, b: unknown, kicks?: number | null): boolean {
+  return shootoutProblem(a, b, kicks) === null;
+}
+
+/** Why a shootout tally can't be, in the scorer's words — or null. */
+export function shootoutProblem(a: unknown, b: unknown, kicks?: number | null): string | null {
   const ok = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= SHOOTOUT_MAX;
-  return ok(a) && ok(b) && a !== b;
+  if (!ok(a) || !ok(b)) return `A shootout score is two whole numbers from 0 to ${SHOOTOUT_MAX}.`;
+  if (a === b) return 'A shootout can’t end level.';
+  if (kicks && Math.max(a as number, b as number) > kicks && Math.abs((a as number) - (b as number)) !== 1) {
+    return `After ${kicks} kicks each it’s sudden death, so it ends by one goal (e.g. ${kicks + 1}–${kicks}).`;
+  }
+  return null;
+}
+
+/** BUILD 3.18: the kicks each before sudden death — football's rules say 3 or 5; otherwise 5. */
+export const SHOOTOUT_KICKS = [3, 5] as const;
+export function shootoutKicksOf(rules: { penaltyKicks?: number | null } | null | undefined): number {
+  return rules?.penaltyKicks === 3 ? 3 : 5;
 }
 
 export function shootoutWinner(a: number, b: number): ShootoutSide {

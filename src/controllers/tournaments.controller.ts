@@ -54,8 +54,9 @@ import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firs
 import { rankTeams, computeStats, pointsModelFor, type PointsModel } from '../utils/standings';
 import { crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
+import { withWalkoverScore } from '../utils/walkoverScore';
 import { DEFAULT_OVERS } from '../utils/cricketRules';
-import { legacyFromRules, stageRules, tournamentRulesRefusal, normalizeRules, STAGE_KEYS, type Stage } from '../utils/matchRules';
+import { legacyFromRules, rulesOf, stageRules, tournamentRulesRefusal, normalizeRules, STAGE_KEYS, type Stage } from '../utils/matchRules';
 import { groupsDrawRefusal, planGroups } from '../utils/groupsPlan';
 import {
   buildSchedule, timeToMinutes, keyOf, formatSlotIst,
@@ -2197,7 +2198,7 @@ export async function advanceTournamentWinner(matchId: string): Promise<void> {
 async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise<void> {
   const { data: matches } = await supabase
     .from('matches')
-    .select('id, team_a_id, team_b_id, status')
+    .select('id, team_a_id, team_b_id, status, sport_id, format, overs, rules, score_summary')
     .eq('tournament_id', tournamentId)
     .in('status', ['scheduled', 'live'])
     .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`);
@@ -2219,10 +2220,13 @@ async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise
       await supabase.from('matches').update({ status: 'abandoned', updated_at: now }).eq('id', mt.id);
       continue;
     }
-    // Walkover: opponent wins the forfeited match and advances.
+    // Walkover: opponent wins the forfeited match and advances. BUILD 3.21: a
+    // football walkover goes down as 3–0 / 5–0.
+    const slug = normSportSlug((await getSport(mt.sport_id as string))?.slug);
+    const ss = withWalkoverScore(slug, rulesOf(slug, mt), { ...(mt.score_summary as object ?? {}), walkover: true }, opponentId === mt.team_a_id ? 'A' : 'B');
     await supabase
       .from('matches')
-      .update({ status: 'abandoned', winner_team_id: opponentId, updated_at: now })
+      .update({ status: 'abandoned', winner_team_id: opponentId, score_summary: ss, updated_at: now })
       .eq('id', mt.id);
     await advanceTournamentWinner(mt.id);
   }

@@ -50,6 +50,7 @@ import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/ma
 import { rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, type UnfinishedEnd } from '../utils/cricketRules';
+import { withWalkoverScore } from '../utils/walkoverScore';
 import { shootoutApplies, shootoutKicksOf, shootoutProblem, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
 // U-13: moved to utils/viewerCanPlay (F-24: availability answers use it too).
@@ -2321,7 +2322,7 @@ export async function abandonMatch(req: Request, res: Response) {
     const { advancing_team_id } = req.body || {};
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, umpire_id, status, tournament_id, round, group_label, next_match_id, team_a_id, team_b_id, team_a_name, team_b_name')
+      .select('id, created_by, umpire_id, status, tournament_id, round, group_label, next_match_id, team_a_id, team_b_id, team_a_name, team_b_name, sport_id, format, overs, rules, score_summary')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -2359,7 +2360,16 @@ export async function abandonMatch(req: Request, res: Response) {
 
     const { data: updated, error } = await supabase
       .from('matches')
-      .update({ status: 'abandoned', winner_team_id: walkoverWinner, updated_at: new Date().toISOString() })
+      .update({
+        status: 'abandoned', winner_team_id: walkoverWinner, updated_at: new Date().toISOString(),
+        // BUILD 3.21: a knockout forfeit is a walkover — football's goes down as 3–0 / 5–0.
+        ...(walkoverWinner ? await (async () => {
+          const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
+          const side = walkoverWinner === match.team_a_id ? 'A' : 'B';
+          const ss = withWalkoverScore(slug, rulesOf(slug, match), { ...(match.score_summary as object ?? {}), walkover: true }, side);
+          return { score_summary: ss };
+        })() : {}),
+      })
       .eq('id', id)
       .select('*')
       .single();
@@ -3138,7 +3148,10 @@ export async function completeMatch(req: Request, res: Response) {
         ss.walkover = true;
         if (walkover_reason) ss.walkover_reason = String(walkover_reason).slice(0, 200);
         const wName = derivedSide === 'A' ? aName : bName;
-        ss.result = `${wName} won by walkover`;
+        // BUILD 3.21: a football walkover goes down as 3–0 / 5–0.
+        Object.assign(ss, withWalkoverScore(slug, rulesOf(slug, match), ss, derivedSide));
+        const wo = ss.walkover_score as Record<string, number> | undefined;
+        ss.result = wo ? `${wName} won by walkover (${wo[derivedSide]}–0)` : `${wName} won by walkover`;
       }
       const patch: Record<string, any> = { score_summary: ss };
       // Backfill winner_team_id when the client didn't send it but a real team

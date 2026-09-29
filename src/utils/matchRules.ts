@@ -67,6 +67,8 @@ export interface MatchRules {
   penaltyKicks?: number;
   /** BUILD 3.19: a level knockout plays extra time first — minutes each half (0 = straight to penalties). */
   extraTimeMinutes?: number;
+  /** BUILD 3.21: the score a football walkover goes down as — 3–0 or 5–0. */
+  walkoverGoals?: number;
   /** Can the match end level. */
   drawAllowed?: boolean;
   /** Chess: the clock. */
@@ -87,7 +89,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   volleyball: { bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true },
   tennis: { bestOf: 3 },
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
-  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, drawAllowed: true },
+  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, drawAllowed: true },
   hockey: { periods: 4, periodMinutes: null, drawAllowed: true },
   basketball: { periods: 4, periodMinutes: null, drawAllowed: false },
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true },
@@ -234,7 +236,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -317,6 +319,8 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'football' && r.penaltyKicks !== 3 && r.penaltyKicks !== 5) {
     return refuse('Penalty kicks must be 3 or 5 each.', 'penaltyKicks');
   }
+  // BUILD 3.21: a walkover goes down as 3–0 or 5–0.
+  if (key === 'football' && r.walkoverGoals !== 3 && r.walkoverGoals !== 5) return refuse('A walkover is 3–0 or 5–0.', 'walkoverGoals');
   // BUILD 3.20: whether a league / group match may end level.
   if (key === 'football' && typeof r.drawAllowed !== 'boolean') return refuse('Draws are allowed or not.', 'drawAllowed');
   // BUILD 3.19: extra time, 0 (none) to 15 minutes a half.
@@ -334,7 +338,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -369,8 +373,18 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   // BUILD 3.18: 3 penalties each is the turf-cup way; 5 is the standard, left unsaid.
   if (rules.extraTimeMinutes) parts.push(`ET 2 × ${rules.extraTimeMinutes} min`); // BUILD 3.19
   if (key === 'football' && rules.drawAllowed === false) parts.push('no draws'); // BUILD 3.20
+  if (key === 'football' && rules.walkoverGoals === 5) parts.push('walkover 5–0'); // BUILD 3.21 (3–0 left unsaid)
   if (rules.penaltyKicks === 3) parts.push('3 pens each');
   return parts.length ? parts.join(' · ') : null;
+}
+
+/**
+ * BUILD 3.21 · the winner's goals when a match is a walkover (the loser's are
+ * 0): football per its rules (3 or 5); other sports keep a walkover scoreless
+ * (their own walkover score is BUILD 4.8).
+ */
+export function walkoverGoalsOf(sport: string | null | undefined, rules: MatchRules): number | null {
+  return lengthKey(sport) === 'football' ? (rules.walkoverGoals === 5 ? 5 : 3) : null;
 }
 
 // ── BUILD 2.4 · a tournament's rules per stage ──────────────────────────────

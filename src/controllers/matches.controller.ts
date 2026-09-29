@@ -49,7 +49,7 @@ import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
 import { rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
-import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, type UnfinishedEnd } from '../utils/cricketRules';
+import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, validSuperOver, superOverWinner, superOverResultText, type UnfinishedEnd } from '../utils/cricketRules';
 import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
 // U-13: moved to utils/viewerCanPlay (F-24: availability answers use it too).
@@ -2671,6 +2671,22 @@ export async function completeMatch(req: Request, res: Response) {
         });
       }
     }
+    // BUILD 3.9: a level knockout cricket match is decided by a super over,
+    // recorded as its score; the named winner is the super over's.
+    const superOver = (req.body?.super_over ?? null) as { A?: unknown; B?: unknown } | null;
+    const superOverScore = superOver ? { A: Number(superOver.A), B: Number(superOver.B) } : null;
+    if (superOver) {
+      const level = Number(canonical?.A?.score ?? 0) === Number(canonical?.B?.score ?? 0);
+      if (normSportSlug(sportRow?.slug) !== 'cricket' || !isBracketMatch || !level) {
+        return res.status(400).json({ error: 'A super over decides only a tied knockout cricket match.', code: 'SUPER_OVER_NOT_ALLOWED' });
+      }
+      if (!validSuperOver(superOver.A, superOver.B)) {
+        return res.status(400).json({ error: 'A super over score is two different whole numbers of runs — if it tied, enter the one that decided it.', code: 'BAD_SUPER_OVER' });
+      }
+      if (superOverWinner(superOverScore!.A, superOverScore!.B) !== winnerSide) {
+        return res.status(400).json({ error: 'The winner has to be the side that won the super over.', code: 'SUPER_OVER_WINNER_MISMATCH' });
+      }
+    }
     if (isBracketMatch && !winner_team_id) {
       return res.status(400).json({
         error: 'Bracket matches need a decisive winner — pick the winning team (a bracket can\'t advance on a tie).',
@@ -3079,6 +3095,12 @@ export async function completeMatch(req: Request, res: Response) {
           goals: { A: aScore, B: bScore },
           shootout: shootoutScore,
         });
+        resultForNotice = ss.result;
+      }
+      // BUILD 3.9: "Lions won the super over (14–9)" — the match itself tied.
+      if (superOverScore && derivedSide) {
+        ss.super_over = superOverScore;
+        ss.result = superOverResultText(derivedSide === 'A' ? aName : bName, superOverScore);
         resultForNotice = ss.result;
       }
       // BUILD 1.5: "Magnus won on tie-break" — the game itself was a draw.

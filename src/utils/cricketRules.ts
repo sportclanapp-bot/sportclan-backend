@@ -249,3 +249,22 @@ export function allowedOnFreeHit(wicketType: unknown): boolean {
   const k = String(wicketType ?? '').toLowerCase().replace(/[^a-z]/g, '');
   return FREE_HIT_OUTS.has(k) || !isDismissal(k) || k === 'retiredout';
 }
+
+/**
+ * BUILD 3.9 · super over: a knockout match that ends level is decided by one
+ * (a bracket can't advance on a tie). It is recorded as its score — each side's
+ * runs, whole numbers that differ; a super over that ties is played again, and
+ * the one that decided it is what's entered.
+ */
+export const SUPER_OVER_MAX = 99;
+export function validSuperOver(a: unknown, b: unknown): boolean {
+  const ok = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= SUPER_OVER_MAX;
+  return ok(a) && ok(b) && a !== b;
+}
+export function superOverWinner(a: number, b: number): 'A' | 'B' {
+  return a > b ? 'A' : 'B';
+}
+/** "Lions won the super over (14–9)". */
+export function superOverResultText(winnerName: string, so: { A: number; B: number }): string {
+  return `${winnerName} won the super over (${Math.max(so.A, so.B)}–${Math.min(so.A, so.B)})`;
+}

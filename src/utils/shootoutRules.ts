@@ -50,10 +50,15 @@ export function shootoutProblem(a: unknown, b: unknown, kicks?: number | null): 
   return null;
 }
 
-/** BUILD 3.18: the kicks each before sudden death — football's rules say 3 or 5; otherwise 5. */
+/**
+ * BUILD 3.18: the kicks each before sudden death — football's rules say 3 or 5.
+ * BUILD 3.27: hockey's shoot-out takers, 1–5. Otherwise 5.
+ */
 export const SHOOTOUT_KICKS = [3, 5] as const;
-export function shootoutKicksOf(rules: { penaltyKicks?: number | null } | null | undefined): number {
-  return rules?.penaltyKicks === 3 ? 3 : 5;
+export function shootoutKicksOf(rules: { penaltyKicks?: number | null; shootoutTakers?: number | null } | null | undefined): number {
+  if (rules?.penaltyKicks === 3) return 3;
+  const t = rules?.shootoutTakers;
+  return typeof t === 'number' && Number.isInteger(t) && t >= 1 && t <= 5 ? t : 5;
 }
 
 export function shootoutWinner(a: number, b: number): ShootoutSide {

@@ -74,6 +74,8 @@ export interface MatchRules {
   offside?: boolean;
   /** BUILD 3.24: a yellow card's sin bin in minutes (display only); null = none. */
   sinBinMinutes?: number | null;
+  /** BUILD 3.27: hockey's shoot-out takers each before sudden death (1–5). */
+  shootoutTakers?: number;
   /** Can the match end level. */
   drawAllowed?: boolean;
   /** Chess: the clock. */
@@ -95,7 +97,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   tennis: { bestOf: 3 },
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true },
-  hockey: { players: null, periods: 4, periodMinutes: null, drawAllowed: true },
+  hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, drawAllowed: true },
   basketball: { periods: 4, periodMinutes: null, drawAllowed: false },
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true },
 };
@@ -241,7 +243,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -328,6 +330,10 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   // BUILD 3.23: two on/off flags, shown on the match (no effect on scoring).
   if (key === 'football' && typeof r.rollingSubs !== 'boolean') return refuse('Rolling subs is on or off.', 'rollingSubs');
   if (key === 'football' && typeof r.offside !== 'boolean') return refuse('Offside is on or off.', 'offside');
+  // BUILD 3.27: hockey's shoot-out takers, 1–5.
+  if (key === 'hockey' && (!isWhole(r.shootoutTakers) || r.shootoutTakers < 1 || r.shootoutTakers > 5)) {
+    return refuse('Shoot-out takers must be 1 to 5 each.', 'shootoutTakers');
+  }
   // BUILD 3.24: a sin bin of 2–15 minutes, or none.
   if (key === 'football' && r.sinBinMinutes !== null && (!isWhole(r.sinBinMinutes) || r.sinBinMinutes < 2 || r.sinBinMinutes > 15)) {
     return refuse('A sin bin must be off, or 2 to 15 minutes.', 'sinBinMinutes');
@@ -351,7 +357,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'hockey' ? ['shootoutTakers'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -399,6 +405,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (key === 'football' && rules.rollingSubs === true) parts.push('rolling subs');
   if (key === 'football' && rules.offside === false) parts.push('no offside');
   if (key === 'football' && rules.sinBinMinutes) parts.push(`sin bin ${rules.sinBinMinutes} min`); // BUILD 3.24
+  if (key === 'hockey' && rules.shootoutTakers != null && rules.shootoutTakers !== 5) parts.push(`shoot-out ${rules.shootoutTakers} each`); // BUILD 3.27
   if (rules.penaltyKicks === 3) parts.push('3 pens each');
   return parts.length ? parts.join(' · ') : null;
 }

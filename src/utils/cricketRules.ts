@@ -343,9 +343,20 @@ export function powerplayState(
     if ((p.team_side === 'B' ? 'B' : 'A') !== side) continue;
     if (ev.event_type !== 'ball' && ev.event_type !== 'extra' && ev.event_type !== 'wicket') continue;
     if (balls >= limit) break;
-    runs += Math.max(0, Number(p.runs ?? 0) || 0);
+    runs += Math.max(0, Number(p.runs ?? 0) || 0) + penaltyRunsOf(p); // BUILD 3.14: a roof penalty
     if (ev.event_type === 'wicket' && isDismissal(p.wicket_type ?? p.type)) wickets += 1;
     if (isBallOfOver(ev.event_type, ev.payload)) balls += 1;
   }
   return { runs, wickets, overNow: Math.min(overs, Math.floor(balls / 6) + 1), overs, running: balls < limit, done: balls >= limit };
+}
+
+/**
+ * BUILD 3.14 · box cricket: hitting the roof costs the batting side runs (−5).
+ * Stored on the ball as `penalty_runs` (a whole number −10..−1): the side's
+ * total takes it; the batter and the bowler don't. 0 on any other event.
+ */
+export const ROOF_PENALTY = -5;
+export function penaltyRunsOf(payload: unknown): number {
+  const n = (payload as { penalty_runs?: unknown } | null | undefined)?.penalty_runs;
+  return typeof n === 'number' && Number.isInteger(n) && n >= -10 && n <= -1 ? n : 0;
 }

@@ -49,7 +49,7 @@ import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
 import { rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
-import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, validSuperOver, superOverWinner, superOverResultText, type UnfinishedEnd } from '../utils/cricketRules';
+import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, type UnfinishedEnd } from '../utils/cricketRules';
 import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
 // U-13: moved to utils/viewerCanPlay (F-24: availability answers use it too).
@@ -1501,6 +1501,8 @@ export async function getCommentary(req: Request, res: Response) {
         } else {
           commentary = `${runs} run${runs === 1 ? '' : 's'}`;
         }
+        // BUILD 3.14: box cricket — the ball hit the roof and the side loses runs.
+        if (penaltyRunsOf(p)) commentary = `Hit the roof · ${penaltyRunsOf(p)} runs`;
         // V200 (visual review B08): say who — "Khan to Sharma, SIX!", the way
         // commentary reads — whenever the ball carries the names.
         commentary = ballWho(p, commentary);

@@ -17,7 +17,7 @@ import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
-import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal } from '../utils/cricketRules';
+import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf } from '../utils/cricketRules';
 import { rulesOf, setConfigOf, standardRules, winsToWin } from '../utils/matchRules';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
@@ -224,6 +224,15 @@ export async function validateScoringEvent(
       }
     } else if (outOfRange(payload.value, 1, 3)) {
       return refuse(400, { error: 'value must be an integer between 1 and 3' });
+    }
+    // BUILD 3.14: a roof penalty (box cricket) rides on a ball: −10..−1.
+    if (payload.penalty_runs !== undefined) {
+      if (event_type !== 'ball' || penaltyRunsOf(payload) === 0) {
+        return refuse(400, { error: 'penalty_runs is a whole number from -10 to -1, on a ball.', code: 'BAD_PENALTY_RUNS' });
+      }
+      if (rulesOf('cricket', match).style !== 'box') {
+        return refuse(400, { error: 'Roof penalties are for box cricket.', code: 'BAD_PENALTY_RUNS' });
+      }
     }
     // BUILD 3.6: a wide / no-ball worth 2 makes a no-ball six 8.
     const wideOrNb = event_type === 'extra' && (payload.type === 'Wd' || payload.type === 'Nb');
@@ -1050,7 +1059,7 @@ export async function recomputeSummary(
       if (cricketFirstBat === null && (e.event_type === 'ball' || e.event_type === 'extra' || e.event_type === 'wicket')) {
         cricketFirstBat = sideOf(p);
       }
-      if (e.event_type === 'ball') { inn.runs += Number(p.runs ?? 0); if (!p.is_extra) inn.balls += 1; }
+      if (e.event_type === 'ball') { inn.runs += Number(p.runs ?? 0) + penaltyRunsOf(p); if (!p.is_extra) inn.balls += 1; } // BUILD 3.14: a roof penalty
       else if (e.event_type === 'extra') {
         inn.runs += Number(p.runs ?? 0);
         // Byes / leg-byes ARE legal deliveries (the over progresses); wides /

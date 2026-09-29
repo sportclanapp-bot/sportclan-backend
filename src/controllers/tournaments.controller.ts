@@ -55,7 +55,7 @@ import { rankTeams, computeStats, pointsModelFor, type PointsModel } from '../ut
 import { crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { DEFAULT_OVERS } from '../utils/cricketRules';
-import { rulesFromLegacy } from '../utils/matchRules';
+import { legacyFromRules, stageRules, tournamentRulesRefusal, normalizeRules, STAGE_KEYS, type Stage } from '../utils/matchRules';
 import { groupsDrawRefusal, planGroups } from '../utils/groupsPlan';
 import {
   buildSchedule, timeToMinutes, keyOf, formatSlotIst,
@@ -75,6 +75,17 @@ function generateEntryCode(): string {
 }
 
 // POST /tournaments — Premium required (Change #6)
+/** BUILD 2.4: stage rules as stored — each stage the organiser set, as full rules. */
+function storedStageRules(sport: string, rules: unknown): Record<string, unknown> | null {
+  if (!rules || typeof rules !== 'object') return null;
+  const out: Record<string, unknown> = {};
+  for (const k of STAGE_KEYS) {
+    const v = (rules as Record<string, unknown>)[k];
+    if (v && typeof v === 'object') out[k] = normalizeRules(sport, v);
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 /**
  * BUILD 1.11 · `home_away` says what the format already decides: a league
  * plays each pair twice (home and away), a round robin once, and knockouts
@@ -134,6 +145,7 @@ export async function createTournament(req: Request, res: Response) {
       ground_names,
       day_windows,
       home_away,
+      match_rules,
       num_groups,
       group_size,
       qualifiers_per_group,
@@ -158,6 +170,10 @@ export async function createTournament(req: Request, res: Response) {
     }
     const haBad = homeAwayRefusal(format, home_away);
     if (haBad) return res.status(400).json(haBad);
+    // BUILD 2.4: the organiser's rules per stage, checked by the shared validator.
+    const createSportSlug = normSportSlug((await getSport(String(sport_id)))?.slug);
+    const mrBad = tournamentRulesRefusal(createSportSlug, match_rules);
+    if (mrBad) return res.status(400).json(mrBad);
     // Bound max_teams (SC-39) — 0/1/absurd values previously created degenerate
     // tournaments.
     const maxTeamsNum = Number(max_teams);
@@ -272,6 +288,7 @@ export async function createTournament(req: Request, res: Response) {
         ground_count: ground_count ?? null,
         ground_names: Array.isArray(ground_names) && ground_names.length > 0 ? ground_names : null,
         home_away: homeAwayFor(format), // BUILD 1.11
+        match_rules: storedStageRules(createSportSlug, match_rules), // BUILD 2.4
         ...groupsConfigFields,
       })
       .select('*')
@@ -816,7 +833,7 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated')
+      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -933,6 +950,7 @@ export async function updateTournament(req: Request, res: Response) {
       'registration_deadline',
       'logo_url',
       'home_away',
+      'match_rules', // BUILD 2.4
       'daily_start_time',
       'daily_end_time',
       'match_duration_minutes',
@@ -945,6 +963,17 @@ export async function updateTournament(req: Request, res: Response) {
       if (req.body && key in req.body) update[key] = req.body[key];
     }
     if (typeof update.name === 'string') update.name = update.name.trim();
+    // BUILD 2.4: stage rules are copied onto fixtures at the draw, so they're
+    // fixed once it's made; before, they're checked like create's.
+    if ('match_rules' in update) {
+      if ((tournament as { fixtures_generated?: boolean }).fixtures_generated) {
+        return res.status(409).json({ error: 'The fixtures are already drawn with these match rules, so they can’t change.', code: 'RULES_LOCKED' });
+      }
+      const slug = normSportSlug((await getSport(String((tournament as { sport_id?: string }).sport_id)))?.slug);
+      const bad = tournamentRulesRefusal(slug, update.match_rules);
+      if (bad) return res.status(400).json(bad);
+      update.match_rules = storedStageRules(slug, update.match_rules);
+    }
     // BUILD 1.11: home_away follows the format (a new one when it changes).
     {
       const fmt = 'format' in update ? update.format : (tournament as { format?: string }).format;
@@ -1749,6 +1778,8 @@ interface BracketBase {
   fallbackStartIso: string;
   /** BUILD 1.3: per-match settings every fixture carries (cricket: overs). */
   fixtureDefaults?: Record<string, unknown>;
+  /** BUILD 2.4: per-stage fixture fields (the bracket's last round is the final). */
+  stageDefaults?: (stage: Stage) => Record<string, unknown>;
 }
 
 function nextPow2(n: number): number {
@@ -1880,7 +1911,7 @@ async function insertSingleElim(
         // the ladder while runs/MVP (ungated) still accrued (the split bug).
         // Forward-only: existing fixtures are untouched (never rewrite settled ELO).
         is_ranked: true,
-        ...(base.fixtureDefaults ?? {}),
+        ...(base.stageDefaults ? base.stageDefaults(r === roundsCount ? 'final' : 'knockout') : (base.fixtureDefaults ?? {})),
       });
     }
     const { data, error } = await supabase.from('matches').insert(rows).select('id, match_no');
@@ -2436,7 +2467,7 @@ export async function generateFixtures(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, status, sport_id, format, city_id, venue, start_date, end_date, created_by, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names')
+      .select('id, status, sport_id, format, city_id, venue, start_date, end_date, created_by, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names, match_rules')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -2539,16 +2570,19 @@ export async function generateFixtures(req: Request, res: Response) {
     // 20-over default while NRR never knew the quota (the ICC all-out rule
     // charges a bowled-out side its full overs). They now carry it.
     const sportSlug = normSportSlug((await getSport(tournament.sport_id as string))?.slug);
-    const legacyDefaults: { format?: string; overs?: number } = sportSlug === 'cricket'
-      ? { format: `T${DEFAULT_OVERS}`, overs: DEFAULT_OVERS }
-      : {};
-    // BUILD 2.1: every fixture carries its rules as data (the stage rules the
-    // organiser sets, BUILD 2.4, replace these standards).
-    const fixtureDefaults: Record<string, unknown> = {
-      ...legacyDefaults,
-      rules: rulesFromLegacy(sportSlug, legacyDefaults.format ?? null, legacyDefaults.overs ?? null),
+    // BUILD 2.4: each fixture takes its stage's rules — the organiser's
+    // tournaments.match_rules (group / knockout / final, falling back to
+    // default), else the sport's standard — with format / overs in step for
+    // older apps. (BUILD 1.3's T20 / 20 is cricket's standard.)
+    const tournamentRules = (tournament as { match_rules?: unknown }).match_rules ?? null;
+    const stageDefaults = (stage: Stage): Record<string, unknown> => {
+      const rules = stageRules(sportSlug, tournamentRules, stage);
+      const legacy = legacyFromRules(sportSlug, rules);
+      return { format: legacy.format, ...(sportSlug === 'cricket' ? { overs: legacy.overs } : {}), rules };
     };
+    const fixtureDefaults: Record<string, unknown> = stageDefaults('group');
     const base: BracketBase = {
+      stageDefaults,
       fixtureDefaults,
       sport_id: tournament.sport_id,
       tournament_id: id,

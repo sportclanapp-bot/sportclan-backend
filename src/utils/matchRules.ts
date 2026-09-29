@@ -256,3 +256,36 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   return null;
 }
+
+// ── BUILD 2.4 · a tournament's rules per stage ──────────────────────────────
+//
+// tournaments.match_rules = { default?, group?, knockout?, final? }, each a
+// rules object (or part of one). A fixture takes its stage's rules: the final
+// falls back to knockout then default; knockout and group to default; a stage
+// the organiser left alone is the sport's standard. Copied onto every fixture
+// at the draw.
+
+export type Stage = 'group' | 'knockout' | 'final';
+export const STAGE_KEYS = ['default', 'group', 'knockout', 'final'] as const;
+export type TournamentRules = Partial<Record<(typeof STAGE_KEYS)[number], Partial<MatchRules>>>;
+
+/** The rules a fixture in `stage` plays by. */
+export function stageRules(sport: string | null | undefined, rules: unknown, stage: Stage): MatchRules {
+  const t = (rules && typeof rules === 'object' && !Array.isArray(rules) ? rules : {}) as Record<string, unknown>;
+  const chain = stage === 'final' ? ['final', 'knockout', 'default'] : stage === 'knockout' ? ['knockout', 'default'] : ['group', 'default'];
+  const hit = chain.map((k) => t[k]).find((r) => r && typeof r === 'object' && !Array.isArray(r));
+  return normalizeRules(sport, hit ?? { v: 1 });
+}
+
+/** Why a tournament's stage rules can't be used, or null. Each stage is checked by rulesRefusal. */
+export function tournamentRulesRefusal(sport: string | null | undefined, rules: unknown): Refusal | null {
+  if (rules === null || rules === undefined) return null;
+  if (typeof rules !== 'object' || Array.isArray(rules)) return refuse('Tournament match rules must be an object.');
+  const labels: Record<string, string> = { default: 'Every match', group: 'Group / league matches', knockout: 'Knockout matches', final: 'The final' };
+  for (const [k, v] of Object.entries(rules as Record<string, unknown>)) {
+    if (!(STAGE_KEYS as readonly string[]).includes(k)) return refuse(`${k} isn’t a tournament stage (default, group, knockout or final).`, k);
+    const bad = rulesRefusal(sport, v);
+    if (bad) return { ...bad, error: `${labels[k]}: ${bad.error}` };
+  }
+  return null;
+}

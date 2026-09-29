@@ -372,6 +372,11 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'football' && (!isWhole(r.extraTimeMinutes) || r.extraTimeMinutes < 0 || r.extraTimeMinutes > EXTRA_TIME_MAX)) {
     return refuse(`Extra time must be off, or up to ${EXTRA_TIME_MAX} minutes a half.`, 'extraTimeMinutes');
   }
+  // BUILD 3.37: a rally sport's points to win a set.
+  const rally = RALLY_LIMITS[key];
+  if (rally && (!isWhole(r.target) || r.target < rally.target[0] || r.target > rally.target[1])) {
+    return refuse(`Points to win a set must be ${rally.target[0]} to ${rally.target[1]}.`, 'target');
+  }
   if (MATCH_LENGTHS[key]) {
     const offered = MATCH_LENGTHS[key]!.options;
     if (!isWhole(r.bestOf) || !(offered as number[]).includes(r.bestOf)) return refuse(`Match length must be best of ${listOf(offered)}.`, 'bestOf');
@@ -383,13 +388,21 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(rally ? ['target'] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
   }
   return null;
 }
+
+/**
+ * BUILD 3.37+ · the rally rules a sport may set (others stay standard):
+ * `target` points to win a set / game.
+ */
+export const RALLY_LIMITS: Record<string, { target: [number, number] }> = {
+  volleyball: { target: [10, 30] },
+};
 
 /** BUILD 3.17: the periods and period lengths a timed sport may set (others stay standard). */
 export const TIMED_LIMITS: Record<string, { periods: [number, number]; minutes: [number, number] }> = {
@@ -439,8 +452,14 @@ const SIDE_LIMITS: Record<string, [number, number]> = {
  */
 export function timedRulesLabel(sport: string | null | undefined, rules: MatchRules): string | null {
   const key = lengthKey(sport);
-  if (key !== 'football' && key !== 'hockey' && key !== 'basketball') return null;
   const parts: string[] = [];
+  // BUILD 3.37+: a rally sport's own points, said when they differ from the standard.
+  if (RALLY_LIMITS[key]) {
+    const std = SPORT_RULES[key] ?? {};
+    if (rules.target != null && rules.target !== std.target) parts.push(`sets to ${rules.target}`);
+    return parts.length ? parts.join(' · ') : null;
+  }
+  if (key !== 'football' && key !== 'hockey' && key !== 'basketball') return null;
   if (rules.players) parts.push(`${rules.players}-a-side`);
   // BUILD 3.17: "2 × 25 min", and the half-time when it's set.
   if (rules.periodMinutes) parts.push(`${rules.periods ?? 1} × ${rules.periodMinutes} min`);

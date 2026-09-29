@@ -164,10 +164,16 @@ export async function recordEventIdempotent(args: {
  */
 export async function validateScoringEvent(
   matchId: string,
-  match: { id: string; status?: string | null; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_b_name?: string | null },
+  match: { id: string; status?: string | null; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_b_name?: string | null; tournament_id?: string | null },
   ev: { event_type: unknown; period?: unknown; clock_seconds?: unknown; payload?: any },
 ): Promise<{ status: number; body: { error: string; code?: string } } | null> {
   const refuse = (status: number, body: { error: string; code?: string }) => ({ status, body });
+  // BUILD 2.4 (found on the device): a tournament fixture waiting on earlier
+  // results has no teams yet — a knockout final before its semis. It took
+  // scoring events, so a result could exist before anyone knew who played.
+  if (match.tournament_id && (!match.team_a_id || !match.team_b_id)) {
+    return refuse(409, { error: 'Both teams aren’t known yet — this fixture waits on earlier results.', code: 'TEAMS_NOT_SET' });
+  }
   const { event_type, period, clock_seconds, payload } = ev;
   if (!isKnownEventType(event_type)) {
     return refuse(400, { error: `Unknown event_type "${String(event_type)}".`, code: 'UNKNOWN_EVENT_TYPE' });

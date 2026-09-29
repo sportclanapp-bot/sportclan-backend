@@ -1472,6 +1472,7 @@ export async function getCommentary(req: Request, res: Response) {
       const sportLine = isCricket ? null : sportCommentary(ev.event_type as string, p, {
         sport: slug, teamA, teamB, period: periods - 1, move: moves, clockSeconds: (ev as any).clock_seconds ?? null,
         regulation: rulesOf(slug, match).periods ?? null, // BUILD 3.17: the match's own periods
+        periodMinutes: rulesOf(slug, match).periodMinutes ?? null, // BUILD 3.22: the timeline minute
       });
       if (sportLine) {
         commentary = sportLine;

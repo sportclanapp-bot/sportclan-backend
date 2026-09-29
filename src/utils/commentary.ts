@@ -11,6 +11,8 @@ export interface CommentaryContext {
   teamB: string;
   /** Periods seen so far, including this one (quarters / halves). */
   period: number;
+  /** BUILD 3.22: minutes a period, for the timeline minute (23', 45+2'). */
+  periodMinutes?: number | null;
   /** BUILD 3.17: the match's regulation periods, when known (football 1–4). */
   regulation?: number | null;
   /** Chess: moves so far, including this one. */
@@ -28,7 +30,29 @@ const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60))
 
 const CARD = { yellow: '🟨 Yellow card', red: '🟥 Red card', green: '🟩 Green card' } as const;
 
+/**
+ * BUILD 3.22 · the timeline minute from a football / hockey event's match time:
+ * 1' from the first second; past a period's length, "45+2'".
+ */
+export function matchMinute(seconds: number, periodMinutes: number, period: number): string {
+  const base = (Math.max(1, period) - 1) * periodMinutes;
+  const minute = Math.floor(seconds / 60) + 1;
+  return minute > base + periodMinutes ? `${base + periodMinutes}+${minute - base - periodMinutes}'` : `${minute}'`;
+}
+
 export function sportCommentary(eventType: string, p: Record<string, any>, ctx: CommentaryContext): string | null {
+  const line = sportLine(eventType, p, ctx);
+  // BUILD 3.22: a football / hockey event scored on the match clock says its minute.
+  const goalSport = ctx.sport === 'football' || ctx.sport === 'hockey';
+  if (line && goalSport && typeof ctx.clockSeconds === 'number' && ctx.periodMinutes) {
+    // ctx.period counts periods ENDED (right for "End of Q3"); a goal is in the next one.
+    const periodNow = eventType === 'period_change' ? ctx.period : ctx.period + 1;
+    return `${matchMinute(ctx.clockSeconds, ctx.periodMinutes, periodNow)} ${line}`;
+  }
+  return line;
+}
+
+function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryContext): string | null {
   const side: 'A' | 'B' = p.team_side === 'B' ? 'B' : 'A';
   const team = side === 'A' ? ctx.teamA : ctx.teamB;
   const other = side === 'A' ? ctx.teamB : ctx.teamA;
@@ -56,6 +80,7 @@ export function sportCommentary(eventType: string, p: Record<string, any>, ctx: 
     return ctx.period <= last ? `End of Q${ctx.period}` : `End of OT${ctx.period - last}`;
   }
   if (goalSport && eventType === 'note' && p.kind === 'pen_corner') return `🏑 Penalty corner — ${team}`;
+  if (goalSport && eventType === 'note' && p.kind === 'kickoff') return '⏱ Kick-off'; // BUILD 3.22
   // Chess: "Move  — game in progress" (no number was ever sent) and a raw
   // result object with a player id in it.
   if (ctx.sport === 'chess' && eventType === 'move') {

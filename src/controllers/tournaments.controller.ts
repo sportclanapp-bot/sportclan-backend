@@ -952,8 +952,8 @@ export async function updateTournament(req: Request, res: Response) {
       if ('format' in update || 'home_away' in update) update.home_away = homeAwayFor(fmt);
     }
     // Empty strings in date/number/city columns mean "clear it", not a cast error.
-    for (const k of ['start_date', 'end_date', 'registration_deadline', 'city_id', 'daily_start_time', 'daily_end_time']) {
-      if (update[k] === '') update[k] = null;
+    for (const k of ['start_date', 'end_date', 'registration_deadline', 'city_id', 'daily_start_time', 'daily_end_time', 'prize_pool']) {
+      if (update[k] === '') update[k] = null; // BUILD 1.15: a cleared prize is no prize, not a cast error
     }
     // SC-86: don't let a tournament be marked completed while matches are still
     // scheduled/live — that crowns a champion with an unplayed bracket.

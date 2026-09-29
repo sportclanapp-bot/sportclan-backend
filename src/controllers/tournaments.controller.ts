@@ -51,7 +51,7 @@ import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
-import { rankTeams, computeStats } from '../utils/standings';
+import { rankTeams, computeStats, pointsModelFor, type PointsModel } from '../utils/standings';
 import { crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { DEFAULT_OVERS } from '../utils/cricketRules';
@@ -1885,6 +1885,11 @@ async function hasUnplayedFixtures(tournamentId: string): Promise<boolean> {
 // crowns the leader (the old crown branch's `if (!winnerId) return` stranded it).
 // Idempotent via the .eq('status','live') CAS + read-back (SC-253 pattern) →
 // notify exactly once.
+/** BUILD 1.6: the points a result earns in this tournament's sport (chess 1 / ½ / 0). */
+async function tournamentPoints(sportId: unknown): Promise<PointsModel> {
+  return pointsModelFor(normSportSlug((await getSport(sportId as string))?.slug));
+}
+
 /**
  * V104 · who won this tournament, by the same rules the automatic crowning
  * uses: the standings leader for round robin / league, otherwise the winner of
@@ -1893,7 +1898,7 @@ async function hasUnplayedFixtures(tournamentId: string): Promise<boolean> {
  */
 export async function championOf(tournamentId: string): Promise<{ id: string; name: string | null } | null> {
   const { data: t } = await supabase
-    .from('tournaments').select('format, tiebreaker_rules').eq('id', tournamentId).maybeSingle();
+    .from('tournaments').select('format, tiebreaker_rules, sport_id').eq('id', tournamentId).maybeSingle();
   const fmt = (t as any)?.format;
   if (fmt === 'round_robin' || fmt === 'league') {
     const { data: entries } = await supabase
@@ -1904,7 +1909,9 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
     const { data: matches } = await supabase
       .from('matches').select('team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
       .eq('tournament_id', tournamentId).is('voided_at', null);
-    const leader = rankTeams(teamIds, (matches ?? []) as any[], ((t as any)?.tiebreaker_rules ?? []) as any[])[0];
+    const leader = rankTeams(
+      teamIds, (matches ?? []) as any[], ((t as any)?.tiebreaker_rules ?? []) as any[], await tournamentPoints((t as any)?.sport_id),
+    )[0];
     if (!leader) return null;
     const e = (entries ?? []).find((x) => x.team_id === leader);
     return { id: leader, name: ((e?.team as any)?.name as string) ?? null };
@@ -1985,10 +1992,11 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
     .eq('tournament_id', tournamentId)
     .is('voided_at', null); // SC-424: a voided fixture is not a played fixture
   const { data: trow } = await supabase
-    .from('tournaments').select('tiebreaker_rules').eq('id', tournamentId).maybeSingle();
+    .from('tournaments').select('tiebreaker_rules, sport_id').eq('id', tournamentId).maybeSingle();
   const tiebreakerRules = ((trow as any)?.tiebreaker_rules ?? []) as any[];
+  const pts = await tournamentPoints((trow as any)?.sport_id);
 
-  const ordered = rankTeams(teamIds, (matches ?? []) as any[], tiebreakerRules);
+  const ordered = rankTeams(teamIds, (matches ?? []) as any[], tiebreakerRules, pts);
   const championId = ordered[0];
   if (!championId) return;
 
@@ -2178,8 +2186,9 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   const cfg = await getGroupsConfig(tournamentId);
   const qualsPerGroup = cfg.qualifiersPerGroup;
   const { data: trow } = await supabase
-    .from('tournaments').select('tiebreaker_rules').eq('id', tournamentId).maybeSingle();
+    .from('tournaments').select('tiebreaker_rules, sport_id').eq('id', tournamentId).maybeSingle();
   const tiebreakerRules = ((trow as any)?.tiebreaker_rules ?? []) as any[];
+  const pts = await tournamentPoints((trow as any)?.sport_id);
 
   const nameOf: Record<string, string> = {};
   const groupTeams: Record<string, string[]> = {};
@@ -2194,13 +2203,13 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   // SC-89: rank each group with the full tiebreak ladder (points -> head-to-head
   // -> score-diff -> score-scored -> team_id), honouring the tournament's
   // configured tiebreaker_rules when set. team_id terminator = no strand.
-  const globalStats = computeStats(Object.keys(nameOf), groupMatches);
+  const globalStats = computeStats(Object.keys(nameOf), groupMatches, undefined, pts);
   const ptsOf = (id: string) => globalStats.get(id)?.points ?? 0;
 
   // ranks[r] = every team that finished position r (0-based) in its group.
   const ranks: Array<Array<{ id: string; name: string }>> = [];
   for (const label of labels) {
-    const orderedIds = rankTeams(groupTeams[label], groupMatches, tiebreakerRules);
+    const orderedIds = rankTeams(groupTeams[label], groupMatches, tiebreakerRules, pts);
     for (let r = 0; r < qualsPerGroup; r++) {
       const id = orderedIds[r];
       if (id) (ranks[r] ??= []).push({ id, name: nameOf[id] ?? 'Team' });

@@ -4,7 +4,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { activeSportIds } from '../utils/sports';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers, matchAudienceIds } from '../utils/notify';
-import { rankTeams, computeStats } from '../utils/standings';
+import { rankTeams, computeStats, pointsModelFor } from '../utils/standings';
 import { istDay, istDayStartIso } from '../utils/appTime';
 import { formatTimeIst } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
@@ -65,6 +65,8 @@ export async function getTournamentStandings(req: Request, res: Response) {
     // Check if cricket for NRR
     const { data: sport } = await supabase.from('sports').select('slug').eq('id', tournament.sport_id).maybeSingle();
     const isCricket = sport?.slug === 'cricket';
+    // BUILD 1.6: chess scores 1 / ½ / 0, not football's 3 / 1 / 0.
+    const pts = pointsModelFor(sport?.slug);
 
     // SC-376: the table is built by the SHARED computeStats — the same function
     // rankTeams uses. It used to be a second, hand-rolled tally living only in
@@ -72,7 +74,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     // the column said NRR while the order was decided by `scored - conceded`.
     // One source of truth now produces both, so they cannot drift again.
     const teamIds = (entries ?? []).map((e: any) => e.team_id).filter(Boolean);
-    const stats = computeStats(teamIds, (matches ?? []) as any);
+    const stats = computeStats(teamIds, (matches ?? []) as any, undefined, pts);
 
     const table = new Map<string, {
       teamId: string; team: string; teamShort: string | null; groupLabel: string | null; withdrawn: boolean;
@@ -128,7 +130,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
       // points. That is exactly the display-vs-ranking split SC-89 exists to
       // prevent, and it reordered a live 3-point team below a 0-point one.
       const withdrawnIds = new Set(groupRows.filter((r) => r.withdrawn).map((r) => r.teamId));
-      const ranked = rankTeams(groupRows.map((r) => r.teamId), matches ?? [], tiebreakerRules);
+      const ranked = rankTeams(groupRows.map((r) => r.teamId), matches ?? [], tiebreakerRules, pts);
       for (const id of ranked.filter((i) => !withdrawnIds.has(i))) orderIndex.set(id, running++);
       for (const id of ranked.filter((i) => withdrawnIds.has(i))) orderIndex.set(id, running++);
     }

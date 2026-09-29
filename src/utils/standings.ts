@@ -45,11 +45,27 @@ export type TeamStat = {
   nrr: number | null;
 };
 
-/** Leading (possibly negative) integer of a score value; 0 when absent/non-numeric. */
+/**
+ * Leading (possibly negative) number of a score value; 0 when absent/non-numeric.
+ * BUILD 1.6: a chess half point reads as one — 0.5, "0.5", "½", "1½". It used to
+ * take the leading integer only, so a draw's ½ counted as 0 in the score tiebreaks.
+ */
 export function parseScoreNum(x: any): number {
   if (x == null) return 0;
-  const m = String(x).match(/-?\d+/);
-  return m ? parseInt(m[0], 10) : 0;
+  const m = String(x).match(/-?\d+(?:\.\d+)?½?|½/u);
+  if (!m) return 0;
+  if (m[0] === '½') return 0.5;
+  if (!m[0].endsWith('½')) return Number(m[0]);
+  const whole = Number(m[0].slice(0, -1));
+  return m[0].startsWith('-') ? whole - 0.5 : whole + 0.5;
+}
+
+/** Points for a result. BUILD 1.6: chess is 1 / ½ / 0; every other sport 3 / 1 / 0 until the per-tournament template (BUILD 4.1). */
+export type PointsModel = { win: number; draw: number; loss: number };
+export const DEFAULT_POINTS: PointsModel = { win: 3, draw: 1, loss: 0 };
+export const CHESS_POINTS: PointsModel = { win: 1, draw: 0.5, loss: 0 };
+export function pointsModelFor(sportSlug?: string | null): PointsModel {
+  return String(sportSlug ?? '').trim().toLowerCase() === 'chess' ? CHESS_POINTS : DEFAULT_POINTS;
 }
 
 function scoresOf(m: GMatch): { a: number; b: number } {
@@ -129,7 +145,9 @@ export function netRunRate(s: Pick<TeamStat, 'runsScored' | 'oversFaced' | 'runs
  * Per-team stats over `matches`. When `scope` is given, only matches between two
  * teams both in `scope` are counted (used to build the head-to-head mini-table).
  */
-export function computeStats(teamIds: string[], matches: GMatch[], scope?: Set<string>): Map<string, TeamStat> {
+export function computeStats(
+  teamIds: string[], matches: GMatch[], scope?: Set<string>, pts: PointsModel = DEFAULT_POINTS,
+): Map<string, TeamStat> {
   const table = new Map<string, TeamStat>();
   for (const id of teamIds) {
     table.set(id, {
@@ -157,9 +175,9 @@ export function computeStats(teamIds: string[], matches: GMatch[], scope?: Set<s
     ra.played++; rb.played++;
     ra.scored += sa; ra.conceded += sb;
     rb.scored += sb; rb.conceded += sa;
-    if (m.winner_team_id === a) { ra.won++; ra.points += 3; rb.lost++; }
-    else if (m.winner_team_id === b) { rb.won++; rb.points += 3; ra.lost++; }
-    else { ra.drawn++; rb.drawn++; ra.points += 1; rb.points += 1; }
+    if (m.winner_team_id === a) { ra.won++; ra.points += pts.win; rb.lost++; rb.points += pts.loss; }
+    else if (m.winner_team_id === b) { rb.won++; rb.points += pts.win; ra.lost++; ra.points += pts.loss; }
+    else { ra.drawn++; rb.drawn++; ra.points += pts.draw; rb.points += pts.draw; }
 
     // SC-376: NRR inputs. Only counted when BOTH sides' overs are known —
     // half a fixture would put runs into the numerator with no matching
@@ -227,13 +245,15 @@ export function buildOrder(tiebreakerRules?: any[]): Criterion[] {
  * Rank teamIds best-first using the ladder. team_id lexicographic order is the
  * final deterministic terminator so a group can never strand on a tie.
  */
-export function rankTeams(teamIds: string[], matches: GMatch[], tiebreakerRules?: any[]): string[] {
+export function rankTeams(
+  teamIds: string[], matches: GMatch[], tiebreakerRules?: any[], pts: PointsModel = DEFAULT_POINTS,
+): string[] {
   const order = buildOrder(tiebreakerRules);
-  const globalStats = computeStats(teamIds, matches);
+  const globalStats = computeStats(teamIds, matches, undefined, pts);
 
   function keyMapFor(crit: Criterion, ids: string[]): Map<string, number> {
     if (crit === 'head_to_head') {
-      const h2h = computeStats(ids, matches, new Set(ids));
+      const h2h = computeStats(ids, matches, new Set(ids), pts);
       return new Map(ids.map((id) => [id, h2h.get(id)?.points ?? 0]));
     }
     const fn = GLOBAL_CRITERION[crit];

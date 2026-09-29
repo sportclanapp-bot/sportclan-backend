@@ -17,7 +17,7 @@ import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
-import { allOutBySide, bowlerQuotaDone, isDismissal } from '../utils/cricketRules';
+import { allOutBySide, bowlerQuotaDone, extraPenaltyOf, isBallOfOver, isDismissal } from '../utils/cricketRules';
 import { rulesOf, setConfigOf, standardRules, winsToWin } from '../utils/matchRules';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
@@ -225,8 +225,29 @@ export async function validateScoringEvent(
     } else if (outOfRange(payload.value, 1, 3)) {
       return refuse(400, { error: 'value must be an integer between 1 and 3' });
     }
-    if (outOfRange(payload.runs, 0, 7)) {
-      return refuse(400, { error: 'runs must be an integer between 0 and 7' });
+    // BUILD 3.6: a wide / no-ball worth 2 makes a no-ball six 8.
+    const wideOrNb = event_type === 'extra' && (payload.type === 'Wd' || payload.type === 'Nb');
+    const maxRuns = 7 + (wideOrNb ? Math.max(0, extraPenaltyOf(payload) - 1) : 0);
+    if (outOfRange(payload.runs, 0, maxRuns)) {
+      return refuse(400, { error: `runs must be an integer between 0 and ${maxRuns}` });
+    }
+    // BUILD 3.6: a wide / no-ball carries the match's penalty. An older app
+    // sends none and adds 1 — right only where a wide is worth 1, so it can't
+    // score a match that counts them otherwise.
+    if (wideOrNb) {
+      const want = rulesOf('cricket', match).extraRuns ?? 1;
+      if (payload.penalty === undefined) {
+        if (want !== 1) {
+          return refuse(409, {
+            error: `This match counts a wide or no-ball as ${want} run${want === 1 ? '' : 's'}. Update SportClan to score it.`,
+            code: 'EXTRA_RUNS_UPDATE_APP',
+          });
+        }
+      } else if (payload.penalty !== want) {
+        return refuse(400, { error: `A wide or no-ball is worth ${want} run${want === 1 ? '' : 's'} in this match.`, code: 'BAD_PENALTY' });
+      } else if (typeof payload.runs === 'number' && payload.runs < want) {
+        return refuse(400, { error: `A wide or no-ball here is at least ${want} run${want === 1 ? '' : 's'}.`, code: 'BAD_PENALTY' });
+      }
     }
   }
 
@@ -722,11 +743,11 @@ export function aggregateCricketPlayers(
     const batName: string | undefined = p.batsman_name || p.player_name;
     const bowlName: string | undefined = p.bowler_name;
     if (bowlId && (e.event_type === 'ball' || e.event_type === 'extra' || e.event_type === 'wicket')) ensure(bowlId, bowlSide, bowlName);
-    if (e.event_type === 'ball') delivery(batSide, bowlId, !p.is_extra, Number(p.runs ?? 0));
+    if (e.event_type === 'ball') delivery(batSide, bowlId, isBallOfOver('ball', p), Number(p.runs ?? 0));
     else if (e.event_type === 'extra') {
-      const legalExtra = p.type === 'B' || p.type === 'Lb';
-      delivery(batSide, bowlId, legalExtra, legalExtra ? 0 : Number(p.runs ?? 0));
-    } else if (e.event_type === 'wicket' && !p.is_extra) delivery(batSide, bowlId, true, 0);
+      const legalExtra = isBallOfOver('extra', p);
+      delivery(batSide, bowlId, legalExtra, p.type === 'B' || p.type === 'Lb' ? 0 : Number(p.runs ?? 0));
+    } else if (e.event_type === 'wicket' && isBallOfOver('wicket', p)) delivery(batSide, bowlId, true, 0);
     if (e.event_type === 'ball' || e.event_type === 'extra' || (e.event_type === 'wicket' && isDismissal(p.wicket_type || p.type))) resumed(batId);
     if (e.event_type === 'ball') {
       const runs = Number(p.runs ?? 0);
@@ -744,15 +765,16 @@ export function aggregateCricketPlayers(
       }
     } else if (e.event_type === 'extra') {
       const runs = Number(p.runs ?? 0);
-      const legal = p.type === 'B' || p.type === 'Lb'; // byes/leg-byes are legal balls
-      if (batId && legal) ensure(batId, batSide, batName).balls += 1; // ball faced, runs are extras (not the batter's)
+      const legal = isBallOfOver('extra', p); // byes/leg-byes are legal balls
+      const bye = p.type === 'B' || p.type === 'Lb';
+      if (batId && bye) ensure(batId, batSide, batName).balls += 1; // ball faced, runs are extras (not the batter's)
       // Decision 2026-09-26 (MATCH_CREATE_TEST_5): runs on a no-ball are off the
       // bat. Stored runs include the 1-run penalty, so NB + N gives the striker N
       // and a ball faced; the bowler is still charged all of it (below), and it is
       // still no ball of the over. The app's utils/cricketCredit is the same rule.
       if (batId && p.type === 'Nb') {
         const b = ensure(batId, batSide, batName);
-        const offBat = Math.max(0, runs - 1);
+        const offBat = Math.max(0, runs - extraPenaltyOf(p)); // BUILD 3.6: the event's own penalty
         b.balls += 1;
         b.runs += offBat;
         if (offBat === 4) b.fours += 1;
@@ -760,8 +782,8 @@ export function aggregateCricketPlayers(
       }
       if (bowlId) {
         const w = ensure(bowlId, bowlSide, bowlName);
-        if (legal) w.bowl_balls += 1; // byes/leg-byes NOT charged to the bowler
-        else w.bowl_runs += runs;     // wides/no-balls ARE charged to the bowler
+        if (legal) w.bowl_balls += 1;
+        if (!bye) w.bowl_runs += runs; // wides/no-balls ARE charged to the bowler; byes/leg-byes are not
       }
     } else if (e.event_type === 'wicket') {
       // Normalised once, and used by all three of the rules below. Until F-36
@@ -1002,7 +1024,7 @@ export async function recomputeSummary(
         inn.runs += Number(p.runs ?? 0);
         // Byes / leg-byes ARE legal deliveries (the over progresses); wides /
         // no-balls are not. Count the ball accordingly (A5-010/A5-012).
-        if (p.type === 'B' || p.type === 'Lb') inn.balls += 1;
+        if (isBallOfOver('extra', p)) inn.balls += 1;
       }
       // Retired hurt is not a wicket (cricketRules.isDismissal): the batter
       // leaves and may return; the side is not a wicket down.

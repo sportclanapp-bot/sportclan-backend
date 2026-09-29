@@ -7,6 +7,7 @@
  * → 4 runs" — for every sport's event types, and a plain generic line for any
  * type it doesn't know. Never raw JSON.
  */
+import { extraPenaltyOf, isBallOfOver } from './cricketRules';
 
 export interface LogContext {
   sport: string;
@@ -53,7 +54,8 @@ export function describeEvent(type: string | null | undefined, p: P | null | und
       const kind = EXTRA[String(x.type)] ?? 'extra';
       const r = Number(x.runs ?? 0);
       if (kind === 'bye' || kind === 'leg bye') return plural(Math.max(r, 1), kind, `${kind}s`);
-      return r > 1 ? `${kind} + ${r - 1}` : kind;
+      const over = r - extraPenaltyOf(x); // BUILD 3.6: on top of its own penalty
+      return over > 0 ? `${kind} + ${over}` : kind;
     }
     case 'wicket': {
       const how = WICKET[String(x.wicket_type ?? x.type ?? '')] ?? (x.wicket_type ? words(String(x.wicket_type)) : null);
@@ -198,7 +200,7 @@ export function cricketBallLabels(events: Array<{ id: string; event_type: string
     if (ev.event_type !== 'ball' && ev.event_type !== 'extra' && ev.event_type !== 'wicket') continue;
     const p: P = ev.payload ?? {};
     const side: 'A' | 'B' = p.team_side === 'B' ? 'B' : 'A';
-    const isLegal = ev.event_type === 'extra' ? (p.type === 'B' || p.type === 'Lb') : !p.is_extra;
+    const isLegal = isBallOfOver(ev.event_type, p);
     if (isLegal) legal[side] += 1;
     const n = isLegal ? legal[side] : legal[side] + 1;
     out.set(ev.id, `ball ${Math.floor((n - 1) / 6)}.${((n - 1) % 6) + 1}`);

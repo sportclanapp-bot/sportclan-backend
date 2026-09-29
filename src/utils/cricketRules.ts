@@ -200,3 +200,28 @@ export function suggestedBowlerOvers(overs: number): number {
 export function bowlerQuotaDone(bowlBalls: number | null | undefined, bowlerOvers: number | null | undefined): boolean {
   return !!bowlerOvers && (bowlBalls ?? 0) >= bowlerOvers * 6;
 }
+
+/** BUILD 3.6: a wide / no-ball's penalty runs — 0 to 2 (1 is the Laws' and the standard). */
+export const EXTRA_RUNS_MIN = 0;
+export const EXTRA_RUNS_MAX = 2;
+
+/**
+ * BUILD 3.6: the penalty a wide / no-ball carried. The app stores it on the
+ * event (`penalty`), so the event reads the same whatever the match's rules
+ * say later; an event from before this carried 1.
+ */
+export function extraPenaltyOf(payload: unknown): number {
+  const n = (payload as { penalty?: unknown } | null | undefined)?.penalty;
+  return n === 0 || n === 1 || n === 2 ? n : 1;
+}
+
+/**
+ * A ball of the over — one the over counts. A ball or a wicket unless marked
+ * `is_extra`; a bye or leg-bye; never a wide or a no-ball (re-bowled).
+ */
+export function isBallOfOver(eventType: unknown, payload: unknown): boolean {
+  const p = (payload ?? {}) as { is_extra?: unknown; type?: unknown };
+  if (eventType === 'extra') return p.type === 'B' || p.type === 'Lb';
+  if (eventType === 'ball' || eventType === 'wicket') return !p.is_extra;
+  return false;
+}

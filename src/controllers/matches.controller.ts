@@ -49,7 +49,7 @@ import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
 import { rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
-import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isDismissal, type UnfinishedEnd } from '../utils/cricketRules';
+import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, type UnfinishedEnd } from '../utils/cricketRules';
 import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
 // U-13: moved to utils/viewerCanPlay (F-24: availability answers use it too).
@@ -1454,7 +1454,7 @@ export async function getCommentary(req: Request, res: Response) {
       let overBallLabel: string | null = null;
       if (isCricket && (ev.event_type === 'ball' || ev.event_type === 'extra' || ev.event_type === 'wicket')) {
         const side: 'A' | 'B' = p.team_side === 'B' ? 'B' : 'A';
-        const isLegal = ev.event_type === 'extra' ? (p.type === 'B' || p.type === 'Lb') : !p.is_extra;
+        const isLegal = isBallOfOver(ev.event_type, p);
         if (isLegal) legalBallsBySide[side] += 1;
         const legalBalls = legalBallsBySide[side];
         const displayBalls = isLegal ? legalBalls : legalBalls + 1;

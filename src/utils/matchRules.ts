@@ -77,7 +77,8 @@ const CLOCK_RE = /(\d+)\s*\+\s*(\d+)/;
  * The rules a match stored before rules were data plays by, from its
  * `format` / `overs` — the same readings the engines made:
  *   cricket  style from the format ("box", "pair", else limited); overs from
- *            `overs`, else a "T<n>" format, else 20 (inningsOvers' default)
+ *            `overs`, else 20 (inningsOvers' default — a "T7" without overs
+ *            played 20)
  *   best-of  "bo<n>" when the sport offers it, else the standard length
  *   chess    the "M+S" in the format, else 5+0
  */
@@ -92,11 +93,9 @@ export function rulesFromLegacy(
   if (key === 'cricket') {
     const lower = f.toLowerCase();
     rules.style = lower === 'box' ? 'box' : lower === 'pair' ? 'pair' : 'limited';
-    const t = /^t(\d{1,3})$/i.exec(f);
-    const n = overs != null && Number.isFinite(Number(overs)) && Number(overs) > 0
-      ? Math.floor(Number(overs))
-      : t ? Number(t[1]) : 20;
-    rules.overs = n;
+    // What the pad played: `overs`, else 20 (inningsOvers). A "T7" with no
+    // overs played 20 — BUILD 1.9 stops new ones, and old ones read as played.
+    rules.overs = overs != null && Number.isFinite(Number(overs)) && Number(overs) > 0 ? Math.floor(Number(overs)) : 20;
   } else if (MATCH_LENGTHS[key]) {
     rules.bestOf = bestOfFor(key, f) ?? rules.bestOf;
   } else if (key === 'chess') {
@@ -107,6 +106,28 @@ export function rulesFromLegacy(
     }
   }
   return rules;
+}
+
+// ── BUILD 2.3 · what the scoring engines read ──────────────────────────────
+
+/** Games / sets / boards needed to win a best-of-n match. */
+export function winsToWin(rules: MatchRules): number {
+  return Math.floor((rules.bestOf ?? 1) / 2) + 1;
+}
+
+/**
+ * A rally or carrom match's game rules, in the shape the server's set rollup
+ * takes (and the app's rally engine, via its own field names). One source for
+ * both — the numbers used to be hand-copied into each.
+ */
+export function setConfigOf(rules: MatchRules): { target: number; cap?: number; maxSets: number; finalTarget?: number; winBy2: boolean } {
+  return {
+    target: rules.target ?? 21,
+    ...(rules.cap != null ? { cap: rules.cap } : {}),
+    maxSets: rules.bestOf ?? 3,
+    ...(rules.finalTarget != null ? { finalTarget: rules.finalTarget } : {}),
+    winBy2: rules.winBy2 ?? true,
+  };
 }
 
 /** "Bullet", "Blitz", "Rapid", "Classical" for a clock (the create form's names). */

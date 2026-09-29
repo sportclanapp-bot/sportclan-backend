@@ -18,13 +18,12 @@ export const REGULATION_QUARTERS = 4;
 
 /** "Q3", "OT1", "OT2" … for period n (1-based). */
 export function periodLabel(n: number): string {
-  const p = Math.max(1, Math.floor(n));
-  return p <= REGULATION_QUARTERS ? `Q${p}` : `OT${p - REGULATION_QUARTERS}`;
+  return periodLabelOf(n, REGULATION_QUARTERS);
 }
 
 /** Is period n an overtime period? */
 export function isOvertime(n: number): boolean {
-  return Math.floor(n) > REGULATION_QUARTERS;
+  return isOvertimeOf(n, REGULATION_QUARTERS);
 }
 
 /**
@@ -33,6 +32,23 @@ export function isOvertime(n: number): boolean {
  * that point is the result.
  */
 export function canStartNextPeriod(n: number, a: number, b: number): boolean {
-  if (Math.floor(n) < REGULATION_QUARTERS) return true;
+  return canStartNextPeriodOf(n, a, b, REGULATION_QUARTERS);
+}
+
+// BUILD 2.3 · the same, for a match whose rules set its regulation periods.
+// Separate functions (not an optional argument) so `.map(periodLabel)` can't
+// pass an index in as the regulation.
+
+export function periodLabelOf(n: number, regulation: number): string {
+  const p = Math.max(1, Math.floor(n));
+  return p <= regulation ? `Q${p}` : `OT${p - regulation}`;
+}
+
+export function isOvertimeOf(n: number, regulation: number): boolean {
+  return Math.floor(n) > regulation;
+}
+
+export function canStartNextPeriodOf(n: number, a: number, b: number, regulation: number): boolean {
+  if (Math.floor(n) < regulation) return true;
   return a === b;
 }

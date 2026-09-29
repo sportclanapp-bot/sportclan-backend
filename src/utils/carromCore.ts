@@ -62,14 +62,17 @@ export function carromBoardPoints(winnerScoreBefore: number, piecesLeft: number,
   return carromPieces(piecesLeft) + queenPts;
 }
 
-/** One board. Pure: returns a new score. A board after the match is decided changes nothing. */
-export function carromBoard(s: CarromScore, b: CarromBoardResult, gamesToWin: number): CarromScore {
+/**
+ * One board. Pure: returns a new score. A board after the match is decided changes nothing.
+ * BUILD 2.3: `target` is the match's points to win a game (its rules), 25 as standard.
+ */
+export function carromBoard(s: CarromScore, b: CarromBoardResult, gamesToWin: number, target = CARROM_GAME_TARGET): CarromScore {
   if (s.winner) return s;
   const w = b.winner;
   const gained = carromBoardPoints(s.points[w], b.piecesLeft, b.queen);
   const points = { ...s.points, [w]: s.points[w] + gained };
   const boards = s.boards + 1;
-  if (points[w] < CARROM_GAME_TARGET) return { ...s, points, boards };
+  if (points[w] < target) return { ...s, points, boards };
   // Game over: the board's winner took it.
   const gamesWon = { ...s.gamesWon, [w]: s.gamesWon[w] + 1 };
   return {
@@ -82,8 +85,8 @@ export function carromBoard(s: CarromScore, b: CarromBoardResult, gamesToWin: nu
 }
 
 /** Replay a match from its boards. */
-export function carromReplay(boards: CarromBoardResult[], gamesToWin: number): CarromScore {
+export function carromReplay(boards: CarromBoardResult[], gamesToWin: number, target = CARROM_GAME_TARGET): CarromScore {
   let s = emptyCarrom();
-  for (const b of boards) s = carromBoard(s, b, gamesToWin);
+  for (const b of boards) s = carromBoard(s, b, gamesToWin, target);
   return s;
 }

@@ -2464,7 +2464,7 @@ export async function completeMatch(req: Request, res: Response) {
       // who was chasing, and a cricket win is described by wickets or by runs
       // depending on the answer. It was missing, so a successful chase reported
       // "won by N runs". See the note at the derivation call below.
-      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice, format, overs, voided_at')
+      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice, format, overs, rules, voided_at')
       .eq('id', id)
       .maybeSingle();
     timer.mark('load');
@@ -2527,7 +2527,7 @@ export async function completeMatch(req: Request, res: Response) {
     // and a best-of-3 badminton match was recorded "won 1-0". A result entered
     // with NO scoring (an organiser recording a result) and walkovers are exempt.
     if (match.status !== 'completed' && !walkover) {
-      const bo = bestOfState(normSportSlug(sportRow?.slug), canonical, match.format);
+      const bo = bestOfState(normSportSlug(sportRow?.slug), canonical, match as { format?: string | null; overs?: number | null; rules?: unknown });
       if (bo && bo.scored && !bo.decided) {
         return res.status(409).json({
           error: `This match isn’t decided yet — a side needs ${bo.needed} to win it. Keep scoring, or abandon it from the match page.`,
@@ -2704,7 +2704,7 @@ export async function completeMatch(req: Request, res: Response) {
         const stage = cricketStage({
           first: firstSide === 'A' ? a : b,
           chase: firstSide === 'A' ? b : a,
-          overs: match.overs ?? null,
+          overs: rulesOf('cricket', match).overs ?? null, // BUILD 2.3: the match's rules
           firstAllOut: allOut[firstSide],
           chaseAllOut: allOut[firstSide === 'A' ? 'B' : 'A'],
           dlsTarget,

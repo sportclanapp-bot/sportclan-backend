@@ -15,9 +15,10 @@ import { isSportInactive } from '../utils/sports';
 import { isKnownEventType } from '../utils/scoringEvents';
 import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
-import { bestOfFor, winsNeeded } from '../utils/matchLength';
+import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
 import { allOutBySide, isDismissal } from '../utils/cricketRules';
+import { rulesOf, setConfigOf, standardRules, winsToWin } from '../utils/matchRules';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
 
@@ -534,28 +535,28 @@ export async function listEvents(req: Request, res: Response) {
 export const SET_CONFIG: Record<
   string,
   { target: number; cap?: number; maxSets: number; finalTarget?: number; winBy2: boolean }
-> = {
-  badminton:   { target: 21, cap: 30, maxSets: 3, winBy2: true },
-  tabletennis: { target: 11, maxSets: 5, winBy2: true },
-  pickleball:  { target: 11, maxSets: 3, winBy2: true },
-  volleyball:  { target: 25, maxSets: 5, finalTarget: 15, winBy2: true },
-  carrom:      { target: 25, maxSets: 3, winBy2: false }, // boards to 25, no 2-lead
-  // Tennis is NOT here (T-1): this table reads each 'score' event as a whole
-  // game/board, and tennis events are POINTS. It has its own branch in
-  // recomputeSummary, replayed through the shared tennisCore.
-};
+> = Object.fromEntries(
+  // BUILD 2.3: the standards live in the shared matchRules (the app's rally
+  // engine reads the same file); this is only their standard-rules view.
+  // Tennis is NOT here (T-1): it scores POINTS, through tennisCore.
+  ['badminton', 'tabletennis', 'pickleball', 'volleyball', 'carrom'].map((sport) => [sport, setConfigOf(standardRules(sport))]),
+);
 
 /**
  * F-01 (confirmed live, session 1): for the best-of sports, how many sets/games/
  * boards win the match, and whether a canonical summary says someone has.
  * Null for sports that are not best-of (goals, points, runs, chess).
  */
-export function bestOfState(slug: string, summary: Record<string, any> | null | undefined, format?: string | null):
-  { needed: number; decided: boolean; scored: boolean; leader: 'A' | 'B' | null } | null {
-  // Decision B: the match's own length preset (matchLength.ts, shared with the app).
-  const bestOf = bestOfFor(slug, format);
-  if (bestOf === null) return null;
-  const needed = winsNeeded(bestOf);
+export function bestOfState(
+  slug: string,
+  summary: Record<string, any> | null | undefined,
+  match?: { format?: string | null; overs?: number | null; rules?: unknown } | string | null,
+): { needed: number; decided: boolean; scored: boolean; leader: 'A' | 'B' | null } | null {
+  // Decision B / BUILD 2.3: the match's own length — its rules (matchRules,
+  // shared with the app), or for an older caller just its format.
+  if (bestOfFor(slug, null) === null) return null;
+  const m = typeof match === 'string' || match == null ? { format: match ?? null } : match;
+  const needed = winsToWin(rulesOf(slug, m));
   const a = Number(summary?.A?.score ?? 0);
   const b = Number(summary?.B?.score ?? 0);
   const scored = a + b > 0
@@ -913,7 +914,7 @@ export async function recomputeSummary(
   // sport comes from the process cache: this runs on EVERY scoring event and at
   // completion, and each sequential round-trip costs ~300 ms from Render.
   const [{ data: match }, { data: eventRows }] = await Promise.all([
-    supabase.from('matches').select('sport_id, score_summary, format').eq('id', matchId).maybeSingle(),
+    supabase.from('matches').select('sport_id, score_summary, format, overs, rules').eq('id', matchId).maybeSingle(),
     supabase.from('match_events').select('event_type, payload, clock_seconds, period').eq('match_id', matchId)
       .order('created_at', { ascending: true }),
   ]);
@@ -1021,7 +1022,7 @@ export async function recomputeSummary(
     // Decision B: "1 set" or "best of 3" — the match's preset.
     tennisState = tennisReplay(
       events.filter((e) => e.event_type === 'score').map((e) => sideOf(e.payload || {})),
-      winsNeeded(bestOfFor('tennis', match.format) ?? 3),
+      winsToWin(rulesOf('tennis', match)), // BUILD 2.3: the match's rules
     );
     A.score = tennisState.setsWon.A; B.score = tennisState.setsWon.B;       // sets won
     A.sets = tennisState.sets.map((x) => x.A); B.sets = tennisState.sets.map((x) => x.B); // games per set
@@ -1039,7 +1040,8 @@ export async function recomputeSummary(
           const p: any = e.payload || {};
           return { winner: sideOf(p), piecesLeft: carromPieces(p.pieces_left), queen: p.queen === true };
         }),
-      winsNeeded(bestOfFor('carrom', match.format) ?? 3),
+      winsToWin(rulesOf('carrom', match)),
+      rulesOf('carrom', match).target, // BUILD 2.3: points to win a game
     );
     A.score = c.gamesWon.A; B.score = c.gamesWon.B;                        // games won
     A.sets = c.games.map((g) => g.A); B.sets = c.games.map((g) => g.B);    // each game's final score
@@ -1048,7 +1050,9 @@ export async function recomputeSummary(
   } else if (SET_CONFIG[slug]) {
     // Decision B: best-of from the match's preset (the deciding set is still the
     // last possible one, so a best-of-3 volleyball match plays its 3rd to 15).
-    const cfg = { ...SET_CONFIG[slug]!, maxSets: bestOfFor(slug, match.format) ?? SET_CONFIG[slug]!.maxSets };
+    // BUILD 2.3: every number from the match's rules (the standards for a match
+    // stored before rules were data).
+    const cfg = setConfigOf(rulesOf(slug, match));
     const r = rollupSets(cfg, events, sideOf);
     A.score = r.setsA; B.score = r.setsB;
     A.sets = r.setScoresA; B.sets = r.setScoresB;

@@ -120,10 +120,11 @@ describe('Decision B · the server reads the match length preset', () => {
   });
   test('recompute, completion and creation all use it', () => {
     const sc = fs.readFileSync(path.join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
-    expect(sc).toContain('maxSets: bestOfFor(slug, match.format)');
-    expect(sc).toContain("winsNeeded(bestOfFor('tennis', match.format) ?? 3)");
+    // BUILD 2.3: through the match's rules (matchRules), which read the preset for older rows.
+    expect(sc).toContain('const cfg = setConfigOf(rulesOf(slug, match));');
+    expect(sc).toContain("winsToWin(rulesOf('tennis', match))");
     const mc = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
-    expect(mc).toContain('bestOfState(normSportSlug(sportRow?.slug), canonical, match.format)');
+    expect(mc).toContain('bestOfState(normSportSlug(sportRow?.slug), canonical, match as { format?: string | null; overs?: number | null; rules?: unknown })');
     expect(mc).toContain("code: 'BAD_MATCH_LENGTH'");
     expect(mc).toContain('format: storedFormat,');
   });
@@ -137,7 +138,7 @@ describe('A5 · carrom on the server', () => {
     expect(sc).toContain('outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_POINTS)');
   });
   test('board events are replayed through the shared core, by the match preset', () => {
-    expect(sc).toMatch(/slug === 'carrom' && events\.some[\s\S]{0,900}carromReplay\([\s\S]{0,400}winsNeeded\(bestOfFor\('carrom', match\.format\) \?\? 3\)/);
+    expect(sc).toMatch(/slug === 'carrom' && events\.some[\s\S]{0,900}carromReplay\([\s\S]{0,400}winsToWin\(rulesOf\('carrom', match\)\)/); // BUILD 2.3: the match's rules
   });
   test('carrom game pushes say "game"', () => {
     expect(scorePush({ slug: 'carrom', side: 'A', teamName: 'X', summary: { A: { sets: [27], points: 0 }, B: { sets: [12], points: 0 } } })!.body).toBe('X wins game 1 · 27–12');

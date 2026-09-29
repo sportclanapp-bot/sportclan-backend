@@ -132,10 +132,14 @@ describe('SC-441 · other sports', () => {
     expect(isSetSport('cricket')).toBe(false);
   });
 
-  test('every sport says "Tied" the same way', () => {
-    for (const sport of ['cricket', 'badminton', 'football']) {
+  test('cricket and the rest say "Tied"; football, hockey and chess say "Draw" (BUILD 1.8)', () => {
+    for (const sport of ['cricket', 'badminton', 'basketball']) {
       expect(deriveResultText({ sport, teamAName: 'A', teamBName: 'B', aScore: 3, bScore: 3 }).text)
         .toBe('Tied');
+    }
+    for (const sport of ['football', 'hockey', 'chess']) {
+      expect(deriveResultText({ sport, teamAName: 'A', teamBName: 'B', aScore: 3, bScore: 3 }).text)
+        .toBe('Draw');
     }
   });
 });

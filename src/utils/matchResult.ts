@@ -111,9 +111,12 @@ export function chasingSide(
  * Cricket:
  *   chased and won  → by the wickets still in hand (10 − wickets lost)
  *   defended a total → by the runs difference
- *   level            → "Tied"
+ *   level            → "Tied" (football, hockey and chess: "Draw")
  * Chess reports no margin. Set sports and everything else report the score.
  */
+/** Sports whose level result is a "Draw" (the app's noWinnerWording agrees). */
+const DRAW_WORD_SPORTS = new Set(['chess', 'football', 'hockey']);
+
 export function deriveResultText(input: ResultInput): {
   text: string;
   winnerSide: Side | null;
@@ -126,7 +129,9 @@ export function deriveResultText(input: ResultInput): {
   if (!winnerSide) {
     // One word, and the same word everywhere. The old server text was
     // "Match Draw 0-0" while the app said "Match tied" and insights said "DREW".
-    return { text: sport === 'chess' ? 'Draw' : 'Tied', winnerSide: null };
+    // BUILD 1.8: football and hockey draw, like chess — the app has always said
+    // "Draw" for them while this stored "Tied". Cricket (and the rest) tie.
+    return { text: DRAW_WORD_SPORTS.has(sport) ? 'Draw' : 'Tied', winnerSide: null };
   }
 
   const winnerName = winnerSide === 'A' ? teamAName : teamBName;

@@ -190,14 +190,13 @@ describe('K1-22 / K1-29c (04ac4a4, 1b1d38b) · is_admin reaches the app on sign-
     expect(r.body.user.is_admin).toBe(true);
   });
   test('K1-29c (1b1d38b): password login selects is_admin and returns it', async () => {
+    // A real (cost 4) hash of 'longenough1': this passes whether the controller
+    // gets the bcryptjs mock or, as happened rarely in full runs, the real module.
     mockNext = (q) => (q[0] === 'from:users' && q.some((c) => c.includes('password_hash'))
-      ? { data: { id: 'u1', phone: PHONE, password_hash: 'hash', is_admin: true, deleted_at: null } }
+      ? { data: { id: 'u1', phone: PHONE, password_hash: '$2b$04$DZGGOYllgnNctwgZ0XiVwuYmVn.XGAOgw9duirp3M75g/DXEiOeCu', is_admin: true, deleted_at: null } }
       : { data: null });
     const r = await call(auth.login, { phone: '9876543210', password: 'longenough1' });
-    // It 401'd twice under load (not reproduced alone): the failure message
-    // carries the response and the users queries, so the next one says why.
-    expect({ status: r.statusCode, body: r.statusCode === 200 ? 'ok' : r.body, users: r.statusCode === 200 ? [] : mockLog.filter((q) => q[0] === 'from:users') })
-      .toEqual({ status: 200, body: 'ok', users: [] });
+    expect({ status: r.statusCode, body: r.statusCode === 200 ? 'ok' : r.body }).toEqual({ status: 200, body: 'ok' });
     expect(selects('users').some((s) => s.includes('password_hash') && s.includes('is_admin'))).toBe(true);
     expect(r.body.user.is_admin).toBe(true);
   });

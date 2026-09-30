@@ -11,7 +11,7 @@ test('10–30; standard 25; the label says a change', () => {
   for (const bad of [9, 31, 20.5]) expect(r(bad)?.error).toBe('Points to win a set must be 10 to 30.');
   expect(timedRulesLabel('volleyball', { ...standardRules('volleyball'), target: 21 })).toBe('sets to 21');
   expect(timedRulesLabel('volleyball', standardRules('volleyball'))).toBeNull();
-  expect(rulesRefusal('badminton', { ...standardRules('badminton'), target: 15 })?.field).toBe('target'); // badminton's own item is 3.44
+  expect(rulesRefusal('tabletennis', { ...standardRules('tabletennis'), target: 15 })?.field).toBe('target'); // badminton's opened in 3.44; TT's is 3.50
 });
 test('a set to 15 ends at 15 (2 clear)', () => {
   const pts = (side: string, n: number) => Array.from({ length: n }, () => ({ event_type: 'score', payload: { team_side: side, value: 1 } }));

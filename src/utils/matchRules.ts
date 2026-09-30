@@ -381,7 +381,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   // BUILD 3.37: a rally sport's points to win a set.
   const rally = RALLY_LIMITS[key];
   if (rally && (!isWhole(r.target) || r.target < rally.target[0] || r.target > rally.target[1])) {
-    return refuse(`Points to win a set must be ${rally.target[0]} to ${rally.target[1]}.`, 'target');
+    return refuse(`Points to win a ${rally.unit ?? 'set'} must be ${rally.target[0]} to ${rally.target[1]}.`, 'target');
   }
   // BUILD 3.39: a cap — off, or the target to target + span, and never below
   // the deciding set's target (it couldn't be reached).
@@ -420,9 +420,20 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
  * `target` points to win a set / game; `finalTarget` the deciding set's (3.38);
  * `capSpan` how far above the target a cap may sit (3.39; off = no cap).
  */
-export const RALLY_LIMITS: Record<string, { target: [number, number]; finalTarget?: [number, number]; capSpan?: number }> = {
+export const RALLY_LIMITS: Record<string, { target: [number, number]; finalTarget?: [number, number]; capSpan?: number; unit?: 'set' | 'game' }> = {
   volleyball: { target: [10, 30], finalTarget: [10, 25], capSpan: 10 },
+  badminton: { target: [5, 30], capSpan: 15, unit: 'game' }, // BUILD 3.44
 };
+
+/**
+ * BUILD 3.44 · badminton's two ways to play: 15 a game capped at 21 (BAI from
+ * July 2026, BWF from 4 Jan 2027) and the classic 21 capped at 30.
+ */
+export const BADMINTON_PRESETS = [{ target: 15, cap: 21 }, { target: 21, cap: 30 }] as const;
+/** The cap a badminton game gets when the form leaves it blank: the preset's, else none. */
+export function badmintonCapFor(target: number): number | null {
+  return BADMINTON_PRESETS.find((p) => p.target === target)?.cap ?? null;
+}
 
 /** BUILD 3.17: the periods and period lengths a timed sport may set (others stay standard). */
 export const TIMED_LIMITS: Record<string, { periods: [number, number]; minutes: [number, number] }> = {
@@ -481,7 +492,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (RALLY_LIMITS[key]) {
     const std = SPORT_RULES[key] ?? {};
     if (rules.players) parts.push(`${rules.players}-a-side`); // BUILD 3.40
-    if (rules.target != null && rules.target !== std.target) parts.push(`sets to ${rules.target}`);
+    if (rules.target != null && rules.target !== std.target) parts.push(`${RALLY_LIMITS[key]!.unit ?? 'set'}s to ${rules.target}`); // BUILD 3.44: badminton plays games
     if (rules.cap !== undefined && rules.cap !== std.cap) parts.push(rules.cap == null ? 'no cap' : `cap ${rules.cap}`); // BUILD 3.39
     if (rules.timeoutsPerSet != null && rules.timeoutsPerSet !== std.timeoutsPerSet) parts.push(rules.timeoutsPerSet === 0 ? 'no timeouts' : `${rules.timeoutsPerSet} timeout${rules.timeoutsPerSet === 1 ? '' : 's'} a set`); // BUILD 3.42
     if (rules.finalTarget !== undefined && rules.finalTarget !== std.finalTarget) parts.push(rules.finalTarget == null ? 'decider the same' : `decider to ${rules.finalTarget}`); // BUILD 3.38

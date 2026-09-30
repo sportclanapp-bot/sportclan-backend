@@ -4,7 +4,8 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { activeSportIds } from '../utils/sports';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers, matchAudienceIds } from '../utils/notify';
-import { rankTeams, computeStats, pointsFor } from '../utils/standings';
+import { rankTeams, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces } from '../utils/standings';
+import { settingsOf } from '../utils/tournamentSettings';
 import { istDay, istDayStartIso } from '../utils/appTime';
 import { formatTimeIst } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
@@ -150,6 +151,20 @@ export async function getTournamentStandings(req: Request, res: Response) {
         const n = seen.get(g) ?? 0;
         if (n < qpg) (row as any).qualified = true;
         seen.set(g, n + 1);
+      }
+      // BUILD 4.5: with best third places on, the best next-placed teams that
+      // will fill the knockout's byes are in a qualifying place too.
+      if (settingsOf(tournament as { settings?: unknown }).bestThirds) {
+        const byGroupLive = new Map<string, string[]>();
+        for (const row of standings) {
+          if (row.withdrawn) continue;
+          const g = row.groupLabel ?? 'default';
+          (byGroupLive.get(g) ?? byGroupLive.set(g, []).get(g)!).push(row.teamId);
+        }
+        const groups = Array.from(byGroupLive.keys()).sort().map((g) => byGroupLive.get(g)!);
+        const open = openKnockoutPlaces(groups.map((g) => g.length), qpg);
+        const best = new Set(bestPlacedAcrossGroups(groups, qpg, open, stats));
+        for (const row of standings) if (best.has(row.teamId)) (row as any).qualified = true;
       }
     }
 

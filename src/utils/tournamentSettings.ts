@@ -225,7 +225,26 @@ export function storedTiebreaks(list: unknown[]): TiebreakToken[] {
 export type TournamentSettings = {
   v: 1;
   points?: PointsTemplate;
+  /** 4.5 · groups → knockout: the best next-placed teams fill the knockout's byes. */
+  bestThirds?: boolean;
 };
+
+/**
+ * Settings the draw is made from. They're fixed once it's made (the fixtures
+ * already reflect them); the points and tie-breaks are fixed once a result is in.
+ */
+export const DRAW_KEYS = ['bestThirds'] as const;
+
+/** Which draw setting an edit changes, if any (to refuse it once the draw is made). */
+export function changedDrawKey(current: TournamentSettings, incoming: Record<string, unknown>): string | null {
+  for (const k of DRAW_KEYS) {
+    if (!(k in incoming)) continue;
+    const was = (current as Record<string, unknown>)[k] ?? null;
+    const now = incoming[k] ?? null;
+    if (JSON.stringify(was) !== JSON.stringify(now)) return k;
+  }
+  return null;
+}
 
 /** A tournament row's settings, or an empty v1 object. Never throws. */
 export function settingsOf(t: { settings?: unknown } | null | undefined): TournamentSettings {
@@ -233,7 +252,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -243,7 +262,10 @@ export function settingsRefusal(sport: string | null | undefined, format: string
   const unknown = Object.keys(o).find((k) => !KNOWN_KEYS.has(k));
   if (unknown) return refuse(`“${unknown}” isn’t a tournament setting.`);
   if (o.v !== undefined && o.v !== 1) return refuse('Tournament settings version must be 1.');
-  void format;
+  if (o.bestThirds != null) {
+    if (typeof o.bestThirds !== 'boolean') return refuse('Best third places is on or off.');
+    if (o.bestThirds && format !== 'groups_knockout') return refuse('Best third places are for groups → knockout.');
+  }
   return pointsRefusal(sport, o.points);
 }
 
@@ -254,6 +276,10 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('points' in s) {
     if (s.points == null) delete out.points;
     else out.points = storedPoints(s.points);
+  }
+  if ('bestThirds' in s) {
+    if (s.bestThirds) out.bestThirds = true;
+    else delete out.bestThirds;
   }
   return out;
 }

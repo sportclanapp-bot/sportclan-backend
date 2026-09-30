@@ -382,3 +382,44 @@ export function rankTeams(
 
   return rec(teamIds, 0);
 }
+
+// ── BUILD 4.5 · best next-placed teams across groups ─────────────────────────
+
+/** Round up to a power of two (a knockout's size). */
+function pow2(n: number): number {
+  let p = 1;
+  while (p < n) p *= 2;
+  return p;
+}
+
+/**
+ * How many places in a groups → knockout bracket the direct qualifiers leave
+ * empty (byes): the bracket holds nextPow2(groups × qualifiers), and a group
+ * smaller than the qualifier count sends fewer.
+ */
+export function openKnockoutPlaces(groupSizes: number[], qualifiersPerGroup: number): number {
+  const direct = groupSizes.reduce((n, size) => n + Math.min(size, qualifiersPerGroup), 0);
+  return Math.max(0, pow2(groupSizes.length * qualifiersPerGroup) - direct);
+}
+
+/**
+ * BUILD 4.5 · the best teams finishing in `place` (0-based: 2 = third) across
+ * the groups, best first, up to `count`. Groups can differ in size, so they're
+ * compared per game played — points, then difference, then scored — and the
+ * team id settles a dead heat. `rankedGroups` is each group's order.
+ */
+export function bestPlacedAcrossGroups(
+  rankedGroups: string[][], place: number, count: number, stats: Map<string, TeamStat>,
+): string[] {
+  if (count <= 0) return [];
+  const per = (id: string, f: (s: TeamStat) => number) => {
+    const s = stats.get(id);
+    return s && s.played > 0 ? f(s) / s.played : 0;
+  };
+  const pool = rankedGroups.map((g) => g[place]).filter((id): id is string => !!id);
+  return pool.sort((x, y) =>
+    per(y, (s) => s.points) - per(x, (s) => s.points)
+    || per(y, (s) => s.diff) - per(x, (s) => s.diff)
+    || per(y, (s) => s.scored) - per(x, (s) => s.scored)
+    || (x < y ? -1 : x > y ? 1 : 0)).slice(0, count);
+}

@@ -51,7 +51,7 @@ import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
-import { rankTeams, computeStats, pointsFor, type PointsModel } from '../utils/standings';
+import { rankTeams, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, type PointsModel } from '../utils/standings';
 import { crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { withWalkoverScore } from '../utils/walkoverScore';
@@ -67,7 +67,7 @@ import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
-import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks } from '../utils/tournamentSettings';
+import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey } from '../utils/tournamentSettings';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -106,6 +106,45 @@ export function homeAwayRefusal(format: unknown, homeAway: unknown): { error: st
       error: 'Home and away comes from the format: a league plays each pair twice, a round robin once. Knockout ties are one match.',
       code: 'HOME_AWAY_MISMATCH',
     };
+  }
+  return null;
+}
+
+/** BUILD 4.3 / 4.4: the groups a groups → knockout draw can have, and how many go through from each. */
+const GROUPS_MIN = 2;
+const GROUPS_MAX = 16;
+const QUALIFIERS_MIN = 1;
+const QUALIFIERS_MAX = 4;
+
+/**
+ * BUILD 4.3 / 4.4 · an edit's groups set-up: before the draw only, in range,
+ * and still able to hold the tournament's teams. `row` is the stored tournament.
+ */
+function groupsEditRefusal(
+  body: Record<string, unknown>,
+  row: { fixtures_generated?: boolean; num_groups?: number | null; group_size?: number | null; qualifiers_per_group?: number | null; max_teams?: number | null; format?: string | null },
+): { status: number; body: { error: string; code: string } } | null {
+  const keys = ['num_groups', 'group_size', 'qualifiers_per_group'].filter((k) => k in body);
+  if (keys.length === 0) return null;
+  const same = keys.every((k) => (body[k] ?? null) === ((row as Record<string, unknown>)[k] ?? null));
+  if (row.fixtures_generated && !same) {
+    return { status: 409, body: { error: 'The groups are drawn, so their set-up can’t change.', code: 'GROUPS_LOCKED' } };
+  }
+  const int = (v: unknown) => (v === null ? null : Number(v));
+  const ng = 'num_groups' in body ? int(body.num_groups) : row.num_groups ?? null;
+  const gs = 'group_size' in body ? int(body.group_size) : row.group_size ?? null;
+  const q = 'qualifiers_per_group' in body ? int(body.qualifiers_per_group) : row.qualifiers_per_group ?? 2;
+  const bad = (error: string) => ({ status: 400, body: { error, code: 'BAD_GROUPS' } });
+  if (ng !== null && (!Number.isInteger(ng) || ng < GROUPS_MIN || ng > GROUPS_MAX)) return bad(`Groups must be ${GROUPS_MIN} to ${GROUPS_MAX}.`);
+  if (gs !== null && (!Number.isInteger(gs) || gs < 2 || gs > 64)) return bad('group_size must be an integer between 2 and 64');
+  if (q === null || !Number.isInteger(q) || q < QUALIFIERS_MIN || q > QUALIFIERS_MAX) return bad(`Teams through from each group must be ${QUALIFIERS_MIN} to ${QUALIFIERS_MAX}.`);
+  if (gs !== null && q > gs) return bad('qualifiers_per_group cannot exceed group_size');
+  const maxTeams = 'max_teams' in body ? Number(body.max_teams) : row.max_teams ?? null;
+  if (row.format === 'groups_knockout' && ng !== null && maxTeams != null && maxTeams < ng * 2) {
+    return { status: 400, body: { error: `${ng} groups need at least ${ng * 2} teams; max teams is ${maxTeams}.`, code: 'GROUPS_TOO_SMALL' } };
+  }
+  if (row.format === 'groups_knockout' && ng !== null && gs !== null && maxTeams != null && maxTeams > ng * gs) {
+    return { status: 400, body: { error: `Max teams (${maxTeams}) is more than ${ng} groups of ${gs} can hold (${ng * gs}).`, code: 'GROUPS_TOO_SMALL' } };
   }
   return null;
 }
@@ -218,8 +257,9 @@ export async function createTournament(req: Request, res: Response) {
     const cfgInt = (v: unknown) => (v === undefined || v === null ? null : Number(v));
     const ng = cfgInt(num_groups);
     if (ng !== null) {
-      if (!Number.isInteger(ng) || ng < 1 || ng > 64) {
-        return res.status(400).json({ error: 'num_groups must be an integer between 1 and 64' });
+      // BUILD 4.3: 2 to 16 groups (it was 1 to 64; the app never sent it).
+      if (!Number.isInteger(ng) || ng < GROUPS_MIN || ng > GROUPS_MAX) {
+        return res.status(400).json({ error: `Groups must be ${GROUPS_MIN} to ${GROUPS_MAX}.`, code: 'BAD_GROUPS' });
       }
       groupsConfigFields.num_groups = ng;
     }
@@ -232,8 +272,9 @@ export async function createTournament(req: Request, res: Response) {
     }
     const qpg = cfgInt(qualifiers_per_group);
     if (qpg !== null) {
-      if (!Number.isInteger(qpg) || qpg < 1 || qpg > 32) {
-        return res.status(400).json({ error: 'qualifiers_per_group must be an integer between 1 and 32' });
+      // BUILD 4.4: 1 to 4 through from each group (it was 1 to 32).
+      if (!Number.isInteger(qpg) || qpg < QUALIFIERS_MIN || qpg > QUALIFIERS_MAX) {
+        return res.status(400).json({ error: `Teams through from each group must be ${QUALIFIERS_MIN} to ${QUALIFIERS_MAX}.`, code: 'BAD_GROUPS' });
       }
       groupsConfigFields.qualifiers_per_group = qpg;
     }
@@ -241,6 +282,11 @@ export async function createTournament(req: Request, res: Response) {
     // (you can't advance more teams from a group than the group contains).
     if (format === 'groups_knockout' && gs !== null && qpg !== null && qpg > gs) {
       return res.status(400).json({ error: 'qualifiers_per_group cannot exceed group_size' });
+    }
+    // BUILD 4.3: every group needs 2 teams, so a group count the tournament
+    // can't fill could never be drawn.
+    if (format === 'groups_knockout' && ng !== null && maxTeamsNum < ng * 2) {
+      return res.status(400).json({ error: `${ng} groups need at least ${ng * 2} teams; max teams is ${maxTeamsNum}.`, code: 'GROUPS_TOO_SMALL' });
     }
     // BUILD 1.12: the group size is a cap — a tournament that takes more teams
     // than its groups can hold could never be drawn.
@@ -846,7 +892,7 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules, sport_metadata')
+      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules, sport_metadata, num_groups, group_size, qualifiers_per_group, max_teams')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -965,6 +1011,9 @@ export async function updateTournament(req: Request, res: Response) {
       'home_away',
       'match_rules', // BUILD 2.4
       'settings', // BUILD Stage 4
+      'num_groups', // BUILD 4.3
+      'group_size',
+      'qualifiers_per_group', // BUILD 4.4
       'daily_start_time',
       'daily_end_time',
       'match_duration_minutes',
@@ -987,6 +1036,11 @@ export async function updateTournament(req: Request, res: Response) {
       const bad = tournamentRulesRefusal(slug, update.match_rules);
       if (bad) return res.status(400).json(bad);
       update.match_rules = storedStageRules(slug, update.match_rules);
+    }
+    // BUILD 4.3 / 4.4: the groups set-up, editable until the draw.
+    {
+      const gBad = groupsEditRefusal(update, tournament as Parameters<typeof groupsEditRefusal>[1]);
+      if (gBad) return res.status(gBad.status).json(gBad.body);
     }
     // Stage 4 fault fix: sport_metadata was written raw, so an edit replaced the
     // whole object and wiped the tournament chat's link (_chat_id). It's merged
@@ -1031,6 +1085,11 @@ export async function updateTournament(req: Request, res: Response) {
       if ('points' in incoming && JSON.stringify(incoming.points ?? null) !== JSON.stringify(current.points ?? null)
           && (await tournamentHasResult(id!))) {
         return res.status(409).json({ error: 'Results are already in, so the points can’t change.', code: 'POINTS_LOCKED' });
+      }
+      // BUILD 4.5 (and the draw settings after it): fixed once the draw is made.
+      const drawKey = changedDrawKey(current, incoming);
+      if (drawKey && (tournament as { fixtures_generated?: boolean }).fixtures_generated) {
+        return res.status(409).json({ error: 'The draw is made, so that setting can’t change.', code: 'SETTINGS_LOCKED', field: drawKey });
       }
       update.settings = storedSettings(incoming, current);
     }
@@ -2375,6 +2434,13 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   for (let r = 0; r < ranks.length; r++) {
     const tier = (ranks[r] ?? []).slice().sort(tierCmp);
     for (const t of tier) seeds.push({ id: t.id, name: t.name });
+  }
+  // BUILD 4.5: the best next-placed teams across the groups fill the byes —
+  // the lowest seeds, so they meet the group winners.
+  if (settingsOf(trow as { settings?: unknown }).bestThirds) {
+    const open = ko1.length * 2 - seeds.length;
+    const ranked = labels.map((label) => rankTeams(groupTeams[label], groupMatches, tiebreakerRules, pts));
+    for (const id of bestPlacedAcrossGroups(ranked, qualsPerGroup, open, globalStats)) seeds.push({ id, name: nameOf[id] ?? 'Team' });
   }
   if (seeds.length < 2) return;
   // FORMATS (28 Sep): cross-pair, so group mates don't meet straight away.

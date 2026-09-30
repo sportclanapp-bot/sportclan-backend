@@ -14,7 +14,7 @@ describe('matchLength', () => {
   test('each sport offers exactly the approved presets, standard first-class', () => {
     expect(MATCH_LENGTHS.badminton).toEqual({ options: [1, 3, 5], standard: 3, unit: 'game' });
     expect(MATCH_LENGTHS.tabletennis).toEqual({ options: [1, 3, 5, 7], standard: 5, unit: 'game' });
-    expect(MATCH_LENGTHS.pickleball).toEqual({ options: [1, 3], standard: 3, unit: 'game' });
+    expect(MATCH_LENGTHS.pickleball).toEqual({ options: [1, 3, 5], standard: 3, unit: 'game' });
     expect(MATCH_LENGTHS.volleyball).toEqual({ options: [1, 3, 5], standard: 5, unit: 'set' }); // BUILD 3.36
     expect(MATCH_LENGTHS.tennis).toEqual({ options: [1, 3], standard: 3, unit: 'set' });
     expect(MATCH_LENGTHS.carrom).toEqual({ options: [1, 3], standard: 3, unit: 'game' });

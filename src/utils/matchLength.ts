@@ -30,7 +30,7 @@ export interface MatchLengthRule {
 export const MATCH_LENGTHS: Record<string, MatchLengthRule> = {
   badminton: { options: [1, 3, 5], standard: 3, unit: 'game' }, // BUILD 3.46: best of 5 too
   tabletennis: { options: [1, 3, 5, 7], standard: 5, unit: 'game' },
-  pickleball: { options: [1, 3], standard: 3, unit: 'game' },
+  pickleball: { options: [1, 3, 5], standard: 3, unit: 'game' }, // BUILD 3.57: best of 5 too
   volleyball: { options: [1, 3, 5], standard: 5, unit: 'set' }, // BUILD 3.36: best of 1 too
   tennis: { options: [1, 3], standard: 3, unit: 'set' },
   carrom: { options: [1, 3], standard: 3, unit: 'game' },

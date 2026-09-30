@@ -4,7 +4,7 @@ import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { supabase } from '../utils/supabase';
 import { pendingRankedOpponent } from '../utils/singles';
-import { tennisReplay, type TennisScore } from '../utils/tennisCore';
+import { tennisReplayEvents, type TennisScore } from '../utils/tennisCore';
 import { scorePush, quarterPush } from '../utils/scorePush';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
@@ -323,6 +323,13 @@ export async function validateScoringEvent(
     }
   }
 
+  // BUILD 3.66: time called at the buzzer — a timed tennis match only.
+  if (event_type === 'note' && payload && payload.kind === 'buzzer') {
+    const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    if (slug !== 'tennis' || !rulesOf(slug, match).timeLimitMinutes) {
+      return refuse(400, { error: 'Time is called only in a timed tennis match.', code: 'BAD_NOTE' });
+    }
+  }
   // BUILD 3.53: table tennis's expedite rule — table tennis only, and never
   // once both players have 9 points in the game (ITTF 2.15.1).
   if (event_type === 'note' && payload && payload.kind === 'expedite') {
@@ -704,6 +711,13 @@ export function bestOfState(
   const needed = winsToWin(rulesOf(slug, m));
   const a = Number(summary?.A?.score ?? 0);
   const b = Number(summary?.B?.score ?? 0);
+  // BUILD 3.66: a timed tennis match after the buzzer goes to the leader — on
+  // sets, then games in the set in play, then points in the game in play.
+  if (summary?.buzzer === true) {
+    const cmp = (x: unknown, y: unknown) => Number(x ?? 0) - Number(y ?? 0);
+    const d = cmp(a, b) || cmp(summary?.A?.games, summary?.B?.games) || cmp(summary?.A?.points, summary?.B?.points);
+    return { needed, decided: d !== 0, scored: true, leader: d > 0 ? 'A' : d < 0 ? 'B' : null };
+  }
   const scored = a + b > 0
     || (summary?.A?.sets?.length ?? 0) > 0 || (summary?.B?.sets?.length ?? 0) > 0
     || Number(summary?.A?.points ?? 0) + Number(summary?.B?.points ?? 0) > 0
@@ -1131,6 +1145,7 @@ export async function recomputeSummary(
   let carromBoardsPlayed: number | null = null; // A5: boards played in the carrom game in play
   let tieRubbers: { rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' }> } | null = null; // BUILD 3.49
   let sideOutServe: { side: 'A' | 'B'; number: 1 | 2 } | null = null; // BUILD 3.58
+  let tennisBuzzer = false; // BUILD 3.66
   const sides: Record<'A' | 'B', Record<string, any>> = { A, B };
   const sideOf = (p: any): 'A' | 'B' => ((p?.team_side as 'A' | 'B') === 'B' ? 'B' : 'A');
   let chessResult: string | null = null; // SC-47
@@ -1213,10 +1228,13 @@ export async function recomputeSummary(
     // same file the app scores with): points → games → sets, with a real 6-6
     // tiebreak. The server used to count every point as a GAME.
     // Decision B: "1 set" or "best of 3" — the match's preset.
-    tennisState = tennisReplay(
-      events.filter((e) => e.event_type === 'score').map((e) => sideOf(e.payload || {})),
+    // BUILD 3.66: a timed match's 'buzzer' note ends it on the leader (tennisReplayEvents).
+    const tr = tennisReplayEvents(
+      events.map((e) => ({ event_type: e.event_type, payload: { ...(e.payload || {}), team_side: sideOf(e.payload || {}) } })),
       tennisOptsOf(rulesOf('tennis', match)), // BUILD 2.3 / 3.59+: the match's rules
     );
+    tennisState = tr.score;
+    if (tr.buzzer) tennisBuzzer = true;
     A.score = tennisState.setsWon.A; B.score = tennisState.setsWon.B;       // sets won
     A.sets = tennisState.sets.map((x) => x.A); B.sets = tennisState.sets.map((x) => x.B); // games per set
     A.games = tennisState.games.A; B.games = tennisState.games.B;           // current set
@@ -1361,6 +1379,7 @@ export async function recomputeSummary(
   if (carromBoardsPlayed !== null) summary.boards_played = carromBoardsPlayed;
   if (tieRubbers) { summary.rubber = tieRubbers.rubber; summary.rubbers = tieRubbers.results; } // BUILD 3.49
   if (sideOutServe) summary.serve = sideOutServe; // BUILD 3.58: who serves, and (doubles) server 1 or 2
+  if (tennisBuzzer) summary.buzzer = true; // BUILD 3.66: time was called
   if (tennisState) {
     // The tiebreak in play, and each completed set's tiebreak points (or null),
     // so a hub card or result can say "7–6 (7–5)".

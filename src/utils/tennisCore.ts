@@ -155,6 +155,40 @@ export function tennisReplay(sides: TennisSide[], options: number | TennisOpts =
   return s;
 }
 
+/**
+ * BUILD 3.66 · a timed match, scored at the buzzer: who leads — on sets, then
+ * games in the set in play, then points in the game in play. Null when level
+ * on all three (the next point decides).
+ */
+export function tennisLeader(s: TennisScore): TennisSide | null {
+  if (s.winner) return s.winner;
+  for (const k of ['setsWon', 'games', 'points'] as const) {
+    if (s[k].A !== s[k].B) return s[k].A > s[k].B ? 'A' : 'B';
+  }
+  return null;
+}
+
+/**
+ * BUILD 3.66 · replay a match's events (point events and a 'buzzer' note):
+ * after the buzzer, points count only until someone leads; that side has won.
+ */
+export function tennisReplayEvents(
+  events: ReadonlyArray<{ event_type: string; payload?: unknown }>,
+  options: number | TennisOpts = TENNIS_SETS_TO_WIN,
+): { score: TennisScore; buzzer: boolean } {
+  let s = emptyTennis();
+  let buzzer = false;
+  for (const e of events) {
+    const p = (e.payload ?? {}) as { team_side?: unknown; kind?: unknown };
+    if (e.event_type === 'note' && p.kind === 'buzzer') { buzzer = true; continue; }
+    if (e.event_type !== 'score') continue;
+    if (buzzer && tennisLeader(s)) break; // decided at the buzzer
+    s = tennisPoint(s, p.team_side === 'B' ? 'B' : 'A', options);
+  }
+  if (buzzer && !s.winner) { const l = tennisLeader(s); if (l) s = { ...s, winner: l }; }
+  return { score: s, buzzer };
+}
+
 /** Games completed so far in the whole match (for the serve rotation). */
 export function tennisGamesPlayed(s: TennisScore): number {
   return s.sets.reduce((n, x) => n + x.A + x.B, 0) + s.games.A + s.games.B;

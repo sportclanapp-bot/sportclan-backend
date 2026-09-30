@@ -19,7 +19,9 @@ test('tennis is no longer in the per-game SET_CONFIG table', () => {
 });
 
 test('tennis replays score events, one per point, through the shared core', () => {
-  expect(src).toMatch(/slug === 'tennis'\)\s*\{\s*tennisState = tennisReplay\(\s*events\.filter\(\(e\) => e\.event_type === 'score'\)/);
+  // BUILD 3.66: through tennisReplayEvents (point events, and a timed match's buzzer note).
+  expect(src).toContain('const tr = tennisReplayEvents(');
+  expect(src).toContain('tennisState = tr.score;');
 });
 
 test('it stores sets won, games per set, the current games and points, and tiebreaks', () => {

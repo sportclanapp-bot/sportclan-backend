@@ -33,7 +33,7 @@ export const MATCH_LENGTHS: Record<string, MatchLengthRule> = {
   pickleball: { options: [1, 3, 5], standard: 3, unit: 'game' }, // BUILD 3.57: best of 5 too
   volleyball: { options: [1, 3, 5], standard: 5, unit: 'set' }, // BUILD 3.36: best of 1 too
   tennis: { options: [1, 3, 5], standard: 3, unit: 'set' }, // BUILD 3.64: best of 5 too
-  carrom: { options: [1, 3], standard: 3, unit: 'game' },
+  carrom: { options: [1, 3, 5], standard: 3, unit: 'game' }, // BUILD 3.75: best of 5 too
 };
 
 /** 'table-tennis' → 'tabletennis': the key form used above. */

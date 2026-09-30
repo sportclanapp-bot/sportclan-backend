@@ -36,7 +36,7 @@ import { sanitizeError } from '../utils/response';
 import { validateSportForCreate, activeSportIds } from '../utils/sports';
 import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems, LIMITS, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
-import { advanceTournamentWinner, recrownAfterVoidChange } from './tournaments.controller';
+import { advanceTournamentWinner, recrownAfterVoidChange, tournamentSettingsOf } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats, bestOfState } from './scoring.controller';
 import { awardBadgesSafe, revokeRecordBadgesSafe } from './badges.controller';
 import { isUuid } from '../utils/uuid';
@@ -2436,7 +2436,7 @@ export async function abandonMatch(req: Request, res: Response) {
         ...(walkoverWinner ? await (async () => {
           const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
           const side = walkoverWinner === match.team_a_id ? 'A' : 'B';
-          const ss = withWalkoverScore(slug, rulesOf(slug, match), { ...(match.score_summary as object ?? {}), walkover: true }, side);
+          const ss = withWalkoverScore(slug, rulesOf(slug, match), { ...(match.score_summary as object ?? {}), walkover: true }, side, await tournamentSettingsOf(match.tournament_id as string | null)); // BUILD 4.8
           return { score_summary: ss };
         })() : {}),
       })
@@ -3260,7 +3260,7 @@ export async function completeMatch(req: Request, res: Response) {
         if (walkover_reason) ss.walkover_reason = String(walkover_reason).slice(0, 200);
         const wName = derivedSide === 'A' ? aName : bName;
         // BUILD 3.21: a football walkover goes down as 3–0 / 5–0.
-        Object.assign(ss, withWalkoverScore(slug, rulesOf(slug, match), ss, derivedSide));
+        Object.assign(ss, withWalkoverScore(slug, rulesOf(slug, match), ss, derivedSide, await tournamentSettingsOf(match.tournament_id as string | null))); // BUILD 4.8
         const wo = ss.walkover_score as Record<string, number> | undefined;
         ss.result = wo ? `${wName} won by walkover (${wo[derivedSide]}–0)` : `${wName} won by walkover`;
       }

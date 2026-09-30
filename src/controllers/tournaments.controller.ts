@@ -1091,6 +1091,10 @@ export async function updateTournament(req: Request, res: Response) {
           && (await tournamentHasResult(id!))) {
         return res.status(409).json({ error: 'Results are already in, so the points can’t change.', code: 'POINTS_LOCKED' });
       }
+      // BUILD 4.8: so is a walkover's score (walkovers already recorded keep theirs).
+      if (changedDrawKey(current, incoming, ['walkoverScore']) && (await tournamentHasResult(id!))) {
+        return res.status(409).json({ error: 'Results are already in, so the walkover score can’t change.', code: 'WALKOVER_LOCKED' });
+      }
       // BUILD 4.5 (and the draw settings after it): fixed once the draw is made.
       const drawKey = changedDrawKey(current, incoming);
       if (drawKey && (tournament as { fixtures_generated?: boolean }).fixtures_generated) {
@@ -2065,6 +2069,13 @@ async function resolveMatchWinner(matchId: string, winnerTeamId: string): Promis
 // played — no match still scheduled or live. Used by both completion paths
 // (auto-complete on final result + manual updateTournament status change) so a
 // champion can never be crowned with an unplayed match (phantom champion).
+/** BUILD 4.8 · a tournament's settings (for a fixture's walkover), or null. */
+export async function tournamentSettingsOf(tournamentId: string | null | undefined): Promise<unknown> {
+  if (!tournamentId) return null;
+  const { data } = await supabase.from('tournaments').select('settings').eq('id', tournamentId).maybeSingle();
+  return (data as { settings?: unknown } | null)?.settings ?? null;
+}
+
 /** BUILD 4.1 · whether any fixture has a result (completed, abandoned or given a winner), voided ones aside. */
 async function tournamentHasResult(tournamentId: string): Promise<boolean> {
   const { count } = await supabase
@@ -2355,7 +2366,8 @@ async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise
     // Walkover: opponent wins the forfeited match and advances. BUILD 3.21: a
     // football walkover goes down as 3–0 / 5–0.
     const slug = normSportSlug((await getSport(mt.sport_id as string))?.slug);
-    const ss = withWalkoverScore(slug, rulesOf(slug, mt), { ...(mt.score_summary as object ?? {}), walkover: true }, opponentId === mt.team_a_id ? 'A' : 'B');
+    // BUILD 4.8: the tournament's walkover score, when it has one.
+    const ss = withWalkoverScore(slug, rulesOf(slug, mt), { ...(mt.score_summary as object ?? {}), walkover: true }, opponentId === mt.team_a_id ? 'A' : 'B', await tournamentSettingsOf(tournamentId));
     await supabase
       .from('matches')
       .update({ status: 'abandoned', winner_team_id: opponentId, score_summary: ss, updated_at: now })

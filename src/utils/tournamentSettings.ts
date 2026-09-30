@@ -229,7 +229,41 @@ export type TournamentSettings = {
   bestThirds?: boolean;
   /** 4.6 · the draw's order: entry time, a random draw, or the organiser's seeds. Absent = seeds if set, then entry time (as before). */
   seeding?: SeedingMode;
+  /** 4.8 · a walkover's score: goals / points for the winner (football, hockey, basketball), or a straight win in the fixture's length ("straight": 3–0 in a best of 5, 1–0 in chess). Absent = as before (football by its rules, others no score). */
+  walkoverScore?: number | 'straight';
 };
+
+// ── 4.8 · walkover score ─────────────────────────────────────────────────────
+
+/** Sports whose walkover is a number of goals / points; the others (bar cricket) score a straight win. */
+export const WALKOVER_NUMBER_SPORTS = new Set(['football', 'hockey', 'basketball']);
+/** Cricket has no walkover score — the win's points are the result. */
+export const walkoverScoreOffered = (sport: string | null | undefined): boolean => sportKeyOf(sport) !== 'cricket';
+export const WALKOVER_MAX = 99;
+
+/** The usual walkover for a new tournament: basketball 20–0 (FIBA), table tennis / volleyball / chess a straight win (ITTF 3–0, FIVB 3–0, a forfeit 1–0). Football keeps its match rules (3–0 / 5–0). */
+export function walkoverPresetFor(sport: string | null | undefined): number | 'straight' | null {
+  switch (sportKeyOf(sport)) {
+    case 'basketball': return 20;
+    case 'tabletennis': case 'volleyball': case 'chess': return 'straight';
+    default: return null;
+  }
+}
+
+export function walkoverRefusal(sport: string | null | undefined, w: unknown): Refusal | null {
+  if (w === undefined || w === null) return null;
+  const key = sportKeyOf(sport);
+  if (!walkoverScoreOffered(key)) return refuse('A cricket walkover has no score — the win’s points are the result.');
+  if (WALKOVER_NUMBER_SPORTS.has(key)) {
+    if (!(typeof w === 'number' && Number.isInteger(w) && w >= 1 && w <= WALKOVER_MAX)) return refuse(`A walkover’s score must be 1 to ${WALKOVER_MAX}.`);
+    return null;
+  }
+  if (w !== 'straight') return refuse('A walkover here is a straight win or no score.');
+  return null;
+}
+
+/** Settings fixed once any result stands (a table can't be re-scored under people). */
+export const RESULT_KEYS = ['points', 'walkoverScore'] as const;
 
 export type SeedingMode = 'registration' | 'random' | 'manual';
 export const SEEDING_MODES: readonly SeedingMode[] = ['registration', 'random', 'manual'];
@@ -241,8 +275,8 @@ export const SEEDING_MODES: readonly SeedingMode[] = ['registration', 'random', 
 export const DRAW_KEYS = ['bestThirds', 'seeding'] as const;
 
 /** Which draw setting an edit changes, if any (to refuse it once the draw is made). */
-export function changedDrawKey(current: TournamentSettings, incoming: Record<string, unknown>): string | null {
-  for (const k of DRAW_KEYS) {
+export function changedDrawKey(current: TournamentSettings, incoming: Record<string, unknown>, keys: readonly string[] = DRAW_KEYS): string | null {
+  for (const k of keys) {
     if (!(k in incoming)) continue;
     const was = (current as Record<string, unknown>)[k] ?? null;
     const now = incoming[k] ?? null;
@@ -257,7 +291,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -272,6 +306,8 @@ export function settingsRefusal(sport: string | null | undefined, format: string
     if (o.bestThirds && format !== 'groups_knockout') return refuse('Best third places are for groups → knockout.');
   }
   if (o.seeding != null && !SEEDING_MODES.includes(o.seeding as SeedingMode)) return refuse('Seeding is registration order, a random draw or manual seeds.');
+  const woBad = walkoverRefusal(sport, o.walkoverScore);
+  if (woBad) return woBad;
   return pointsRefusal(sport, o.points);
 }
 
@@ -290,6 +326,10 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('seeding' in s) {
     if (s.seeding) out.seeding = s.seeding;
     else delete out.seeding;
+  }
+  if ('walkoverScore' in s) {
+    if (s.walkoverScore != null) out.walkoverScore = s.walkoverScore;
+    else delete out.walkoverScore;
   }
   return out;
 }

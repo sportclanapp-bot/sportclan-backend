@@ -2603,6 +2603,16 @@ export async function completeMatch(req: Request, res: Response) {
           code: 'MATCH_NOT_DECIDED',
         });
       }
+      // BUILD 3.49 (found checking team ties): a decided best-of match went to
+      // whichever side the request named — a tie B won 2–1 in rubbers completed
+      // as A's win. The named winner must be the side the score says won.
+      if (bo && bo.scored && bo.decided && winnerSide && bo.leader && winnerSide !== bo.leader) {
+        const leaderName = bo.leader === 'A' ? match.team_a_name : match.team_b_name;
+        return res.status(409).json({
+          error: `The score says ${leaderName ?? `Team ${bo.leader}`} won this match.`,
+          code: 'WINNER_NOT_LEADER',
+        });
+      }
     }
     timer.mark('reads');
     if (match.status === 'completed') {

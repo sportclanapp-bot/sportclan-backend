@@ -121,7 +121,7 @@ describe('Decision B · the server reads the match length preset', () => {
   test('recompute, completion and creation all use it', () => {
     const sc = fs.readFileSync(path.join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
     // BUILD 2.3: through the match's rules (matchRules), which read the preset for older rows.
-    expect(sc).toContain('const cfg = setConfigOf(rulesOf(slug, match));');
+    expect(sc).toContain('const cfg = setConfigOf(rules);' /* BUILD 3.49: rules = rulesOf(slug, match) */);
     expect(sc).toContain("winsToWin(rulesOf('tennis', match))");
     const mc = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
     expect(mc).toContain('bestOfState(normSportSlug(sportRow?.slug), canonical, match as { format?: string | null; overs?: number | null; rules?: unknown })');

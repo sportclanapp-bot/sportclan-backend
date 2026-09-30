@@ -732,6 +732,46 @@ export function rollupSets(
   return { setsA, setsB, setScoresA, setScoresB, curA, curB, decided };
 }
 
+/**
+ * BUILD 3.49 · a badminton team tie: rubbers of `cfg.maxSets` games each, the
+ * tie to whoever wins floor(rubbers/2)+1 of them (no dead rubbers). The app's
+ * tie ruleset (scoring/rules/_tie) splits the same events the same way.
+ * `setScores` are every game played, in order, across the rubbers.
+ */
+export function rollupTie(
+  cfg: { target: number; cap?: number; maxSets: number; finalTarget?: number; winBy2: boolean },
+  rubbers: number,
+  events: { event_type: string; payload: any }[],
+  sideOf: (p: any) => 'A' | 'B',
+): { rubbersA: number; rubbersB: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' }>; rubber: number; gamesA: number; gamesB: number; setScoresA: number[]; setScoresB: number[]; curA: number; curB: number; decided: 'A' | 'B' | null } {
+  const needGames = Math.ceil(cfg.maxSets / 2);
+  const needRubbers = Math.floor(rubbers / 2) + 1;
+  let curA = 0, curB = 0, gamesA = 0, gamesB = 0, period = 1, rubbersA = 0, rubbersB = 0;
+  let decided: 'A' | 'B' | null = null;
+  const setScoresA: number[] = [], setScoresB: number[] = [];
+  const results: Array<{ A: number; B: number; winner: 'A' | 'B' }> = [];
+  for (const e of events) {
+    if (decided) break;
+    if (e.event_type !== 'score') continue;
+    const p: any = e.payload || {};
+    if (sideOf(p) === 'A') curA += 1; else curB += 1;
+    const target = cfg.finalTarget && period === cfg.maxSets ? cfg.finalTarget : cfg.target;
+    const w = setWon(curA, curB, target, cfg.cap, cfg.winBy2);
+    if (!w) continue;
+    setScoresA.push(curA); setScoresB.push(curB);
+    if (w === 'A') gamesA += 1; else gamesB += 1;
+    curA = 0; curB = 0; period += 1;
+    const rw = gamesA >= needGames ? 'A' : gamesB >= needGames ? 'B' : null;
+    if (!rw) continue;
+    results.push({ A: gamesA, B: gamesB, winner: rw });
+    if (rw === 'A') rubbersA += 1; else rubbersB += 1;
+    gamesA = 0; gamesB = 0; period = 1;
+    if (rubbersA >= needRubbers) decided = 'A';
+    else if (rubbersB >= needRubbers) decided = 'B';
+  }
+  return { rubbersA, rubbersB, results, rubber: decided ? results.length : results.length + 1, gamesA, gamesB, setScoresA, setScoresB, curA, curB, decided };
+}
+
 // Per-player cricket rollup (A5-003/004). Player identity rides in the event
 // payload (`batsman_id` / `bowler_id`, or `player_id` as a batting fallback) —
 // there are no dedicated columns on match_events. The batting `team_side` in
@@ -1061,6 +1101,7 @@ export async function recomputeSummary(
   const B: Record<string, any> = { score: 0 };
   let tennisState: TennisScore | null = null;
   let carromBoardsPlayed: number | null = null; // A5: boards played in the carrom game in play
+  let tieRubbers: { rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' }> } | null = null; // BUILD 3.49
   const sides: Record<'A' | 'B', Record<string, any>> = { A, B };
   const sideOf = (p: any): 'A' | 'B' => ((p?.team_side as 'A' | 'B') === 'B' ? 'B' : 'A');
   let chessResult: string | null = null; // SC-47
@@ -1175,11 +1216,22 @@ export async function recomputeSummary(
     // last possible one, so a best-of-3 volleyball match plays its 3rd to 15).
     // BUILD 2.3: every number from the match's rules (the standards for a match
     // stored before rules were data).
-    const cfg = setConfigOf(rulesOf(slug, match));
-    const r = rollupSets(cfg, events, sideOf);
-    A.score = r.setsA; B.score = r.setsB;
-    A.sets = r.setScoresA; B.sets = r.setScoresB;
-    A.points = r.curA; B.points = r.curB; // current in-progress set/board
+    const rules = rulesOf(slug, match);
+    const cfg = setConfigOf(rules);
+    if (slug === 'badminton' && rules.rubbers) {
+      // BUILD 3.49: a team tie — the score is rubbers won; sets are every game.
+      const t = rollupTie(cfg, rules.rubbers, events, sideOf);
+      A.score = t.rubbersA; B.score = t.rubbersB;
+      A.sets = t.setScoresA; B.sets = t.setScoresB;
+      A.games = t.gamesA; B.games = t.gamesB; // games in the rubber in play
+      A.points = t.curA; B.points = t.curB;
+      tieRubbers = { rubber: t.rubber, results: t.results };
+    } else {
+      const r = rollupSets(cfg, events, sideOf);
+      A.score = r.setsA; B.score = r.setsB;
+      A.sets = r.setScoresA; B.sets = r.setScoresB;
+      A.points = r.curA; B.points = r.curB; // current in-progress set/board
+    }
   } else if (slug === 'chess') {
     // SC-47: chess records a single `result` event ({winner: white|black|draw}).
     // Reflect it as A/B scores (1-0 / 0-1 / ½-½) plus a result string + winner
@@ -1270,6 +1322,7 @@ export async function recomputeSummary(
   // and the A7-002 results surface don't change.
   summary.players = aggregatePlayers(slug, events as any[]);
   if (carromBoardsPlayed !== null) summary.boards_played = carromBoardsPlayed;
+  if (tieRubbers) { summary.rubber = tieRubbers.rubber; summary.rubbers = tieRubbers.results; } // BUILD 3.49
   if (tennisState) {
     // The tiebreak in play, and each completed set's tiebreak points (or null),
     // so a hub card or result can say "7–6 (7–5)".

@@ -28,7 +28,7 @@ const RALLY = new Set(['badminton', 'tabletennis', 'pickleball', 'volleyball', '
 
 export function scorePush(args: {
   slug: string;
-  summary: { A?: SideLine; B?: SideLine; set_tiebreaks?: Array<{ A: number; B: number } | null> };
+  summary: { A?: SideLine; B?: SideLine; set_tiebreaks?: Array<{ A: number; B: number } | null>; rubbers?: Array<{ A: number; B: number; winner: 'A' | 'B' }> };
   side: 'A' | 'B';
   teamName: string;
   kind?: string;
@@ -38,7 +38,7 @@ export function scorePush(args: {
    * test kept matching the last finished game and re-sent "wins board 2" for
    * every extra tap. A game/set push now needs this event to have finished one.
    */
-  prevSummary?: { A?: SideLine; B?: SideLine } | null;
+  prevSummary?: { A?: SideLine; B?: SideLine; rubbers?: unknown[] } | null;
   /** F-15: an own goal — `side`/`teamName` are the side it counts FOR; this is who put it in. */
   concedingName?: string;
 }): { title: string; body: string } | null {
@@ -50,6 +50,15 @@ export function scorePush(args: {
   const setsB = B.sets ?? [];
   const n = Math.max(setsA.length, setsB.length);
   const mine = (a: number, b: number) => (side === 'A' ? `${a}–${b}` : `${b}–${a}`);
+
+  // BUILD 3.49: a team tie — the point that ends a rubber is announced as the rubber.
+  const rubbers = summary.rubbers ?? [];
+  if (RALLY.has(slug) && rubbers.length > (args.prevSummary?.rubbers?.length ?? 0)) {
+    const r = rubbers[rubbers.length - 1]!;
+    const won = rubbers.filter((x) => x.winner === side).length;
+    const lost = rubbers.length - won;
+    return { title: `Rubber to ${teamName}`, body: `${teamName} wins rubber ${rubbers.length} · ${mine(r.A, r.B)} in games · rubbers ${won}–${lost}` };
+  }
 
   if (RALLY.has(slug)) {
     // A game just ended exactly when the live points are back at 0-0 and a

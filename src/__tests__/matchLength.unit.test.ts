@@ -12,7 +12,7 @@ import path from 'path';
 
 describe('matchLength', () => {
   test('each sport offers exactly the approved presets, standard first-class', () => {
-    expect(MATCH_LENGTHS.badminton).toEqual({ options: [1, 3], standard: 3, unit: 'game' });
+    expect(MATCH_LENGTHS.badminton).toEqual({ options: [1, 3, 5], standard: 3, unit: 'game' });
     expect(MATCH_LENGTHS.tabletennis).toEqual({ options: [1, 3, 5, 7], standard: 5, unit: 'game' });
     expect(MATCH_LENGTHS.pickleball).toEqual({ options: [1, 3], standard: 3, unit: 'game' });
     expect(MATCH_LENGTHS.volleyball).toEqual({ options: [1, 3, 5], standard: 5, unit: 'set' }); // BUILD 3.36
@@ -26,7 +26,7 @@ describe('matchLength', () => {
     expect(bestOfFor('badminton', 'bo3')).toBe(3);
     expect(bestOfFor('badminton', 'badminton')).toBe(3); // an older match: the slug
     expect(bestOfFor('badminton', null)).toBe(3);
-    expect(bestOfFor('badminton', 'bo5')).toBe(3); // not offered → standard
+    expect(bestOfFor('badminton', 'bo7')).toBe(3); // not offered → standard (bo5 is, BUILD 3.46)
     expect(bestOfFor('table-tennis', 'bo7')).toBe(7); // DB slug form
     expect(bestOfFor('tabletennis', undefined)).toBe(5);
     expect(bestOfFor('volleyball', 'bo3')).toBe(3);

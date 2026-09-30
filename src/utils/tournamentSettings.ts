@@ -113,6 +113,113 @@ export function storedPoints(p: Record<string, any>): PointsTemplate {
   };
 }
 
+// ── 4.2 · tie-break order ────────────────────────────────────────────────────
+// Stored in tournaments.tiebreaker_rules (a list of these names), read by the
+// standings ladder after points. Points always come first; the team id is the
+// last word when everything else is level.
+
+export type TiebreakToken =
+  | 'head_to_head' | 'wins' | 'nrr' | 'score_diff' | 'score_scored' | 'score_ratio'
+  | 'buchholz' | 'sonneborn_berger';
+
+const ALIASES: Record<string, TiebreakToken> = {
+  head_to_head: 'head_to_head', h2h: 'head_to_head', head2head: 'head_to_head', headtohead: 'head_to_head',
+  wins: 'wins', won: 'wins',
+  nrr: 'nrr', run_rate: 'nrr', net_run_rate: 'nrr', netrunrate: 'nrr',
+  score_diff: 'score_diff', score_difference: 'score_diff', goal_difference: 'score_diff', goal_diff: 'score_diff', gd: 'score_diff',
+  score_scored: 'score_scored', score_for: 'score_scored', goals_for: 'score_scored', gf: 'score_scored', runs_scored: 'score_scored', points_scored: 'score_scored',
+  score_ratio: 'score_ratio', set_ratio: 'score_ratio', game_ratio: 'score_ratio', goal_ratio: 'score_ratio',
+  buchholz: 'buchholz',
+  sonneborn_berger: 'sonneborn_berger', sb: 'sonneborn_berger', 'sonneborn-berger': 'sonneborn_berger',
+};
+
+/** A stored or typed name as its canonical token, or null for one the table doesn't know. */
+export function tiebreakToken(x: unknown): TiebreakToken | null {
+  return typeof x === 'string' ? ALIASES[x.toLowerCase().trim()] ?? null : null;
+}
+
+/** The tie-breaks this sport can use (run rate is cricket's; Buchholz and Sonneborn-Berger chess's). */
+export function tiebreaksFor(sport: string | null | undefined): TiebreakToken[] {
+  const key = sportKeyOf(sport);
+  const all: TiebreakToken[] = ['head_to_head', 'wins', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'buchholz', 'sonneborn_berger'];
+  return all.filter((t) => (t === 'nrr' ? key === 'cricket' : t === 'buchholz' || t === 'sonneborn_berger' ? key === 'chess' : true));
+}
+
+/** How a tie-break reads for this sport ("Goal difference", "Set ratio"). */
+export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken): string {
+  const key = sportKeyOf(sport);
+  const unit = key === 'football' || key === 'hockey' ? 'Goal'
+    : key === 'cricket' ? 'Run'
+      : key === 'basketball' ? 'Point'
+        : key === 'volleyball' || key === 'tennis' ? 'Set'
+          : key === 'chess' ? 'Score' : 'Game';
+  switch (t) {
+    case 'head_to_head': return 'Head-to-head';
+    case 'wins': return 'Wins';
+    case 'nrr': return 'Net run rate';
+    case 'score_diff': return `${unit} difference`;
+    case 'score_scored': return unit === 'Score' ? 'Score' : `${unit}s ${unit === 'Set' || unit === 'Game' ? 'won' : 'scored'}`;
+    case 'score_ratio': return `${unit} ratio`;
+    case 'buchholz': return 'Buchholz';
+    case 'sonneborn_berger': return 'Sonneborn-Berger';
+  }
+}
+
+/** The order a table uses when the organiser sets none (the standings ladder's default), for this sport. */
+export function defaultTiebreaks(sport: string | null | undefined): TiebreakToken[] {
+  const key = sportKeyOf(sport);
+  return (['head_to_head', 'nrr', 'score_diff', 'score_scored'] as TiebreakToken[]).filter((t) => t !== 'nrr' || key === 'cricket');
+}
+
+/** The sport's recognised orders, offered as presets on the form. The first is the default. */
+export function tiebreakPresetsFor(sport: string | null | undefined): Array<{ key: string; label: string; order: TiebreakToken[] }> {
+  // The standard is also a recognised order for some sports; the chip says so.
+  const standardName = ({ football: 'Head-to-head first (AIFF)', basketball: 'Standard (FIBA)' } as Record<string, string>)[sportKeyOf(sport)] ?? 'Standard';
+  const out = [{ key: 'default', label: standardName, order: defaultTiebreaks(sport) }];
+  switch (sportKeyOf(sport)) {
+    case 'cricket': out.push({ key: 'cricket', label: 'Run rate, then wins', order: ['nrr', 'wins', 'head_to_head'] }); break;
+    case 'football':
+      out.push({ key: 'local', label: 'Goal difference first', order: ['score_diff', 'score_scored', 'head_to_head'] });
+      break;
+    case 'hockey': out.push({ key: 'fih', label: 'FIH (wins first)', order: ['wins', 'score_diff', 'score_scored', 'head_to_head'] }); break;
+    case 'volleyball': out.push({ key: 'fivb', label: 'FIVB (wins, set ratio)', order: ['wins', 'score_ratio', 'head_to_head'] }); break;
+    case 'tabletennis': out.push({ key: 'ittf', label: 'ITTF (head-to-head, game ratio)', order: ['head_to_head', 'score_ratio'] }); break;
+    case 'chess':
+      out.push({ key: 'fide_rr', label: 'Sonneborn-Berger', order: ['sonneborn_berger', 'head_to_head', 'wins'] });
+      out.push({ key: 'fide_swiss', label: 'Buchholz', order: ['buchholz', 'sonneborn_berger', 'wins'] });
+      break;
+    default: break;
+  }
+  // An order the same as the standard isn't offered twice.
+  return out.filter((p, i) => i === 0 || JSON.stringify(p.order) !== JSON.stringify(out[0]!.order));
+}
+
+export const TIEBREAK_MAX = 6;
+
+/** Why a tie-break list can't be stored (null = fine). Points is implied first, so it's dropped, not refused. */
+export function tiebreakRefusal(sport: string | null | undefined, list: unknown): Refusal | null {
+  if (list === undefined || list === null) return null;
+  const bad = (error: string) => refuse(error, 'INVALID_TIEBREAKS');
+  if (!Array.isArray(list)) return bad('Tie-breaks must be a list.');
+  const allowed = new Set(tiebreaksFor(sport));
+  const seen = new Set<TiebreakToken>();
+  for (const x of list) {
+    if (typeof x === 'string' && ['points', 'pts'].includes(x.toLowerCase().trim())) continue;
+    const t = tiebreakToken(x);
+    if (!t) return bad(`“${String(x).slice(0, 40)}” isn’t a tie-break.`);
+    if (!allowed.has(t)) return bad(`${tiebreakLabel(sport, t)} isn’t a tie-break for this sport.`);
+    if (seen.has(t)) return bad(`${tiebreakLabel(sport, t)} is in the list twice.`);
+    seen.add(t);
+  }
+  if (seen.size > TIEBREAK_MAX) return bad(`Up to ${TIEBREAK_MAX} tie-breaks.`);
+  return null;
+}
+
+/** The list to store: canonical names, points dropped (it always comes first). */
+export function storedTiebreaks(list: unknown[]): TiebreakToken[] {
+  return list.map(tiebreakToken).filter((t): t is TiebreakToken => !!t);
+}
+
 // ── the settings object ──────────────────────────────────────────────────────
 
 export type TournamentSettings = {

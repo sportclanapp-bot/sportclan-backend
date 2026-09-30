@@ -254,9 +254,9 @@ export function computeStats(
   return table;
 }
 
-type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate';
+type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger';
 
-const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head'>, (s: TeamStat) => number> = {
+const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 'sonneborn_berger'>, (s: TeamStat) => number> = {
   points: (s) => s.points,
   wins: (s) => s.won,
   score_diff: (s) => s.diff,
@@ -266,7 +266,34 @@ const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head'>, (s: TeamStat)
   // straight through to score_diff — i.e. goal difference still decides
   // football exactly as before.
   score_rate: (s) => s.nrr ?? 0,
+  // BUILD 4.2: scored ÷ conceded — volleyball's set ratio, table tennis's
+  // game ratio. Nothing conceded reads as a very large ratio (or 0 with
+  // nothing scored either), never a division by zero.
+  score_ratio: (s) => (s.conceded > 0 ? s.scored / s.conceded : s.scored > 0 ? 1e9 : 0),
 };
+
+/**
+ * BUILD 4.2 · each team's played opponents and results, counted by the same
+ * rules as computeStats (a no-result is no game). Chess's Buchholz and
+ * Sonneborn-Berger are built from it.
+ */
+function opponentLog(teamIds: string[], matches: GMatch[]): Map<string, Array<{ opp: string; res: 'w' | 'd' | 'l' }>> {
+  const inSet = new Set(teamIds);
+  const log = new Map<string, Array<{ opp: string; res: 'w' | 'd' | 'l' }>>(teamIds.map((id) => [id, []]));
+  for (const m of matches) {
+    const a = m.team_a_id;
+    const b = m.team_b_id;
+    if (!a || !b || !inSet.has(a) || !inSet.has(b)) continue;
+    const terminal = m.status === 'completed' || m.status === 'abandoned';
+    if (!terminal && !m.winner_team_id) continue;
+    if (m.status === 'abandoned' && !m.winner_team_id) continue;
+    const ra = m.winner_team_id === a ? 'w' : m.winner_team_id === b ? 'l' : 'd';
+    const rb = ra === 'w' ? 'l' : ra === 'l' ? 'w' : 'd';
+    log.get(a)!.push({ opp: b, res: ra });
+    log.get(b)!.push({ opp: a, res: rb });
+  }
+  return log;
+}
 
 /** Map a configured tiebreaker_rules token to a known criterion (or null to ignore). */
 function mapRule(token: string): Criterion | null {
@@ -280,6 +307,10 @@ function mapRule(token: string): Criterion | null {
   if (t === 'score_diff' || t === 'score_difference' || t === 'goal_difference' || t === 'goal_diff' || t === 'gd') return 'score_diff';
   if (t === 'score_scored' || t === 'score_for' || t === 'goals_for' || t === 'gf' || t === 'runs_scored' || t === 'points_scored') return 'score_scored';
   if (t === 'wins' || t === 'won') return 'wins';
+  // BUILD 4.2
+  if (t === 'score_ratio' || t === 'set_ratio' || t === 'game_ratio' || t === 'goal_ratio') return 'score_ratio';
+  if (t === 'buchholz') return 'buchholz';
+  if (t === 'sonneborn_berger' || t === 'sb' || t === 'sonneborn-berger') return 'sonneborn_berger';
   return null; // 'team_id' and unknowns handled by the terminator
 }
 
@@ -307,11 +338,21 @@ export function rankTeams(
 ): string[] {
   const order = buildOrder(tiebreakerRules);
   const globalStats = computeStats(teamIds, matches, undefined, pts);
+  let opps: ReturnType<typeof opponentLog> | null = null;
 
   function keyMapFor(crit: Criterion, ids: string[]): Map<string, number> {
     if (crit === 'head_to_head') {
       const h2h = computeStats(ids, matches, new Set(ids), pts);
       return new Map(ids.map((id) => [id, h2h.get(id)?.points ?? 0]));
+    }
+    // BUILD 4.2 · Buchholz: the sum of the opponents' points. Sonneborn-Berger:
+    // the points of the opponents beaten, plus half those drawn with.
+    if (crit === 'buchholz' || crit === 'sonneborn_berger') {
+      opps = opps ?? opponentLog(teamIds, matches);
+      const ptsOf = (id: string) => globalStats.get(id)?.points ?? 0;
+      return new Map(ids.map((id) => [id, (opps!.get(id) ?? []).reduce((sum, o) => sum + (
+        crit === 'buchholz' ? ptsOf(o.opp) : o.res === 'w' ? ptsOf(o.opp) : o.res === 'd' ? ptsOf(o.opp) / 2 : 0
+      ), 0)]));
     }
     const fn = GLOBAL_CRITERION[crit];
     return new Map(ids.map((id) => [id, fn(globalStats.get(id)!)]));

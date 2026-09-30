@@ -67,7 +67,7 @@ import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
-import { settingsRefusal, storedSettings, settingsOf } from '../utils/tournamentSettings';
+import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks } from '../utils/tournamentSettings';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -180,6 +180,10 @@ export async function createTournament(req: Request, res: Response) {
     // BUILD Stage 4: the tournament-wide settings, checked by the shared validator.
     const setBad = settingsRefusal(createSportSlug, format, settings);
     if (setBad) return res.status(400).json(setBad);
+    // BUILD 4.2: tie-break names are checked (they were stored as sent, and an
+    // unknown one was silently skipped by the table).
+    const tbBad = tiebreakRefusal(createSportSlug, tiebreaker_rules);
+    if (tbBad) return res.status(400).json(tbBad);
     // Bound max_teams (SC-39) — 0/1/absurd values previously created degenerate
     // tournaments.
     const maxTeamsNum = Number(max_teams);
@@ -278,7 +282,7 @@ export async function createTournament(req: Request, res: Response) {
         logo_url: logo_url || null,
         entry_code,
         created_by: userId,
-        tiebreaker_rules: tiebreaker_rules ?? [],
+        tiebreaker_rules: Array.isArray(tiebreaker_rules) ? storedTiebreaks(tiebreaker_rules) : [], // BUILD 4.2
         sport_metadata: metadata,
         sponsor_name: sponsor_name || null,
         sponsor_logo_url: sponsor_logo_url || null,
@@ -842,7 +846,7 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings')
+      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -983,6 +987,19 @@ export async function updateTournament(req: Request, res: Response) {
       const bad = tournamentRulesRefusal(slug, update.match_rules);
       if (bad) return res.status(400).json(bad);
       update.match_rules = storedStageRules(slug, update.match_rules);
+    }
+    // BUILD 4.2: tie-breaks are checked like create's and fixed once any result
+    // stands (re-ordering a table people have played to is re-deciding it).
+    if ('tiebreaker_rules' in update) {
+      const slug = normSportSlug((await getSport(String((tournament as { sport_id?: string }).sport_id)))?.slug);
+      const bad = tiebreakRefusal(slug, update.tiebreaker_rules);
+      if (bad) return res.status(400).json(bad);
+      const next = storedTiebreaks(update.tiebreaker_rules ?? []);
+      const current = storedTiebreaks(((tournament as { tiebreaker_rules?: unknown[] }).tiebreaker_rules ?? []) as unknown[]);
+      if (JSON.stringify(next) !== JSON.stringify(current) && (await tournamentHasResult(id!))) {
+        return res.status(409).json({ error: 'Results are already in, so the tie-breaks can’t change.', code: 'TIEBREAKS_LOCKED' });
+      }
+      update.tiebreaker_rules = next;
     }
     // BUILD Stage 4: settings are checked like create's and merged over the
     // stored ones (an edit sends only what changes). The points template is

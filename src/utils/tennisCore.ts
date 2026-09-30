@@ -47,6 +47,22 @@ export const TENNIS_SETS_TO_WIN = 2;
 const GAMES_PER_SET = 6;
 const TIEBREAK_TO = 7;
 
+/**
+ * BUILD 3.59+ · a match's own tennis rules (the match's rules, via
+ * matchRules.tennisOptsOf). Anything left out is the standard above. A bare
+ * number is the old argument: sets to win.
+ */
+export interface TennisOpts {
+  setsToWin: number;
+  /** BUILD 3.59: games to win a set, 4–10 (short set to pro set); the tiebreak comes at games-all. */
+  gamesPerSet?: number;
+}
+type Opts = Required<TennisOpts>;
+function optsOf(o: number | TennisOpts | undefined): Opts {
+  const x: TennisOpts = typeof o === 'number' ? { setsToWin: o } : o ?? { setsToWin: TENNIS_SETS_TO_WIN };
+  return { setsToWin: x.setsToWin, gamesPerSet: x.gamesPerSet ?? GAMES_PER_SET };
+}
+
 const other = (s: TennisSide): TennisSide => (s === 'A' ? 'B' : 'A');
 
 export function emptyTennis(): TennisScore {
@@ -75,8 +91,9 @@ function winSet(s: TennisScore, side: TennisSide, setsToWin: number, tiebreak?: 
 }
 
 /** One point to `side`. Pure: returns a new score. */
-export function tennisPoint(s: TennisScore, side: TennisSide, setsToWin: number = TENNIS_SETS_TO_WIN): TennisScore {
+export function tennisPoint(s: TennisScore, side: TennisSide, options: number | TennisOpts = TENNIS_SETS_TO_WIN): TennisScore {
   if (s.winner) return s;
+  const { setsToWin, gamesPerSet } = optsOf(options);
   const o = other(side);
   const points = { ...s.points, [side]: s.points[side] + 1 };
 
@@ -91,19 +108,19 @@ export function tennisPoint(s: TennisScore, side: TennisSide, setsToWin: number 
 
   if (points[side] >= 4 && points[side] - points[o] >= 2) {
     const games = { ...s.games, [side]: s.games[side] + 1 };
-    if (games[side] >= GAMES_PER_SET && games[side] - games[o] >= 2) {
+    if (games[side] >= gamesPerSet && games[side] - games[o] >= 2) {
       return winSet({ ...s, games }, side, setsToWin);
     }
-    const tiebreak = games.A === GAMES_PER_SET && games.B === GAMES_PER_SET;
+    const tiebreak = games.A === gamesPerSet && games.B === gamesPerSet;
     return { ...s, points: { A: 0, B: 0 }, games, tiebreak };
   }
   return { ...s, points };
 }
 
 /** Replay a sequence of point winners from the start. */
-export function tennisReplay(sides: TennisSide[], setsToWin: number = TENNIS_SETS_TO_WIN): TennisScore {
+export function tennisReplay(sides: TennisSide[], options: number | TennisOpts = TENNIS_SETS_TO_WIN): TennisScore {
   let s = emptyTennis();
-  for (const side of sides) s = tennisPoint(s, side, setsToWin);
+  for (const side of sides) s = tennisPoint(s, side, options);
   return s;
 }
 

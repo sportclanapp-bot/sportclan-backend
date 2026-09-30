@@ -122,7 +122,7 @@ describe('Decision B · the server reads the match length preset', () => {
     const sc = fs.readFileSync(path.join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
     // BUILD 2.3: through the match's rules (matchRules), which read the preset for older rows.
     expect(sc).toContain('const cfg = setConfigOf(rules);' /* BUILD 3.49: rules = rulesOf(slug, match) */);
-    expect(sc).toContain("winsToWin(rulesOf('tennis', match))");
+    expect(sc).toContain("tennisOptsOf(rulesOf('tennis', match))" /* BUILD 3.59: sets to win and the rest of the match's tennis rules */);
     const mc = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
     expect(mc).toContain('bestOfState(normSportSlug(sportRow?.slug), canonical, match as { format?: string | null; overs?: number | null; rules?: unknown })');
     expect(mc).toContain("code: 'BAD_MATCH_LENGTH'");

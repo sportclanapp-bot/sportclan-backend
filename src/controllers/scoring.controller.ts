@@ -18,7 +18,7 @@ import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf } from '../utils/cricketRules';
-import { DOUBLES_PLAYERS, doublesLineupProblem, rulesOf, setConfigOf, standardRules, winsToWin } from '../utils/matchRules';
+import { DOUBLES_PLAYERS, doublesLineupProblem, rulesOf, setConfigOf, standardRules, tennisOptsOf, winsToWin } from '../utils/matchRules';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
@@ -1215,7 +1215,7 @@ export async function recomputeSummary(
     // Decision B: "1 set" or "best of 3" — the match's preset.
     tennisState = tennisReplay(
       events.filter((e) => e.event_type === 'score').map((e) => sideOf(e.payload || {})),
-      winsToWin(rulesOf('tennis', match)), // BUILD 2.3: the match's rules
+      tennisOptsOf(rulesOf('tennis', match)), // BUILD 2.3 / 3.59+: the match's rules
     );
     A.score = tennisState.setsWon.A; B.score = tennisState.setsWon.B;       // sets won
     A.sets = tennisState.sets.map((x) => x.A); B.sets = tennisState.sets.map((x) => x.B); // games per set

@@ -16,9 +16,9 @@ import { isKnownEventType } from '../utils/scoringEvents';
 import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor } from '../utils/matchLength';
-import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
+import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX } from '../utils/carromCore';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf } from '../utils/cricketRules';
-import { DOUBLES_PLAYERS, doublesLineupProblem, rulesOf, setConfigOf, standardRules, tennisOptsOf, winsToWin } from '../utils/matchRules';
+import { DOUBLES_PLAYERS, carromOptsOf, doublesLineupProblem, rulesOf, setConfigOf, standardRules, tennisOptsOf, winsToWin } from '../utils/matchRules';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
@@ -220,7 +220,8 @@ export async function validateScoringEvent(
       if (payload.queen != null && typeof payload.queen !== 'boolean') {
         return refuse(400, { error: 'queen must be true or false' });
       }
-      if (outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_POINTS)) {
+      // BUILD 3.72: a queen can be worth up to 5 (the home game); the score is recomputed anyway.
+      if (outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_MAX)) {
         return refuse(400, { error: 'value is out of range for a board' });
       }
     } else if (outOfRange(payload.value, 1, 3)) {
@@ -1251,8 +1252,7 @@ export async function recomputeSummary(
           const p: any = e.payload || {};
           return { winner: sideOf(p), piecesLeft: carromPieces(p.pieces_left), queen: p.queen === true };
         }),
-      winsToWin(rulesOf('carrom', match)),
-      rulesOf('carrom', match).target, // BUILD 2.3: points to win a game
+      carromOptsOf(rulesOf('carrom', match)), // BUILD 2.3 / 3.72+: target, queen, …
     );
     A.score = c.gamesWon.A; B.score = c.gamesWon.B;                        // games won
     A.sets = c.games.map((g) => g.A); B.sets = c.games.map((g) => g.B);    // each game's final score

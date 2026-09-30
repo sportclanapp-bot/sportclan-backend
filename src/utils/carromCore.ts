@@ -25,6 +25,33 @@ export const CARROM_QUEEN_POINTS = 3;
 /** The queen scores only while the winner's game score is below this. */
 export const CARROM_QUEEN_LIMIT = 22;
 export const CARROM_MAX_PIECES = 9;
+/** BUILD 3.72: the most a queen can be worth (the home game's 5). */
+export const CARROM_QUEEN_MAX = 5;
+
+/**
+ * BUILD 3.72+ · a match's own carrom rules (matchRules.carromOptsOf). Anything
+ * left out is the official game above. A bare number is the old argument:
+ * games to win.
+ */
+export interface CarromOpts {
+  gamesToWin: number;
+  /** Points to win a game, 7–29. */
+  target?: number;
+  /** The queen's worth, 0–5 (3 official, 5 in the home game). */
+  queenPoints?: number;
+  /** The queen counts only while the winner is below target − queen (true, official), or always (false). */
+  queenCutoff?: boolean;
+}
+type Opts = Required<CarromOpts>;
+function optsOf(o: number | CarromOpts, target?: number): Opts {
+  const x: CarromOpts = typeof o === 'number' ? { gamesToWin: o, target } : o;
+  return { gamesToWin: x.gamesToWin, target: x.target ?? CARROM_GAME_TARGET, queenPoints: x.queenPoints ?? CARROM_QUEEN_POINTS, queenCutoff: x.queenCutoff ?? true };
+}
+/** The score below which the queen counts: target − queen (22 in the official game, 24 at home). */
+export function carromQueenLimit(o: number | CarromOpts): number {
+  const x = optsOf(o);
+  return x.target - x.queenPoints;
+}
 
 export interface CarromBoardResult {
   winner: CarromSide;
@@ -57,19 +84,22 @@ export function carromPieces(n: unknown): number {
 }
 
 /** What a board is worth to its winner, given the winner's game score before it. */
-export function carromBoardPoints(winnerScoreBefore: number, piecesLeft: number, queen: boolean): number {
-  const queenPts = queen && winnerScoreBefore < CARROM_QUEEN_LIMIT ? CARROM_QUEEN_POINTS : 0;
-  return carromPieces(piecesLeft) + queenPts;
+export function carromBoardPoints(winnerScoreBefore: number, piecesLeft: number, queen: boolean, options?: CarromOpts): number {
+  const o = optsOf(options ?? { gamesToWin: 1 });
+  const counts = queen && (!o.queenCutoff || winnerScoreBefore < o.target - o.queenPoints);
+  return carromPieces(piecesLeft) + (counts ? o.queenPoints : 0);
 }
 
 /**
  * One board. Pure: returns a new score. A board after the match is decided changes nothing.
  * BUILD 2.3: `target` is the match's points to win a game (its rules), 25 as standard.
  */
-export function carromBoard(s: CarromScore, b: CarromBoardResult, gamesToWin: number, target = CARROM_GAME_TARGET): CarromScore {
+export function carromBoard(s: CarromScore, b: CarromBoardResult, options: number | CarromOpts, targetArg?: number): CarromScore {
   if (s.winner) return s;
+  const o = optsOf(options, targetArg);
+  const { gamesToWin, target } = o;
   const w = b.winner;
-  const gained = carromBoardPoints(s.points[w], b.piecesLeft, b.queen);
+  const gained = carromBoardPoints(s.points[w], b.piecesLeft, b.queen, o);
   const points = { ...s.points, [w]: s.points[w] + gained };
   const boards = s.boards + 1;
   if (points[w] < target) return { ...s, points, boards };
@@ -85,8 +115,8 @@ export function carromBoard(s: CarromScore, b: CarromBoardResult, gamesToWin: nu
 }
 
 /** Replay a match from its boards. */
-export function carromReplay(boards: CarromBoardResult[], gamesToWin: number, target = CARROM_GAME_TARGET): CarromScore {
+export function carromReplay(boards: CarromBoardResult[], options: number | CarromOpts, target?: number): CarromScore {
   let s = emptyCarrom();
-  for (const b of boards) s = carromBoard(s, b, gamesToWin, target);
+  for (const b of boards) s = carromBoard(s, b, options, target);
   return s;
 }

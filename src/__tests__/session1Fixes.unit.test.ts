@@ -135,10 +135,10 @@ describe('A5 · carrom on the server', () => {
   test('a board event may carry 0–12 points and 0–9 pieces; other scores stay 1–3', () => {
     expect(sc).toContain("const isBoard = payload.kind === 'board';");
     expect(sc).toContain('outOfRange(payload.pieces_left, 0, CARROM_MAX_PIECES)');
-    expect(sc).toContain('outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_POINTS)');
+    expect(sc).toContain('outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_MAX)'); // BUILD 3.72: a queen up to 5
   });
   test('board events are replayed through the shared core, by the match preset', () => {
-    expect(sc).toMatch(/slug === 'carrom' && events\.some[\s\S]{0,900}carromReplay\([\s\S]{0,400}winsToWin\(rulesOf\('carrom', match\)\)/); // BUILD 2.3: the match's rules
+    expect(sc).toMatch(/slug === 'carrom' && events\.some[\s\S]{0,900}carromReplay\([\s\S]{0,400}carromOptsOf\(rulesOf\('carrom', match\)\)/); // BUILD 2.3 / 3.72: the match's rules
   });
   test('carrom game pushes say "game"', () => {
     expect(scorePush({ slug: 'carrom', side: 'A', teamName: 'X', summary: { A: { sets: [27], points: 0 }, B: { sets: [12], points: 0 } } })!.body).toBe('X wins game 1 · 27–12');

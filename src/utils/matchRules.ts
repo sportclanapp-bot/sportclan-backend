@@ -122,7 +122,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null }, // BUILD 3.54 rubbers
   pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally' }, // BUILD 3.58: side-out; players 2 = doubles
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2 },
-  tennis: { bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad' }, // BUILD 3.59–3.63
+  tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad' }, // BUILD 3.59–3.65 (players 2 = doubles)
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true },
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
@@ -368,6 +368,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'tennis' && typeof r.tiebreak !== 'boolean') return refuse('A tiebreak is on or off.', 'tiebreak'); // BUILD 3.60
   if (key === 'tennis' && r.tiebreakTo !== 7 && r.tiebreakTo !== 10) return refuse('A tiebreak is to 7 or 10 points.', 'tiebreakTo'); // BUILD 3.61
   if (key === 'tennis' && typeof r.matchTiebreak !== 'boolean') return refuse('A match tiebreak is on or off.', 'matchTiebreak'); // BUILD 3.62
+  if (key === 'tennis' && r.players !== null && r.players !== DOUBLES_PLAYERS) return refuse('Tennis players a side is 2 (doubles), or not set for singles.', 'players'); // BUILD 3.65
   if (key === 'tennis' && r.adScoring !== 'ad' && r.adScoring !== 'noad' && r.adScoring !== 'semiad') return refuse('Games are ad, no-ad or semi-ad.', 'adScoring'); // BUILD 3.63
   if (key === 'tennis' && r.matchTiebreak === true && r.bestOf === 1) return refuse('A match tiebreak replaces a final set — there is none in a one-set match.', 'matchTiebreak');
   // BUILD 3.58: pickleball scores every rally, or side-out (doubles: players 2).
@@ -609,6 +610,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   }
   // BUILD 3.59+: tennis — said when it isn't sets to 6.
   if (key === 'tennis') {
+    if (rules.players === DOUBLES_PLAYERS) parts.push('doubles'); // BUILD 3.65
     if (rules.gamesPerSet != null && rules.gamesPerSet !== 6) parts.push(rules.bestOf === 1 && rules.gamesPerSet === 8 ? 'pro set to 8' : `sets to ${rules.gamesPerSet}`);
     if (rules.tiebreak === false) parts.push('advantage sets'); // BUILD 3.60
     else if (rules.tiebreakTo === 10) parts.push('10-point tiebreaks'); // BUILD 3.61

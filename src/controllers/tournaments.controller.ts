@@ -67,7 +67,7 @@ import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
-import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey } from '../utils/tournamentSettings';
+import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem } from '../utils/tournamentSettings';
 import { drawOrder } from '../utils/drawOrder';
 import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSeparation';
 
@@ -521,9 +521,11 @@ type EntryTournament = {
   registration_deadline?: string | null;
   fixtures_generated?: boolean | null;
   created_by?: string | null;
+  settings?: unknown; // BUILD 4.11 open entry, 4.14 category
+  start_date?: string | null; // BUILD 4.14 ages on the start date
 };
 type EntryRefusal = { status: number; body: { error: string; code: string } };
-const ENTRY_TOURNAMENT_COLS = 'id, name, status, sport_id, max_teams, registration_deadline, fixtures_generated, created_by, settings';
+const ENTRY_TOURNAMENT_COLS = 'id, name, status, sport_id, max_teams, registration_deadline, fixtures_generated, created_by, settings, start_date';
 
 /**
  * Phase 3 · B08-F2/F4/F8/F9: the rules EVERY way into a tournament passes — a
@@ -538,6 +540,26 @@ const ENTRY_TOURNAMENT_COLS = 'id, name, status, sport_id, max_teams, registrati
  *    approval count approved only.
  *  - `deadline`: the registration deadline binds captains, not the organiser.
  */
+/** BUILD 4.14 · why a team's roster doesn't fit a category (naming a player), or null. */
+async function categoryRefusalFor(
+  category: NonNullable<ReturnType<typeof settingsOf>['category']>, teamId: string, sportId: string | null, startDate: string | null,
+): Promise<string | null> {
+  const { data: roster } = await supabase.from('team_members').select('user_id').eq('team_id', teamId);
+  const ids = Array.from(new Set(((roster ?? []) as Array<{ user_id: string | null }>).map((m) => m.user_id).filter((x): x is string => !!x)));
+  if (ids.length === 0) return null;
+  const { data: users } = await supabase.from('users').select('id, name, username, gender, dob').in('id', ids);
+  const ratings = new Map<string, number>();
+  if (sportId && (category.maxRating != null || category.minRating != null)) {
+    const { data: profs } = await supabase.from('user_sport_profiles').select('user_id, rating').eq('sport_id', sportId).in('user_id', ids);
+    for (const p of (profs ?? []) as Array<{ user_id: string; rating: number | null }>) if (p.rating != null) ratings.set(p.user_id, Number(p.rating));
+  }
+  const on = startDate && Number.isFinite(Date.parse(startDate)) ? new Date(startDate) : new Date();
+  const players = ((users ?? []) as Array<{ id: string; name?: string | null; username?: string | null; gender?: string | null; dob?: string | null }>).map((u) => ({
+    name: u.name || u.username || 'A player', gender: u.gender ?? null, dob: u.dob ?? null, rating: ratings.get(u.id) ?? null,
+  }));
+  return categoryProblem(category, players, on);
+}
+
 async function entryRefusal(
   t: EntryTournament,
   teamId: string,
@@ -581,6 +603,12 @@ async function entryRefusal(
     if ((count ?? 0) >= t.max_teams) {
       return { status: 400, body: { error: 'Tournament is full', code: 'TOURNAMENT_FULL' } };
     }
+  }
+  // BUILD 4.14: every player on the team fits the tournament's category.
+  const category = settingsOf(t as { settings?: unknown }).category;
+  if (category) {
+    const why = await categoryRefusalFor(category, teamId, t.sport_id ?? null, (t as { start_date?: string | null }).start_date ?? null);
+    if (why) return { status: 400, body: { error: why, code: 'CATEGORY' } };
   }
   // SC-240: no player may appear on two teams in the same tournament.
   if (opts.overlap) {

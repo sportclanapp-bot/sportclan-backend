@@ -239,7 +239,104 @@ export type TournamentSettings = {
   thirdPlace?: boolean;
   /** 4.13 · keep entries from the same club / state apart in the draw (the entry's club label). */
   separateClubs?: boolean;
+  /** 4.14 · who may play: gender, an age limit on the start date, a rating band in the sport. Absent = open. */
+  category?: Category;
 };
+
+// ── 4.14 · categories ────────────────────────────────────────────────────────
+
+export type Category = {
+  /** men / women: every player; mixed: at least one man and one woman. */
+  gender?: 'men' | 'women' | 'mixed' | null;
+  /** Under this age on the start date (U-14 → 14). */
+  underAge?: number | null;
+  /** At least this age on the start date (veterans 40+ → 40). */
+  minAge?: number | null;
+  /** Rating in the sport at most / at least this. */
+  maxRating?: number | null;
+  minRating?: number | null;
+};
+
+const isInt = (x: unknown, lo: number, hi: number) => typeof x === 'number' && Number.isInteger(x) && x >= lo && x <= hi;
+
+export function categoryRefusal(c: unknown): Refusal | null {
+  if (c === undefined || c === null) return null;
+  if (typeof c !== 'object' || Array.isArray(c)) return refuse('A category must be an object.');
+  const o = c as Record<string, unknown>;
+  const unknown = Object.keys(o).find((k) => !['gender', 'underAge', 'minAge', 'maxRating', 'minRating'].includes(k));
+  if (unknown) return refuse(`“${unknown}” isn’t part of a category.`);
+  if (o.gender != null && !['men', 'women', 'mixed'].includes(o.gender as string)) return refuse('A category is men’s, women’s, mixed or open.');
+  if (o.underAge != null && !isInt(o.underAge, 6, 25)) return refuse('An under-age limit is 6 to 25.');
+  if (o.minAge != null && !isInt(o.minAge, 30, 80)) return refuse('A minimum age is 30 to 80.');
+  if (o.underAge != null && o.minAge != null) return refuse('A category is an under-age limit or a minimum age, not both.');
+  if (o.maxRating != null && !isInt(o.maxRating, 100, 3000)) return refuse('A rating limit is 100 to 3000.');
+  if (o.minRating != null && !isInt(o.minRating, 100, 3000)) return refuse('A rating limit is 100 to 3000.');
+  if (o.maxRating != null && o.minRating != null && (o.minRating as number) > (o.maxRating as number)) return refuse('The lowest rating can’t be above the highest.');
+  return null;
+}
+
+/** The category kept, without empty parts; null when nothing's set (open). */
+export function storedCategory(c: Record<string, any> | null | undefined): Category | null {
+  if (!c) return null;
+  const out: Category = {};
+  for (const k of ['gender', 'underAge', 'minAge', 'maxRating', 'minRating'] as const) if (c[k] != null) (out as Record<string, unknown>)[k] = c[k];
+  return Object.keys(out).length ? out : null;
+}
+
+/** "Women’s · Under 19 · Rated up to 1600", or null for open. */
+export function categoryLabel(c: Category | null | undefined): string | null {
+  if (!c) return null;
+  const parts: string[] = [];
+  if (c.gender) parts.push(c.gender === 'men' ? 'Men’s' : c.gender === 'women' ? 'Women’s' : 'Mixed');
+  if (c.underAge != null) parts.push(`Under ${c.underAge}`);
+  if (c.minAge != null) parts.push(`${c.minAge} and over`);
+  if (c.minRating != null && c.maxRating != null) parts.push(`Rated ${c.minRating}–${c.maxRating}`);
+  else if (c.maxRating != null) parts.push(`Rated up to ${c.maxRating}`);
+  else if (c.minRating != null) parts.push(`Rated ${c.minRating} and up`);
+  return parts.length ? parts.join(' · ') : null;
+}
+
+export type CategoryPlayer = { name: string; gender?: string | null; dob?: string | null; rating?: number | null };
+
+/** Full years on `on` (a date), from a 'YYYY-MM-DD' birth date. */
+export function ageOn(dob: string, on: Date): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dob);
+  if (!m) return null;
+  let age = on.getUTCFullYear() - Number(m[1]);
+  const md = (on.getUTCMonth() + 1) * 100 + on.getUTCDate();
+  if (md < Number(m[2]) * 100 + Number(m[3])) age -= 1;
+  return age;
+}
+
+/** "Tara’s", "Kings’" — as the app's possessive(); this file takes no imports. */
+const poss = (n: string) => n + (/s$/i.test(n.trim()) ? '’' : '’s');
+
+/** Why this team's players don't fit the category (naming one), or null. */
+export function categoryProblem(c: Category | null | undefined, players: CategoryPlayer[], on: Date): string | null {
+  if (!c) return null;
+  for (const p of players) {
+    if (c.gender === 'men' || c.gender === 'women') {
+      const want = c.gender === 'men' ? 'male' : 'female';
+      if (p.gender !== 'male' && p.gender !== 'female') return `${poss(p.name)} profile doesn’t say ${c.gender === 'men' ? 'he’s a man' : 'she’s a woman'} — add it to the profile first.`;
+      if (p.gender !== want) return `This is a ${c.gender === 'men' ? 'men’s' : 'women’s'} event, and ${p.name} can’t play in it.`;
+    }
+    if (c.underAge != null || c.minAge != null) {
+      const age = p.dob ? ageOn(p.dob, on) : null;
+      if (age == null) return `${poss(p.name)} date of birth isn’t on the profile — add it first (this event has an age limit).`;
+      if (c.underAge != null && age >= c.underAge) return `This is an under-${c.underAge} event, and ${p.name} is ${age} on the start date.`;
+      if (c.minAge != null && age < c.minAge) return `This event is for ${c.minAge} and over, and ${p.name} is ${age} on the start date.`;
+    }
+    if (c.maxRating != null && p.rating != null && p.rating > c.maxRating) return `This event is for players rated up to ${c.maxRating}, and ${p.name} is rated ${Math.round(p.rating)}.`;
+    if (c.minRating != null && (p.rating == null || p.rating < c.minRating)) {
+      return p.rating == null ? `${p.name} has no rating in this sport yet (this event is for ${c.minRating} and up).` : `This event is for players rated ${c.minRating} and up, and ${p.name} is rated ${Math.round(p.rating)}.`;
+    }
+  }
+  if (c.gender === 'mixed' && players.length > 1) {
+    const g = new Set(players.map((p) => p.gender));
+    if (!g.has('male') || !g.has('female')) return 'A mixed event needs at least one man and one woman on the team.';
+  }
+  return null;
+}
 
 export const CLUB_MAX = 60;
 
@@ -286,7 +383,7 @@ export const SEEDING_MODES: readonly SeedingMode[] = ['registration', 'random', 
  * Settings the draw is made from. They're fixed once it's made (the fixtures
  * already reflect them); the points and tie-breaks are fixed once a result is in.
  */
-export const DRAW_KEYS = ['bestThirds', 'seeding', 'restMinutes', 'thirdPlace', 'separateClubs'] as const;
+export const DRAW_KEYS = ['bestThirds', 'seeding', 'restMinutes', 'thirdPlace', 'separateClubs', 'category'] as const;
 
 /** Which draw setting an edit changes, if any (to refuse it once the draw is made). */
 export function changedDrawKey(current: TournamentSettings, incoming: Record<string, unknown>, keys: readonly string[] = DRAW_KEYS): string | null {
@@ -305,7 +402,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -324,6 +421,8 @@ export function settingsRefusal(sport: string | null | undefined, format: string
     return refuse(`Rest between a team’s matches must be 0 to ${REST_MAX} minutes.`);
   }
   if (o.entry != null && o.entry !== 'approval' && o.entry !== 'open') return refuse('Entry is open or by approval.');
+  const catBad = categoryRefusal(o.category);
+  if (catBad) return catBad;
   if (o.separateClubs != null) {
     if (typeof o.separateClubs !== 'boolean') return refuse('Keeping clubs apart is on or off.');
     if (o.separateClubs && format !== 'knockout' && format !== 'groups_knockout') return refuse('Keeping clubs apart is for a draw — a knockout or groups.');
@@ -352,6 +451,11 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('seeding' in s) {
     if (s.seeding) out.seeding = s.seeding;
     else delete out.seeding;
+  }
+  if ('category' in s) {
+    const c = storedCategory(s.category);
+    if (c) out.category = c;
+    else delete out.category;
   }
   if ('separateClubs' in s) {
     if (s.separateClubs) out.separateClubs = true;

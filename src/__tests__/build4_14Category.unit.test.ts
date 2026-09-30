@@ -71,11 +71,11 @@ describe('BUILD 4.14 · the rules', () => {
   });
   test.each([
     [{ gender: 'women' }, [P('Asha', 'female', null), P('Ravi', 'male', null)], 'This is a women’s event, and Ravi can’t play in it.'],
-    [{ gender: 'men' }, [P('Kiran', null, null)], 'Kiran’s profile doesn’t say he’s a man — add it to the profile first.'],
+    [{ gender: 'men' }, [P('Kiran', null, null)], 'Kiran’s profile doesn’t list their gender as man. Add it to the profile first.'],
     [{ gender: 'mixed' }, [P('A', 'male', null), P('B', 'male', null)], 'A mixed event needs at least one man and one woman on the team.'],
     [{ underAge: 14 }, [P('Tara', 'female', '2012-10-10')], 'This is an under-14 event, and Tara is 14 on the start date.'],
     [{ underAge: 14 }, [P('Tara', 'female', '2012-10-11')], null],
-    [{ underAge: 14 }, [P('Neel', 'male', null)], 'Neel’s date of birth isn’t on the profile — add it first (this event has an age limit).'],
+    [{ underAge: 14 }, [P('Neel', 'male', null)], 'Neel’s profile doesn’t list their date of birth, and this event has an age limit. Add it to the profile first.'],
     [{ minAge: 40 }, [P('Old', 'male', '1990-01-01')], 'This event is for 40 and over, and Old is 36 on the start date.'],
     [{ maxRating: 1600 }, [P('Magnus', 'male', null, 1650.4)], 'This event is for players rated up to 1600, and Magnus is rated 1650.'],
     [{ maxRating: 1600 }, [P('New', 'male', null, null)], null],

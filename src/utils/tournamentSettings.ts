@@ -331,12 +331,13 @@ export function categoryProblem(c: Category | null | undefined, players: Categor
   for (const p of players) {
     if (c.gender === 'men' || c.gender === 'women') {
       const want = c.gender === 'men' ? 'male' : 'female';
-      if (p.gender !== 'male' && p.gender !== 'female') return `${poss(p.name)} profile doesn’t say ${c.gender === 'men' ? 'he’s a man' : 'she’s a woman'} — add it to the profile first.`;
+      // 1 Oct 2026: no pronouns — the profile hasn't said, so neither do we.
+      if (p.gender !== 'male' && p.gender !== 'female') return `${poss(p.name)} profile doesn’t list their gender as ${c.gender === 'men' ? 'man' : 'woman'}. Add it to the profile first.`;
       if (p.gender !== want) return `This is a ${c.gender === 'men' ? 'men’s' : 'women’s'} event, and ${p.name} can’t play in it.`;
     }
     if (c.underAge != null || c.minAge != null) {
       const age = p.dob ? ageOn(p.dob, on) : null;
-      if (age == null) return `${poss(p.name)} date of birth isn’t on the profile — add it first (this event has an age limit).`;
+      if (age == null) return `${poss(p.name)} profile doesn’t list their date of birth, and this event has an age limit. Add it to the profile first.`;
       if (c.underAge != null && age >= c.underAge) return `This is an under-${c.underAge} event, and ${p.name} is ${age} on the start date.`;
       if (c.minAge != null && age < c.minAge) return `This event is for ${c.minAge} and over, and ${p.name} is ${age} on the start date.`;
     }

@@ -67,7 +67,9 @@ describe('wiring', () => {
   const complete = fn(matches, 'completeMatch');
 
   test('createMatch: singles seeds BOTH players as the line-up and notifies the opponent', () => {
-    expect(create).toMatch(/team_side: 'A' \},\s*\{ match_id: data\.id, user_id: singlesSides\.opponentId, team_side: 'B' \}/);
+    // BUILD 3.68: the creator's side is chosen (a chess creator may take Black); the opponent the other.
+    expect(create).toContain('{ match_id: data.id, user_id: userId, team_side: singlesSides.creatorSide },');
+    expect(create).toContain("{ match_id: data.id, user_id: singlesSides.opponentId, team_side: singlesSides.creatorSide === 'A' ? 'B' : 'A' },");
     expect(create).toContain("type: 'match_challenge'");
   });
 

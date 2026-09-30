@@ -96,7 +96,9 @@ export async function pendingRankedOpponent(match: {
   is_ranked?: boolean | null;
   team_a_id?: string | null;
   team_b_id?: string | null;
+  team_a_name?: string | null;
   team_b_name?: string | null;
+  created_by?: string | null;
 }): Promise<{ pending: boolean; opponentName: string | null }> {
   if (!match.is_ranked || match.team_a_id || match.team_b_id) return { pending: false, opponentName: null };
   const { data: parts } = await supabase
@@ -104,12 +106,15 @@ export async function pendingRankedOpponent(match: {
     .select('user_id, team_side')
     .eq('match_id', match.id);
   if (!isSinglesShape(match, parts ?? [])) return { pending: false, opponentName: null };
-  const opponentId = (parts ?? []).find((p) => p.team_side === 'B')?.user_id as string;
+  // BUILD 3.68: the opponent is whoever isn't the creator — a chess creator can
+  // take Black (side B). Without the creator, side B as before.
+  const opp = (parts ?? []).find((p) => (match.created_by ? p.user_id !== match.created_by : p.team_side === 'B'));
+  const opponentId = opp?.user_id as string;
   const { data: av } = await supabase
     .from('match_availability')
     .select('status')
     .eq('match_id', match.id)
     .eq('user_id', opponentId)
     .maybeSingle();
-  return { pending: (av as { status?: string } | null)?.status !== 'available', opponentName: match.team_b_name ?? null };
+  return { pending: (av as { status?: string } | null)?.status !== 'available', opponentName: (opp?.team_side === 'A' ? match.team_a_name : match.team_b_name) ?? null };
 }

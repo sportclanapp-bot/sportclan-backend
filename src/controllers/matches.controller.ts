@@ -67,13 +67,37 @@ import { OFFICIATING_TYPES } from '../constants/accountTypes';
  * One check, used on every route that starts, changes or finishes the match.
  */
 async function opponentNotAcceptedRefusal(match: {
-  id: string; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_b_name?: string | null;
+  id: string; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_a_name?: string | null; team_b_name?: string | null; created_by?: string | null;
 }): Promise<{ error: string; code: string } | null> {
   if (!match.is_ranked || match.team_a_id || match.team_b_id) return null;
   const { pending, opponentName } = await pendingRankedOpponent(match);
   return pending
     ? { error: `${opponentName ?? 'Your opponent'} hasn't accepted this ranked match yet. It can start once they do.`, code: 'OPPONENT_NOT_ACCEPTED' }
     : null;
+}
+
+/**
+ * BUILD 3.68 · the side (A = White) the creator played in their last chess game
+ * against this opponent, or null when they haven't played.
+ */
+async function lastChessSide(userId: string, opponentId: string, chessSportId: string): Promise<'A' | 'B' | null> {
+  // The creator's chess games, newest first (a long-time player has hundreds of
+  // matches — an unordered read of their line-ups missed the latest one).
+  const { data: games } = await supabase
+    .from('matches')
+    .select('id, created_at, mine:match_participants!inner(user_id, team_side)')
+    .eq('sport_id', chessSportId)
+    .eq('mine.user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(100);
+  const rows = (games ?? []) as Array<{ id: string; mine?: Array<{ team_side: string }> }>;
+  if (rows.length === 0) return null;
+  const { data: theirs } = await supabase
+    .from('match_participants').select('match_id').eq('user_id', opponentId).in('match_id', rows.map((g) => g.id));
+  const shared = new Set(((theirs ?? []) as Array<{ match_id: string }>).map((r) => r.match_id));
+  const last = rows.find((g) => shared.has(g.id));
+  const s = last?.mine?.[0]?.team_side;
+  return s === 'A' || s === 'B' ? s : null;
 }
 
 /** A little clock skew is allowed: "now" on the phone can be a minute behind. */
@@ -305,6 +329,7 @@ export async function createMatch(req: Request, res: Response) {
       join_policy,
       mode,
       opponent_id,
+      chess_colour,
     } = req.body || {};
     const singles = mode === 'singles';
 
@@ -394,7 +419,7 @@ export async function createMatch(req: Request, res: Response) {
     }
     // Phase 3 · SINGLES: a one-a-side sport played between two PEOPLE. Validated
     // up front so nothing is written for a bad request. See utils/singles.
-    let singlesSides: { aName: string; bName: string; opponentId: string; sportName: string } | null = null;
+    let singlesSides: { aName: string; bName: string; opponentId: string; sportName: string; creatorSide: 'A' | 'B'; creatorName: string } | null = null;
     if (singles) {
       if (team_a_id || team_b_id) {
         return res.status(400).json({ error: 'A singles match is between two players, not teams.', code: 'SINGLES_NO_TEAMS' });
@@ -424,7 +449,27 @@ export async function createMatch(req: Request, res: Response) {
       }
       const label = (u: { name?: string | null; username?: string | null } | undefined) =>
         (u?.name || (u?.username ? `@${u.username}` : '') || 'Player').slice(0, 60);
-      singlesSides = { aName: label(me), bName: label(opp), opponentId: opponent_id, sportName: (sportRow as { name?: string }).name ?? 'Singles' };
+      // BUILD 3.68: chess — the creator plays White (side A), Black (side B), a
+      // random colour, or alternates with their last game against this player.
+      let creatorSide: 'A' | 'B' = 'A';
+      if (normSportSlug((sportRow as { slug?: string }).slug) === 'chess' && chess_colour != null) {
+        if (!['white', 'black', 'random', 'alternate'].includes(String(chess_colour))) {
+          return res.status(400).json({ error: 'Colour is white, black, random or alternate.', code: 'BAD_COLOUR' });
+        }
+        if (chess_colour === 'black') creatorSide = 'B';
+        else if (chess_colour === 'random') creatorSide = Math.random() < 0.5 ? 'A' : 'B';
+        else if (chess_colour === 'alternate') creatorSide = (await lastChessSide(userId, opponent_id, String(resolved ?? sport_id))) === 'A' ? 'B' : 'A';
+      }
+      const mine = label(me);
+      const theirs = label(opp);
+      singlesSides = {
+        aName: creatorSide === 'A' ? mine : theirs,
+        bName: creatorSide === 'A' ? theirs : mine,
+        opponentId: opponent_id,
+        sportName: (sportRow as { name?: string }).name ?? 'Singles',
+        creatorSide,
+        creatorName: mine,
+      };
     }
     const sides = singles
       ? null
@@ -491,8 +536,8 @@ export async function createMatch(req: Request, res: Response) {
     // singles match always counts, and there is no line-up step to forget.
     if (singlesSides) {
       const { error: seedErr } = await supabase.from('match_participants').insert([
-        { match_id: data.id, user_id: userId, team_side: 'A' },
-        { match_id: data.id, user_id: singlesSides.opponentId, team_side: 'B' },
+        { match_id: data.id, user_id: userId, team_side: singlesSides.creatorSide },
+        { match_id: data.id, user_id: singlesSides.opponentId, team_side: singlesSides.creatorSide === 'A' ? 'B' : 'A' },
       ]);
       if (seedErr) {
         // Without its players a singles match is meaningless; don't leave it behind.
@@ -500,7 +545,7 @@ export async function createMatch(req: Request, res: Response) {
         return res.status(500).json({ error: 'Could not create the match. Try again.' });
       }
       const text = challengeText({
-        challengerName: singlesSides.aName,
+        challengerName: singlesSides.creatorName,
         sportName: singlesSides.sportName,
         ranked: !!is_ranked,
         when: istWhen(data.scheduled_at as string | null), // F-22: the challenge never said when

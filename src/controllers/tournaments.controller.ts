@@ -2843,6 +2843,15 @@ export async function generateFixtures(req: Request, res: Response) {
     if (teams.length < 2) {
       return res.status(400).json({ error: 'At least 2 approved teams required' });
     }
+    // BUILD 4.14: a team's roster can change after it entered — the draw checks
+    // every team against the category again, naming who no longer fits.
+    const drawCategory = settingsOf(tournament as { settings?: unknown }).category;
+    if (drawCategory) {
+      for (const t of teams) {
+        const why = await categoryRefusalFor(drawCategory, t.id, (tournament as { sport_id?: string }).sport_id ?? null, (tournament as { start_date?: string | null }).start_date ?? null);
+        if (why) return res.status(400).json({ error: `${t.name}: ${why}`, code: 'CATEGORY' });
+      }
+    }
     // BUILD 1.10: a group of one has no matches and the knockout never seeds.
     if (String(tournament.format ?? '').toLowerCase() === 'groups_knockout') {
       const why = groupsDrawRefusal(groupEntries, await getGroupsConfig(id));

@@ -57,7 +57,7 @@ const run = async (fn: any, req: object) => {
 const written = (table: string, op: 'insert' | 'update') => mockLog.filter((q) => q[0] === `from:${table}` && has(q, `${op}:`)).map((q) => { const v = JSON.parse(q.find((c) => c.startsWith(`${op}:`))!.slice(op.length + 1)); return op === 'update' ? v[0] : v; });
 
 // eslint-disable-next-line import/first
-import { createEntry, directAddTeam } from '../controllers/tournaments.controller';
+import { createEntry, directAddTeam, generateFixtures } from '../controllers/tournaments.controller';
 // eslint-disable-next-line import/first
 import { ageOn, categoryLabel, categoryProblem, categoryRefusal } from '../utils/tournamentSettings';
 
@@ -121,5 +121,22 @@ describe('BUILD 4.14 · entries', () => {
     setup({ underAge: 14 }, [{ id: 'u1', name: 'Tara', gender: 'female', dob: '2012-10-11' }]);
     const r = await run(createEntry, { body: { team_id: TEAM } });
     expect(r.statusCode).toBe(200);
+  });
+});
+
+describe('BUILD 4.14 · the draw re-checks', () => {
+  test('a player who joined after the entry → the draw is refused, naming team and player', async () => {
+    mockLog = [];
+    mockNext = (q) => {
+      if (q[0] === 'from:tournaments' && has(q, 'update:')) return { data: [{ id: T }] };
+      if (q[0] === 'from:tournaments') return { data: { id: T, status: 'upcoming', sport_id: 'sp', format: 'knockout', start_date: '2026-10-10', settings: { v: 1, category: { underAge: 14 } } } };
+      if (q[0] === 'from:tournament_entries') return { data: [{ id: 'e1', team_id: 'tA', team: { name: 'P3 Juniors' } }, { id: 'e2', team_id: 'tB', team: { name: 'P3 Colts' } }] };
+      if (q[0] === 'from:team_members') return { data: [{ user_id: 'u9' }] };
+      if (q[0] === 'from:users') return { data: [{ id: 'u9', name: 'Late Joiner', gender: 'male', dob: '2000-01-01' }] };
+      return { data: [] };
+    };
+    const r = await run(generateFixtures, {});
+    expect([r.statusCode, r.body.code, r.body.error]).toEqual([400, 'CATEGORY', 'P3 Juniors: This is an under-14 event, and Late Joiner is 26 on the start date.']);
+    expect(mockLog.some((q) => q[0] === 'from:matches' && has(q, 'insert:'))).toBe(false);
   });
 });

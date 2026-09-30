@@ -47,7 +47,7 @@ import { stepTimer } from '../utils/stepTimer';
 import { leaseRefusal } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
-import { rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
+import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, type UnfinishedEnd } from '../utils/cricketRules';
 import { withWalkoverScore } from '../utils/walkoverScore';
@@ -386,6 +386,12 @@ export async function createMatch(req: Request, res: Response) {
       : rulesFromLegacy(lengthSlug, storedFormat, storedOvers);
     const rulesBad = rulesRefusal(lengthSlug, storedRules);
     if (rulesBad) return res.status(400).json(rulesBad);
+    // BUILD 3.47: an open doubles game is four players — you and 3 more at most
+    // (joins fill the emptier side, so 3 more is 2 a side).
+    if (lengthSlug === 'badminton' && storedRules.players === DOUBLES_PLAYERS && is_open === true
+      && typeof players_needed === 'number' && players_needed > DOUBLES_PLAYERS * 2 - 1) {
+      return res.status(400).json({ error: `Doubles is two a side — an open doubles game needs ${DOUBLES_PLAYERS * 2 - 1} more players at most.`, code: 'DOUBLES_TWO_A_SIDE' });
+    }
     // Phase 3 · SINGLES: a one-a-side sport played between two PEOPLE. Validated
     // up front so nothing is written for a bad request. See utils/singles.
     let singlesSides: { aName: string; bName: string; opponentId: string; sportName: string } | null = null;
@@ -2024,7 +2030,7 @@ export async function addParticipants(req: Request, res: Response) {
     }
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id, status, tournament_id, is_ranked, team_a_id, team_b_id, sport_id')
+      .select('created_by, umpire_id, status, tournament_id, is_ranked, team_a_id, team_b_id, sport_id, team_a_name, team_b_name, format, overs, rules')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -2081,7 +2087,23 @@ export async function addParticipants(req: Request, res: Response) {
     // SC-53: dedupe by user_id (last wins) — a batch containing the same user
     // twice would otherwise make Postgres' ON CONFLICT upsert fail with "cannot
     // affect row a second time" → 500.
-    const isCricketLineup = normSportSlug((await getSport(match.sport_id as string))?.slug) === 'cricket';
+    const lineupSlug = normSportSlug((await getSport(match.sport_id as string))?.slug);
+    const isCricketLineup = lineupSlug === 'cricket';
+    // BUILD 3.47: badminton doubles is two a side — the line-up this batch
+    // makes (it adds to the one stored) may not put a third on either side.
+    {
+      const rules = rulesOf(lineupSlug, match);
+      if (lineupSlug === 'badminton' && rules.players === DOUBLES_PLAYERS) {
+        const { data: cur } = await supabase.from('match_participants').select('user_id, team_side').eq('match_id', id);
+        const side = new Map<string, string>(((cur ?? []) as Array<{ user_id: string; team_side: string }>).map((r) => [r.user_id, r.team_side]));
+        for (const p of participants as Array<{ user_id: string; team_side: string }>) side.set(p.user_id, p.team_side);
+        const sides = [...side.values()];
+        const problem = doublesLineupProblem(lineupSlug, rules,
+          { A: sides.filter((s) => s === 'A').length, B: sides.filter((s) => s === 'B').length },
+          { A: (match.team_a_name as string | null) ?? 'Team A', B: (match.team_b_name as string | null) ?? 'Team B' }, 'lineup');
+        if (problem) return res.status(409).json({ error: problem, code: 'DOUBLES_TWO_A_SIDE' });
+      }
+    }
     const byUser = new Map<string, any>();
     for (const p of participants as any[]) {
       if (p && p.user_id) byUser.set(p.user_id, p);

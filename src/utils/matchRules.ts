@@ -104,7 +104,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   cricket: { style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, inningsMinutes: null, powerplayOvers: null, oneTipOneHand: false, sixAndOut: false, drawAllowed: true },
   // BUILD 3.45: 15 a game capped at 21 (BAI from July 2026, BWF from 4 Jan 2027).
   // A match stored without rules still plays 21 / 30 — see rulesFromLegacy.
-  badminton: { bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true },
+  badminton: { players: null, bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true }, // BUILD 3.47: players 2 = doubles
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true },
   pickleball: { bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true },
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2 },
@@ -323,6 +323,10 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (typeof r.oneTipOneHand !== 'boolean') return refuse('One tip, one hand is on or off.', 'oneTipOneHand');
     if (typeof r.sixAndOut !== 'boolean') return refuse('Six and out is on or off.', 'sixAndOut');
   }
+  // BUILD 3.47: badminton doubles is 2 a side; singles leaves it unset.
+  if (key === 'badminton' && r.players !== null && r.players !== DOUBLES_PLAYERS) {
+    return refuse('Badminton players a side is 2 (doubles), or not set for singles.', 'players');
+  }
   // BUILD 3.16 / 3.26: players a side — football 3–11, hockey 4–11 (null = not set).
   const side = SIDE_LIMITS[key];
   if (side && r.players !== null && (!isWhole(r.players) || r.players < side[0] || r.players > side[1])) {
@@ -480,6 +484,30 @@ export function cardSuspensions(sport: string | null | undefined, rules: MatchRu
 /** BUILD 3.41: beach volleyball — 2 a side, sets to 21, a deciding set to 15, best of 3. */
 export const BEACH_VOLLEYBALL = { players: 2, target: 21, finalTarget: 15, bestOf: 3, timeoutsPerSet: 1 } as const; // BUILD 3.42: one timeout a set on the beach
 
+/** BUILD 3.47: doubles is exactly two a side. */
+export const DOUBLES_PLAYERS = 2;
+/**
+ * BUILD 3.47 · why a doubles line-up can't stand, or null. `phase` 'lineup':
+ * no side may have more than 2; 'start': no side may have just 1 (0 is a
+ * typed-in team, which has no players to list). Rules without players = 2
+ * (singles, other sports) are never refused here.
+ */
+export function doublesLineupProblem(
+  sport: string | null | undefined,
+  rules: MatchRules,
+  counts: { A: number; B: number },
+  names: { A: string; B: string },
+  phase: 'lineup' | 'start',
+): string | null {
+  if (lengthKey(sport) !== 'badminton' || rules.players !== DOUBLES_PLAYERS) return null;
+  for (const side of ['A', 'B'] as const) {
+    const n = counts[side];
+    if (n > DOUBLES_PLAYERS) return `Doubles is two a side — ${names[side]} has ${n}.`;
+    if (phase === 'start' && n === 1) return `Doubles is two a side — ${names[side]} needs a partner in the line-up.`;
+  }
+  return null;
+}
+
 /** BUILD 3.28: FIH Hockey5s — 5 a side, two halves of 10 minutes. */
 export const HOCKEY5S = { players: 5, periods: 2, periodMinutes: 10 } as const;
 const SIDE_LIMITS: Record<string, [number, number]> = {
@@ -499,7 +527,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   // BUILD 3.37+: a rally sport's own points, said when they differ from the standard.
   if (RALLY_LIMITS[key]) {
     const std = SPORT_RULES[key] ?? {};
-    if (rules.players) parts.push(`${rules.players}-a-side`); // BUILD 3.40
+    if (rules.players) parts.push(key === 'badminton' ? 'doubles' : `${rules.players}-a-side`); // BUILD 3.40 / 3.47
     if (rules.target != null && rules.target !== std.target) parts.push(`${RALLY_LIMITS[key]!.unit ?? 'set'}s to ${rules.target}`); // BUILD 3.44: badminton plays games
     if (rules.cap !== undefined && rules.cap !== std.cap) parts.push(rules.cap == null ? 'no cap' : `cap ${rules.cap}`); // BUILD 3.39
     if (rules.timeoutsPerSet != null && rules.timeoutsPerSet !== std.timeoutsPerSet) parts.push(rules.timeoutsPerSet === 0 ? 'no timeouts' : `${rules.timeoutsPerSet} timeout${rules.timeoutsPerSet === 1 ? '' : 's'} a set`); // BUILD 3.42

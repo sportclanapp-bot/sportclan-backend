@@ -18,7 +18,7 @@ describe('F-13', () => {
   });
   test('addParticipants keeps a batting order only for cricket', () => {
     const body = fn('addParticipants');
-    expect(body).toContain("const isCricketLineup = normSportSlug((await getSport(match.sport_id as string))?.slug) === 'cricket';");
+    expect(body).toContain("const isCricketLineup = lineupSlug === 'cricket';");
     expect(body).toContain('batting_order: isCricketLineup ? p.batting_order ?? null : null,');
     expect(body.indexOf('sport_id')).toBeLessThan(body.indexOf('isCricketLineup'));
   });

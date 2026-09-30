@@ -18,7 +18,7 @@ import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf } from '../utils/cricketRules';
-import { rulesOf, setConfigOf, standardRules, winsToWin } from '../utils/matchRules';
+import { DOUBLES_PLAYERS, doublesLineupProblem, rulesOf, setConfigOf, standardRules, winsToWin } from '../utils/matchRules';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
 
@@ -65,7 +65,7 @@ async function fanoutScoreUpdate(
 export async function authorizeScorer(matchId: string, userId: string, deviceId?: string | null) {
   const { data: match } = await supabase
     .from('matches')
-    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_b_name, format, overs, rules')
+    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return { ok: false as const, status: 404, error: 'Match not found' };
@@ -164,7 +164,7 @@ export async function recordEventIdempotent(args: {
  */
 export async function validateScoringEvent(
   matchId: string,
-  match: { id: string; status?: string | null; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_b_name?: string | null; tournament_id?: string | null; score_summary?: unknown; format?: string | null; overs?: number | null; rules?: unknown },
+  match: { id: string; status?: string | null; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_a_name?: string | null; team_b_name?: string | null; tournament_id?: string | null; score_summary?: unknown; format?: string | null; overs?: number | null; rules?: unknown; sport_id?: string | null },
   ev: { event_type: unknown; period?: unknown; clock_seconds?: unknown; payload?: any },
 ): Promise<{ status: number; body: { error: string; code?: string } } | null> {
   const refuse = (status: number, body: { error: string; code?: string }) => ({ status, body });
@@ -303,6 +303,22 @@ export async function validateScoringEvent(
         error: `${gate.opponentName ?? 'Your opponent'} hasn't accepted this ranked match yet. It can start once they do.`,
         code: 'OPPONENT_NOT_ACCEPTED',
       });
+    }
+  }
+
+  // BUILD 3.47: badminton doubles is two a side — play can't start with a side
+  // of one (a typed-in side, with no players listed, is fine). Checked before
+  // the first point only, like the ranked gate above.
+  if (event_type !== 'serve_swap' && match.status === 'scheduled' && match.sport_id) {
+    const slug = normSportSlug((await getSport(match.sport_id))?.slug);
+    const rules = rulesOf(slug, match);
+    if (slug === 'badminton' && rules.players === DOUBLES_PLAYERS) {
+      const { data: parts } = await supabase.from('match_participants').select('team_side').eq('match_id', matchId);
+      const rows = (parts ?? []) as Array<{ team_side?: string | null }>;
+      const problem = doublesLineupProblem(slug, rules,
+        { A: rows.filter((r) => r.team_side === 'A').length, B: rows.filter((r) => r.team_side === 'B').length },
+        { A: match.team_a_name ?? 'Team A', B: match.team_b_name ?? 'Team B' }, 'start');
+      if (problem) return refuse(409, { error: problem, code: 'DOUBLES_TWO_A_SIDE' });
     }
   }
 

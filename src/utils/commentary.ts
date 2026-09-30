@@ -85,6 +85,8 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   }
   if (goalSport && eventType === 'note' && p.kind === 'pen_corner') return `🏑 Penalty corner — ${team}`;
   if (goalSport && eventType === 'note' && p.kind === 'kickoff') return '⏱ Kick-off'; // BUILD 3.22
+  // BUILD 3.78: a carrom foul — a piece due from that side.
+  if (ctx.sport === 'carrom' && eventType === 'foul') return `🚫 Foul — ${team} (a piece due)`;
   // BUILD 3.77: point carrom — the piece, who pocketed it, and what it was worth.
   if (ctx.sport === 'carrom' && eventType === 'score' && p.kind === 'coin') {
     const piece = p.coin === 'queen' ? '👑 Queen' : p.coin === 'white' ? '⚪ White' : '⚫ Black';

@@ -19,6 +19,7 @@ import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_POINTS } from '../utils/carromCore';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf } from '../utils/cricketRules';
 import { DOUBLES_PLAYERS, doublesLineupProblem, rulesOf, setConfigOf, standardRules, winsToWin } from '../utils/matchRules';
+import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
 
@@ -303,6 +304,22 @@ export async function validateScoringEvent(
         error: `${gate.opponentName ?? 'Your opponent'} hasn't accepted this ranked match yet. It can start once they do.`,
         code: 'OPPONENT_NOT_ACCEPTED',
       });
+    }
+  }
+
+  // BUILD 3.58: a side-out 'rally' event only in a side-out pickleball match —
+  // in any other it would score as a point (the rollups count every score).
+  if (event_type === 'score' && payload && payload.kind === 'rally') {
+    const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    if (slug !== 'pickleball' || rulesOf(slug, match).scoring !== 'sideout') {
+      return refuse(400, { error: 'A rally without a point is for side-out pickleball.', code: 'BAD_RALLY' });
+    }
+  }
+  // A side-out match takes rallies, not points (a point would bypass the serve).
+  if (event_type === 'score' && payload && payload.kind !== 'rally' && match.sport_id) {
+    const slug = normSportSlug((await getSport(match.sport_id))?.slug);
+    if (slug === 'pickleball' && rulesOf(slug, match).scoring === 'sideout') {
+      return refuse(409, { error: 'This match uses side-out scoring — update SportClan to score it.', code: 'SIDEOUT_NEEDS_UPDATE' });
     }
   }
 
@@ -1113,6 +1130,7 @@ export async function recomputeSummary(
   let tennisState: TennisScore | null = null;
   let carromBoardsPlayed: number | null = null; // A5: boards played in the carrom game in play
   let tieRubbers: { rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' }> } | null = null; // BUILD 3.49
+  let sideOutServe: { side: 'A' | 'B'; number: 1 | 2 } | null = null; // BUILD 3.58
   const sides: Record<'A' | 'B', Record<string, any>> = { A, B };
   const sideOf = (p: any): 'A' | 'B' => ((p?.team_side as 'A' | 'B') === 'B' ? 'B' : 'A');
   let chessResult: string | null = null; // SC-47
@@ -1229,7 +1247,15 @@ export async function recomputeSummary(
     // stored before rules were data).
     const rules = rulesOf(slug, match);
     const cfg = setConfigOf(rules);
-    if (rules.rubbers) { // BUILD 3.54: table tennis ties too
+    if (slug === 'pickleball' && rules.scoring === 'sideout') {
+      // BUILD 3.58: side-out scoring — only the server scores, so the serve is
+      // replayed (the shared pickleballCore, as the app scores it).
+      const s = sideOutReplay(events, { target: cfg.target, winBy2: cfg.winBy2, maxGames: cfg.maxSets, doubles: rules.players === DOUBLES_PLAYERS });
+      A.score = s.won.A; B.score = s.won.B;
+      A.sets = s.games.map((g) => g.A); B.sets = s.games.map((g) => g.B);
+      A.points = s.cur.A; B.points = s.cur.B;
+      sideOutServe = { side: s.server, number: s.serverNum };
+    } else if (rules.rubbers) { // BUILD 3.54: table tennis ties too
       // BUILD 3.49: a team tie — the score is rubbers won; sets are every game.
       const t = rollupTie(cfg, rules.rubbers, events, sideOf);
       A.score = t.rubbersA; B.score = t.rubbersB;
@@ -1334,6 +1360,7 @@ export async function recomputeSummary(
   summary.players = aggregatePlayers(slug, events as any[]);
   if (carromBoardsPlayed !== null) summary.boards_played = carromBoardsPlayed;
   if (tieRubbers) { summary.rubber = tieRubbers.rubber; summary.rubbers = tieRubbers.results; } // BUILD 3.49
+  if (sideOutServe) summary.serve = sideOutServe; // BUILD 3.58: who serves, and (doubles) server 1 or 2
   if (tennisState) {
     // The tiebreak in play, and each completed set's tiebreak points (or null),
     // so a hub card or result can say "7–6 (7–5)".

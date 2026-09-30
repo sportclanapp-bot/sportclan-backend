@@ -90,6 +90,8 @@ export interface MatchRules {
   timeoutsPerSet?: number;
   /** BUILD 3.49 / 3.54: a team tie — badminton 3 or 5 rubbers, table tennis 5 (Corbillon) or 9 (Swaythling), each played to `bestOf` games; null = one match. */
   rubbers?: number | null;
+  /** BUILD 3.58: pickleball rally scoring (every rally scores) or side-out (only the server scores). */
+  scoring?: 'rally' | 'sideout';
   /** Can the match end level. */
   drawAllowed?: boolean;
   /** Chess: the clock. */
@@ -108,7 +110,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   // A match stored without rules still plays 21 / 30 — see rulesFromLegacy.
   badminton: { players: null, bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true, rubbers: null }, // BUILD 3.47: players 2 = doubles; 3.49 rubbers
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null }, // BUILD 3.54 rubbers
-  pickleball: { bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true },
+  pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally' }, // BUILD 3.58: side-out; players 2 = doubles
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2 },
   tennis: { bestOf: 3 },
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
@@ -282,7 +284,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -343,6 +345,11 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     }
     if (typeof r.oneTipOneHand !== 'boolean') return refuse('One tip, one hand is on or off.', 'oneTipOneHand');
     if (typeof r.sixAndOut !== 'boolean') return refuse('Six and out is on or off.', 'sixAndOut');
+  }
+  // BUILD 3.58: pickleball scores every rally, or side-out (doubles: players 2).
+  if (key === 'pickleball' && r.scoring !== 'rally' && r.scoring !== 'sideout') return refuse('Scoring is rally or side-out.', 'scoring');
+  if (key === 'pickleball' && r.players !== null && r.players !== DOUBLES_PLAYERS) {
+    return refuse('Pickleball players a side is 2 (doubles), or not set for singles.', 'players');
   }
   // BUILD 3.56: pickleball plays win by 2, or a golden point (winBy2 false).
   if (key === 'pickleball' && typeof r.winBy2 !== 'boolean') return refuse('Win by 2 is on or off (golden point).', 'winBy2');
@@ -450,7 +457,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -567,9 +574,10 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (RALLY_LIMITS[key]) {
     const std = SPORT_RULES[key] ?? {};
     if (rules.rubbers) parts.push(key === 'tabletennis' && TT_TIES[rules.rubbers] ? `${TT_TIES[rules.rubbers]!.name} · ${rules.rubbers} rubbers` : `team tie · ${rules.rubbers} rubbers`); // BUILD 3.49 / 3.54
-    if (rules.players) parts.push(key === 'badminton' ? 'doubles' : `${rules.players}-a-side`); // BUILD 3.40 / 3.47
+    if (rules.players) parts.push(key === 'badminton' || key === 'pickleball' ? 'doubles' : `${rules.players}-a-side`); // BUILD 3.40 / 3.47 / 3.58
     if (rules.target != null && rules.target !== std.target) parts.push(`${RALLY_LIMITS[key]!.unit ?? 'set'}s to ${rules.target}`); // BUILD 3.44: badminton plays games
     if (rules.cap !== undefined && rules.cap !== std.cap) parts.push(rules.cap == null ? 'no cap' : `cap ${rules.cap}`); // BUILD 3.39
+    if (key === 'pickleball' && rules.scoring === 'sideout') parts.push('side-out scoring'); // BUILD 3.58
     if (key === 'pickleball' && rules.winBy2 === false) parts.push('golden point'); // BUILD 3.56
     if (rules.timeoutsPerSet != null && rules.timeoutsPerSet !== std.timeoutsPerSet) parts.push(rules.timeoutsPerSet === 0 ? 'no timeouts' : `${rules.timeoutsPerSet} timeout${rules.timeoutsPerSet === 1 ? '' : 's'} a set`); // BUILD 3.42
     if (rules.finalTarget !== undefined && rules.finalTarget !== std.finalTarget) parts.push(rules.finalTarget == null ? 'decider the same' : `decider to ${rules.finalTarget}`); // BUILD 3.38

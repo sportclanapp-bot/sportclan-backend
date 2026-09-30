@@ -85,6 +85,8 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   }
   if (goalSport && eventType === 'note' && p.kind === 'pen_corner') return `🏑 Penalty corner — ${team}`;
   if (goalSport && eventType === 'note' && p.kind === 'kickoff') return '⏱ Kick-off'; // BUILD 3.22
+  // BUILD 3.58: a side-out rally names who won it — it scores only for the server.
+  if (eventType === 'score' && p.kind === 'rally') return `Rally to ${team}`;
   // BUILD 3.53: table tennis's expedite rule comes in.
   if (eventType === 'note' && p.kind === 'expedite') return '⏱ Expedite rule — serve alternates; the receiver wins on the 13th return';
   // BUILD 3.42: a volleyball timeout names the side (it read "Timeout called by team").

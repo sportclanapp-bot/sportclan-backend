@@ -1229,7 +1229,7 @@ export async function recomputeSummary(
     // stored before rules were data).
     const rules = rulesOf(slug, match);
     const cfg = setConfigOf(rules);
-    if (slug === 'badminton' && rules.rubbers) {
+    if (rules.rubbers) { // BUILD 3.54: table tennis ties too
       // BUILD 3.49: a team tie — the score is rubbers won; sets are every game.
       const t = rollupTie(cfg, rules.rubbers, events, sideOf);
       A.score = t.rubbersA; B.score = t.rubbersB;

@@ -88,7 +88,7 @@ export interface MatchRules {
   foulOut?: number;
   /** BUILD 3.42: volleyball timeouts each side may take per set, 0–3 (FIVB 2). */
   timeoutsPerSet?: number;
-  /** BUILD 3.49: a badminton team tie — 3 or 5 rubbers (matches), each played to `bestOf` games; null = one match. */
+  /** BUILD 3.49 / 3.54: a team tie — badminton 3 or 5 rubbers, table tennis 5 (Corbillon) or 9 (Swaythling), each played to `bestOf` games; null = one match. */
   rubbers?: number | null;
   /** Can the match end level. */
   drawAllowed?: boolean;
@@ -107,7 +107,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   // BUILD 3.45: 15 a game capped at 21 (BAI from July 2026, BWF from 4 Jan 2027).
   // A match stored without rules still plays 21 / 30 — see rulesFromLegacy.
   badminton: { players: null, bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true, rubbers: null }, // BUILD 3.47: players 2 = doubles; 3.49 rubbers
-  tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true },
+  tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null }, // BUILD 3.54 rubbers
   pickleball: { bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true },
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2 },
   tennis: { bestOf: 3 },
@@ -174,6 +174,21 @@ export function winsToWin(rules: MatchRules): number {
 
 /** BUILD 3.49: rubbers a team tie may have. */
 export const TIE_RUBBERS = [3, 5] as const;
+
+/**
+ * BUILD 3.54 · table tennis team ties, in the Cups' own order: the Corbillon
+ * (4 singles and a doubles, first to 3) and the Swaythling (three a side, all
+ * nine singles, first to 5). Home plays A, B, C; away X, Y, Z.
+ */
+export const TT_TIES: Record<number, { name: string; order: string[] }> = {
+  5: { name: 'Corbillon Cup', order: ['A v X', 'B v Y', 'Doubles', 'A v Y', 'B v X'] },
+  9: { name: 'Swaythling Cup', order: ['A v X', 'B v Y', 'C v Z', 'B v X', 'A v Z', 'C v Y', 'B v Z', 'C v X', 'A v Y'] },
+};
+
+/** BUILD 3.54: who plays each rubber, when the tie has a set order. */
+export function tieOrder(sport: string | null | undefined, rubbers: number | null | undefined): string[] | null {
+  return lengthKey(sport) === 'tabletennis' && rubbers ? TT_TIES[rubbers]?.order ?? null : null;
+}
 
 /**
  * A rally or carrom match's game rules, in the shape the server's set rollup
@@ -333,6 +348,9 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'badminton' && r.rubbers !== null && !(TIE_RUBBERS as readonly unknown[]).includes(r.rubbers)) {
     return refuse('A team tie is 3 or 5 rubbers.', 'rubbers');
   }
+  if (key === 'tabletennis' && r.rubbers !== null && !TT_TIES[r.rubbers as number]) {
+    return refuse('A table tennis team tie is the Corbillon (5 rubbers) or the Swaythling (9).', 'rubbers');
+  }
   if (key === 'badminton' && r.rubbers != null && r.players != null) {
     return refuse('A team tie mixes singles and doubles rubbers — leave players a side unset.', 'players');
   }
@@ -430,7 +448,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' ? ['rubbers'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -543,7 +561,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   // BUILD 3.37+: a rally sport's own points, said when they differ from the standard.
   if (RALLY_LIMITS[key]) {
     const std = SPORT_RULES[key] ?? {};
-    if (rules.rubbers) parts.push(`team tie · ${rules.rubbers} rubbers`); // BUILD 3.49
+    if (rules.rubbers) parts.push(key === 'tabletennis' && TT_TIES[rules.rubbers] ? `${TT_TIES[rules.rubbers]!.name} · ${rules.rubbers} rubbers` : `team tie · ${rules.rubbers} rubbers`); // BUILD 3.49 / 3.54
     if (rules.players) parts.push(key === 'badminton' ? 'doubles' : `${rules.players}-a-side`); // BUILD 3.40 / 3.47
     if (rules.target != null && rules.target !== std.target) parts.push(`${RALLY_LIMITS[key]!.unit ?? 'set'}s to ${rules.target}`); // BUILD 3.44: badminton plays games
     if (rules.cap !== undefined && rules.cap !== std.cap) parts.push(rules.cap == null ? 'no cap' : `cap ${rules.cap}`); // BUILD 3.39

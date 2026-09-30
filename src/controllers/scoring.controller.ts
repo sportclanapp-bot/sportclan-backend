@@ -1366,6 +1366,7 @@ export async function recomputeSummary(
     // so a hub card or result can say "7–6 (7–5)".
     summary.tiebreak = tennisState.tiebreak;
     summary.set_tiebreaks = tennisState.sets.map((x) => x.tiebreak ?? null);
+    if (tennisState.matchTiebreak) summary.match_tiebreak = true; // BUILD 3.62: the final set's match tiebreak is in play
   }
   // Chess has no scoring events, so aggregatePlayers yields an empty map. Instead
   // represent the credited WINNER as a 1-entry rollup keyed by their player_id

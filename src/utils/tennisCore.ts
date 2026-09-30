@@ -40,6 +40,8 @@ export interface TennisScore {
   setsWon: { A: number; B: number };
   /** The current game is a tiebreak (the set is at 6-6). */
   tiebreak: boolean;
+  /** BUILD 3.62: the tiebreak in play is the match tiebreak that replaces the final set. */
+  matchTiebreak?: boolean;
   winner: TennisSide | null;
 }
 
@@ -60,11 +62,13 @@ export interface TennisOpts {
   tiebreak?: boolean;
   /** BUILD 3.61: tiebreak to 7 (standard) or 10 points, win by 2. */
   tiebreakTo?: number;
+  /** BUILD 3.62: the final set is a match tiebreak to 10 (win by 2), recorded as a 1–0 set. */
+  matchTiebreak?: boolean;
 }
 type Opts = Required<TennisOpts>;
 function optsOf(o: number | TennisOpts | undefined): Opts {
   const x: TennisOpts = typeof o === 'number' ? { setsToWin: o } : o ?? { setsToWin: TENNIS_SETS_TO_WIN };
-  return { setsToWin: x.setsToWin, gamesPerSet: x.gamesPerSet ?? GAMES_PER_SET, tiebreak: x.tiebreak ?? true, tiebreakTo: x.tiebreakTo ?? TIEBREAK_TO };
+  return { setsToWin: x.setsToWin, gamesPerSet: x.gamesPerSet ?? GAMES_PER_SET, tiebreak: x.tiebreak ?? true, tiebreakTo: x.tiebreakTo ?? TIEBREAK_TO, matchTiebreak: x.matchTiebreak ?? false };
 }
 
 const other = (s: TennisSide): TennisSide => (s === 'A' ? 'B' : 'A');
@@ -80,32 +84,40 @@ export function emptyTennis(): TennisScore {
   };
 }
 
-function winSet(s: TennisScore, side: TennisSide, setsToWin: number, tiebreak?: { A: number; B: number }): TennisScore {
+function winSet(s: TennisScore, side: TennisSide, setsToWin: number, tiebreak?: { A: number; B: number }, matchTiebreak = false): TennisScore {
   const set: TennisSet = { A: s.games.A, B: s.games.B };
   if (tiebreak) set.tiebreak = tiebreak;
   const setsWon = { ...s.setsWon, [side]: s.setsWon[side] + 1 };
+  const winner = setsWon[side] >= setsToWin ? side : null;
+  // BUILD 3.62: sets level going into the final set — it is a match tiebreak.
+  const mtb = !winner && matchTiebreak && setsToWin > 1 && setsWon.A === setsToWin - 1 && setsWon.B === setsToWin - 1;
   return {
     points: { A: 0, B: 0 },
     games: { A: 0, B: 0 },
     sets: [...s.sets, set],
     setsWon,
-    tiebreak: false,
-    winner: setsWon[side] >= setsToWin ? side : null,
+    tiebreak: mtb,
+    ...(mtb ? { matchTiebreak: true } : {}),
+    winner,
   };
 }
+
+/** BUILD 3.62: the match tiebreak's points. */
+const MATCH_TIEBREAK_TO = 10;
 
 /** One point to `side`. Pure: returns a new score. */
 export function tennisPoint(s: TennisScore, side: TennisSide, options: number | TennisOpts = TENNIS_SETS_TO_WIN): TennisScore {
   if (s.winner) return s;
-  const { setsToWin, gamesPerSet, tiebreak: tiebreaks, tiebreakTo } = optsOf(options);
+  const { setsToWin, gamesPerSet, tiebreak: tiebreaks, tiebreakTo, matchTiebreak } = optsOf(options);
   const o = other(side);
   const points = { ...s.points, [side]: s.points[side] + 1 };
 
   if (s.tiebreak) {
-    if (points[side] >= tiebreakTo && points[side] - points[o] >= 2) {
-      // The tiebreak winner takes the set 7-6.
+    const to = s.matchTiebreak ? MATCH_TIEBREAK_TO : tiebreakTo;
+    if (points[side] >= to && points[side] - points[o] >= 2) {
+      // The tiebreak winner takes the set 7-6 (a match tiebreak: 1-0).
       const games = { ...s.games, [side]: s.games[side] + 1 };
-      return winSet({ ...s, games }, side, setsToWin, points);
+      return winSet({ ...s, games }, side, setsToWin, points, matchTiebreak);
     }
     return { ...s, points };
   }
@@ -113,7 +125,7 @@ export function tennisPoint(s: TennisScore, side: TennisSide, options: number | 
   if (points[side] >= 4 && points[side] - points[o] >= 2) {
     const games = { ...s.games, [side]: s.games[side] + 1 };
     if (games[side] >= gamesPerSet && games[side] - games[o] >= 2) {
-      return winSet({ ...s, games }, side, setsToWin);
+      return winSet({ ...s, games }, side, setsToWin, undefined, matchTiebreak);
     }
     const tiebreak = tiebreaks && games.A === gamesPerSet && games.B === gamesPerSet;
     return { ...s, points: { A: 0, B: 0 }, games, tiebreak };
@@ -138,7 +150,7 @@ const CALL = ['0', '15', '30', '40'];
 /** How the current game reads: 15-30, deuce, advantage — or tiebreak numbers. */
 export function tennisPointsDisplay(s: TennisScore): { a: string; b: string; status?: string } {
   const { A: a, B: b } = s.points;
-  if (s.tiebreak) return { a: String(a), b: String(b), status: 'Tiebreak' };
+  if (s.tiebreak) return { a: String(a), b: String(b), status: s.matchTiebreak ? 'Match tiebreak' : 'Tiebreak' };
   if (a >= 3 && b >= 3) {
     if (a === b) return { a: '40', b: '40', status: 'Deuce' };
     if (a === b + 1) return { a: 'Ad', b: '40', status: 'Advantage A' };

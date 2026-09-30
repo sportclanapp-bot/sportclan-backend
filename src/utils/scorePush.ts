@@ -74,6 +74,10 @@ export function scorePush(args: {
     const setEnded = n > prevN && (A.games ?? 0) === 0 && (B.games ?? 0) === 0 && (A.points ?? 0) === 0 && (B.points ?? 0) === 0;
     if (!setEnded) return null;
     const tb = summary.set_tiebreaks?.[n - 1];
+    // BUILD 3.62: a match tiebreak (a 1–0 "set" with its points) is said as one.
+    if (tb && (setsA[n - 1] ?? 0) + (setsB[n - 1] ?? 0) === 1) {
+      return { title: `Match tiebreak to ${teamName}`, body: `${teamName} wins the match tiebreak · ${mine(tb.A, tb.B)}` };
+    }
     const games = mine(setsA[n - 1] ?? 0, setsB[n - 1] ?? 0);
     const tbText = tb ? ` (${mine(tb.A, tb.B)})` : '';
     return { title: `Set to ${teamName}`, body: `${teamName} wins set ${n} · ${games}${tbText}` };

@@ -446,6 +446,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
 export const RALLY_LIMITS: Record<string, { target: [number, number]; finalTarget?: [number, number]; capSpan?: number; unit?: 'set' | 'game' }> = {
   volleyball: { target: [10, 30], finalTarget: [10, 25], capSpan: 10 },
   badminton: { target: [5, 30], capSpan: 15, unit: 'game' }, // BUILD 3.44
+  tabletennis: { target: [5, 21], unit: 'game' }, // BUILD 3.50: 11 (ITTF) or the old 21
 };
 
 /**
@@ -453,6 +454,8 @@ export const RALLY_LIMITS: Record<string, { target: [number, number]; finalTarge
  * July 2026, BWF from 4 Jan 2027) and the classic 21 capped at 30.
  */
 export const BADMINTON_PRESETS = [{ target: 15, cap: 21 }, { target: 21, cap: 30 }] as const;
+/** BUILD 3.50 · table tennis: 11 a game (ITTF), or the old 21 still played in offices. */
+export const TABLE_TENNIS_PRESETS = [11, 21] as const;
 /** BUILD 3.45: what a badminton match with no stored rules plays (the pre-2026 game). */
 export const BADMINTON_LEGACY = { target: 21, cap: 30 } as const;
 /** The cap a badminton game gets when the form leaves it blank: the preset's, else none. */

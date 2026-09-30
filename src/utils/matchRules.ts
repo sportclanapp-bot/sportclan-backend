@@ -92,6 +92,8 @@ export interface MatchRules {
   rubbers?: number | null;
   /** BUILD 3.59: tennis games to win a set, 4–10 (6 standard; a short set 4, a pro set 8). */
   gamesPerSet?: number;
+  /** BUILD 3.60: tennis — a tiebreak at games-all, or none (advantage sets). */
+  tiebreak?: boolean;
   /** BUILD 3.58: pickleball rally scoring (every rally scores) or side-out (only the server scores). */
   scoring?: 'rally' | 'sideout';
   /** Can the match end level. */
@@ -114,7 +116,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null }, // BUILD 3.54 rubbers
   pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally' }, // BUILD 3.58: side-out; players 2 = doubles
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2 },
-  tennis: { bestOf: 3, gamesPerSet: 6 }, // BUILD 3.59
+  tennis: { bestOf: 3, gamesPerSet: 6, tiebreak: true }, // BUILD 3.59 / 3.60
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false },
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true },
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
@@ -171,8 +173,8 @@ export function rulesFromLegacy(
 // ── BUILD 2.3 · what the scoring engines read ──────────────────────────────
 
 /** BUILD 3.59+ · the tennis core's options from a match's rules (tennisCore.TennisOpts). */
-export function tennisOptsOf(rules: MatchRules): { setsToWin: number; gamesPerSet: number } {
-  return { setsToWin: winsToWin(rules), gamesPerSet: rules.gamesPerSet ?? 6 };
+export function tennisOptsOf(rules: MatchRules): { setsToWin: number; gamesPerSet: number; tiebreak: boolean } {
+  return { setsToWin: winsToWin(rules), gamesPerSet: rules.gamesPerSet ?? 6, tiebreak: rules.tiebreak !== false };
 }
 
 /** Games / sets / boards needed to win a best-of-n match — BUILD 3.49: rubbers, for a team tie. */
@@ -291,7 +293,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -357,6 +359,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'tennis' && (!isWhole(r.gamesPerSet) || r.gamesPerSet < 4 || r.gamesPerSet > 10)) {
     return refuse('Games a set must be 4 to 10.', 'gamesPerSet');
   }
+  if (key === 'tennis' && typeof r.tiebreak !== 'boolean') return refuse('A tiebreak is on or off.', 'tiebreak'); // BUILD 3.60
   // BUILD 3.58: pickleball scores every rally, or side-out (doubles: players 2).
   if (key === 'pickleball' && r.scoring !== 'rally' && r.scoring !== 'sideout') return refuse('Scoring is rally or side-out.', 'scoring');
   if (key === 'pickleball' && r.players !== null && r.players !== DOUBLES_PLAYERS) {
@@ -468,7 +471,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'tennis' ? ['gamesPerSet'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -597,6 +600,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   // BUILD 3.59+: tennis — said when it isn't sets to 6.
   if (key === 'tennis') {
     if (rules.gamesPerSet != null && rules.gamesPerSet !== 6) parts.push(rules.bestOf === 1 && rules.gamesPerSet === 8 ? 'pro set to 8' : `sets to ${rules.gamesPerSet}`);
+    if (rules.tiebreak === false) parts.push('advantage sets'); // BUILD 3.60
     return parts.length ? parts.join(' · ') : null;
   }
   if (key !== 'football' && key !== 'hockey' && key !== 'basketball') return null;

@@ -56,11 +56,13 @@ export interface TennisOpts {
   setsToWin: number;
   /** BUILD 3.59: games to win a set, 4–10 (short set to pro set); the tiebreak comes at games-all. */
   gamesPerSet?: number;
+  /** BUILD 3.60: a tiebreak at games-all (standard), or none — an advantage set, won 2 games clear. */
+  tiebreak?: boolean;
 }
 type Opts = Required<TennisOpts>;
 function optsOf(o: number | TennisOpts | undefined): Opts {
   const x: TennisOpts = typeof o === 'number' ? { setsToWin: o } : o ?? { setsToWin: TENNIS_SETS_TO_WIN };
-  return { setsToWin: x.setsToWin, gamesPerSet: x.gamesPerSet ?? GAMES_PER_SET };
+  return { setsToWin: x.setsToWin, gamesPerSet: x.gamesPerSet ?? GAMES_PER_SET, tiebreak: x.tiebreak ?? true };
 }
 
 const other = (s: TennisSide): TennisSide => (s === 'A' ? 'B' : 'A');
@@ -93,7 +95,7 @@ function winSet(s: TennisScore, side: TennisSide, setsToWin: number, tiebreak?: 
 /** One point to `side`. Pure: returns a new score. */
 export function tennisPoint(s: TennisScore, side: TennisSide, options: number | TennisOpts = TENNIS_SETS_TO_WIN): TennisScore {
   if (s.winner) return s;
-  const { setsToWin, gamesPerSet } = optsOf(options);
+  const { setsToWin, gamesPerSet, tiebreak: tiebreaks } = optsOf(options);
   const o = other(side);
   const points = { ...s.points, [side]: s.points[side] + 1 };
 
@@ -111,7 +113,7 @@ export function tennisPoint(s: TennisScore, side: TennisSide, options: number | 
     if (games[side] >= gamesPerSet && games[side] - games[o] >= 2) {
       return winSet({ ...s, games }, side, setsToWin);
     }
-    const tiebreak = games.A === gamesPerSet && games.B === gamesPerSet;
+    const tiebreak = tiebreaks && games.A === gamesPerSet && games.B === gamesPerSet;
     return { ...s, points: { A: 0, B: 0 }, games, tiebreak };
   }
   return { ...s, points };

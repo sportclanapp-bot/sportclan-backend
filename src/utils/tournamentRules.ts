@@ -52,7 +52,7 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
  */
 export function tournamentDetailsRefusal(
   body: Record<string, unknown>,
-  current: { start_date?: string | null; end_date?: string | null } = {},
+  current: { start_date?: string | null; end_date?: string | null; registration_deadline?: string | null } = {},
 ): Refusal | null {
   for (const k of ['start_date', 'end_date', 'registration_deadline'] as const) {
     if (present(body[k]) && !isDateLike(body[k])) return { error: `${k} must be a date.`, code: 'INVALID_DATE' };
@@ -67,6 +67,13 @@ export function tournamentDetailsRefusal(
   if (present(start) && present(end) && isDateLike(start) && isDateLike(end)
       && Date.parse(end as string) < Date.parse(start as string)) {
     return { error: 'The end date can’t be before the start date.', code: 'END_BEFORE_START' };
+  }
+  // BUILD 4.10: entries close by the day the tournament starts, not after it.
+  const deadline = 'registration_deadline' in body ? body.registration_deadline : current.registration_deadline;
+  // Only when the edit moves one of them — an older tournament's other edits aren't held up.
+  if (('registration_deadline' in body || 'start_date' in body) && present(start) && present(deadline) && isDateLike(start) && isDateLike(deadline)
+      && Date.parse(deadline as string) > Date.parse(start as string) + 86_400_000) {
+    return { error: 'Entries have to close by the day the tournament starts.', code: 'DEADLINE_AFTER_START' };
   }
   // BUILD 1.16: whole rupees. 12.5 passed this check and the int column then
   // refused it (a 500); a number past the column's range did the same.

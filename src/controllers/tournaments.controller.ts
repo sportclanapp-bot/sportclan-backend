@@ -897,7 +897,7 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules, sport_metadata, num_groups, group_size, qualifiers_per_group, max_teams')
+      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules, sport_metadata, num_groups, group_size, qualifiers_per_group, max_teams, registration_deadline')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -974,7 +974,7 @@ export async function updateTournament(req: Request, res: Response) {
     // B08-F11/F12: an edit can't blank the name, end before it starts, charge a
     // negative fee or put text in a date/number column.
     const detailBad = ('name' in body ? tournamentNameRefusal(body.name) : null)
-      ?? tournamentDetailsRefusal(body, { start_date: tournament.start_date, end_date: tournament.end_date });
+      ?? tournamentDetailsRefusal(body, { start_date: tournament.start_date, end_date: tournament.end_date, registration_deadline: (tournament as { registration_deadline?: string | null }).registration_deadline });
     if (detailBad) return res.status(400).json(detailBad);
     // B08-F8: max_teams can't go below the teams already approved.
     if (body.max_teams !== undefined) {

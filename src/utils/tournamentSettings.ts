@@ -227,13 +227,18 @@ export type TournamentSettings = {
   points?: PointsTemplate;
   /** 4.5 · groups → knockout: the best next-placed teams fill the knockout's byes. */
   bestThirds?: boolean;
+  /** 4.6 · the draw's order: entry time, a random draw, or the organiser's seeds. Absent = seeds if set, then entry time (as before). */
+  seeding?: SeedingMode;
 };
+
+export type SeedingMode = 'registration' | 'random' | 'manual';
+export const SEEDING_MODES: readonly SeedingMode[] = ['registration', 'random', 'manual'];
 
 /**
  * Settings the draw is made from. They're fixed once it's made (the fixtures
  * already reflect them); the points and tie-breaks are fixed once a result is in.
  */
-export const DRAW_KEYS = ['bestThirds'] as const;
+export const DRAW_KEYS = ['bestThirds', 'seeding'] as const;
 
 /** Which draw setting an edit changes, if any (to refuse it once the draw is made). */
 export function changedDrawKey(current: TournamentSettings, incoming: Record<string, unknown>): string | null {
@@ -252,7 +257,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -266,6 +271,7 @@ export function settingsRefusal(sport: string | null | undefined, format: string
     if (typeof o.bestThirds !== 'boolean') return refuse('Best third places is on or off.');
     if (o.bestThirds && format !== 'groups_knockout') return refuse('Best third places are for groups → knockout.');
   }
+  if (o.seeding != null && !SEEDING_MODES.includes(o.seeding as SeedingMode)) return refuse('Seeding is registration order, a random draw or manual seeds.');
   return pointsRefusal(sport, o.points);
 }
 
@@ -280,6 +286,10 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('bestThirds' in s) {
     if (s.bestThirds) out.bestThirds = true;
     else delete out.bestThirds;
+  }
+  if ('seeding' in s) {
+    if (s.seeding) out.seeding = s.seeding;
+    else delete out.seeding;
   }
   return out;
 }

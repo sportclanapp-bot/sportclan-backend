@@ -68,6 +68,7 @@ import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/not
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
 import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey } from '../utils/tournamentSettings';
+import { drawOrder } from '../utils/drawOrder';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -831,6 +832,10 @@ export async function updateEntry(req: Request, res: Response) {
     // group — moving it would split the table from the matches it played.
     if (group_label !== undefined && (tournament as { fixtures_generated?: boolean }).fixtures_generated) {
       return res.status(409).json({ error: 'The groups are already drawn, so a team can’t change group.', code: 'GROUPS_LOCKED' });
+    }
+    // BUILD 4.6: the draw is made from the seeds, so they're fixed after it.
+    if (seed !== undefined && (tournament as { fixtures_generated?: boolean }).fixtures_generated) {
+      return res.status(409).json({ error: 'The draw is made, so seeds can’t change.', code: 'SEEDS_LOCKED' });
     }
     const update: Record<string, any> = {};
     if (status !== undefined) update.status = status;
@@ -2605,7 +2610,7 @@ export async function generateFixtures(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, status, sport_id, format, city_id, venue, start_date, end_date, created_by, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names, match_rules')
+      .select('id, status, sport_id, format, city_id, venue, start_date, end_date, created_by, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names, match_rules, settings')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -2627,14 +2632,18 @@ export async function generateFixtures(req: Request, res: Response) {
     // fell on arbitrary teams. Order: the organiser's explicit `seed` when set
     // (1 = strongest), then entry time, then team_id as the terminator so the
     // sequence is total and repeatable.
-    const { data: entries } = await supabase
+    const { data: fetched } = await supabase
       .from('tournament_entries')
-      .select('team_id, seed, entered_at, group_label, team:teams!team_id(id, name, short_name)')
+      .select('id, team_id, seed, entered_at, group_label, team:teams!team_id(id, name, short_name)')
       .eq('tournament_id', id)
       .eq('status', 'approved')
       .order('seed', { ascending: true, nullsFirst: false })
       .order('entered_at', { ascending: true })
       .order('team_id', { ascending: true });
+    // BUILD 4.6: the tournament's seeding — entry time, a random draw, or the
+    // organiser's seeds (absent: seeds when set, then entry time, as above).
+    const seeding = settingsOf(tournament as { settings?: unknown }).seeding ?? null;
+    const entries = drawOrder((fetched ?? []) as Array<{ id: string; team_id: string; seed?: number | null; entered_at?: string | null; group_label?: string | null; team?: unknown }>, seeding);
     const teams = (entries ?? []).map((e: any) => ({
       id: e.team_id,
       name: (e.team as any)?.name ?? 'TBD',
@@ -2697,6 +2706,14 @@ export async function generateFixtures(req: Request, res: Response) {
         return res.status(409).json({ error: 'Fixtures already generated for this tournament.' });
       }
       // Won the stuck-state recovery (flag already true, 0 matches, stale) → regenerate.
+    }
+
+    // BUILD 4.6: a random draw is written down as seeds 1…N, so the order it
+    // made can be seen (and explained) after the draw.
+    if (seeding === 'random') {
+      for (let i = 0; i < entries.length; i++) {
+        await supabase.from('tournament_entries').update({ seed: i + 1 }).eq('id', entries[i]!.id);
+      }
     }
 
     const startDateYmd = (tournament.start_date ?? new Date().toISOString().slice(0, 10)) as string;

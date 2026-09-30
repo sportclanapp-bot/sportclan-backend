@@ -20,6 +20,7 @@ import {
   getActivityHeatmap,
   getRival,
   getRatingHistory,
+  getChessRatings,
   getReviews,
   submitReview,
   deleteReview,
@@ -64,6 +65,7 @@ router.get('/:id/sport-profile/:sportId', authenticateToken, getSportProfile);
 router.patch('/:id/sport-profile/:sportId', authenticateToken, updateSportProfile);
 router.get('/:id/activity-heatmap', authenticateToken, getActivityHeatmap);
 router.get('/:id/rating-history', authenticateToken, getRatingHistory);
+router.get('/:id/chess-ratings', authenticateToken, getChessRatings); // BUILD 3.71
 router.get('/:id/rival', authenticateToken, getRival);
 router.get('/:id/season-recap', authenticateToken, getSeasonRecap);
 router.get('/:id/insights', authenticateToken, getUserInsights);

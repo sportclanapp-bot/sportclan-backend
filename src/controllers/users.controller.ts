@@ -1379,6 +1379,28 @@ export async function getRatingHistory(req: Request, res: Response) {
   return res.json({ history: ordered });
 }
 
+// GET /users/:id/chess-ratings — BUILD 3.71: the player's chess rating in each
+// time control (bullet / blitz / rapid / classical) they've played rated.
+// Same visibility rule as the rating history.
+export async function getChessRatings(req: Request, res: Response) {
+  const { id } = req.params;
+  const [hidden, { data, error }] = await Promise.all([
+    targetUserHidden(id, req.userId),
+    supabase
+      .from('user_chess_ratings')
+      .select('time_control, rating, matches_played, wins, losses, draws')
+      .eq('user_id', id),
+  ]);
+  if (hidden) return res.status(404).json({ error: 'User not found' });
+  if (error) return res.status(500).json({ error: error.message });
+  const order = ['bullet', 'blitz', 'rapid', 'classical'];
+  const ratings = ((data ?? []) as Array<{ time_control: string; rating: number; matches_played: number }>)
+    .filter((r) => r.matches_played > 0)
+    .map((r) => ({ ...r, rating: Math.round(Number(r.rating)) }))
+    .sort((a, b) => order.indexOf(a.time_control) - order.indexOf(b.time_control));
+  return res.json({ ratings });
+}
+
 // GET /users/:id/sport-profile/:sportId — per-sport rating + stats
 // Every preference column the frontend can edit. Centralised here so
 // getSportProfile and updateSportProfile agree on what's allowed.

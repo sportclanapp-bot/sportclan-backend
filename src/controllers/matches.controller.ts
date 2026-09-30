@@ -48,6 +48,7 @@ import { leaseRefusal } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
 import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
+import { applyChessTcDeltas, recordChessTc } from '../utils/chessTcRatings';
 import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, type UnfinishedEnd } from '../utils/cricketRules';
@@ -3114,6 +3115,19 @@ export async function completeMatch(req: Request, res: Response) {
     }
 
     timer.mark('finalize');
+    // BUILD 3.71: a ranked one-a-side chess game also moves both players' rating
+    // in its time control (blitz, rapid, …) — beside the overall rating above.
+    if (match.is_ranked && !walkover && normSportSlug(sportRow?.slug) === 'chess' && participants) {
+      const white = participants.filter((p) => p.team_side === 'A');
+      const black = participants.filter((p) => p.team_side === 'B');
+      if (white.length === 1 && black.length === 1) {
+        try {
+          await recordChessTc(match as { id: string; rules?: unknown; format?: string | null; overs?: number | null }, white[0]!.user_id, black[0]!.user_id, winnerSide ?? null);
+        } catch (tcErr) {
+          console.warn('[3.71] time-control rating failed:', String(tcErr)); // eslint-disable-line no-console
+        }
+      }
+    }
     // SC-283: casual isn't rated — remove the delta-0 rating_history rows
     // finalize_match wrote for a casual match, so casual never pollutes the
     // rating trajectory or the ranked analytics (SC-275 reads rating_history as
@@ -3600,6 +3614,7 @@ export async function voidMatch(req: Request, res: Response) {
     // numbers are computed against the match as it still stands.
     const deltas = await recordDeltas(id);
     if (deltas.length > 0) await applyRecordDeltas(match.sport_id, deltas, -1);
+    await applyChessTcDeltas(id, -1); // BUILD 3.71: and the time-control ratings (none for other sports)
 
     const { data: updated, error } = await supabase
       .from('matches')
@@ -3685,6 +3700,7 @@ export async function unvoidMatch(req: Request, res: Response) {
 
     const deltas = await recordDeltas(id);
     if (deltas.length > 0) await applyRecordDeltas(match.sport_id, deltas, 1);
+    await applyChessTcDeltas(id, 1); // BUILD 3.71
 
     // V-6: a restored win pays again — re-grant the +5 win coins (ledger).
     await reconcileWinCoins(id).catch(() => undefined);

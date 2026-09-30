@@ -203,6 +203,13 @@ export function computeStats(
   for (const m of matches) {
     const a = m.team_a_id;
     const b = m.team_b_id;
+    // BUILD 4.15: a Swiss bye — one player, marked on its summary — is a win's
+    // points and a game played. (A knockout bye isn't marked: it only advances.)
+    if (a && !b && !scope && m.score_summary?.bye === true && m.status === 'completed' && table.has(a)) {
+      const r = table.get(a)!;
+      r.played++; r.won++; r.points += pts.win;
+      continue;
+    }
     if (!a || !b || !table.has(a) || !table.has(b)) continue;
     if (scope && (!scope.has(a) || !scope.has(b))) continue;
     // Only decided/played matches count. A completed match with no winner = draw.

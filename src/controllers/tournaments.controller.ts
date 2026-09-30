@@ -67,9 +67,10 @@ import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
-import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem } from '../utils/tournamentSettings';
+import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal } from '../utils/tournamentSettings';
 import { drawOrder } from '../utils/drawOrder';
 import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSeparation';
+import { swissFirstRound, swissNextRound, type SwissRound } from '../utils/swiss';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -224,6 +225,11 @@ export async function createTournament(req: Request, res: Response) {
     // BUILD Stage 4: the tournament-wide settings, checked by the shared validator.
     const setBad = settingsRefusal(createSportSlug, format, settings);
     if (setBad) return res.status(400).json(setBad);
+    // BUILD 4.15: a Swiss is chess, with its rounds.
+    if (format === 'swiss') {
+      const swBad = swissCreateRefusal(createSportSlug, settings);
+      if (swBad) return res.status(400).json(swBad);
+    }
     // BUILD 4.2: tie-break names are checked (they were stored as sent, and an
     // unknown one was silently skipped by the table).
     const tbBad = tiebreakRefusal(createSportSlug, tiebreaker_rules);
@@ -333,7 +339,9 @@ export async function createTournament(req: Request, res: Response) {
         logo_url: logo_url || null,
         entry_code,
         created_by: userId,
-        tiebreaker_rules: Array.isArray(tiebreaker_rules) ? storedTiebreaks(tiebreaker_rules) : [], // BUILD 4.2
+        // BUILD 4.2; BUILD 4.15: a Swiss without its own order ranks on Buchholz, then Sonneborn-Berger, then wins.
+        tiebreaker_rules: Array.isArray(tiebreaker_rules) && tiebreaker_rules.length ? storedTiebreaks(tiebreaker_rules)
+          : format === 'swiss' ? ['buchholz', 'sonneborn_berger', 'wins'] : [],
         sport_metadata: metadata,
         sponsor_name: sponsor_name || null,
         sponsor_logo_url: sponsor_logo_url || null,
@@ -1005,6 +1013,13 @@ export async function updateTournament(req: Request, res: Response) {
         code: 'FORMAT_LOCKED',
       });
     }
+    // BUILD 4.15: turning a tournament into a Swiss needs chess and its rounds.
+    if (body.format === 'swiss' && (tournament as { format?: string }).format !== 'swiss') {
+      const slug = normSportSlug((await getSport(String((tournament as { sport_id?: string }).sport_id)))?.slug);
+      const merged = { ...settingsOf(tournament as { settings?: unknown }), ...((body.settings ?? {}) as object) };
+      const swBad = swissCreateRefusal(slug, merged);
+      if (swBad) return res.status(400).json(swBad);
+    }
     if (body.format !== undefined && !isValidTournamentFormat(body.format)) {
       return res.status(400).json({
         error: `Invalid format. Must be one of: ${TOURNAMENT_FORMATS.join(', ')}`,
@@ -1567,10 +1582,11 @@ export async function getBracket(req: Request, res: Response) {
     // end rule labelled every fixture list "Final" — a 6-fixture double round
     // robin displayed as a single round called "Final". Those formats have no
     // final; they have a fixture list.
-    const isBracketFormat = ((tournament as any).format ?? 'knockout').toLowerCase() !== 'round_robin'
-      && ((tournament as any).format ?? 'knockout').toLowerCase() !== 'league';
+    const fmtLc = ((tournament as any).format ?? 'knockout').toLowerCase();
+    const isBracketFormat = fmtLc !== 'round_robin' && fmtLc !== 'league' && fmtLc !== 'swiss';
     const roundName = (r: number, idx: number): string => {
       if (r === 0) return 'Group Stage';
+      if (fmtLc === 'swiss') return `Round ${r}`; // BUILD 4.15
       if (!isBracketFormat) return count > 1 ? `Matchday ${r}` : 'Fixtures';
       const fromEnd = count - 1 - idx; // 0 = last round = final
       if (fromEnd === 0) return 'Final';
@@ -2211,7 +2227,7 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
   const { data: t } = await supabase
     .from('tournaments').select('format, tiebreaker_rules, sport_id, settings').eq('id', tournamentId).maybeSingle();
   const fmt = (t as any)?.format;
-  if (fmt === 'round_robin' || fmt === 'league') {
+  if (fmt === 'round_robin' || fmt === 'league' || fmt === 'swiss') { // BUILD 4.15: a Swiss is won on the table
     const { data: entries } = await supabase
       .from('tournament_entries').select('team_id, team:teams!team_id(id, name, short_name)')
       .eq('tournament_id', tournamentId).eq('status', 'approved');
@@ -2271,6 +2287,7 @@ export async function recrownAfterVoidChange(matchId: string): Promise<void> {
     if (t.status === 'upcoming' || t.status === 'live') {
       if (m.group_label) await maybeSeedKnockout(m.tournament_id as string);
       else if (t.format === 'league' || t.format === 'round_robin') await crownLeagueChampion(m.tournament_id as string);
+      else if (t.format === 'swiss') await swissAfterResult(m.tournament_id as string); // BUILD 4.15
       // BUILD 4.12: voiding the third-place match (or the final) can leave the
       // bracket finished — complete it then, as a completion would.
       else if (!m.next_match_id) await completeBracketIfDone(m.tournament_id as string);
@@ -2278,7 +2295,7 @@ export async function recrownAfterVoidChange(matchId: string): Promise<void> {
     }
     if (m.next_match_id || m.group_label) return;
     if (t.status !== 'completed') return;
-    if (t.format === 'league' || t.format === 'round_robin') return;
+    if (t.format === 'league' || t.format === 'round_robin' || t.format === 'swiss') return;
     const champ = await championOf(m.tournament_id as string);
     const next = champ?.id ?? null;
     if (next === (t.champion_team_id ?? null)) return;
@@ -2329,6 +2346,85 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
   }
 }
 
+/**
+ * BUILD 4.15 · a Swiss round's match rows: white is side A. A bye is a
+ * completed one-player match, marked `bye`, worth a win — the table counts it
+ * (standings.ts), and older apps list it like a knockout bye.
+ */
+function swissRoundRows(
+  round: SwissRound, roundNo: number, nameOf: Map<string, string>,
+  base: { sport_id: unknown; tournament_id: string; venue: unknown; city_id: unknown; created_by: string; fixtureDefaults: Record<string, unknown> },
+): any[] {
+  const rows: any[] = round.pairs.map((p, i) => ({
+    sport_id: base.sport_id, tournament_id: base.tournament_id,
+    team_a_id: p.white, team_b_id: p.black,
+    team_a_name: nameOf.get(p.white) ?? 'Player', team_b_name: nameOf.get(p.black) ?? 'Player',
+    venue: base.venue, city_id: base.city_id, status: 'scheduled', score_summary: {}, created_by: base.created_by,
+    round: roundNo, match_no: i, is_ranked: true, ...base.fixtureDefaults,
+  }));
+  if (round.bye) {
+    rows.push({
+      sport_id: base.sport_id, tournament_id: base.tournament_id,
+      team_a_id: round.bye, team_b_id: null,
+      team_a_name: nameOf.get(round.bye) ?? 'Player', team_b_name: 'BYE',
+      venue: base.venue, city_id: base.city_id, status: 'completed', winner_team_id: round.bye,
+      score_summary: { bye: true, A: { score: 1 }, B: { score: 0 }, result: `${nameOf.get(round.bye) ?? 'Player'} has a bye (a win)` },
+      created_by: base.created_by, round: roundNo, match_no: round.pairs.length, is_ranked: false, ...base.fixtureDefaults,
+    });
+  }
+  return rows;
+}
+
+/**
+ * BUILD 4.15 · after a Swiss result: once the round is finished, pair the next
+ * one (a CAS on settings.swiss.paired, so two results landing together pair it
+ * once), or — after the last round — crown the standings leader.
+ */
+async function swissAfterResult(tournamentId: string): Promise<void> {
+  if (await hasUnplayedFixtures(tournamentId)) return;
+  const { data: t } = await supabase
+    .from('tournaments').select('id, sport_id, venue, city_id, created_by, settings, tiebreaker_rules, match_rules, match_duration_minutes, buffer_minutes')
+    .eq('id', tournamentId).maybeSingle();
+  if (!t) return;
+  const sw = settingsOf(t as { settings?: unknown }).swiss;
+  if (!sw) return;
+  const paired = sw.paired ?? 1;
+  if (paired >= sw.rounds) { await crownLeagueChampion(tournamentId); return; }
+  // Claim the next round.
+  const { data: claim } = await supabase
+    .from('tournaments')
+    .update({ settings: { ...settingsOf(t as { settings?: unknown }), swiss: { rounds: sw.rounds, paired: paired + 1 } }, updated_at: new Date().toISOString() })
+    .eq('id', tournamentId)
+    .eq('settings->swiss->>paired', String(paired))
+    .select('id');
+  if (!claim || claim.length === 0) return;
+  const { data: entries } = await supabase
+    .from('tournament_entries').select('team_id, seed, entered_at, team:teams!team_id(id, name, short_name)')
+    .eq('tournament_id', tournamentId).eq('status', 'approved');
+  const seeded = drawOrder(((entries ?? []) as Array<{ team_id: string; seed?: number | null; entered_at?: string | null }>), settingsOf(t as { settings?: unknown }).seeding ?? null);
+  const ids = seeded.map((e) => e.team_id);
+  const nameOf = new Map(((entries ?? []) as Array<{ team_id: string; team?: { name?: string } | null }>).map((e) => [e.team_id, e.team?.name ?? 'Player']));
+  const { data: matches } = await supabase
+    .from('matches').select('team_a_id, team_b_id, winner_team_id, status, score_summary, scheduled_at, overs')
+    .eq('tournament_id', tournamentId).is('voided_at', null);
+  const ms = (matches ?? []) as Array<{ team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; score_summary: any; scheduled_at: string | null }>;
+  const pts = await tournamentPoints(t as any);
+  const ranked = rankTeams(ids, ms as any[], ((t as any).tiebreaker_rules ?? []) as any[], pts);
+  const next = swissNextRound(ranked, ms.map((m) => ({ white: m.team_a_id, black: m.team_b_id, bye: m.score_summary?.bye === true })));
+  const slug = normSportSlug((await getSport(t.sport_id as string))?.slug);
+  const rules = stageRules(slug, (t as { match_rules?: unknown }).match_rules ?? null, 'group');
+  const legacy = legacyFromRules(slug, rules);
+  const rows = swissRoundRows(next, paired + 1, nameOf, {
+    sport_id: t.sport_id, tournament_id: tournamentId, venue: t.venue ?? null, city_id: t.city_id ?? null,
+    created_by: t.created_by as string, fixtureDefaults: { format: legacy.format, rules },
+  });
+  // Timed after the previous round's last game (its length plus the buffer).
+  const lastAt = Math.max(...ms.map((m) => (m.scheduled_at ? Date.parse(m.scheduled_at) : 0)), Date.now());
+  const gap = (Number((t as any).match_duration_minutes ?? 60) + Number((t as any).buffer_minutes ?? 10)) * 60000;
+  for (const r of rows) r.scheduled_at = new Date(lastAt + gap).toISOString();
+  await supabase.from('matches').insert(rows).select('id');
+}
+
 export async function advanceTournamentWinner(matchId: string): Promise<void> {
   const { data: m } = await supabase
     .from('matches')
@@ -2355,6 +2451,11 @@ export async function advanceTournamentWinner(matchId: string): Promise<void> {
   const fmt = (fmtRow as any)?.format;
   if (fmt === 'round_robin' || fmt === 'league') {
     await crownLeagueChampion(m.tournament_id);
+    return;
+  }
+  // BUILD 4.15: a Swiss pairs its next round, or crowns after the last.
+  if (fmt === 'swiss') {
+    await swissAfterResult(m.tournament_id);
     return;
   }
   // Defensive: a non-bracket match with no round somehow reaching here has no
@@ -2986,6 +3087,28 @@ export async function generateFixtures(req: Request, res: Response) {
     }
 
     const matchRows: any[] = [];
+
+    if (format === 'swiss') {
+      // BUILD 4.15: round 1 now (top half v bottom half); each later round is
+      // paired when the one before it is finished (swissAfterResult).
+      const rounds = settingsOf(tournament as { settings?: unknown }).swiss?.rounds ?? 0;
+      if (rounds < 2 || rounds > teams.length - 1) {
+        await releaseFixtureClaim(id);
+        return res.status(400).json({ error: `${teams.length} players can play at most ${teams.length - 1} Swiss rounds without meeting twice; this one has ${rounds}.`, code: 'SWISS_ROUNDS' });
+      }
+      const r1 = swissFirstRound(teams.map((t) => t.id));
+      const nameOfId = new Map(teams.map((t) => [t.id, t.name]));
+      const rows = swissRoundRows(r1, 1, nameOfId, { sport_id: tournament.sport_id, tournament_id: id, venue: tournament.venue ?? null, city_id: tournament.city_id ?? null, created_by: userId, fixtureDefaults });
+      const sched = applyScheduleToRows(rows.filter((r) => !r.score_summary?.bye), schedCfg, fallbackStartIso);
+      if (!sched.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' }); }
+      for (const r of rows) if (r.score_summary?.bye) r.scheduled_at = rows.find((x) => !x.score_summary?.bye)?.scheduled_at ?? fallbackStartIso;
+      const { error } = await supabase.from('matches').insert(rows).select('id');
+      if (error) throw new Error('fixture insert failed');
+      await supabase.from('tournaments')
+        .update({ status: statusAfterFixtures(tournament.start_date as string | null), settings: { ...settingsOf(tournament as { settings?: unknown }), swiss: { rounds, paired: 1 } } })
+        .eq('id', id);
+      return res.json({ success: true, matchesCreated: rows.length, format });
+    }
 
     if (format === 'round_robin' || format === 'league') {
       // round_robin = single round-robin (N*(N-1)/2 matches). league = DOUBLE

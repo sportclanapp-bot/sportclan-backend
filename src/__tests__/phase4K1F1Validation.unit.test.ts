@@ -124,9 +124,9 @@ describe('K1-41b (d5aa529) · SC-37/39 tournament format and size, team name', (
   const base = { sport_id: SPORT, name: 'Monsoon Cup', format: 'knockout', max_teams: 8 };
   beforeEach(() => { mockNext = (q) => (q[0] === 'from:sports' ? { data: { id: SPORT, is_active: true, slug: 'cricket' } } : { data: null }); });
   it('K1-41b (d5aa529): an unknown format → 400 naming the formats, nothing inserted', async () => {
-    const r = await call(createTournament, { body: { ...base, format: 'swiss' } });
+    const r = await call(createTournament, { body: { ...base, format: 'double_elimination' } }); // BUILD 4.15: swiss is a format now
     expect(r.statusCode).toBe(400);
-    expect(r.body.error).toMatch(/^Invalid format\. Must be one of: knockout, league, round_robin, groups_knockout/);
+    expect(r.body.error).toMatch(/^Invalid format\. Must be one of: knockout, league, round_robin, groups_knockout, swiss/);
     expect(writes()).toHaveLength(0);
   });
   it.each([1, 0, 65, 2.5])('K1-41b (d5aa529): max_teams %p → 400', async (n) => {

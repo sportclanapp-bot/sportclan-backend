@@ -12,7 +12,7 @@ export function isTerminalMatchStatus(status?: string | null): boolean {
 }
 
 // ── Tournament format (SC-37) ────────────────────────────────────────────────
-export const TOURNAMENT_FORMATS = ['knockout', 'league', 'round_robin', 'groups_knockout'] as const;
+export const TOURNAMENT_FORMATS = ['knockout', 'league', 'round_robin', 'groups_knockout', 'swiss'] as const; // BUILD 4.15: swiss (chess, migration 116)
 
 export function isValidTournamentFormat(format?: string | null): boolean {
   return !!format && (TOURNAMENT_FORMATS as readonly string[]).includes(format);

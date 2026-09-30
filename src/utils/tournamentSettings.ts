@@ -241,7 +241,21 @@ export type TournamentSettings = {
   separateClubs?: boolean;
   /** 4.14 · who may play: gender, an age limit on the start date, a rating band in the sport. Absent = open. */
   category?: Category;
+  /** 4.15 · a Swiss (chess): how many rounds; `paired` is the last round the server paired (it writes that, not the app). */
+  swiss?: { rounds: number; paired?: number };
 };
+
+export const SWISS_ROUNDS: [number, number] = [2, 11];
+
+/** Why a new Swiss can't be created (chess only, with its rounds), or null. */
+export function swissCreateRefusal(sport: string | null | undefined, settings: unknown): Refusal | null {
+  if (sportKeyOf(sport) !== 'chess') return refuse('Swiss is for chess.');
+  const sw = settings && typeof settings === 'object' ? (settings as { swiss?: unknown }).swiss : null;
+  if (!sw) return refuse('A Swiss needs its number of rounds.');
+  return null;
+}
+/** A sensible number of rounds for a field: enough to separate a winner (log₂ N, rounded up), plus one. */
+export const swissRoundsFor = (teams: number): number => Math.min(SWISS_ROUNDS[1], Math.max(SWISS_ROUNDS[0], Math.ceil(Math.log2(Math.max(2, teams))) + 1));
 
 // ── 4.14 · categories ────────────────────────────────────────────────────────
 
@@ -383,14 +397,16 @@ export const SEEDING_MODES: readonly SeedingMode[] = ['registration', 'random', 
  * Settings the draw is made from. They're fixed once it's made (the fixtures
  * already reflect them); the points and tie-breaks are fixed once a result is in.
  */
-export const DRAW_KEYS = ['bestThirds', 'seeding', 'restMinutes', 'thirdPlace', 'separateClubs', 'category'] as const;
+export const DRAW_KEYS = ['bestThirds', 'seeding', 'restMinutes', 'thirdPlace', 'separateClubs', 'category', 'swiss'] as const;
 
 /** Which draw setting an edit changes, if any (to refuse it once the draw is made). */
 export function changedDrawKey(current: TournamentSettings, incoming: Record<string, unknown>, keys: readonly string[] = DRAW_KEYS): string | null {
   for (const k of keys) {
     if (!(k in incoming)) continue;
-    const was = (current as Record<string, unknown>)[k] ?? null;
-    const now = incoming[k] ?? null;
+    // A Swiss's settings change only in their rounds (`paired` is the server's).
+    const pick = (v: unknown) => (k === 'swiss' && v && typeof v === 'object' ? (v as { rounds?: unknown }).rounds ?? null : v);
+    const was = pick((current as Record<string, unknown>)[k] ?? null);
+    const now = pick(incoming[k] ?? null);
     if (JSON.stringify(was) !== JSON.stringify(now)) return k;
   }
   return null;
@@ -402,7 +418,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -421,6 +437,11 @@ export function settingsRefusal(sport: string | null | undefined, format: string
     return refuse(`Rest between a team’s matches must be 0 to ${REST_MAX} minutes.`);
   }
   if (o.entry != null && o.entry !== 'approval' && o.entry !== 'open') return refuse('Entry is open or by approval.');
+  if (o.swiss != null) {
+    if (format !== 'swiss') return refuse('Swiss rounds are for a Swiss tournament.');
+    const r = (o.swiss as { rounds?: unknown }).rounds;
+    if (!(typeof r === 'number' && Number.isInteger(r) && r >= SWISS_ROUNDS[0] && r <= SWISS_ROUNDS[1])) return refuse(`A Swiss has ${SWISS_ROUNDS[0]} to ${SWISS_ROUNDS[1]} rounds.`);
+  }
   const catBad = categoryRefusal(o.category);
   if (catBad) return catBad;
   if (o.separateClubs != null) {
@@ -451,6 +472,11 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('seeding' in s) {
     if (s.seeding) out.seeding = s.seeding;
     else delete out.seeding;
+  }
+  if ('swiss' in s) {
+    // The app sets the rounds; `paired` is the server's own bookkeeping.
+    if (s.swiss) out.swiss = { rounds: Number(s.swiss.rounds), ...(current?.swiss?.paired != null ? { paired: current.swiss.paired } : {}) };
+    else delete out.swiss;
   }
   if ('category' in s) {
     const c = storedCategory(s.category);

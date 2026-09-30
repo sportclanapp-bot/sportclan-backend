@@ -106,6 +106,8 @@ export interface MatchRules {
   queenPoints?: number;
   /** BUILD 3.73: carrom — the queen counts only below target − queen (true, official), or always. */
   queenCutoff?: boolean;
+  /** BUILD 3.74: carrom — boards a game (1–12, ICF 8), or null for none. */
+  boardCap?: number | null;
   /** BUILD 3.58: pickleball rally scoring (every rally scores) or side-out (only the server scores). */
   scoring?: 'rally' | 'sideout';
   /** Can the match end level. */
@@ -129,7 +131,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally' }, // BUILD 3.58: side-out; players 2 = doubles
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2 },
   tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null }, // BUILD 3.59–3.66 (players 2 = doubles)
-  carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true }, // BUILD 3.72 / 3.73
+  carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null }, // BUILD 3.72–3.74
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true },
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
   basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false },
@@ -185,8 +187,8 @@ export function rulesFromLegacy(
 // ── BUILD 2.3 · what the scoring engines read ──────────────────────────────
 
 /** BUILD 3.72+ · the carrom core's options from a match's rules (carromCore.CarromOpts). */
-export function carromOptsOf(rules: MatchRules): { gamesToWin: number; target: number; queenPoints: number; queenCutoff: boolean } {
-  return { gamesToWin: winsToWin(rules), target: rules.target ?? 25, queenPoints: rules.queenPoints ?? 3, queenCutoff: rules.queenCutoff !== false };
+export function carromOptsOf(rules: MatchRules): { gamesToWin: number; target: number; queenPoints: number; queenCutoff: boolean; boardCap: number | null } {
+  return { gamesToWin: winsToWin(rules), target: rules.target ?? 25, queenPoints: rules.queenPoints ?? 3, queenCutoff: rules.queenCutoff !== false, boardCap: rules.boardCap ?? null };
 }
 
 /** BUILD 3.72 · carrom's two games: the official 25 (queen +3 below 22) and the home 29 (queen +5 below 24). */
@@ -323,7 +325,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', queenPoints: 'Queen', queenCutoff: 'Queen cut-off',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -389,6 +391,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'carrom' && (!isWhole(r.target) || r.target < 7 || r.target > 29)) return refuse('Points to win a game must be 7 to 29.', 'target');
   if (key === 'carrom' && (!isWhole(r.queenPoints) || r.queenPoints < 0 || r.queenPoints > 5)) return refuse('The queen is worth 0 to 5.', 'queenPoints');
   if (key === 'carrom' && typeof r.queenCutoff !== 'boolean') return refuse('The queen cut-off is on or off.', 'queenCutoff'); // BUILD 3.73
+  if (key === 'carrom' && r.boardCap !== null && (!isWhole(r.boardCap) || r.boardCap < 1 || r.boardCap > 12)) return refuse('Boards a game must be off, or 1 to 12.', 'boardCap'); // BUILD 3.74
   // BUILD 3.59: tennis games a set, short set (4) to pro set (10).
   if (key === 'tennis' && (!isWhole(r.gamesPerSet) || r.gamesPerSet < 4 || r.gamesPerSet > 10)) {
     return refuse('Games a set must be 4 to 10.', 'gamesPerSet');
@@ -517,7 +520,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -648,6 +651,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     if (rules.target != null && rules.target !== 25) parts.push(`games to ${rules.target}`);
     if (rules.queenPoints != null && rules.queenPoints !== 3) parts.push(rules.queenPoints === 0 ? 'no queen points' : `queen +${rules.queenPoints}`);
     if (rules.queenCutoff === false && rules.queenPoints !== 0) parts.push('queen always counts'); // BUILD 3.73
+    if (rules.boardCap) parts.push(`${rules.boardCap} boards a game`); // BUILD 3.74
     return parts.length ? parts.join(' · ') : null;
   }
   // BUILD 3.59+: tennis — said when it isn't sets to 6.

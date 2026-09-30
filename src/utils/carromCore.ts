@@ -41,11 +41,16 @@ export interface CarromOpts {
   queenPoints?: number;
   /** The queen counts only while the winner is below target − queen (true, official), or always (false). */
   queenCutoff?: boolean;
+  /**
+   * BUILD 3.74: boards a game, 1–12 (ICF: 8), or null for none. At the cap the
+   * side ahead takes the game; level, extra boards until one side leads.
+   */
+  boardCap?: number | null;
 }
 type Opts = Required<CarromOpts>;
 function optsOf(o: number | CarromOpts, target?: number): Opts {
   const x: CarromOpts = typeof o === 'number' ? { gamesToWin: o, target } : o;
-  return { gamesToWin: x.gamesToWin, target: x.target ?? CARROM_GAME_TARGET, queenPoints: x.queenPoints ?? CARROM_QUEEN_POINTS, queenCutoff: x.queenCutoff ?? true };
+  return { gamesToWin: x.gamesToWin, target: x.target ?? CARROM_GAME_TARGET, queenPoints: x.queenPoints ?? CARROM_QUEEN_POINTS, queenCutoff: x.queenCutoff ?? true, boardCap: x.boardCap ?? null };
 }
 /** The score below which the queen counts: target − queen (22 in the official game, 24 at home). */
 export function carromQueenLimit(o: number | CarromOpts): number {
@@ -102,15 +107,18 @@ export function carromBoard(s: CarromScore, b: CarromBoardResult, options: numbe
   const gained = carromBoardPoints(s.points[w], b.piecesLeft, b.queen, o);
   const points = { ...s.points, [w]: s.points[w] + gained };
   const boards = s.boards + 1;
-  if (points[w] < target) return { ...s, points, boards };
-  // Game over: the board's winner took it.
-  const gamesWon = { ...s.gamesWon, [w]: s.gamesWon[w] + 1 };
+  // BUILD 3.74: at the board cap (or on an extra board after it), the side ahead takes the game.
+  const capped = o.boardCap != null && boards >= o.boardCap && points.A !== points.B;
+  if (points[w] < target && !capped) return { ...s, points, boards };
+  // Game over: the board's winner took it — or, at the cap, whoever leads.
+  const gw: CarromSide = points[w] >= target ? w : points.A > points.B ? 'A' : 'B';
+  const gamesWon = { ...s.gamesWon, [gw]: s.gamesWon[gw] + 1 };
   return {
     points: { A: 0, B: 0 },
     boards: 0,
     games: [...s.games, points],
     gamesWon,
-    winner: gamesWon[w] >= gamesToWin ? w : null,
+    winner: gamesWon[gw] >= gamesToWin ? gw : null,
   };
 }
 

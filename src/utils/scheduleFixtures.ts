@@ -24,6 +24,11 @@ export interface SchedulingConfig {
   // Per-day window overrides (tournament_days), keyed 'YYYY-MM-DD'. Any day
   // without an entry uses the default window above. (Sat 8–8, Sun 8–2.)
   dayWindows?: Map<string, { startMin: number; endMin: number }>;
+  // BUILD 4.9: minimum rest between a team's matches (0–240 min): a team's next
+  // match starts at least this long after its last one ends. A knockout slot's
+  // teams aren't known at the draw, so each round starts at least this long
+  // after the previous round's last match ends.
+  restMin?: number;
 }
 
 export interface FixtureShape {
@@ -126,6 +131,12 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
   const teamsAt: Array<Set<string>> = Array.from({ length: totalTimeSlots }, () => new Set<string>());
 
   const assignments = new Map<string, SlotAssign>();
+  // BUILD 4.9: rest. Minutes on one clock across days, per time-slot.
+  const R = Math.max(0, cfg.restMin ?? 0);
+  const absStart = (order: number) => timeSlotMeta[order]!.dayIndex * 1440 + timeSlotMeta[order]!.wallMin;
+  const teamFree = new Map<string, number>(); // team → earliest start of its next match
+  let prevRoundEnd = -Infinity; // the previous round's last finish
+  let curRoundEnd = -Infinity;
 
   // Round-ascending, match_no order. Round r can't start until strictly after the
   // last time-slot used by round r−1 (so a SF follows its QFs; groups precede KO).
@@ -143,13 +154,15 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
       error:
         `These ${N} fixtures need ${N} slots, but the schedule (${G} ground${G > 1 ? 's' : ''} at ` +
         `${D} min/match across ${days} day${days > 1 ? 's' : ''}) fits only ${rawCapacity}. ` +
-        `Add a ground, extend to ${needDays} day${needDays > 1 ? 's' : ''}, or shorten the match duration.`,
+        `Add a ground, extend to ${needDays} day${needDays > 1 ? 's' : ''}, or shorten the match duration` +
+        (R > 0 ? ` — or the ${R}-minute rest between a team’s matches.` : '.'),
     };
   };
 
   for (const f of sorted) {
     if (f.round !== curRound) {
       prevRoundMaxOrder = curRoundMaxOrder;
+      prevRoundEnd = curRoundEnd;
       curRound = f.round;
     }
     const hasTeams = !!f.team_a_id && !!f.team_b_id;
@@ -159,6 +172,12 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
       if (hasTeams) {
         const s = teamsAt[order];
         if (s.has(f.team_a_id!) || s.has(f.team_b_id!)) continue;
+      }
+      // BUILD 4.9: rest after the team's last match, or after the last round.
+      if (R > 0) {
+        const at = absStart(order);
+        if (at < prevRoundEnd + R) continue;
+        if (hasTeams && (at < (teamFree.get(f.team_a_id!) ?? -Infinity) || at < (teamFree.get(f.team_b_id!) ?? -Infinity))) continue;
       }
       const groundIdx = usedGround[order].findIndex((u) => !u);
       if (groundIdx === -1) continue; // this time-slot's grounds are all taken
@@ -173,6 +192,11 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
         ground_label: groundLabelFor(groundIdx, cfg.groundNames),
       });
       curRoundMaxOrder = Math.max(curRoundMaxOrder, order);
+      curRoundEnd = Math.max(curRoundEnd, absStart(order) + D);
+      if (R > 0 && hasTeams) {
+        teamFree.set(f.team_a_id!, absStart(order) + D + R);
+        teamFree.set(f.team_b_id!, absStart(order) + D + R);
+      }
       placed = true;
       break;
     }

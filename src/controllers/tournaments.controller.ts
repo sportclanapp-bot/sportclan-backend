@@ -2511,6 +2511,7 @@ function buildTournamentScheduleConfig(
       dailyStartMin: 9 * 60, dailyEndMin: 21 * 60,
       durationMin: 60, bufferMin: 10,
       groundCount: 1, groundNames: null, bounded: false,
+      restMin: settingsOf(t).restMinutes ?? 0, // BUILD 4.9
     };
   }
   return {
@@ -2524,6 +2525,7 @@ function buildTournamentScheduleConfig(
     groundNames: Array.isArray(t.ground_names) ? (t.ground_names as string[]) : null,
     bounded: true,
     dayWindows: dayWindows && dayWindows.size > 0 ? dayWindows : undefined,
+    restMin: settingsOf(t).restMinutes ?? 0, // BUILD 4.9
   };
 }
 

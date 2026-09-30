@@ -231,7 +231,11 @@ export type TournamentSettings = {
   seeding?: SeedingMode;
   /** 4.8 · a walkover's score: goals / points for the winner (football, hockey, basketball), or a straight win in the fixture's length ("straight": 3–0 in a best of 5, 1–0 in chess). Absent = as before (football by its rules, others no score). */
   walkoverScore?: number | 'straight';
+  /** 4.9 · minimum minutes between a team's matches when fixtures are timed (0–240). */
+  restMinutes?: number;
 };
+
+export const REST_MAX = 240;
 
 // ── 4.8 · walkover score ─────────────────────────────────────────────────────
 
@@ -272,7 +276,7 @@ export const SEEDING_MODES: readonly SeedingMode[] = ['registration', 'random', 
  * Settings the draw is made from. They're fixed once it's made (the fixtures
  * already reflect them); the points and tie-breaks are fixed once a result is in.
  */
-export const DRAW_KEYS = ['bestThirds', 'seeding'] as const;
+export const DRAW_KEYS = ['bestThirds', 'seeding', 'restMinutes'] as const;
 
 /** Which draw setting an edit changes, if any (to refuse it once the draw is made). */
 export function changedDrawKey(current: TournamentSettings, incoming: Record<string, unknown>, keys: readonly string[] = DRAW_KEYS): string | null {
@@ -291,7 +295,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -306,6 +310,9 @@ export function settingsRefusal(sport: string | null | undefined, format: string
     if (o.bestThirds && format !== 'groups_knockout') return refuse('Best third places are for groups → knockout.');
   }
   if (o.seeding != null && !SEEDING_MODES.includes(o.seeding as SeedingMode)) return refuse('Seeding is registration order, a random draw or manual seeds.');
+  if (o.restMinutes != null && !(typeof o.restMinutes === 'number' && Number.isInteger(o.restMinutes) && o.restMinutes >= 0 && o.restMinutes <= REST_MAX)) {
+    return refuse(`Rest between a team’s matches must be 0 to ${REST_MAX} minutes.`);
+  }
   const woBad = walkoverRefusal(sport, o.walkoverScore);
   if (woBad) return woBad;
   return pointsRefusal(sport, o.points);
@@ -326,6 +333,10 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('seeding' in s) {
     if (s.seeding) out.seeding = s.seeding;
     else delete out.seeding;
+  }
+  if ('restMinutes' in s) {
+    if (s.restMinutes) out.restMinutes = s.restMinutes;
+    else delete out.restMinutes;
   }
   if ('walkoverScore' in s) {
     if (s.walkoverScore != null) out.walkoverScore = s.walkoverScore;

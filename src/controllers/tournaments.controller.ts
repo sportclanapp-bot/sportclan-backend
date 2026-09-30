@@ -846,7 +846,7 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules')
+      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules, sport_metadata')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -987,6 +987,23 @@ export async function updateTournament(req: Request, res: Response) {
       const bad = tournamentRulesRefusal(slug, update.match_rules);
       if (bad) return res.status(400).json(bad);
       update.match_rules = storedStageRules(slug, update.match_rules);
+    }
+    // Stage 4 fault fix: sport_metadata was written raw, so an edit replaced the
+    // whole object and wiped the tournament chat's link (_chat_id). It's merged
+    // now, string values only like create's, and keys starting "_" belong to
+    // the server — an edit can neither set nor clear them. null or "" clears one.
+    if ('sport_metadata' in update) {
+      const incoming = update.sport_metadata;
+      if (incoming !== null && (typeof incoming !== 'object' || Array.isArray(incoming))) {
+        return res.status(400).json({ error: 'sport_metadata must be an object.' });
+      }
+      const merged: Record<string, unknown> = { ...(((tournament as { sport_metadata?: Record<string, unknown> }).sport_metadata) ?? {}) };
+      for (const [k, v] of Object.entries((incoming ?? {}) as Record<string, unknown>)) {
+        if (k.startsWith('_')) continue;
+        if (v === null || v === '' || v === '__custom__') delete merged[k];
+        else if (typeof v === 'string') merged[k] = v;
+      }
+      update.sport_metadata = merged;
     }
     // BUILD 4.2: tie-breaks are checked like create's and fixed once any result
     // stands (re-ordering a table people have played to is re-deciding it).

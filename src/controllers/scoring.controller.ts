@@ -306,6 +306,17 @@ export async function validateScoringEvent(
     }
   }
 
+  // BUILD 3.53: table tennis's expedite rule — table tennis only, and never
+  // once both players have 9 points in the game (ITTF 2.15.1).
+  if (event_type === 'note' && payload && payload.kind === 'expedite') {
+    const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    if (slug !== 'tabletennis') return refuse(400, { error: 'The expedite rule is for table tennis.', code: 'BAD_NOTE' });
+    const ss = (match.score_summary ?? {}) as { A?: { points?: number }; B?: { points?: number } };
+    if (Number(ss.A?.points ?? 0) >= 9 && Number(ss.B?.points ?? 0) >= 9) {
+      return refuse(409, { error: 'The expedite rule can’t come in once both players have 9 points.', code: 'EXPEDITE_TOO_LATE' });
+    }
+  }
+
   // BUILD 3.47: badminton doubles is two a side — play can't start with a side
   // of one (a typed-in side, with no players listed, is fine). Checked before
   // the first point only, like the ranked gate above.

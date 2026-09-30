@@ -69,6 +69,7 @@ import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
 import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey } from '../utils/tournamentSettings';
 import { drawOrder } from '../utils/drawOrder';
+import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSeparation';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -428,7 +429,7 @@ export async function getTournament(req: Request, res: Response) {
     const { data: entries } = await supabase
       .from('tournament_entries')
       // Phase 3 B08-F5: team_id too — the fixture editor keys its team chips on it.
-      .select('id, team_id, status, seed, group_label, entered_at, team:team_id (id, name, short_name, logo_url, sport_id)')
+      .select('id, team_id, status, seed, group_label, club, entered_at, team:team_id (id, name, short_name, logo_url, sport_id)')
       .eq('tournament_id', id);
     // SC-293: authoritative fixture count so the Overview's Quick Stats agrees
     // with the Bracket + Officials tabs. Was: the FE showed fixtures.length, but
@@ -786,7 +787,11 @@ export async function updateEntry(req: Request, res: Response) {
     // B02 (V022, D7): the chat follows the entries and organisers.
     syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
     const { id, entryId } = req.params;
-    const { status, seed, group_label } = req.body || {};
+    const { status, seed, group_label, club } = req.body || {};
+    // BUILD 4.13: the entry's club / state (for keeping clubs apart in the draw).
+    if (club !== undefined && club !== null && !(typeof club === 'string' && club.trim().length <= 60)) {
+      return res.status(400).json({ error: 'A club is up to 60 characters.' });
+    }
     if (status && !['pending', 'approved', 'rejected', 'withdrawn'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
@@ -852,6 +857,7 @@ export async function updateEntry(req: Request, res: Response) {
     const update: Record<string, any> = {};
     if (status !== undefined) update.status = status;
     if (seed !== undefined) update.seed = seed;
+    if (club !== undefined) update.club = typeof club === 'string' && club.trim() ? club.trim() : null;
     // Stored in capitals, as the draw reads it ("a" is group A).
     if (group_label !== undefined) update.group_label = typeof group_label === 'string' ? group_label.trim().toUpperCase() : group_label;
 
@@ -2525,7 +2531,7 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
 
   const { data: entries } = await supabase
     .from('tournament_entries')
-    .select('team_id, group_label, team:teams!team_id(id, name, short_name)')
+    .select('team_id, group_label, club, team:teams!team_id(id, name, short_name)')
     .eq('tournament_id', tournamentId)
     .not('group_label', 'is', null);
 
@@ -2584,7 +2590,12 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   // FORMATS (28 Sep): cross-pair, so group mates don't meet straight away.
   const groupOfTeam = new Map<string, string>();
   for (const label of labels) for (const id of groupTeams[label]) groupOfTeam.set(id, label);
-  const round1 = crossGroupFirstRound(seededRound1(seeds, ko1.length * 2), (id) => groupOfTeam.get(id));
+  const crossed = crossGroupFirstRound(seededRound1(seeds, ko1.length * 2), (id) => groupOfTeam.get(id));
+  // BUILD 4.13: and same-club qualifiers apart, without undoing the cross-pairing.
+  const clubOfTeam = new Map((entries ?? []).map((e: { team_id: string; club?: string | null }) => [e.team_id, e.club ?? null]));
+  const round1 = settingsOf(trow as { settings?: unknown }).separateClubs
+    ? separateClubsInRound1(crossed, (tid) => clubOfTeam.get(tid) ?? null, (x, y) => groupOfTeam.get(x) === groupOfTeam.get(y))
+    : crossed;
 
   for (let m = 0; m < ko1.length; m++) {
     const mu = round1[m] ?? { a: null, b: null };
@@ -2778,7 +2789,7 @@ export async function generateFixtures(req: Request, res: Response) {
     // sequence is total and repeatable.
     const { data: fetched } = await supabase
       .from('tournament_entries')
-      .select('id, team_id, seed, entered_at, group_label, team:teams!team_id(id, name, short_name)')
+      .select('id, team_id, seed, entered_at, group_label, club, team:teams!team_id(id, name, short_name)')
       .eq('tournament_id', id)
       .eq('status', 'approved')
       .order('seed', { ascending: true, nullsFirst: false })
@@ -2789,6 +2800,10 @@ export async function generateFixtures(req: Request, res: Response) {
     const seeding = settingsOf(tournament as { settings?: unknown }).seeding ?? null;
     // BUILD 4.12: the semi-final losers play for third place.
     const thirdPlace = !!settingsOf(tournament as { settings?: unknown }).thirdPlace;
+    // BUILD 4.13: keep same-club entries apart (their club label).
+    const separateClubs = !!settingsOf(tournament as { settings?: unknown }).separateClubs;
+    const clubOfTeam = new Map((fetched ?? []).map((e: { team_id: string; club?: string | null }) => [e.team_id, e.club ?? null]));
+    const clubOf = (tid: string) => clubOfTeam.get(tid) ?? null;
     const entries = drawOrder((fetched ?? []) as Array<{ id: string; team_id: string; seed?: number | null; entered_at?: string | null; group_label?: string | null; team?: unknown }>, seeding);
     const teams = (entries ?? []).map((e: any) => ({
       id: e.team_id,
@@ -2904,7 +2919,8 @@ export async function generateFixtures(req: Request, res: Response) {
       // field is a bye, the byes land on the TOP seeds, which is the standard
       // rule. It used to call buildRound1, which paired teams by raw array
       // index, so byes fell on whoever happened to sit at positions M..n.
-      const round1 = seededRound1(teams, nextPow2(teams.length));
+      const seeded = seededRound1(teams, nextPow2(teams.length));
+      const round1 = separateClubs ? separateClubsInRound1(seeded, clubOf) : seeded; // BUILD 4.13
       const shape = bracketShape(round1, thirdPlace);
       const sched = buildSchedule(shape, schedCfg);
       if (!sched.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' }); }
@@ -2996,7 +3012,11 @@ export async function generateFixtures(req: Request, res: Response) {
       const numGroups = plan.groups.length;
       const qualsPerGroup = gcfg.qualifiersPerGroup;
       const slotOf = new Map(teams.map((t) => [t.id, t]));
-      const groups: TeamSlot[][] = plan.groups.map((g) => g.ids.map((tid) => slotOf.get(tid)!));
+      // BUILD 4.13: spread same-club entries across the groups (a team the
+      // organiser put in a group stays there).
+      const placed = new Set(groupEntries.filter((e) => e.label).map((e) => e.id));
+      const groupIds = separateClubs ? separateClubsInGroups(plan.groups.map((g) => g.ids), clubOf, placed) : plan.groups.map((g) => g.ids);
+      const groups: TeamSlot[][] = groupIds.map((ids) => ids.map((tid) => slotOf.get(tid)!));
 
       let mno = 0;
       for (let g = 0; g < groups.length; g++) {

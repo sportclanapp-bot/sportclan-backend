@@ -327,8 +327,10 @@ export async function validateScoringEvent(
   // BUILD 3.66: time called at the buzzer — a timed tennis match only.
   if (event_type === 'note' && payload && payload.kind === 'buzzer') {
     const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
-    if (slug !== 'tennis' || !rulesOf(slug, match).timeLimitMinutes) {
-      return refuse(400, { error: 'Time is called only in a timed tennis match.', code: 'BAD_NOTE' });
+    // BUILD 3.76: and a timed carrom game.
+    const timedHere = slug === 'tennis' ? !!rulesOf(slug, match).timeLimitMinutes : slug === 'carrom' ? !!rulesOf(slug, match).gameMinutes : false;
+    if (!timedHere) {
+      return refuse(400, { error: 'Time is called only in a timed tennis match or carrom game.', code: 'BAD_NOTE' });
     }
   }
   // BUILD 3.53: table tennis's expedite rule — table tennis only, and never
@@ -1245,11 +1247,13 @@ export async function recomputeSummary(
     // scores with): boards → games to 25 → best of 1 or 3 games. A carrom match
     // scored before this (+1 piece events, no board events) keeps the old rollup
     // below, so its record reads as it always did.
+    const timed = !!rulesOf('carrom', match).gameMinutes; // BUILD 3.76: time called ends a timed game
     const c = carromReplay(
       events
-        .filter((e) => e.event_type === 'score' && (e.payload as any)?.kind === 'board')
+        .filter((e) => (e.event_type === 'score' && (e.payload as any)?.kind === 'board') || (timed && e.event_type === 'note' && (e.payload as any)?.kind === 'buzzer'))
         .map((e) => {
           const p: any = e.payload || {};
+          if (e.event_type === 'note') return { buzzer: true as const };
           return { winner: sideOf(p), piecesLeft: carromPieces(p.pieces_left), queen: p.queen === true };
         }),
       carromOptsOf(rulesOf('carrom', match)), // BUILD 2.3 / 3.72+: target, queen, …

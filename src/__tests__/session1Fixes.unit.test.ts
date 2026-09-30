@@ -138,7 +138,7 @@ describe('A5 · carrom on the server', () => {
     expect(sc).toContain('outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_MAX)'); // BUILD 3.72: a queen up to 5
   });
   test('board events are replayed through the shared core, by the match preset', () => {
-    expect(sc).toMatch(/slug === 'carrom' && events\.some[\s\S]{0,900}carromReplay\([\s\S]{0,400}carromOptsOf\(rulesOf\('carrom', match\)\)/); // BUILD 2.3 / 3.72: the match's rules
+    expect(sc).toMatch(/slug === 'carrom' && events\.some[\s\S]{0,900}carromReplay\([\s\S]{0,800}carromOptsOf\(rulesOf\('carrom', match\)\)/); // BUILD 2.3 / 3.72: the match's rules
   });
   test('carrom game pushes say "game"', () => {
     expect(scorePush({ slug: 'carrom', side: 'A', teamName: 'X', summary: { A: { sets: [27], points: 0 }, B: { sets: [12], points: 0 } } })!.body).toBe('X wins game 1 · 27–12');

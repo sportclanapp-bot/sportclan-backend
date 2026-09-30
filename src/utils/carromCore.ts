@@ -46,11 +46,13 @@ export interface CarromOpts {
    * side ahead takes the game; level, extra boards until one side leads.
    */
   boardCap?: number | null;
+  /** BUILD 3.76: a timed game's minutes — for the pad's TIME CALLED; the core only reads the buzzer. */
+  gameMinutes?: number | null;
 }
 type Opts = Required<CarromOpts>;
 function optsOf(o: number | CarromOpts, target?: number): Opts {
   const x: CarromOpts = typeof o === 'number' ? { gamesToWin: o, target } : o;
-  return { gamesToWin: x.gamesToWin, target: x.target ?? CARROM_GAME_TARGET, queenPoints: x.queenPoints ?? CARROM_QUEEN_POINTS, queenCutoff: x.queenCutoff ?? true, boardCap: x.boardCap ?? null };
+  return { gamesToWin: x.gamesToWin, target: x.target ?? CARROM_GAME_TARGET, queenPoints: x.queenPoints ?? CARROM_QUEEN_POINTS, queenCutoff: x.queenCutoff ?? true, boardCap: x.boardCap ?? null, gameMinutes: x.gameMinutes ?? null };
 }
 /** The score below which the queen counts: target − queen (22 in the official game, 24 at home). */
 export function carromQueenLimit(o: number | CarromOpts): number {
@@ -75,7 +77,12 @@ export interface CarromScore {
   games: Array<{ A: number; B: number }>;
   gamesWon: { A: number; B: number };
   winner: CarromSide | null;
+  /** BUILD 3.76: time has been called in the game in play (a timed game). */
+  timeUp?: boolean;
 }
+
+/** BUILD 3.76: a board, or time called in a timed game. */
+export type CarromItem = CarromBoardResult | { buzzer: true };
 
 export function emptyCarrom(): CarromScore {
   return { points: { A: 0, B: 0 }, boards: 0, games: [], gamesWon: { A: 0, B: 0 }, winner: null };
@@ -108,7 +115,8 @@ export function carromBoard(s: CarromScore, b: CarromBoardResult, options: numbe
   const points = { ...s.points, [w]: s.points[w] + gained };
   const boards = s.boards + 1;
   // BUILD 3.74: at the board cap (or on an extra board after it), the side ahead takes the game.
-  const capped = o.boardCap != null && boards >= o.boardCap && points.A !== points.B;
+  // BUILD 3.76: likewise once time is called in a timed game.
+  const capped = ((o.boardCap != null && boards >= o.boardCap) || s.timeUp === true) && points.A !== points.B;
   if (points[w] < target && !capped) return { ...s, points, boards };
   // Game over: the board's winner took it — or, at the cap, whoever leads.
   const gw: CarromSide = points[w] >= target ? w : points.A > points.B ? 'A' : 'B';
@@ -122,9 +130,22 @@ export function carromBoard(s: CarromScore, b: CarromBoardResult, options: numbe
   };
 }
 
-/** Replay a match from its boards. */
-export function carromReplay(boards: CarromBoardResult[], options: number | CarromOpts, target?: number): CarromScore {
+/**
+ * BUILD 3.76 · time called in the game in play: the side ahead on points takes
+ * it; level, the next board that puts a side ahead does (carromBoard).
+ */
+export function carromTimeUp(s: CarromScore, options: number | CarromOpts, targetArg?: number): CarromScore {
+  if (s.winner || s.timeUp) return s;
+  if (s.points.A === s.points.B) return { ...s, timeUp: true };
+  const o = optsOf(options, targetArg);
+  const gw: CarromSide = s.points.A > s.points.B ? 'A' : 'B';
+  const gamesWon = { ...s.gamesWon, [gw]: s.gamesWon[gw] + 1 };
+  return { points: { A: 0, B: 0 }, boards: 0, games: [...s.games, s.points], gamesWon, winner: gamesWon[gw] >= o.gamesToWin ? gw : null };
+}
+
+/** Replay a match from its boards (BUILD 3.76: and any time called). */
+export function carromReplay(items: CarromItem[], options: number | CarromOpts, target?: number): CarromScore {
   let s = emptyCarrom();
-  for (const b of boards) s = carromBoard(s, b, options, target);
+  for (const b of items) s = 'buzzer' in b ? carromTimeUp(s, options, target) : carromBoard(s, b, options, target);
   return s;
 }

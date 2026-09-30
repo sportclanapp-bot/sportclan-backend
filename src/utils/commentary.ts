@@ -85,6 +85,11 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   }
   if (goalSport && eventType === 'note' && p.kind === 'pen_corner') return `🏑 Penalty corner — ${team}`;
   if (goalSport && eventType === 'note' && p.kind === 'kickoff') return '⏱ Kick-off'; // BUILD 3.22
+  // BUILD 3.77: point carrom — the piece, who pocketed it, and what it was worth.
+  if (ctx.sport === 'carrom' && eventType === 'score' && p.kind === 'coin') {
+    const piece = p.coin === 'queen' ? '👑 Queen' : p.coin === 'white' ? '⚪ White' : '⚫ Black';
+    return `${piece} pocketed — ${team}${p.value != null ? ` (+${p.value})` : ''}`;
+  }
   // BUILD 3.58: a side-out rally names who won it — it scores only for the server.
   if (eventType === 'score' && p.kind === 'rally') return `Rally to ${team}`;
   // BUILD 3.53: table tennis's expedite rule comes in.

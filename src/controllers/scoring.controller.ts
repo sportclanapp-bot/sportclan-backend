@@ -16,7 +16,7 @@ import { isKnownEventType } from '../utils/scoringEvents';
 import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor } from '../utils/matchLength';
-import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX } from '../utils/carromCore';
+import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf } from '../utils/cricketRules';
 import { DOUBLES_PLAYERS, carromOptsOf, doublesLineupProblem, rulesOf, setConfigOf, standardRules, tennisOptsOf, winsToWin } from '../utils/matchRules';
 import { sideOutReplay } from '../utils/pickleballCore';
@@ -223,6 +223,15 @@ export async function validateScoringEvent(
       // BUILD 3.72: a queen can be worth up to 5 (the home game); the score is recomputed anyway.
       if (outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_MAX)) {
         return refuse(400, { error: 'value is out of range for a board' });
+      }
+    } else if (payload.kind === 'coin') {
+      // BUILD 3.77: point carrom — one piece, worth its colour; only in a point-carrom match.
+      const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+      const r = slug === 'carrom' ? rulesOf(slug, match) : null;
+      if (!r || r.carromMode !== 'points') return refuse(400, { error: 'A piece is scored only in point carrom.', code: 'BAD_COIN' });
+      if (payload.coin !== 'white' && payload.coin !== 'black' && payload.coin !== 'queen') return refuse(400, { error: 'A piece is white, black or the queen.', code: 'BAD_COIN' });
+      if (payload.value != null && Number(payload.value) !== pointCoinValue(payload.coin, r.queenValue ?? 50)) {
+        return refuse(400, { error: 'That piece isn’t worth that.', code: 'BAD_COIN' });
       }
     } else if (outOfRange(payload.value, 1, 3)) {
       return refuse(400, { error: 'value must be an integer between 1 and 3' });
@@ -1242,6 +1251,19 @@ export async function recomputeSummary(
     A.sets = tennisState.sets.map((x) => x.A); B.sets = tennisState.sets.map((x) => x.B); // games per set
     A.games = tennisState.games.A; B.games = tennisState.games.B;           // current set
     A.points = tennisState.points.A; B.points = tennisState.points.B;       // current game / tiebreak
+  } else if (slug === 'carrom' && rulesOf('carrom', match).carromMode === 'points') {
+    // BUILD 3.77: point carrom — every piece scores for whoever pocketed it.
+    const r = rulesOf('carrom', match);
+    const pc = pointCarromReplay(
+      events
+        .filter((e) => e.event_type === 'score' && (e.payload as any)?.kind === 'coin')
+        .map((e) => ({ side: sideOf(e.payload || {}), coin: (e.payload as any).coin }))
+        .filter((x) => x.coin === 'white' || x.coin === 'black' || x.coin === 'queen'),
+      { gamesToWin: winsToWin(r), queenValue: r.queenValue ?? 50 },
+    );
+    A.score = pc.gamesWon.A; B.score = pc.gamesWon.B;
+    A.sets = pc.games.map((g) => g.A); B.sets = pc.games.map((g) => g.B);
+    A.points = pc.points.A; B.points = pc.points.B;
   } else if (slug === 'carrom' && events.some((e) => e.event_type === 'score' && (e.payload as any)?.kind === 'board')) {
     // A5 · real carrom rules through the shared carromCore (the file the app
     // scores with): boards → games to 25 → best of 1 or 3 games. A carrom match

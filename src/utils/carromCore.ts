@@ -149,3 +149,59 @@ export function carromReplay(items: CarromItem[], options: number | CarromOpts, 
   for (const b of items) s = 'buzzer' in b ? carromTimeUp(s, options, target) : carromBoard(s, b, options, target);
   return s;
 }
+
+// ─── BUILD 3.77 · point carrom ──────────────────────────────────────────────
+//
+// The home game where every pocketed piece scores for whoever pockets it:
+// white 10, black 5, the queen 25 or 50. A board is over when all 19 are down
+// (9 white, 9 black, the queen) and the higher total takes the game; level,
+// the side that pocketed the queen takes it. Input is one event per piece.
+
+export const POINT_CARROM = { white: 10, black: 5, whites: 9, blacks: 9 } as const;
+export type PointCoin = 'white' | 'black' | 'queen';
+
+export interface PointCarromOpts {
+  gamesToWin: number;
+  /** 25 or 50. */
+  queenValue: number;
+}
+
+export interface PointCarromScore {
+  points: { A: number; B: number };
+  /** Pieces still on the board in the game in play. */
+  left: { white: number; black: number; queen: number };
+  /** Who pocketed the queen this game (the tie-break), if anyone. */
+  queenBy: CarromSide | null;
+  games: Array<{ A: number; B: number }>;
+  gamesWon: { A: number; B: number };
+  winner: CarromSide | null;
+}
+
+const freshBoard = () => ({ white: POINT_CARROM.whites, black: POINT_CARROM.blacks, queen: 1 });
+
+export function emptyPointCarrom(): PointCarromScore {
+  return { points: { A: 0, B: 0 }, left: freshBoard(), queenBy: null, games: [], gamesWon: { A: 0, B: 0 }, winner: null };
+}
+
+/** What a piece is worth. */
+export function pointCoinValue(coin: PointCoin, queenValue: number): number {
+  return coin === 'white' ? POINT_CARROM.white : coin === 'black' ? POINT_CARROM.black : queenValue;
+}
+
+/** One piece pocketed by `side`. A piece that's no longer on the board — or after the match — changes nothing. */
+export function pointCarromPocket(s: PointCarromScore, side: CarromSide, coin: PointCoin, o: PointCarromOpts): PointCarromScore {
+  if (s.winner || s.left[coin] <= 0) return s;
+  const points = { ...s.points, [side]: s.points[side] + pointCoinValue(coin, o.queenValue) };
+  const left = { ...s.left, [coin]: s.left[coin] - 1 };
+  const queenBy = coin === 'queen' ? side : s.queenBy;
+  if (left.white + left.black + left.queen > 0) return { ...s, points, left, queenBy };
+  const gw: CarromSide = points.A !== points.B ? (points.A > points.B ? 'A' : 'B') : queenBy ?? side;
+  const gamesWon = { ...s.gamesWon, [gw]: s.gamesWon[gw] + 1 };
+  return { points: { A: 0, B: 0 }, left: freshBoard(), queenBy: null, games: [...s.games, points], gamesWon, winner: gamesWon[gw] >= o.gamesToWin ? gw : null };
+}
+
+export function pointCarromReplay(pockets: ReadonlyArray<{ side: CarromSide; coin: PointCoin }>, o: PointCarromOpts): PointCarromScore {
+  let s = emptyPointCarrom();
+  for (const p of pockets) s = pointCarromPocket(s, p.side, p.coin, o);
+  return s;
+}

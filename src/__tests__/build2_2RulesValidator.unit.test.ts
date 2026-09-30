@@ -110,10 +110,11 @@ describe('BUILD 2.2 · create', () => {
     expect([r.statusCode, r.body.code, r.body.field]).toEqual([400, 'BAD_RULES', 'drawAllowed']);
     expect(inserted()).toBeNull();
   });
-  it('the older format path is validated too: a chess clock that isn’t offered → 400 (it used to be stored as sent)', async () => {
+  it('the older format path is validated too: a chess clock out of range → 400 (it used to be stored as sent)', async () => {
     asSport('chess');
     mockNext = onCreate;
-    const r = await call(createMatch, { body: body({ sport_id: 'cricket', format: 'Rapid 10+5' }) });
+    // BUILD 3.67: any clock 1–120 min + 0–60 s is fine now (10+5 is); 150 minutes isn't.
+    const r = await call(createMatch, { body: body({ sport_id: 'cricket', format: 'Classical · 150+0' }) });
     expect([r.statusCode, r.body.code, r.body.field]).toEqual([400, 'BAD_RULES', 'baseMinutes']);
     const ok = await call(createMatch, { body: body({ sport_id: 'cricket', format: 'Rapid · 15+10' }) });
     expect(ok.statusCode).toBeLessThan(300);

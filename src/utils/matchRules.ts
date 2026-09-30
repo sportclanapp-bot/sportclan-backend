@@ -224,13 +224,23 @@ export function setConfigOf(rules: MatchRules): { target: number; cap?: number; 
   };
 }
 
-/** "Bullet", "Blitz", "Rapid", "Classical" for a clock (the create form's names). */
-export function chessClockLabel(baseMinutes: number): string {
-  if (baseMinutes < 3) return 'Bullet';
-  if (baseMinutes < 10) return 'Blitz';
-  if (baseMinutes < 30) return 'Rapid';
+/**
+ * "Bullet", "Blitz", "Rapid", "Classical" for a clock. BUILD 3.67: worked out
+ * the FIDE way, from the time for 60 moves — base minutes + increment seconds
+ * (60 × s = s minutes) — with the local line at 10 (a 10+0 game is rapid here):
+ * under 3 bullet, under 10 blitz, under 60 rapid, else classical.
+ */
+export function chessClockLabel(baseMinutes: number, incrementSeconds = 0): string {
+  const t = baseMinutes + incrementSeconds;
+  if (t < 3) return 'Bullet';
+  if (t < 10) return 'Blitz';
+  if (t < 60) return 'Rapid';
   return 'Classical';
 }
+
+/** BUILD 3.67: a chess clock's limits. */
+export const CHESS_BASE_MINUTES: [number, number] = [1, 120];
+export const CHESS_INCREMENT_SECONDS: [number, number] = [0, 60];
 
 /**
  * The `format` / `overs` to store beside the rules, for display and for older
@@ -250,7 +260,7 @@ export function legacyFromRules(
   if (key === 'chess') {
     const b = rules.baseMinutes ?? 5;
     const i = rules.incrementSeconds ?? 0;
-    return { format: `${chessClockLabel(b)} · ${b}+${i}`, overs: null };
+    return { format: `${chessClockLabel(b, i)} · ${b}+${i}`, overs: null };
   }
   return { format: key || null, overs: null };
 }
@@ -481,8 +491,12 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (!isWhole(r.bestOf) || !(offered as number[]).includes(r.bestOf)) return refuse(`Match length must be best of ${listOf(offered)}.`, 'bestOf');
   }
   if (key === 'chess') {
-    if (!CHESS_CLOCKS.some(([b, i]) => r.baseMinutes === b && r.incrementSeconds === i)) {
-      return refuse(`The clock must be one of ${CHESS_CLOCKS.map(([b, i]) => `${b}+${i}`).join(', ')}.`, 'baseMinutes');
+    // BUILD 3.67: any clock — 1–120 minutes plus 0–60 seconds a move (the chips are presets).
+    if (!isWhole(r.baseMinutes) || r.baseMinutes < CHESS_BASE_MINUTES[0] || r.baseMinutes > CHESS_BASE_MINUTES[1]) {
+      return refuse(`The clock must be ${CHESS_BASE_MINUTES[0]} to ${CHESS_BASE_MINUTES[1]} minutes.`, 'baseMinutes');
+    }
+    if (!isWhole(r.incrementSeconds) || r.incrementSeconds < CHESS_INCREMENT_SECONDS[0] || r.incrementSeconds > CHESS_INCREMENT_SECONDS[1]) {
+      return refuse(`The increment must be ${CHESS_INCREMENT_SECONDS[0]} to ${CHESS_INCREMENT_SECONDS[1]} seconds a move.`, 'incrementSeconds');
     }
   }
   // Everything else is fixed at the sport's standard for now.

@@ -47,6 +47,7 @@ import { stepTimer } from '../utils/stepTimer';
 import { leaseRefusal } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
+import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
 import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, type UnfinishedEnd } from '../utils/cricketRules';
@@ -2753,7 +2754,23 @@ export async function completeMatch(req: Request, res: Response) {
     // BUILD 1.5: a drawn knockout chess game is decided by a tie-break game
     // (Armageddon or a playoff). It used to dead-end: a bracket needs a winner
     // and nothing let the scorer name one. The named winner is the tie-break's.
-    const chessTiebreak = req.body?.chess_tiebreak === true;
+    // BUILD 3.69: `chess_tiebreak` may say how — { method: 'armageddon', armageddon:
+    // 'white'|'black'|'draw' } or { method: 'organiser' }. `true` is 1.5's plain form.
+    const tbBody = req.body?.chess_tiebreak as unknown;
+    const chessTiebreak = tbBody === true || (!!tbBody && typeof tbBody === 'object');
+    const tbMethod = tbBody && typeof tbBody === 'object' ? (tbBody as { method?: unknown }).method : null;
+    const tbArmageddon = tbBody && typeof tbBody === 'object' ? (tbBody as { armageddon?: unknown }).armageddon : null;
+    if (chessTiebreak && tbMethod != null && tbMethod !== 'armageddon' && tbMethod !== 'organiser') {
+      return res.status(400).json({ error: 'A tie-break is an Armageddon game or the organiser’s call.', code: 'BAD_CHESS_TIEBREAK' });
+    }
+    if (tbMethod === 'armageddon') {
+      if (tbArmageddon !== 'white' && tbArmageddon !== 'black' && tbArmageddon !== 'draw') {
+        return res.status(400).json({ error: 'Say how the Armageddon game ended: White won, Black won or a draw.', code: 'BAD_CHESS_TIEBREAK' });
+      }
+      if (winnerSide && armageddonWinner(tbArmageddon) !== winnerSide) {
+        return res.status(400).json({ error: 'In Armageddon a draw sends Black through — White has to win it.', code: 'ARMAGEDDON_WINNER_MISMATCH' });
+      }
+    }
     if (chessTiebreak) {
       const cs = canonical as { A?: { score?: unknown }; B?: { score?: unknown }; chess?: { result?: unknown } } | null;
       const drawn = cs?.chess?.result === 'Draw' || Number(cs?.A?.score ?? 0) === Number(cs?.B?.score ?? 0);
@@ -3207,8 +3224,10 @@ export async function completeMatch(req: Request, res: Response) {
       }
       // BUILD 1.5: "Magnus won on tie-break" — the game itself was a draw.
       if (chessTiebreak && derivedSide) {
-        ss.chess_tiebreak = { winner_side: derivedSide };
-        ss.result = `${derivedSide === 'A' ? aName : bName} won on tie-break`;
+        // BUILD 3.69: how it was decided, and the line that says so.
+        const method = tbMethod === 'armageddon' || tbMethod === 'organiser' ? tbMethod : null;
+        ss.chess_tiebreak = { winner_side: derivedSide, ...(method ? { method } : {}), ...(method === 'armageddon' ? { armageddon: tbArmageddon } : {}) };
+        ss.result = chessTiebreakText(derivedSide === 'A' ? aName : bName, method, method === 'armageddon' ? (tbArmageddon as 'white' | 'black' | 'draw') : null);
         resultForNotice = ss.result;
       }
       // Decision 2026-09-26: an awarded result names the winner with no margin —

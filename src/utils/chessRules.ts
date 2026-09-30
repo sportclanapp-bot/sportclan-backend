@@ -44,3 +44,24 @@ export function isValidChessReason(result: ChessResult, reason: unknown): boolea
 export function flagFallen(remainingSeconds: number): boolean {
   return remainingSeconds <= 0;
 }
+
+/**
+ * BUILD 3.69 · a drawn knockout game decided by a tie-break (builds on 1.5).
+ *   armageddon  one game, White more time (e.g. 5 v 4 minutes); a DRAW sends
+ *               Black through — so White must win it.
+ *   organiser   the organiser names who goes through.
+ */
+export type ChessTiebreakMethod = 'armageddon' | 'organiser';
+export type ArmageddonResult = 'white' | 'black' | 'draw';
+
+/** Who goes through after Armageddon: White (side A) only on a White win. */
+export function armageddonWinner(result: ArmageddonResult): 'A' | 'B' {
+  return result === 'white' ? 'A' : 'B';
+}
+
+/** The result line: "Magnus won the Armageddon", "… goes through (organiser's call)". */
+export function chessTiebreakText(winnerName: string, method: ChessTiebreakMethod | null, result?: ArmageddonResult | null): string {
+  if (method === 'armageddon') return result === 'draw' ? `${winnerName} went through on the Armageddon draw` : `${winnerName} won the Armageddon`;
+  if (method === 'organiser') return `${winnerName} goes through (organiser's call)`;
+  return `${winnerName} won on tie-break`;
+}

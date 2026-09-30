@@ -465,6 +465,7 @@ export const RALLY_LIMITS: Record<string, { target: [number, number]; finalTarge
   volleyball: { target: [10, 30], finalTarget: [10, 25], capSpan: 10 },
   badminton: { target: [5, 30], capSpan: 15, unit: 'game' }, // BUILD 3.44
   tabletennis: { target: [5, 21], unit: 'game' }, // BUILD 3.50: 11 (ITTF) or the old 21
+  pickleball: { target: [5, 25], unit: 'game' }, // BUILD 3.55: 11, 15 or 21
 };
 
 /**
@@ -474,6 +475,8 @@ export const RALLY_LIMITS: Record<string, { target: [number, number]; finalTarge
 export const BADMINTON_PRESETS = [{ target: 15, cap: 21 }, { target: 21, cap: 30 }] as const;
 /** BUILD 3.50 · table tennis: 11 a game (ITTF), or the old 21 still played in offices. */
 export const TABLE_TENNIS_PRESETS = [11, 21] as const;
+/** BUILD 3.55 · pickleball: 11 (the base game), 15 (IPBL), 21. */
+export const PICKLEBALL_PRESETS = [11, 15, 21] as const;
 /** BUILD 3.45: what a badminton match with no stored rules plays (the pre-2026 game). */
 export const BADMINTON_LEGACY = { target: 21, cap: 30 } as const;
 /** The cap a badminton game gets when the form leaves it blank: the preset's, else none. */

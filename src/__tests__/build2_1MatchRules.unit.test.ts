@@ -131,7 +131,7 @@ describe('BUILD 2.1 · create', () => {
     expect(rulesAsLegacy('cricket', { v: 1, overs: 20, drawAllowed: false })).toMatchObject({ refusal: { field: 'drawAllowed' } });
     expect(rulesAsLegacy('cricket', { v: 1, overs: 20 })).toEqual({ format: 'T20', overs: 20 });
     expect(rulesAsLegacy('badminton', { v: 1, bestOf: 1 })).toEqual({ format: 'bo1', overs: null });
-    expect(rulesAsLegacy('pickleball', { v: 1, bestOf: 3, target: 15 })).toMatchObject({ refusal: { field: 'target' } });
+    expect(rulesAsLegacy('carrom', { v: 1, bestOf: 3, target: 29 })).toMatchObject({ refusal: { field: 'target' } });
   });
 });
 

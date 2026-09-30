@@ -245,15 +245,16 @@ export function setConfigOf(rules: MatchRules): { target: number; cap?: number; 
 }
 
 /**
- * "Bullet", "Blitz", "Rapid", "Classical" for a clock. BUILD 3.67: worked out
- * the FIDE way, from the time for 60 moves — base minutes + increment seconds
- * (60 × s = s minutes) — with the local line at 10 (a 10+0 game is rapid here):
- * under 3 bullet, under 10 blitz, under 60 rapid, else classical.
+ * "Bullet", "Blitz", "Rapid", "Classical" for a clock, the FIDE way: from the
+ * time for 60 moves — base minutes + increment seconds (60 × s = s minutes).
+ * Blitz is 10 minutes or less, rapid more than 10 and under 60, classical 60
+ * or more; bullet (under 3) is the usual online split of blitz. Decision
+ * 30 Sep 2026: 10+0 is blitz, as FIDE has it (BUILD 3.67 had it rapid).
  */
 export function chessClockLabel(baseMinutes: number, incrementSeconds = 0): string {
   const t = baseMinutes + incrementSeconds;
   if (t < 3) return 'Bullet';
-  if (t < 10) return 'Blitz';
+  if (t <= 10) return 'Blitz';
   if (t < 60) return 'Rapid';
   return 'Classical';
 }

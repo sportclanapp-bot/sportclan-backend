@@ -8,7 +8,9 @@ test('the time control comes from the match’s clock', () => {
   expect(timeControlOf({ rules: { v: 1, baseMinutes: 3, incrementSeconds: 2 } })).toBe('blitz');
   expect(timeControlOf({ rules: { v: 1, baseMinutes: 15, incrementSeconds: 10 } })).toBe('rapid');
   expect(timeControlOf({ rules: { v: 1, baseMinutes: 90, incrementSeconds: 30 } })).toBe('classical');
-  expect(timeControlOf({ format: 'Rapid · 10+0' })).toBe('rapid'); // an older match: its format
+  expect(timeControlOf({ format: 'Rapid · 10+0' })).toBe('blitz'); // an older match: its clock, 10+0 — blitz since 30 Sep (FIDE)
+  expect(timeControlOf({ rules: { v: 1, baseMinutes: 10, incrementSeconds: 0 } })).toBe('blitz');
+  expect(timeControlOf({ rules: { v: 1, baseMinutes: 10, incrementSeconds: 1 } })).toBe('rapid');
   expect(timeControlOf({})).toBe('blitz'); // the standard 5+0
 });
 

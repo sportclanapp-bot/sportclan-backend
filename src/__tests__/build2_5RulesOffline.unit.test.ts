@@ -92,7 +92,7 @@ describe('BUILD 2.5 · the handoff carries the rules', () => {
   });
   it('the offline pack carries each fixture’s rules and the tournament’s stage rules', () => {
     const src = fs.readFileSync(path.join(__dirname, '../controllers/tournamentHub.controller.ts'), 'utf8');
-    expect(src).toContain('next_match_id, next_slot, overs, format, rules, umpire_id, updated_at');
+    expect(src).toContain('next_match_id, next_slot, third_place, overs, format, rules, umpire_id, updated_at'); // BUILD 4.12 adds third_place
     expect(src).toContain('created_by, updated_at, match_rules');
   });
 });

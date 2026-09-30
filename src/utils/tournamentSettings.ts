@@ -235,6 +235,8 @@ export type TournamentSettings = {
   restMinutes?: number;
   /** 4.11 · how a captain's entry lands: 'approval' (the organiser approves it — as before) or 'open' (in at once, up to max teams). */
   entry?: EntryMode;
+  /** 4.12 · a knockout's semi-final losers play for third place. */
+  thirdPlace?: boolean;
 };
 
 export type EntryMode = 'approval' | 'open';
@@ -280,7 +282,7 @@ export const SEEDING_MODES: readonly SeedingMode[] = ['registration', 'random', 
  * Settings the draw is made from. They're fixed once it's made (the fixtures
  * already reflect them); the points and tie-breaks are fixed once a result is in.
  */
-export const DRAW_KEYS = ['bestThirds', 'seeding', 'restMinutes'] as const;
+export const DRAW_KEYS = ['bestThirds', 'seeding', 'restMinutes', 'thirdPlace'] as const;
 
 /** Which draw setting an edit changes, if any (to refuse it once the draw is made). */
 export function changedDrawKey(current: TournamentSettings, incoming: Record<string, unknown>, keys: readonly string[] = DRAW_KEYS): string | null {
@@ -299,7 +301,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -318,6 +320,10 @@ export function settingsRefusal(sport: string | null | undefined, format: string
     return refuse(`Rest between a team’s matches must be 0 to ${REST_MAX} minutes.`);
   }
   if (o.entry != null && o.entry !== 'approval' && o.entry !== 'open') return refuse('Entry is open or by approval.');
+  if (o.thirdPlace != null) {
+    if (typeof o.thirdPlace !== 'boolean') return refuse('A third-place match is on or off.');
+    if (o.thirdPlace && format !== 'knockout' && format !== 'groups_knockout') return refuse('A third-place match is for a knockout.');
+  }
   const woBad = walkoverRefusal(sport, o.walkoverScore);
   if (woBad) return woBad;
   return pointsRefusal(sport, o.points);
@@ -338,6 +344,10 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('seeding' in s) {
     if (s.seeding) out.seeding = s.seeding;
     else delete out.seeding;
+  }
+  if ('thirdPlace' in s) {
+    if (s.thirdPlace) out.thirdPlace = true;
+    else delete out.thirdPlace;
   }
   if ('entry' in s) {
     if (s.entry === 'open') out.entry = 'open';

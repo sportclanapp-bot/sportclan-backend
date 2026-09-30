@@ -59,7 +59,7 @@ export async function getOfflinePack(req: Request, res: Response) {
         .select('id, team_id, status, group_label, team:teams(id, name, short_name, logo_url)')
         .eq('tournament_id', id),
       supabase.from('matches')
-        .select('id, team_a_id, team_b_id, team_a_name, team_b_name, status, winner_team_id, score_summary, round, match_no, group_label, scheduled_at, venue, ground_label, voided_at, next_match_id, next_slot, overs, format, rules, umpire_id, updated_at')
+        .select('id, team_a_id, team_b_id, team_a_name, team_b_name, status, winner_team_id, score_summary, round, match_no, group_label, scheduled_at, venue, ground_label, voided_at, next_match_id, next_slot, third_place, overs, format, rules, umpire_id, updated_at')
         .eq('tournament_id', id)
         .order('round', { ascending: true })
         .order('match_no', { ascending: true }),

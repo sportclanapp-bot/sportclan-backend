@@ -217,6 +217,9 @@ export async function createTournament(req: Request, res: Response) {
     const createSportSlug = normSportSlug((await getSport(String(sport_id)))?.slug);
     const mrBad = tournamentRulesRefusal(createSportSlug, match_rules);
     if (mrBad) return res.status(400).json(mrBad);
+    // BUILD 4.11: open entry is settings.entry. Apps before it send `is_open:
+    // true` on every create with no choice behind it, so that field stays
+    // ignored — honouring it would turn every older app's tournament open.
     // BUILD Stage 4: the tournament-wide settings, checked by the shared validator.
     const setBad = settingsRefusal(createSportSlug, format, settings);
     if (setBad) return res.status(400).json(setBad);
@@ -519,7 +522,7 @@ type EntryTournament = {
   created_by?: string | null;
 };
 type EntryRefusal = { status: number; body: { error: string; code: string } };
-const ENTRY_TOURNAMENT_COLS = 'id, name, status, sport_id, max_teams, registration_deadline, fixtures_generated, created_by';
+const ENTRY_TOURNAMENT_COLS = 'id, name, status, sport_id, max_teams, registration_deadline, fixtures_generated, created_by, settings';
 
 /**
  * Phase 3 · B08-F2/F4/F8/F9: the rules EVERY way into a tournament passes — a
@@ -686,6 +689,11 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string):
   const refusal = await entryRefusal(tournament as EntryTournament, teamId, { capCounts: ['pending', 'approved'], deadline: true, overlap: true });
   if (refusal) return refusal;
 
+  // BUILD 4.11: an open tournament takes a captain's entry straight in (up to
+  // max teams); otherwise it waits for the organiser, as before.
+  const open = settingsOf(tournament as { settings?: unknown }).entry === 'open';
+  const landing = open ? 'approved' : 'pending';
+
   // SC-83: a team may re-enter after a REJECTED/WITHDRAWN entry. Reopen the
   // existing row to `pending` with a single filtered UPDATE (atomic per
   // statement). A row that is already pending/approved is a clean 400 —
@@ -701,7 +709,9 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string):
         userId: organiserId,
         type: 'entry_requested',
         title: 'New tournament entry',
-        body: `${team?.name ?? 'A team'} requested to enter ${tournament.name ?? 'your tournament'}.`,
+        body: open
+          ? `${team?.name ?? 'A team'} entered ${tournament.name ?? 'your tournament'}.`
+          : `${team?.name ?? 'A team'} requested to enter ${tournament.name ?? 'your tournament'}.`,
         data: { tournamentId, teamId, entryId: entryRowId },
       });
     } catch { /* best-effort */ }
@@ -710,7 +720,7 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string):
   const nowIso = new Date().toISOString();
   const { data: reopened } = await supabase
     .from('tournament_entries')
-    .update({ status: 'pending', entered_at: nowIso })
+    .update({ status: landing, entered_at: nowIso })
     .eq('tournament_id', tournamentId)
     .eq('team_id', teamId)
     .in('status', ['rejected', 'withdrawn'])
@@ -718,6 +728,7 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string):
     .maybeSingle();
   if (reopened) {
     await notifyEntryRequested(reopened.id);
+    if (open) void awardTournamentBadges(teamId as string);
     return { status: 200, body: { entry: reopened } };
   }
 
@@ -735,7 +746,7 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string):
 
   const { data, error } = await supabase
     .from('tournament_entries')
-    .insert({ tournament_id: tournamentId, team_id: teamId, status: 'pending' })
+    .insert({ tournament_id: tournamentId, team_id: teamId, status: landing })
     .select('*')
     .single();
   if (error) {
@@ -749,6 +760,7 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string):
     return { status: 500, body: { error: sanitizeError(error) } };
   }
   await notifyEntryRequested(data.id);
+  if (open) void awardTournamentBadges(teamId as string); // as an approval does
   return { status: 200, body: { entry: data } };
 }
 

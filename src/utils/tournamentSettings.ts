@@ -233,7 +233,11 @@ export type TournamentSettings = {
   walkoverScore?: number | 'straight';
   /** 4.9 · minimum minutes between a team's matches when fixtures are timed (0–240). */
   restMinutes?: number;
+  /** 4.11 · how a captain's entry lands: 'approval' (the organiser approves it — as before) or 'open' (in at once, up to max teams). */
+  entry?: EntryMode;
 };
+
+export type EntryMode = 'approval' | 'open';
 
 export const REST_MAX = 240;
 
@@ -295,7 +299,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -313,6 +317,7 @@ export function settingsRefusal(sport: string | null | undefined, format: string
   if (o.restMinutes != null && !(typeof o.restMinutes === 'number' && Number.isInteger(o.restMinutes) && o.restMinutes >= 0 && o.restMinutes <= REST_MAX)) {
     return refuse(`Rest between a team’s matches must be 0 to ${REST_MAX} minutes.`);
   }
+  if (o.entry != null && o.entry !== 'approval' && o.entry !== 'open') return refuse('Entry is open or by approval.');
   const woBad = walkoverRefusal(sport, o.walkoverScore);
   if (woBad) return woBad;
   return pointsRefusal(sport, o.points);
@@ -333,6 +338,10 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('seeding' in s) {
     if (s.seeding) out.seeding = s.seeding;
     else delete out.seeding;
+  }
+  if ('entry' in s) {
+    if (s.entry === 'open') out.entry = 'open';
+    else delete out.entry;
   }
   if ('restMinutes' in s) {
     if (s.restMinutes) out.restMinutes = s.restMinutes;

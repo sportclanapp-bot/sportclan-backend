@@ -64,11 +64,18 @@ export interface TennisOpts {
   tiebreakTo?: number;
   /** BUILD 3.62: the final set is a match tiebreak to 10 (win by 2), recorded as a 1–0 set. */
   matchTiebreak?: boolean;
+  /**
+   * BUILD 3.63: games — 'ad' (standard: deuce and advantage), 'noad' (at
+   * 40-all the next point wins), 'semiad' (one advantage; at the second deuce
+   * the next point wins).
+   */
+  scoring?: TennisGameScoring;
 }
+export type TennisGameScoring = 'ad' | 'noad' | 'semiad';
 type Opts = Required<TennisOpts>;
 function optsOf(o: number | TennisOpts | undefined): Opts {
   const x: TennisOpts = typeof o === 'number' ? { setsToWin: o } : o ?? { setsToWin: TENNIS_SETS_TO_WIN };
-  return { setsToWin: x.setsToWin, gamesPerSet: x.gamesPerSet ?? GAMES_PER_SET, tiebreak: x.tiebreak ?? true, tiebreakTo: x.tiebreakTo ?? TIEBREAK_TO, matchTiebreak: x.matchTiebreak ?? false };
+  return { setsToWin: x.setsToWin, gamesPerSet: x.gamesPerSet ?? GAMES_PER_SET, tiebreak: x.tiebreak ?? true, tiebreakTo: x.tiebreakTo ?? TIEBREAK_TO, matchTiebreak: x.matchTiebreak ?? false, scoring: x.scoring ?? 'ad' };
 }
 
 const other = (s: TennisSide): TennisSide => (s === 'A' ? 'B' : 'A');
@@ -108,7 +115,7 @@ const MATCH_TIEBREAK_TO = 10;
 /** One point to `side`. Pure: returns a new score. */
 export function tennisPoint(s: TennisScore, side: TennisSide, options: number | TennisOpts = TENNIS_SETS_TO_WIN): TennisScore {
   if (s.winner) return s;
-  const { setsToWin, gamesPerSet, tiebreak: tiebreaks, tiebreakTo, matchTiebreak } = optsOf(options);
+  const { setsToWin, gamesPerSet, tiebreak: tiebreaks, tiebreakTo, matchTiebreak, scoring } = optsOf(options);
   const o = other(side);
   const points = { ...s.points, [side]: s.points[side] + 1 };
 
@@ -122,7 +129,7 @@ export function tennisPoint(s: TennisScore, side: TennisSide, options: number | 
     return { ...s, points };
   }
 
-  if (points[side] >= 4 && points[side] - points[o] >= 2) {
+  if (gameWon(points[side], points[o], scoring)) {
     const games = { ...s.games, [side]: s.games[side] + 1 };
     if (games[side] >= gamesPerSet && games[side] - games[o] >= 2) {
       return winSet({ ...s, games }, side, setsToWin, undefined, matchTiebreak);
@@ -131,6 +138,14 @@ export function tennisPoint(s: TennisScore, side: TennisSide, options: number | 
     return { ...s, points: { A: 0, B: 0 }, games, tiebreak };
   }
   return { ...s, points };
+}
+
+/** BUILD 3.63: has a side with `a` points (the other `b`) won the game? */
+function gameWon(a: number, b: number, scoring: TennisGameScoring): boolean {
+  if (a >= 4 && a - b >= 2) return true;
+  if (scoring === 'noad') return a >= 4 && a > b; // 4-3: the deciding point at 40-all
+  if (scoring === 'semiad') return a >= 5 && a + b >= 9; // 5-4: the deciding point at the second deuce
+  return false;
 }
 
 /** Replay a sequence of point winners from the start. */
@@ -148,10 +163,12 @@ export function tennisGamesPlayed(s: TennisScore): number {
 const CALL = ['0', '15', '30', '40'];
 
 /** How the current game reads: 15-30, deuce, advantage — or tiebreak numbers. */
-export function tennisPointsDisplay(s: TennisScore): { a: string; b: string; status?: string } {
+export function tennisPointsDisplay(s: TennisScore, scoring: TennisGameScoring = 'ad'): { a: string; b: string; status?: string } {
   const { A: a, B: b } = s.points;
   if (s.tiebreak) return { a: String(a), b: String(b), status: s.matchTiebreak ? 'Match tiebreak' : 'Tiebreak' };
   if (a >= 3 && b >= 3) {
+    // BUILD 3.63: the point that decides a no-ad game (or a semi-ad one's second deuce).
+    if (a === b && (scoring === 'noad' || (scoring === 'semiad' && a >= 4))) return { a: '40', b: '40', status: 'Deciding point' };
     if (a === b) return { a: '40', b: '40', status: 'Deuce' };
     if (a === b + 1) return { a: 'Ad', b: '40', status: 'Advantage A' };
     if (b === a + 1) return { a: '40', b: 'Ad', status: 'Advantage B' };

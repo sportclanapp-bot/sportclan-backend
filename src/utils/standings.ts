@@ -8,7 +8,8 @@
 // ever strands. Head-to-head is a mini-table computed among ONLY the currently
 // tied teams, recomputed as the tie shrinks (standard cascade).
 //
-// Points model: win = 3, draw = 1, loss = 0. A *completed* match with no
+// Points model: win = 3, draw = 1, loss = 0 unless the tournament has a points
+// template (BUILD 4.1, pointsFor). A *completed* match with no
 // winner_team_id is a draw. Per-team scores come from score_summary
 // (team_a_score / team_b_score, or A.score / B.score) — populated by the live
 // scorer; absent for organiser fixture-editor results, which then contribute 0
@@ -34,6 +35,8 @@ export type TeamStat = {
   scored: number;
   conceded: number;
   diff: number;
+  /** BUILD 4.1 · no-results counted (only when the template scores them). */
+  noResult: number;
   // SC-376 · net run rate inputs. Accumulated across the whole tournament and
   // divided ONCE at the end — NRR is a rate over aggregate runs and aggregate
   // overs, never an average of per-match rates.
@@ -60,12 +63,31 @@ export function parseScoreNum(x: any): number {
   return m[0].startsWith('-') ? whole - 0.5 : whole + 0.5;
 }
 
-/** Points for a result. BUILD 1.6: chess is 1 / ½ / 0; every other sport 3 / 1 / 0 until the per-tournament template (BUILD 4.1). */
-export type PointsModel = { win: number; draw: number; loss: number };
+/**
+ * Points for a result. BUILD 1.6: chess is 1 / ½ / 0; every other sport 3 / 1 / 0.
+ * BUILD 4.1: a tournament's points template (settings.points) can also score a
+ * no-result (null = not counted, as before), a walkover (null = as a win / loss)
+ * and, for volleyball, a win by its set score (`sets`: a straight win, or one
+ * that went the distance — the loser one set short).
+ */
+export type PointsModel = {
+  win: number; draw: number; loss: number;
+  noResult?: number | null;
+  walkoverWin?: number | null;
+  walkoverLoss?: number | null;
+  sets?: { straight: [number, number]; decider: [number, number] } | null;
+};
 export const DEFAULT_POINTS: PointsModel = { win: 3, draw: 1, loss: 0 };
 export const CHESS_POINTS: PointsModel = { win: 1, draw: 0.5, loss: 0 };
 export function pointsModelFor(sportSlug?: string | null): PointsModel {
   return String(sportSlug ?? '').trim().toLowerCase() === 'chess' ? CHESS_POINTS : DEFAULT_POINTS;
+}
+
+/** BUILD 4.1 · a tournament's points: its template when it has one, else the sport's default above. */
+export function pointsFor(sportSlug: string | null | undefined, settings?: any): PointsModel {
+  const p = settings && typeof settings === 'object' ? settings.points : null;
+  if (p && typeof p === 'object' && typeof p.win === 'number' && typeof p.draw === 'number' && typeof p.loss === 'number') return p as PointsModel;
+  return pointsModelFor(sportSlug);
 }
 
 function scoresOf(m: GMatch): { a: number; b: number } {
@@ -141,6 +163,29 @@ export function netRunRate(s: Pick<TeamStat, 'runsScored' | 'oversFaced' | 'runs
   return Number((s.runsScored / s.oversFaced - s.runsConceded / s.oversBowled).toFixed(3));
 }
 
+/** A walkover: marked on its summary (SC-254), or an abandoned match that still has a winner. */
+function isWalkover(m: GMatch): boolean {
+  return m.score_summary?.walkover === true || (m.status === 'abandoned' && !!m.winner_team_id);
+}
+
+/**
+ * BUILD 4.1 · [winner's, loser's] points for a decided match. A walkover takes
+ * the template's walkover values when it has them; volleyball's set-score
+ * template scores a win that went the distance (the loser one set short of the
+ * winner) apart from a straight one.
+ */
+function resultPoints(m: GMatch, pts: PointsModel, winnerScore: number, loserScore: number): [number, number] {
+  if (isWalkover(m)) {
+    const straight = pts.sets?.straight;
+    return [pts.walkoverWin ?? straight?.[0] ?? pts.win, pts.walkoverLoss ?? straight?.[1] ?? pts.loss];
+  }
+  if (pts.sets) {
+    const decider = winnerScore > 1 && loserScore === winnerScore - 1;
+    return decider ? pts.sets.decider : pts.sets.straight;
+  }
+  return [pts.win, pts.loss];
+}
+
 /**
  * Per-team stats over `matches`. When `scope` is given, only matches between two
  * teams both in `scope` are counted (used to build the head-to-head mini-table).
@@ -151,7 +196,7 @@ export function computeStats(
   const table = new Map<string, TeamStat>();
   for (const id of teamIds) {
     table.set(id, {
-      id, played: 0, won: 0, drawn: 0, lost: 0, points: 0, scored: 0, conceded: 0, diff: 0,
+      id, played: 0, won: 0, drawn: 0, lost: 0, points: 0, scored: 0, conceded: 0, diff: 0, noResult: 0,
       runsScored: 0, oversFaced: 0, runsConceded: 0, oversBowled: 0, nrr: null,
     });
   }
@@ -168,15 +213,27 @@ export function computeStats(
     // give points for one). It used to count as a 1-1 draw here while the
     // server's table left it out, so the crowned champion and the table could
     // disagree. An abandoned match WITH a winner is a walkover: a win.
-    if (m.status === 'abandoned' && !m.winner_team_id) continue;
+    // BUILD 4.1: a template that scores a no-result counts it as played, with
+    // those points each — and nothing else (no scores, no run rate).
+    if (m.status === 'abandoned' && !m.winner_team_id) {
+      if (pts.noResult == null) continue;
+      const ra = table.get(a)!;
+      const rb = table.get(b)!;
+      ra.played++; rb.played++; ra.noResult++; rb.noResult++;
+      ra.points += pts.noResult; rb.points += pts.noResult;
+      continue;
+    }
     const ra = table.get(a)!;
     const rb = table.get(b)!;
     const { a: sa, b: sb } = scoresOf(m);
     ra.played++; rb.played++;
     ra.scored += sa; ra.conceded += sb;
     rb.scored += sb; rb.conceded += sa;
-    if (m.winner_team_id === a) { ra.won++; ra.points += pts.win; rb.lost++; rb.points += pts.loss; }
-    else if (m.winner_team_id === b) { rb.won++; rb.points += pts.win; ra.lost++; ra.points += pts.loss; }
+    if (m.winner_team_id === a || m.winner_team_id === b) {
+      const [w, l] = m.winner_team_id === a ? [ra, rb] : [rb, ra];
+      const [wp, lp] = resultPoints(m, pts, m.winner_team_id === a ? sa : sb, m.winner_team_id === a ? sb : sa);
+      w.won++; w.points += wp; l.lost++; l.points += lp;
+    }
     else { ra.drawn++; rb.drawn++; ra.points += pts.draw; rb.points += pts.draw; }
 
     // SC-376: NRR inputs. Only counted when BOTH sides' overs are known —

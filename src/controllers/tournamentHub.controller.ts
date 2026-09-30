@@ -49,7 +49,7 @@ export async function getOfflinePack(req: Request, res: Response) {
 
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, name, format, status, sport_id, tiebreaker_rules, fixtures_generated, champion_team_id, start_date, end_date, venue, created_by, updated_at, match_rules')
+      .select('id, name, format, status, sport_id, tiebreaker_rules, fixtures_generated, champion_team_id, start_date, end_date, venue, created_by, updated_at, match_rules, settings, num_groups, qualifiers_per_group')
       .eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
 

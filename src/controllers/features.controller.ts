@@ -4,7 +4,7 @@ import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { activeSportIds } from '../utils/sports';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers, matchAudienceIds } from '../utils/notify';
-import { rankTeams, computeStats, pointsModelFor } from '../utils/standings';
+import { rankTeams, computeStats, pointsFor } from '../utils/standings';
 import { istDay, istDayStartIso } from '../utils/appTime';
 import { formatTimeIst } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
@@ -24,7 +24,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, sport_id, format, tiebreaker_rules, qualifiers_per_group')
+      .select('id, sport_id, format, tiebreaker_rules, qualifiers_per_group, settings')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -66,7 +66,8 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const { data: sport } = await supabase.from('sports').select('slug').eq('id', tournament.sport_id).maybeSingle();
     const isCricket = sport?.slug === 'cricket';
     // BUILD 1.6: chess scores 1 / ½ / 0, not football's 3 / 1 / 0.
-    const pts = pointsModelFor(sport?.slug);
+    // BUILD 4.1: the tournament's points template when it has one.
+    const pts = pointsFor(sport?.slug, (tournament as any).settings);
 
     // SC-376: the table is built by the SHARED computeStats — the same function
     // rankTeams uses. It used to be a second, hand-rolled tally living only in
@@ -79,7 +80,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const table = new Map<string, {
       teamId: string; team: string; teamShort: string | null; groupLabel: string | null; withdrawn: boolean;
       played: number; won: number; lost: number; drawn: number; points: number;
-      scored: number; conceded: number; diff: number;
+      scored: number; conceded: number; diff: number; noResult: number;
       nrr: number | null; runsScored: number; oversFaced: number; runsConceded: number; oversBowled: number;
     }>();
     for (const e of entries ?? []) {
@@ -94,6 +95,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
         withdrawn: (e as any).status === 'withdrawn',
         played: s.played, won: s.won, lost: s.lost, drawn: s.drawn, points: s.points,
         scored: s.scored, conceded: s.conceded, diff: s.diff,
+        noResult: s.noResult, // BUILD 4.1
         // NRR is a cricket column; other sports keep the null the FE renders as '—'.
         nrr: isCricket ? s.nrr : null,
         runsScored: s.runsScored, oversFaced: s.oversFaced,

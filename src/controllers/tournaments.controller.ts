@@ -51,7 +51,7 @@ import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
-import { rankTeams, computeStats, pointsModelFor, type PointsModel } from '../utils/standings';
+import { rankTeams, computeStats, pointsFor, type PointsModel } from '../utils/standings';
 import { crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { withWalkoverScore } from '../utils/walkoverScore';
@@ -67,6 +67,7 @@ import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
+import { settingsRefusal, storedSettings, settingsOf } from '../utils/tournamentSettings';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -150,6 +151,7 @@ export async function createTournament(req: Request, res: Response) {
       num_groups,
       group_size,
       qualifiers_per_group,
+      settings,
     } = req.body || {};
     if (!sport_id || !name || !format) {
       return res.status(400).json({ error: 'sport_id, name, format are required' });
@@ -175,6 +177,9 @@ export async function createTournament(req: Request, res: Response) {
     const createSportSlug = normSportSlug((await getSport(String(sport_id)))?.slug);
     const mrBad = tournamentRulesRefusal(createSportSlug, match_rules);
     if (mrBad) return res.status(400).json(mrBad);
+    // BUILD Stage 4: the tournament-wide settings, checked by the shared validator.
+    const setBad = settingsRefusal(createSportSlug, format, settings);
+    if (setBad) return res.status(400).json(setBad);
     // Bound max_teams (SC-39) — 0/1/absurd values previously created degenerate
     // tournaments.
     const maxTeamsNum = Number(max_teams);
@@ -290,6 +295,7 @@ export async function createTournament(req: Request, res: Response) {
         ground_names: Array.isArray(ground_names) && ground_names.length > 0 ? ground_names : null,
         home_away: homeAwayFor(format), // BUILD 1.11
         match_rules: storedStageRules(createSportSlug, match_rules), // BUILD 2.4
+        settings: settings ? storedSettings(settings) : null, // BUILD Stage 4
         ...groupsConfigFields,
       })
       .select('*')
@@ -380,6 +386,8 @@ export async function getTournament(req: Request, res: Response) {
       .select('id', { count: 'exact', head: true })
       .eq('tournament_id', id);
     (tournament as { fixtures_count?: number }).fixtures_count = fixturesCount ?? 0;
+    // BUILD 4.1: whether any result is in — the points and tie-breaks are fixed from then on.
+    (tournament as { has_results?: boolean }).has_results = (fixturesCount ?? 0) > 0 ? await tournamentHasResult(String(tournament.id)) : false;
     // B02 (N2): whether THIS viewer may open the tournament chat, so the app can
     // hide a button that would only answer 403. Signed-out viewers can't.
     const can_open_chat = req.userId ? await canOpenTournamentChat(String(tournament.id), req.userId) : false;
@@ -834,7 +842,7 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id')
+      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -952,6 +960,7 @@ export async function updateTournament(req: Request, res: Response) {
       'logo_url',
       'home_away',
       'match_rules', // BUILD 2.4
+      'settings', // BUILD Stage 4
       'daily_start_time',
       'daily_end_time',
       'match_duration_minutes',
@@ -974,6 +983,22 @@ export async function updateTournament(req: Request, res: Response) {
       const bad = tournamentRulesRefusal(slug, update.match_rules);
       if (bad) return res.status(400).json(bad);
       update.match_rules = storedStageRules(slug, update.match_rules);
+    }
+    // BUILD Stage 4: settings are checked like create's and merged over the
+    // stored ones (an edit sends only what changes). The points template is
+    // fixed once any result stands — a table can't be re-scored under people.
+    if ('settings' in update) {
+      const slug = normSportSlug((await getSport(String((tournament as { sport_id?: string }).sport_id)))?.slug);
+      const fmt = 'format' in update ? update.format : (tournament as { format?: string }).format;
+      const bad = settingsRefusal(slug, fmt, update.settings);
+      if (bad) return res.status(400).json(bad);
+      const current = settingsOf(tournament as { settings?: unknown });
+      const incoming = (update.settings ?? {}) as Record<string, unknown>;
+      if ('points' in incoming && JSON.stringify(incoming.points ?? null) !== JSON.stringify(current.points ?? null)
+          && (await tournamentHasResult(id!))) {
+        return res.status(409).json({ error: 'Results are already in, so the points can’t change.', code: 'POINTS_LOCKED' });
+      }
+      update.settings = storedSettings(incoming, current);
     }
     // BUILD 1.11: home_away follows the format (a new one when it changes).
     {
@@ -1942,6 +1967,15 @@ async function resolveMatchWinner(matchId: string, winnerTeamId: string): Promis
 // played — no match still scheduled or live. Used by both completion paths
 // (auto-complete on final result + manual updateTournament status change) so a
 // champion can never be crowned with an unplayed match (phantom champion).
+/** BUILD 4.1 · whether any fixture has a result (completed, abandoned or given a winner), voided ones aside. */
+async function tournamentHasResult(tournamentId: string): Promise<boolean> {
+  const { count } = await supabase
+    .from('matches').select('id', { count: 'exact', head: true })
+    .eq('tournament_id', tournamentId).is('voided_at', null)
+    .or('status.in.(completed,abandoned),winner_team_id.not.is.null');
+  return (count ?? 0) > 0;
+}
+
 async function hasUnplayedFixtures(tournamentId: string): Promise<boolean> {
   const { count } = await supabase
     .from('matches')
@@ -1966,9 +2000,9 @@ async function hasUnplayedFixtures(tournamentId: string): Promise<boolean> {
 // crowns the leader (the old crown branch's `if (!winnerId) return` stranded it).
 // Idempotent via the .eq('status','live') CAS + read-back (SC-253 pattern) →
 // notify exactly once.
-/** BUILD 1.6: the points a result earns in this tournament's sport (chess 1 / ½ / 0). */
-async function tournamentPoints(sportId: unknown): Promise<PointsModel> {
-  return pointsModelFor(normSportSlug((await getSport(sportId as string))?.slug));
+/** BUILD 1.6: the points a result earns in this tournament's sport (chess 1 / ½ / 0); BUILD 4.1: its points template when it has one. */
+async function tournamentPoints(t: { sport_id?: unknown; settings?: unknown } | null | undefined): Promise<PointsModel> {
+  return pointsFor(normSportSlug((await getSport(t?.sport_id as string))?.slug), t?.settings);
 }
 
 /**
@@ -1979,7 +2013,7 @@ async function tournamentPoints(sportId: unknown): Promise<PointsModel> {
  */
 export async function championOf(tournamentId: string): Promise<{ id: string; name: string | null } | null> {
   const { data: t } = await supabase
-    .from('tournaments').select('format, tiebreaker_rules, sport_id').eq('id', tournamentId).maybeSingle();
+    .from('tournaments').select('format, tiebreaker_rules, sport_id, settings').eq('id', tournamentId).maybeSingle();
   const fmt = (t as any)?.format;
   if (fmt === 'round_robin' || fmt === 'league') {
     const { data: entries } = await supabase
@@ -1991,7 +2025,7 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
       .from('matches').select('team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
       .eq('tournament_id', tournamentId).is('voided_at', null);
     const leader = rankTeams(
-      teamIds, (matches ?? []) as any[], ((t as any)?.tiebreaker_rules ?? []) as any[], await tournamentPoints((t as any)?.sport_id),
+      teamIds, (matches ?? []) as any[], ((t as any)?.tiebreaker_rules ?? []) as any[], await tournamentPoints(t as any),
     )[0];
     if (!leader) return null;
     const e = (entries ?? []).find((x) => x.team_id === leader);
@@ -2073,9 +2107,9 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
     .eq('tournament_id', tournamentId)
     .is('voided_at', null); // SC-424: a voided fixture is not a played fixture
   const { data: trow } = await supabase
-    .from('tournaments').select('tiebreaker_rules, sport_id').eq('id', tournamentId).maybeSingle();
+    .from('tournaments').select('tiebreaker_rules, sport_id, settings').eq('id', tournamentId).maybeSingle();
   const tiebreakerRules = ((trow as any)?.tiebreaker_rules ?? []) as any[];
-  const pts = await tournamentPoints((trow as any)?.sport_id);
+  const pts = await tournamentPoints(trow as any);
 
   const ordered = rankTeams(teamIds, (matches ?? []) as any[], tiebreakerRules, pts);
   const championId = ordered[0];
@@ -2270,9 +2304,9 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   const cfg = await getGroupsConfig(tournamentId);
   const qualsPerGroup = cfg.qualifiersPerGroup;
   const { data: trow } = await supabase
-    .from('tournaments').select('tiebreaker_rules, sport_id').eq('id', tournamentId).maybeSingle();
+    .from('tournaments').select('tiebreaker_rules, sport_id, settings').eq('id', tournamentId).maybeSingle();
   const tiebreakerRules = ((trow as any)?.tiebreaker_rules ?? []) as any[];
-  const pts = await tournamentPoints((trow as any)?.sport_id);
+  const pts = await tournamentPoints(trow as any);
 
   const nameOf: Record<string, string> = {};
   const groupTeams: Record<string, string[]> = {};

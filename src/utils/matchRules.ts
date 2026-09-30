@@ -102,7 +102,9 @@ export interface MatchRules {
  */
 export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   cricket: { style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, inningsMinutes: null, powerplayOvers: null, oneTipOneHand: false, sixAndOut: false, drawAllowed: true },
-  badminton: { bestOf: 3, target: 21, cap: 30, finalTarget: null, winBy2: true },
+  // BUILD 3.45: 15 a game capped at 21 (BAI from July 2026, BWF from 4 Jan 2027).
+  // A match stored without rules still plays 21 / 30 — see rulesFromLegacy.
+  badminton: { bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true },
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true },
   pickleball: { bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true },
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2 },
@@ -146,6 +148,10 @@ export function rulesFromLegacy(
     rules.overs = overs != null && Number.isFinite(Number(overs)) && Number(overs) > 0 ? Math.floor(Number(overs)) : 20;
   } else if (MATCH_LENGTHS[key]) {
     rules.bestOf = bestOfFor(key, f) ?? rules.bestOf;
+    // BUILD 3.45: badminton's standard became 15 (cap 21), but a match with no
+    // rules came from an app (or an older one) that plays 21 (cap 30) — and the
+    // server must count its games the same way.
+    if (key === 'badminton') Object.assign(rules, BADMINTON_LEGACY);
   } else if (key === 'chess') {
     const m = CLOCK_RE.exec(f);
     if (m) {
@@ -430,6 +436,8 @@ export const RALLY_LIMITS: Record<string, { target: [number, number]; finalTarge
  * July 2026, BWF from 4 Jan 2027) and the classic 21 capped at 30.
  */
 export const BADMINTON_PRESETS = [{ target: 15, cap: 21 }, { target: 21, cap: 30 }] as const;
+/** BUILD 3.45: what a badminton match with no stored rules plays (the pre-2026 game). */
+export const BADMINTON_LEGACY = { target: 21, cap: 30 } as const;
 /** The cap a badminton game gets when the form leaves it blank: the preset's, else none. */
 export function badmintonCapFor(target: number): number | null {
   return BADMINTON_PRESETS.find((p) => p.target === target)?.cap ?? null;
@@ -547,7 +555,10 @@ export function stageRules(sport: string | null | undefined, rules: unknown, sta
   const t = (rules && typeof rules === 'object' && !Array.isArray(rules) ? rules : {}) as Record<string, unknown>;
   const chain = stage === 'final' ? ['final', 'knockout', 'default'] : stage === 'knockout' ? ['knockout', 'default'] : ['group', 'default'];
   const hit = chain.map((k) => t[k]).find((r) => r && typeof r === 'object' && !Array.isArray(r));
-  return normalizeRules(sport, hit ?? { v: 1 });
+  // BUILD 3.45: no rules for the stage → what an app without rules plays (the
+  // legacy reading), not the standard: badminton's standard is 15 now, and an
+  // older app scoring the fixture plays 21.
+  return hit ? normalizeRules(sport, hit) : rulesFromLegacy(sport, null, null);
 }
 
 /** Why a tournament's stage rules can't be used, or null. Each stage is checked by rulesRefusal. */

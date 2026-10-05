@@ -66,6 +66,10 @@ import { SET_CONFIG } from '../controllers/scoring.controller';
 // eslint-disable-next-line import/first
 import { MATCH_LENGTHS } from '../utils/matchLength';
 
+// A start a week ahead: a fixed date (it was 5 Oct 2026) turns into a refused
+// past start the day it passes, and every create test then fails with 400.
+const FUTURE = new Date(Date.now() + 7 * 864e5).toISOString();
+
 const ME = '11111111-1111-4111-8111-111111111111';
 const MATCH = '22222222-2222-4222-8222-222222222222';
 const TA = '33333333-3333-4333-8333-333333333333';
@@ -104,7 +108,7 @@ const inserted = () => {
 };
 const created = { data: { id: MATCH } };
 const onCreate = (q: Q) => (q[0] === 'from:matches' && q.some((c) => c.startsWith('insert:')) ? created : { data: null });
-const body = (extra: object) => ({ sport_id: 'cricket', team_a_name: 'Lions', team_b_name: 'Tigers', scheduled_at: '2026-10-05T10:00:00Z', venue: 'Oval', ...extra });
+const body = (extra: object) => ({ sport_id: 'cricket', team_a_name: 'Lions', team_b_name: 'Tigers', scheduled_at: FUTURE, venue: 'Oval', ...extra });
 
 describe('BUILD 2.1 · create', () => {
   it('format / overs only (an older app) → the rules are stored too', async () => {

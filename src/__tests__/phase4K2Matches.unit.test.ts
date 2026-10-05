@@ -65,6 +65,10 @@ import { canOfficiateMatch } from '../utils/tournamentAuth';
 // eslint-disable-next-line import/first
 import { notifyUsers, matchAudienceIds } from '../utils/notify';
 
+// A start a week ahead: a fixed date (it was 5 Oct 2026) turns into a refused
+// past start the day it passes, and every create test then fails with 400.
+const FUTURE = new Date(Date.now() + 7 * 864e5).toISOString();
+
 const ME = '11111111-1111-4111-8111-111111111111';
 const MATCH = '22222222-2222-4222-8222-222222222222';
 const TA = '33333333-3333-4333-8333-333333333333';
@@ -203,7 +207,7 @@ describe('K2-39b / K2-40 · a decisive sport can’t be completed level without 
 describe('K2-50 · a team can’t play itself (SC-245)', () => {
   it('K2-50 (ba48a6f): createMatch with team_a_id === team_b_id → 400 SAME_TEAM, nothing inserted', async () => {
     mockNext = (q) => (q[0] === 'from:teams' ? { data: [{ id: TA, name: 'A', sport_id: 'cricket' }] } : { data: null });
-    const r = await call(createMatch, { body: { sport_id: 'cricket', team_a_id: TA, team_b_id: TA, scheduled_at: '2026-10-05T10:00:00Z', venue: 'Oval' } });
+    const r = await call(createMatch, { body: { sport_id: 'cricket', team_a_id: TA, team_b_id: TA, scheduled_at: FUTURE, venue: 'Oval' } });
     expect([r.statusCode, r.body.code]).toEqual([400, 'SAME_TEAM']);
     expect(mockLog.filter((q) => q[0] === 'from:matches' && q.some((c) => c.startsWith('insert:')))).toHaveLength(0);
   });
@@ -218,7 +222,7 @@ describe('K2-50 · a team can’t play itself (SC-245)', () => {
 describe('K2-62 · an open match’s creator is in its line-up (SC-281)', () => {
   it('K2-62 (57cf537): createMatch is_open → the creator is inserted as a participant on side A', async () => {
     mockNext = (q) => (q[0] === 'from:matches' && q.some((c) => c.startsWith('insert:')) ? { data: { id: MATCH, is_open: true } } : { data: null });
-    const r = await call(createMatch, { body: { sport_id: 'cricket', team_a_name: 'Lions', is_open: true, players_needed: 3, scheduled_at: '2026-10-05T10:00:00Z', venue: 'Oval' } });
+    const r = await call(createMatch, { body: { sport_id: 'cricket', team_a_name: 'Lions', is_open: true, players_needed: 3, scheduled_at: FUTURE, venue: 'Oval' } });
     expect(r.statusCode).toBeLessThan(300);
     const seed = mockLog.find((q) => q[0] === 'from:match_participants' && q.some((c) => c.startsWith('insert:')))!;
     expect(seed.find((c) => c.startsWith('insert:'))).toBe(`insert:${JSON.stringify({ match_id: MATCH, user_id: ME, team_side: 'A' })}`);

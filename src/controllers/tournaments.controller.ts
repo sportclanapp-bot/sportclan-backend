@@ -434,10 +434,13 @@ export async function getTournament(req: Request, res: Response) {
       .eq('id', id)
       .maybeSingle();
     if (error || !tournament) return res.status(404).json({ error: 'Tournament not found' });
+    // Cricket gap 10 (5 Oct 2026): who has paid the entry fee is the organisers'
+    // record — read only for them; nobody else gets the columns.
+    const organiser = await isTournamentOrganiser(id, userId);
     const { data: entries } = await supabase
       .from('tournament_entries')
       // Phase 3 B08-F5: team_id too — the fixture editor keys its team chips on it.
-      .select('id, team_id, status, seed, group_label, club, entered_at, team:team_id (id, name, short_name, logo_url, sport_id)')
+      .select(`id, team_id, status, seed, group_label, club, entered_at,${organiser ? ' fee_paid_at, fee_note,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`)
       .eq('tournament_id', id);
     // SC-293: authoritative fixture count so the Overview's Quick Stats agrees
     // with the Bracket + Officials tabs. Was: the FE showed fixtures.length, but
@@ -823,7 +826,15 @@ export async function updateEntry(req: Request, res: Response) {
     // B02 (V022, D7): the chat follows the entries and organisers.
     syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
     const { id, entryId } = req.params;
-    const { status, seed, group_label, club } = req.body || {};
+    const { status, seed, group_label, club, fee_paid, fee_note } = req.body || {};
+    // Cricket gap 10 (5 Oct 2026): the organiser keeps track of who has paid the
+    // entry fee (cash / UPI, outside the app) — a yes/no and a short note.
+    if (fee_paid !== undefined && typeof fee_paid !== 'boolean') {
+      return res.status(400).json({ error: 'Paid is yes or no.', code: 'BAD_FEE_PAID' });
+    }
+    if (fee_note !== undefined && fee_note !== null && !(typeof fee_note === 'string' && fee_note.trim().length <= 120)) {
+      return res.status(400).json({ error: 'A payment note is up to 120 characters.', code: 'BAD_FEE_NOTE' });
+    }
     // BUILD 4.13: the entry's club / state (for keeping clubs apart in the draw).
     if (club !== undefined && club !== null && !(typeof club === 'string' && club.trim().length <= 60)) {
       return res.status(400).json({ error: 'A club is up to 60 characters.' });
@@ -896,6 +907,12 @@ export async function updateEntry(req: Request, res: Response) {
     if (club !== undefined) update.club = typeof club === 'string' && club.trim() ? club.trim() : null;
     // Stored in capitals, as the draw reads it ("a" is group A).
     if (group_label !== undefined) update.group_label = typeof group_label === 'string' ? group_label.trim().toUpperCase() : group_label;
+    // Gap 10 (organisers only: a request without a status needs an organiser, above).
+    if (fee_paid !== undefined) {
+      update.fee_paid_at = fee_paid ? new Date().toISOString() : null;
+      update.fee_marked_by = fee_paid ? userId : null;
+    }
+    if (fee_note !== undefined) update.fee_note = typeof fee_note === 'string' && fee_note.trim() ? fee_note.trim() : null;
 
     const { data, error } = await supabase
       .from('tournament_entries')
@@ -937,6 +954,8 @@ export async function updateEntry(req: Request, res: Response) {
         }
       } catch { /* best-effort */ }
     }
+    // Gap 10: the payment record stays with the organisers (a captain withdrawing gets the rest).
+    if (!isCreator && data) { delete (data as Record<string, unknown>).fee_paid_at; delete (data as Record<string, unknown>).fee_marked_by; delete (data as Record<string, unknown>).fee_note; }
     return res.json({ entry: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

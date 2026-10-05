@@ -1674,6 +1674,7 @@ export async function getMatch(req: Request, res: Response) {
       tournamentFormat,
       myJoinRequest,
       umpire,
+      canManage,
     ] = await Promise.all([
       supabase
         .from('match_participants')
@@ -1702,6 +1703,11 @@ export async function getMatch(req: Request, res: Response) {
           supabase.from('users').select('id, name, username').eq('id', match.umpire_id).is('deleted_at', null).maybeSingle(),
         ).then(({ data: u }) => u ?? null, () => null)
         : Promise.resolve(null),
+      // Cricket gaps 1 and 3 (5 Oct 2026): may this viewer change the fixture
+      // (its rules, its umpire and scorer)? updateMatch's own check.
+      match.tournament_id
+        ? isTournamentOrganiser(match.tournament_id, userId).catch(() => false)
+        : Promise.resolve(!!userId && (match.created_by === userId || match.umpire_id === userId)),
     ]);
     timer.mark('reads');
 
@@ -1731,6 +1737,7 @@ export async function getMatch(req: Request, res: Response) {
     // compute from created_by alone — that gap under-showed Score to co-organisers
     // and over-showed it (→403) to a fixture creator later removed as organiser.
     matchWithRating.can_officiate = canOfficiate;
+    matchWithRating.can_manage = canManage;
 
     // U-13: could this viewer actually be in the line-up? Only then is "Are you
     // playing?" a question worth asking them. It was shown to everyone — the

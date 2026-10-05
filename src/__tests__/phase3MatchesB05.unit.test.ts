@@ -233,10 +233,11 @@ describe('Decision 18 · PATCH /matches/:id sets no result (B05-D1)', () => {
     expect(r.statusCode).toBe(200);
     expect(writes()[0].join()).toContain('"status":"cancelled"');
   });
-  test('the app never calls this route with a result (it has no call to PATCH /matches/:id at all)', () => {
+  test('the app never calls this route with a result (its one call sends a fixture’s rules only, cricket gap 1)', () => {
     const app = path.join(__dirname, '../../../sportclan-v2/src/api/matches.ts');
     if (!fs.existsSync(app)) return; // the app repo isn't beside this one (CI)
-    expect(fs.readFileSync(app, 'utf8')).not.toMatch(/client\.patch[^(]*\(\s*`\/matches\/\$\{id\}`\s*,/);
+    const calls = [...fs.readFileSync(app, 'utf8').matchAll(/client\.patch[^(]*\(\s*`\/matches\/\$\{id\}`\s*,\s*([^)]*)\)/g)].map((m) => m[1]!.trim());
+    expect(calls).toEqual(['{ rules }']);
   });
 });
 

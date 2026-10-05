@@ -50,6 +50,8 @@ export interface MatchRules {
   /** BUILD 3.15: gully cricket — caught one-handed off one bounce is out; a six is out. */
   oneTipOneHand?: boolean;
   sixAndOut?: boolean;
+  /** Cricket gap 1 (5 Oct 2026): tennis-ball and box cricket play no LBW. On: LBW is not a way out. */
+  noLbw?: boolean;
   /** Best-of sports: games / sets / boards the match is best of. */
   bestOf?: number;
   /** Rally and carrom: points to win a game, the hard cap (null = none), the
@@ -129,7 +131,7 @@ export interface MatchRules {
  * cricket default, periods.ts, the chess default clock).
  */
 export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
-  cricket: { style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, inningsMinutes: null, powerplayOvers: null, oneTipOneHand: false, sixAndOut: false, drawAllowed: true },
+  cricket: { style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, inningsMinutes: null, powerplayOvers: null, oneTipOneHand: false, sixAndOut: false, noLbw: false, drawAllowed: true },
   // BUILD 3.45: 15 a game capped at 21 (BAI from July 2026, BWF from 4 Jan 2027).
   // A match stored without rules still plays 21 / 30 — see rulesFromLegacy.
   badminton: { players: null, bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true, rubbers: null }, // BUILD 3.47: players 2 = doubles; 3.49 rubbers
@@ -331,7 +333,7 @@ type Refusal = { error: string; code: 'BAD_RULES'; field: string | null };
 const refuse = (error: string, field: string | null = null): Refusal => ({ error, code: 'BAD_RULES', field });
 
 const FIELD_NAMES: Record<string, string> = {
-  style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
+  style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', noLbw: 'No LBW', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
   finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game', gameMinutes: 'Minutes a game', carromMode: 'Carrom game', queenValue: 'Queen (point carrom)',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
@@ -393,6 +395,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     }
     if (typeof r.oneTipOneHand !== 'boolean') return refuse('One tip, one hand is on or off.', 'oneTipOneHand');
     if (typeof r.sixAndOut !== 'boolean') return refuse('Six and out is on or off.', 'sixAndOut');
+    if (typeof r.noLbw !== 'boolean') return refuse('No LBW is on or off.', 'noLbw');
   }
   // BUILD 3.72: carrom — a game to 7–29, the queen worth 0–5.
   if (key === 'carrom' && (!isWhole(r.target) || r.target < 7 || r.target > 29)) return refuse('Points to win a game must be 7 to 29.', 'target');
@@ -529,7 +532,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     }
   }
   // Everything else is fixed at the sport's standard for now.
-  const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'bestOf', 'baseMinutes', 'incrementSeconds',
+  const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'noLbw', 'bestOf', 'baseMinutes', 'incrementSeconds',
     ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;

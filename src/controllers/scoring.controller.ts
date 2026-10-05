@@ -450,6 +450,14 @@ export async function validateScoringEvent(
       }
     }
 
+    // Cricket gap 1 (5 Oct 2026): a match played without LBW (tennis-ball and
+    // box cricket) refuses an LBW. Older apps still show the button; this keeps
+    // the scorecard to the match's rules.
+    if (event_type === 'wicket' && String(payload.wicket_type ?? payload.type ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'lbw'
+      && rulesOf('cricket', match).noLbw) {
+      return refuse(400, { error: 'This match is played without LBW — it isn’t a way out here.', code: 'NO_LBW' });
+    }
+
     // BUILD 3.5: a bowler who has bowled the match's max overs can't bowl
     // again. A delivery of theirs — a ball, a wide, a no-ball, a bye — is
     // refused; a wicket off no ball (a run-out on a wide, a retirement) is not

@@ -51,7 +51,7 @@ import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
 import { applyChessTcDeltas, recordChessTc } from '../utils/chessTcRatings';
 import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
-import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, type UnfinishedEnd } from '../utils/cricketRules';
+import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, typedScoreRefusal, typedScoreWinner, typedOversToBalls, type UnfinishedEnd } from '../utils/cricketRules';
 import { withWalkoverScore } from '../utils/walkoverScore';
 import { shootoutApplies, shootoutKicksOf, shootoutProblem, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
@@ -2907,6 +2907,49 @@ export async function completeMatch(req: Request, res: Response) {
       if (superOverWinner(superOverScore!.A, superOverScore!.B) !== winnerSide) {
         return res.status(400).json({ error: 'The winner has to be the side that won the super over.', code: 'SUPER_OVER_WINNER_MISMATCH' });
       }
+    }
+    // Cricket gap 5 (5 Oct 2026): a score typed in, not ball by ball — each
+    // side's runs, wickets and overs and who batted first, marked score_only.
+    // Checked here (shared typedScoreRefusal), the winner held to the runs, and
+    // written in both shapes: flat (what a typed result always used) and nested
+    // A / B with wickets and all_out, so NRR's all-out rule and "won by N
+    // wickets" read it like a scored innings.
+    if (!walkover && submittedSummary?.score_only === true && normSportSlug(sportRow?.slug) === 'cricket') {
+      const { count: scoredEvents } = await supabase
+        .from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id);
+      if (scoredEvents) {
+        return res.status(409).json({ error: 'This match was scored ball by ball — finish it on the scoring pad.', code: 'SCORE_ONLY_AFTER_BALLS' });
+      }
+      const typed = (x: any) => ({ runs: x?.runs, wickets: x?.wickets, overs: x?.overs, allOut: x?.all_out });
+      const ta = typed(submittedSummary.A), tb = typed(submittedSummary.B);
+      const allOut = allOutBySide(partsRes.data ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands);
+      const bad = typedScoreRefusal(ta, tb, { overs: rulesOf('cricket', match).overs ?? null, allOut, firstBatting: submittedSummary.first_batting_side });
+      if (bad) return res.status(400).json({ error: bad.error, code: 'BAD_SCORE', field: bad.field });
+      const byRuns = typedScoreWinner(ta, tb);
+      if (byRuns && winnerSide !== byRuns) {
+        const who = byRuns === 'A' ? match.team_a_name ?? 'Team A' : match.team_b_name ?? 'Team B';
+        return res.status(400).json({ error: `The score says ${who} won.`, code: 'SCORE_WINNER_MISMATCH' });
+      }
+      if (!byRuns && winnerSide && !isBracketMatch) {
+        return res.status(400).json({ error: 'Level scores are a tie — no winner.', code: 'SCORE_WINNER_MISMATCH' });
+      }
+      const side = (x: ReturnType<typeof typed>, s: 'A' | 'B') => {
+        const balls = typedOversToBalls(x.overs)!;
+        const overs = `${Math.floor(balls / 6)}.${balls % 6}`;
+        return { runs: Number(x.runs), wickets: Number(x.wickets), balls, overs, all_out: x.allOut === true || Number(x.wickets) >= allOut[s] };
+      };
+      const A = side(ta, 'A'), B = side(tb, 'B');
+      const firstBatting = submittedSummary.first_batting_side as 'A' | 'B';
+      // Only these keys are stored (nothing else sent along is kept).
+      for (const k of Object.keys(submittedSummary)) delete submittedSummary[k];
+      Object.assign(submittedSummary, {
+        score_only: true,
+        first_batting_side: firstBatting,
+        A: { runs: A.runs, score: A.runs, wickets: A.wickets, balls: A.balls, all_out: A.all_out },
+        B: { runs: B.runs, score: B.runs, wickets: B.wickets, balls: B.balls, all_out: B.all_out },
+        team_a_score: A.runs, team_b_score: B.runs, team_a_overs: A.overs, team_b_overs: B.overs,
+        team_a_wickets: A.wickets, team_b_wickets: B.wickets,
+      });
     }
     // BUILD 3.20: a football match that can't end level (drawAllowed: false)
     // is decided on penalties — a level end without a winner is refused.

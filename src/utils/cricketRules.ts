@@ -360,3 +360,61 @@ export function penaltyRunsOf(payload: unknown): number {
   const n = (payload as { penalty_runs?: unknown } | null | undefined)?.penalty_runs;
   return typeof n === 'number' && Number.isInteger(n) && n >= -10 && n <= -1 ? n : 0;
 }
+
+// ─── Cricket gap 5 (5 Oct 2026) · a score typed in, not ball by ball ────────
+// A tournament where nobody scores on a phone still wants NRR. The organiser
+// types each side's runs, wickets and overs (and who batted first); completion
+// stores it marked `score_only`. Overs are cricket's o.b (12.3 = 12 overs and
+// 3 balls). A chase stops once the target is passed, so the side batting
+// second can't have more than the target plus a last-ball no-ball six (7).
+
+export const TYPED_RUNS_MAX = 999;
+
+/** Balls from o.b overs (12.3 → 75), or null when it isn't valid o.b. */
+export function typedOversToBalls(x: unknown): number | null {
+  const s = typeof x === 'number' ? String(x) : typeof x === 'string' ? x.trim() : '';
+  if (!/^\d{1,2}(\.\d)?$/.test(s)) return null;
+  const [w, b = '0'] = s.split('.');
+  const balls = Number(b);
+  if (balls > 5) return null;
+  return Number(w) * 6 + balls;
+}
+
+export interface TypedInnings { runs: unknown; wickets: unknown; overs: unknown; allOut?: unknown }
+
+/** Why a typed score can't be stored, and which field, or null. */
+export function typedScoreRefusal(
+  a: TypedInnings, b: TypedInnings,
+  opts: { overs: number | null; allOut: { A: number; B: number }; firstBatting: unknown },
+): { error: string; field: string } | null {
+  if (opts.firstBatting !== 'A' && opts.firstBatting !== 'B') return { error: 'Say which side batted first.', field: 'first_batting_side' };
+  const sides = [['A', a], ['B', b]] as const;
+  for (const [s, x] of sides) {
+    const runs = Number(x.runs);
+    if (x.runs === '' || x.runs == null || !Number.isInteger(runs) || runs < 0 || runs > TYPED_RUNS_MAX) {
+      return { error: `Runs must be a whole number from 0 to ${TYPED_RUNS_MAX}.`, field: `${s}.runs` };
+    }
+    const w = Number(x.wickets);
+    if (x.wickets === '' || x.wickets == null || !Number.isInteger(w) || w < 0 || w > opts.allOut[s]) {
+      return { error: `Wickets must be a whole number from 0 to ${opts.allOut[s]}.`, field: `${s}.wickets` };
+    }
+    if (x.allOut != null && typeof x.allOut !== 'boolean') return { error: 'All out is yes or no.', field: `${s}.allOut` };
+    const balls = typedOversToBalls(x.overs);
+    if (balls == null) return { error: 'Overs are written like 12.3 — whole overs, then 0 to 5 balls.', field: `${s}.overs` };
+    if (balls === 0 && (runs > 0 || w > 0)) return { error: 'A side that scored runs or lost wickets faced at least one ball.', field: `${s}.overs` };
+    if (opts.overs != null && balls > opts.overs * 6) return { error: `No side can bat more than the match's ${opts.overs} overs.`, field: `${s}.overs` };
+  }
+  const first = opts.firstBatting === 'A' ? a : b;
+  const chase = opts.firstBatting === 'A' ? b : a;
+  const chaseSide = opts.firstBatting === 'A' ? 'B' : 'A';
+  if (Number(chase.runs) > Number(first.runs) + 7) {
+    return { error: `The chase stops once ${Number(first.runs) + 1} is reached, so the side batting second can't have more than ${Number(first.runs) + 7}.`, field: `${chaseSide}.runs` };
+  }
+  return null;
+}
+
+/** Who won a typed score: more runs; null when level. */
+export function typedScoreWinner(a: { runs: unknown }, b: { runs: unknown }): 'A' | 'B' | null {
+  const ra = Number(a.runs), rb = Number(b.runs);
+  return ra > rb ? 'A' : rb > ra ? 'B' : null;
+}

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { sortSports } from '../constants/sportOrder';
 
 const router = Router();
 
@@ -19,7 +20,9 @@ router.get('/', async (_req: Request, res: Response) => {
   // absent → `!== false` keeps every sport, so nothing breaks until 070 runs; post-
   // migration kabaddi/athletics (is_active=false) drop out.
   const active = (data || []).filter((s: { is_active?: boolean }) => s.is_active !== false);
-  return res.json({ sports: active });
+  // The app's one sport order (Cricket first), not insertion or display_order
+  // alone — the column had drifted (Cricket, Football, Basketball, …).
+  return res.json({ sports: sortSports(active) });
 });
 
 export default router;

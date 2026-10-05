@@ -6,6 +6,7 @@ import { parsePagination, pageMeta } from '../utils/pagination';
 import { authenticateToken } from '../middleware/auth.middleware';
 import { blockedUserIds, excludeIds } from '../utils/blocks';
 import { queryText } from '../utils/validation';
+import { sortSports } from '../constants/sportOrder';
 
 const router = Router();
 
@@ -85,7 +86,8 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
   const providers = (rows || []).map((r: any) => r.users).filter(Boolean).map(({ city, sports, ...u }: any) => ({
     ...u,
     city_name: city?.name ?? null,
-    sports: (sports ?? []).map((s: any) => s.sport?.slug).filter(Boolean),
+    // In the one sport order (constants/sportOrder), not the join's.
+    sports: sortSports((sports ?? []).map((s: any) => ({ slug: s.sport?.slug as string | undefined })).filter((s: { slug?: string }) => !!s.slug)).map((s) => s.slug),
   }));
   return res.json({ providers, ...pageMeta(count, p) });
 });

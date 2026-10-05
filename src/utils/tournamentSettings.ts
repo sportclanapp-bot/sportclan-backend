@@ -243,7 +243,14 @@ export type TournamentSettings = {
   category?: Category;
   /** 4.15 · a Swiss (chess): how many rounds; `paired` is the last round the server paired (it writes that, not the app). */
   swiss?: { rounds: number; paired?: number };
+  /** Cricket gap 6 (5 Oct 2026) · the walkover rule, shown to teams: a team not ready this many minutes after its start time loses by walkover (5–60). */
+  graceMinutes?: number;
+  /** …or one that can't field this many players (2–15). */
+  minPlayers?: number;
 };
+
+export const GRACE_MINUTES: [number, number] = [5, 60];
+export const MIN_PLAYERS: [number, number] = [2, 15];
 
 export const SWISS_ROUNDS: [number, number] = [2, 11];
 
@@ -419,7 +426,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -438,6 +445,10 @@ export function settingsRefusal(sport: string | null | undefined, format: string
     return refuse(`Rest between a team’s matches must be 0 to ${REST_MAX} minutes.`);
   }
   if (o.entry != null && o.entry !== 'approval' && o.entry !== 'open') return refuse('Entry is open or by approval.');
+  const whole = (v: unknown, [lo, hi]: [number, number]) => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
+  // 0 clears a rule (an edit), like the rest.
+  if (o.graceMinutes != null && o.graceMinutes !== 0 && !whole(o.graceMinutes, GRACE_MINUTES)) return refuse(`The grace time must be ${GRACE_MINUTES[0]} to ${GRACE_MINUTES[1]} minutes.`);
+  if (o.minPlayers != null && o.minPlayers !== 0 && !whole(o.minPlayers, MIN_PLAYERS)) return refuse(`The fewest players a team can play with must be ${MIN_PLAYERS[0]} to ${MIN_PLAYERS[1]}.`);
   if (o.swiss != null) {
     if (format !== 'swiss') return refuse('Swiss rounds are for a Swiss tournament.');
     const r = (o.swiss as { rounds?: unknown }).rounds;
@@ -503,6 +514,12 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('walkoverScore' in s) {
     if (s.walkoverScore != null) out.walkoverScore = s.walkoverScore;
     else delete out.walkoverScore;
+  }
+  // Gap 6: the walkover rule (null or 0 clears it).
+  for (const k of ['graceMinutes', 'minPlayers'] as const) {
+    if (!(k in s)) continue;
+    if (s[k]) out[k] = Number(s[k]);
+    else delete out[k];
   }
   return out;
 }

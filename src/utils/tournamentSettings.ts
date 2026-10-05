@@ -247,6 +247,8 @@ export type TournamentSettings = {
   graceMinutes?: number;
   /** …or one that can't field this many players (2–15). */
   minPlayers?: number;
+  /** Cricket gap 9 · a tied knockout with no (more) super over possible goes to the higher seed / group finisher ('seed', the default when absent), more boundaries, or a toss. */
+  tieFallback?: 'seed' | 'boundaries' | 'toss';
 };
 
 export const GRACE_MINUTES: [number, number] = [5, 60];
@@ -426,7 +428,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -448,6 +450,7 @@ export function settingsRefusal(sport: string | null | undefined, format: string
   const whole = (v: unknown, [lo, hi]: [number, number]) => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
   // 0 clears a rule (an edit), like the rest.
   if (o.graceMinutes != null && o.graceMinutes !== 0 && !whole(o.graceMinutes, GRACE_MINUTES)) return refuse(`The grace time must be ${GRACE_MINUTES[0]} to ${GRACE_MINUTES[1]} minutes.`);
+  if (o.tieFallback != null && o.tieFallback !== 'seed' && o.tieFallback !== 'boundaries' && o.tieFallback !== 'toss') return refuse('A tied knockout goes to the higher seed, more boundaries or a toss.');
   if (o.minPlayers != null && o.minPlayers !== 0 && !whole(o.minPlayers, MIN_PLAYERS)) return refuse(`The fewest players a team can play with must be ${MIN_PLAYERS[0]} to ${MIN_PLAYERS[1]}.`);
   if (o.swiss != null) {
     if (format !== 'swiss') return refuse('Swiss rounds are for a Swiss tournament.');
@@ -514,6 +517,11 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('walkoverScore' in s) {
     if (s.walkoverScore != null) out.walkoverScore = s.walkoverScore;
     else delete out.walkoverScore;
+  }
+  // Gap 9: the tie fallback ('seed' is the default, so it isn't stored).
+  if ('tieFallback' in s) {
+    if (s.tieFallback && s.tieFallback !== 'seed') out.tieFallback = s.tieFallback;
+    else delete out.tieFallback;
   }
   // Gap 6: the walkover rule (null or 0 clears it).
   for (const k of ['graceMinutes', 'minPlayers'] as const) {

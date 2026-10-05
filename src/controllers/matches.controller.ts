@@ -38,6 +38,7 @@ import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems, LIMITS, normaliseVen
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner, recrownAfterVoidChange, tournamentSettingsOf } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats, bestOfState } from './scoring.controller';
+import { isKnockoutBracketMatch } from '../utils/knockout';
 import { awardBadgesSafe, revokeRecordBadgesSafe } from './badges.controller';
 import { isUuid } from '../utils/uuid';
 import { isSinglesSport, winnerSideOf, challengeText, pendingRankedOpponent, isSinglesShape } from '../utils/singles';
@@ -51,7 +52,7 @@ import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
 import { applyChessTcDeltas, recordChessTc } from '../utils/chessTcRatings';
 import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
-import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, typedScoreRefusal, typedScoreWinner, typedOversToBalls, type UnfinishedEnd } from '../utils/cricketRules';
+import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, superOverPlayedText, tieFallbackText, boundariesOf, type SuperOverState, type TieFallback, typedScoreRefusal, typedScoreWinner, typedOversToBalls, type UnfinishedEnd } from '../utils/cricketRules';
 import { withWalkoverScore } from '../utils/walkoverScore';
 import { shootoutApplies, shootoutKicksOf, shootoutProblem, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
@@ -2479,15 +2480,6 @@ export async function getMatchChat(req: Request, res: Response) {
 // brackets (round=1) — blocking ties at completion (SC-257) and forcing a walkover
 // winner on abandon (SC-258). The reliable discriminator is the tournament FORMAT,
 // not the round value (which is load-bearing for maybeSeedKnockout / getBracket).
-async function isKnockoutBracketMatch(match: {
-  tournament_id: string | null; round: number | null; group_label: string | null;
-}): Promise<boolean> {
-  if (!match.tournament_id || match.round == null || match.round <= 0 || match.group_label) return false;
-  const { data: t } = await supabase
-    .from('tournaments').select('format').eq('id', match.tournament_id).maybeSingle();
-  const fmt = (t as any)?.format;
-  return fmt === 'knockout' || fmt === 'groups_knockout';
-}
 
 // POST /matches/:id/abandon  { advancing_team_id? } — creator/umpire only.
 // Casual matches simply go 'abandoned' (no result). For a knockout bracket
@@ -2906,6 +2898,55 @@ export async function completeMatch(req: Request, res: Response) {
       }
       if (superOverWinner(superOverScore!.A, superOverScore!.B) !== winnerSide) {
         return res.status(400).json({ error: 'The winner has to be the side that won the super over.', code: 'SUPER_OVER_WINNER_MISMATCH' });
+      }
+    }
+    // Cricket gap 9 (5 Oct 2026): a tied knockout decided by super overs played
+    // ball by ball (canonical.super_overs) — the named winner must be the last
+    // one's. Or, when no (more) super over can be played, the tournament's
+    // fallback (tie_fallback: the higher seed by default, more boundaries, or a
+    // toss) — boundaries are counted here; a seed or a toss is the organiser's call.
+    const playedSOs = ((canonical as { super_overs?: SuperOverState[] } | null)?.super_overs ?? []);
+    const lastSO = playedSOs[playedSOs.length - 1] ?? null;
+    const tieFallback = (req.body?.tie_fallback ?? null) as string | null;
+    let fallbackBoundaries: { w: number; l: number } | null = null;
+    if (!walkover && !superOver && normSportSlug(sportRow?.slug) === 'cricket' && isBracketMatch) {
+      const levelMain = Number(canonical?.A?.score ?? 0) === Number(canonical?.B?.score ?? 0);
+      if (tieFallback != null) {
+        const configured = ((await tournamentSettingsOf(match.tournament_id as string | null)) as { tieFallback?: string } | null)?.tieFallback ?? 'seed';
+        if (!levelMain || (lastSO?.done && lastSO.winner)) {
+          return res.status(400).json({ error: 'A tie-break decides only a knockout still level after any super overs.', code: 'TIE_FALLBACK_NOT_ALLOWED' });
+        }
+        if (tieFallback !== configured) {
+          return res.status(400).json({ error: `This tournament settles a tie by ${configured === 'seed' ? 'the higher seed' : configured === 'boundaries' ? 'more boundaries' : 'a toss'}.`, code: 'TIE_FALLBACK_MISMATCH' });
+        }
+        if (!winnerSide) return res.status(400).json({ error: 'Name the side that goes through.', code: 'TIE_FALLBACK_NEEDS_WINNER' });
+        if (tieFallback === 'boundaries') {
+          const { data: allEv } = await supabase.from('match_events').select('event_type, payload').eq('match_id', id);
+          const b = boundariesOf((allEv ?? []) as never);
+          if (b.A === b.B) return res.status(400).json({ error: `Boundaries are level too (${b.A}–${b.B}).`, code: 'BOUNDARIES_LEVEL' });
+          const more: 'A' | 'B' = b.A > b.B ? 'A' : 'B';
+          if (more !== winnerSide) return res.status(400).json({ error: `The other side hit more boundaries (${Math.max(b.A, b.B)}–${Math.min(b.A, b.B)}).`, code: 'TIE_FALLBACK_WINNER_MISMATCH' });
+          fallbackBoundaries = { w: Math.max(b.A, b.B), l: Math.min(b.A, b.B) };
+        } else if (!(await isTournamentOrganiser(match.tournament_id as string, userId))) {
+          return res.status(403).json({ error: 'Only the organiser can send a side through on the seeding or a toss.', code: 'TIE_FALLBACK_ORGANISER_ONLY' });
+        }
+      } else if (levelMain && !playedSOs.length && winnerSide) {
+        // Found on the local server: a knockout that was PLAYED and ended level
+        // took any named winner with no super over. A desk result (nothing
+        // scored) still names its winner; a played tie needs a super over (on
+        // the pad, or its runs) or the tournament's way.
+        const { count: playedBalls } = await supabase
+          .from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id);
+        if (playedBalls) {
+          return res.status(400).json({ error: 'The match is tied — play a super over, enter its runs, or settle it the tournament’s way.', code: 'SUPER_OVER_NEEDED' });
+        }
+      } else if (levelMain && playedSOs.length) {
+        if (!lastSO?.done || !lastSO.winner) {
+          return res.status(400).json({ error: lastSO?.done ? 'The super over is level — play another, or settle it the tournament’s way.' : 'The super over isn’t finished.', code: 'SUPER_OVER_NOT_DECIDED' });
+        }
+        if (winnerSide !== lastSO.winner) {
+          return res.status(400).json({ error: 'The winner has to be the side that won the super over.', code: 'SUPER_OVER_WINNER_MISMATCH' });
+        }
       }
     }
     // Cricket gap 5 (5 Oct 2026): a score typed in, not ball by ball — each
@@ -3384,6 +3425,14 @@ export async function completeMatch(req: Request, res: Response) {
         resultForNotice = ss.result;
       }
       // BUILD 3.9: "Lions won the super over (14–9)" — the match itself tied.
+      // Gap 9: decided by a super over played ball by ball, or by the fallback.
+      if (!superOverScore && derivedSide && lastSO?.done && lastSO.winner === derivedSide && isBracketMatch && slug === 'cricket') {
+        ss.result = superOverPlayedText(derivedSide === 'A' ? aName : bName, lastSO);
+      }
+      if (tieFallback && derivedSide && isBracketMatch && slug === 'cricket') {
+        ss.tie_decided_by = tieFallback;
+        ss.result = tieFallbackText(derivedSide === 'A' ? aName : bName, tieFallback as TieFallback, fallbackBoundaries ?? undefined);
+      }
       if (superOverScore && derivedSide) {
         ss.super_over = superOverScore;
         ss.result = superOverResultText(derivedSide === 'A' ? aName : bName, superOverScore);

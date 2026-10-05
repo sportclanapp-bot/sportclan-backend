@@ -418,3 +418,108 @@ export function typedScoreWinner(a: { runs: unknown }, b: { runs: unknown }): 'A
   const ra = Number(a.runs), rb = Number(b.runs);
   return ra > rb ? 'A' : rb > ra ? 'B' : null;
 }
+
+// ─── Cricket gap 9 (5 Oct 2026) · a super over scored ball by ball ──────────
+// A tied knockout is decided by super overs scored on the pad: each event
+// carries payload.super_over = 1, 2, … . They never count in the match's own
+// innings, player stats or NRR. One over a side, two wickets and the side is
+// out. The side that batted second bats first; in a second super over, the side
+// that batted second in the one before. Level again → another super over.
+
+export const SUPER_OVER_BALLS = 6;
+export const SUPER_OVER_ALL_OUT = 2;
+
+type Ev = { event_type: string; payload?: unknown };
+type P = Record<string, unknown>;
+
+/** The super over an event belongs to (1, 2, …), or 0 for the match itself. */
+export function superOverNumber(payload: unknown): number {
+  const n = (payload as P | null | undefined)?.super_over;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 ? n : 0;
+}
+
+/** The match's own events — what its innings, stats and NRR are made of. */
+export function mainEvents<T extends Ev>(events: readonly T[]): T[] {
+  return events.filter((e) => superOverNumber(e.payload) === 0);
+}
+
+/** One side's runs, legal balls and wickets in these events — the server's own sums. */
+export function sideTotals(events: readonly Ev[], side: 'A' | 'B', allOut: number): { runs: number; balls: number; wickets: number } {
+  const t = { runs: 0, balls: 0, wickets: 0 };
+  for (const e of events) {
+    const p = (e.payload ?? {}) as P;
+    if ((p.team_side === 'B' ? 'B' : 'A') !== side) continue;
+    if (e.event_type === 'ball') { t.runs += Number(p.runs ?? 0) + penaltyRunsOf(p); if (!p.is_extra) t.balls += 1; }
+    else if (e.event_type === 'extra') { t.runs += Number(p.runs ?? 0); if (isBallOfOver('extra', p)) t.balls += 1; }
+    else if (e.event_type === 'wicket') { if (isDismissal((p.wicket_type ?? p.type) as string)) t.wickets = Math.min(allOut, t.wickets + 1); if (!p.is_extra) t.balls += 1; }
+  }
+  return t;
+}
+
+export interface SuperOverState {
+  n: number;
+  /** Who bats first in it. */
+  first: 'A' | 'B';
+  A: { runs: number; balls: number; wickets: number };
+  B: { runs: number; balls: number; wickets: number };
+  /** Both sides have batted (an over, two wickets, or the target passed). */
+  done: boolean;
+  /** The side with more runs once done; null while playing or when level. */
+  winner: 'A' | 'B' | null;
+}
+
+const ended = (t: { balls: number; wickets: number }) => t.balls >= SUPER_OVER_BALLS || t.wickets >= SUPER_OVER_ALL_OUT;
+
+/**
+ * Every super over played so far, in order. `matchFirst` is the side that
+ * batted first in the match (the other bats first in super over 1).
+ */
+export function superOversOf(events: readonly Ev[], matchFirst: 'A' | 'B'): SuperOverState[] {
+  const max = events.reduce((m, e) => Math.max(m, superOverNumber(e.payload)), 0);
+  const out: SuperOverState[] = [];
+  let firstOfNext: 'A' | 'B' = matchFirst === 'A' ? 'B' : 'A';
+  for (let n = 1; n <= max; n++) {
+    const evs = events.filter((e) => superOverNumber(e.payload) === n);
+    const first = firstOfNext;
+    const second = first === 'A' ? 'B' : 'A';
+    const A = sideTotals(evs, 'A', SUPER_OVER_ALL_OUT);
+    const B = sideTotals(evs, 'B', SUPER_OVER_ALL_OUT);
+    const f = first === 'A' ? A : B, s = second === 'A' ? A : B;
+    const done = ended(f) && (ended(s) || s.runs > f.runs);
+    const winner = done && A.runs !== B.runs ? (A.runs > B.runs ? 'A' : 'B') : null;
+    out.push({ n, first, A, B, done, winner });
+    firstOfNext = second; // ICC: the side that batted second bats first next time
+  }
+  return out;
+}
+
+const ORD = ['', '', '2nd ', '3rd ', '4th ', '5th '];
+/** "Lions won the super over (14–9)", "Lions won the 2nd super over (8–6)". */
+export function superOverPlayedText(winnerName: string, so: SuperOverState): string {
+  const w = so.winner === 'A' ? so.A.runs : so.B.runs;
+  const l = so.winner === 'A' ? so.B.runs : so.A.runs;
+  return `${winnerName} won the ${ORD[so.n] ?? `${so.n}th `}super over (${w}–${l})`;
+}
+
+/** Cricket gap 9: how a tied knockout is settled when no (more) super overs can be played. */
+export type TieFallback = 'seed' | 'boundaries' | 'toss';
+export const TIE_FALLBACKS: readonly TieFallback[] = ['seed', 'boundaries', 'toss'];
+
+/** Fours and sixes off the bat for each side, in these events (the match and its super overs). */
+export function boundariesOf(events: readonly Ev[]): { A: number; B: number } {
+  const out = { A: 0, B: 0 };
+  for (const e of events) {
+    if (e.event_type !== 'ball') continue;
+    const p = (e.payload ?? {}) as P;
+    const r = Number(p.runs ?? 0);
+    if (r === 4 || r === 6) out[p.team_side === 'B' ? 'B' : 'A'] += 1;
+  }
+  return out;
+}
+
+/** "Lions went through on boundaries (14–11)", "… as the higher seed", "Lions won the toss". */
+export function tieFallbackText(winnerName: string, how: TieFallback, b?: { w: number; l: number }): string {
+  if (how === 'boundaries') return `${winnerName} went through on boundaries${b ? ` (${b.w}–${b.l})` : ''}`;
+  if (how === 'toss') return `${winnerName} won the toss`;
+  return `${winnerName} went through as the higher seed`;
+}

@@ -17,7 +17,8 @@ import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
-import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf } from '../utils/cricketRules';
+import { isKnockoutBracketMatch } from '../utils/knockout';
+import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber } from '../utils/cricketRules';
 import { DOUBLES_PLAYERS, carromOptsOf, doublesLineupProblem, rulesOf, setConfigOf, standardRules, tennisOptsOf, winsToWin } from '../utils/matchRules';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
@@ -66,7 +67,7 @@ async function fanoutScoreUpdate(
 export async function authorizeScorer(matchId: string, userId: string, deviceId?: string | null) {
   const { data: match } = await supabase
     .from('matches')
-    .select('id, created_by, umpire_id, scorer_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules')
+    .select('id, created_by, umpire_id, scorer_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules, round, group_label')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return { ok: false as const, status: 404, error: 'Match not found' };
@@ -165,7 +166,7 @@ export async function recordEventIdempotent(args: {
  */
 export async function validateScoringEvent(
   matchId: string,
-  match: { id: string; status?: string | null; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_a_name?: string | null; team_b_name?: string | null; tournament_id?: string | null; score_summary?: unknown; format?: string | null; overs?: number | null; rules?: unknown; sport_id?: string | null },
+  match: { id: string; status?: string | null; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_a_name?: string | null; team_b_name?: string | null; tournament_id?: string | null; score_summary?: unknown; format?: string | null; overs?: number | null; rules?: unknown; sport_id?: string | null; round?: number | null; group_label?: string | null },
   ev: { event_type: unknown; period?: unknown; clock_seconds?: unknown; payload?: any },
 ): Promise<{ status: number; body: { error: string; code?: string } } | null> {
   const refuse = (status: number, body: { error: string; code?: string }) => ({ status, body });
@@ -183,6 +184,30 @@ export async function validateScoringEvent(
   // skip every check below and still count as a legal ball.
   if (payload != null && (typeof payload !== 'object' || Array.isArray(payload))) {
     return refuse(400, { error: 'payload must be an object' });
+  }
+  // Cricket gap 9: a super over is played only when a knockout cricket match
+  // ended level — and the next one only when the last was level too.
+  const soNo = superOverNumber(payload);
+  if (payload && 'super_over' in payload && !soNo) {
+    return refuse(400, { error: 'A super over is numbered 1, 2, 3…', code: 'BAD_SUPER_OVER' });
+  }
+  if (soNo) {
+    const slugSo = normSportSlug((await getSport(String(match.sport_id)))?.slug);
+    const ss = (match.score_summary ?? {}) as { A?: { runs?: number; balls?: number; wickets?: number }; B?: { runs?: number; balls?: number; wickets?: number }; super_overs?: Array<{ done?: boolean; winner?: string | null }> };
+    const batted = (x?: { balls?: number; wickets?: number }) => Number(x?.balls ?? 0) > 0 || Number(x?.wickets ?? 0) > 0;
+    const level = batted(ss.A) && batted(ss.B) && Number(ss.A?.runs ?? 0) === Number(ss.B?.runs ?? 0);
+    const bracket = await isKnockoutBracketMatch(match as { tournament_id: string | null; round: number | null; group_label: string | null });
+    if (slugSo !== 'cricket' || !bracket || !level) {
+      return refuse(409, { error: 'A super over decides only a knockout cricket match that ended level.', code: 'SUPER_OVER_NOT_ALLOWED' });
+    }
+    const sos = ss.super_overs ?? [];
+    const last = sos[sos.length - 1];
+    if (last?.done && last.winner) {
+      return refuse(409, { error: 'The super over has decided the match — end it.', code: 'SUPER_OVER_DECIDED' });
+    }
+    if (soNo > sos.length + 1 || (soNo === sos.length + 1 && sos.length > 0 && !last?.done) || soNo < sos.length || (soNo === sos.length && last?.done)) {
+      return refuse(409, { error: sos.length && !last?.done ? `Finish super over ${sos.length} first.` : 'That super over isn’t the one being played.', code: 'SUPER_OVER_OUT_OF_ORDER' });
+    }
   }
   // B06-F6: cricket extras and dismissals are closed lists — an unknown one
   // counted a run or a wicket nobody can name.
@@ -442,7 +467,9 @@ export async function validateScoringEvent(
       const { data: log } = await supabase
         .from('match_events').select('event_type, payload')
         .eq('match_id', matchId).order('created_at', { ascending: true });
-      if (freeHitNext((log ?? []) as never, payload.team_side === 'B' ? 'B' : 'A')) {
+      // Gap 9: within the same innings — the match's own, or this super over's.
+      const sameInnings = (log ?? []).filter((e: { payload?: unknown }) => superOverNumber(e.payload) === superOverNumber(payload));
+      if (freeHitNext(sameInnings as never, payload.team_side === 'B' ? 'B' : 'A')) {
         return refuse(400, {
           error: 'It’s a free hit — the batter can only be run out (or out obstructing the field or hitting the ball twice).',
           code: 'FREE_HIT',
@@ -463,7 +490,8 @@ export async function validateScoringEvent(
     // refused; a wicket off no ball (a run-out on a wide, a retirement) is not
     // their delivery and goes through. The summary's rollup counts their balls.
     const isDelivery = event_type === 'ball' || event_type === 'extra' || (event_type === 'wicket' && payload.is_extra !== true);
-    if (bowlId && isDelivery) {
+    // Gap 9: the match's quota doesn't stop anyone bowling a super over.
+    if (bowlId && isDelivery && !superOverNumber(payload)) {
       const limit = rulesOf('cricket', match).bowlerOvers;
       const bowled = (match.score_summary as { players?: Record<string, { bowl_balls?: number }> } | null)?.players?.[bowlId]?.bowl_balls;
       if (bowlerQuotaDone(bowled, limit)) {
@@ -1113,7 +1141,8 @@ export function aggregateRallyPlayers(events: { event_type: string; payload: any
 // output is byte-identical). Chess has no scoring events → empty map (MVP is
 // decided by winner side). `slug` must be the normalised form.
 export function aggregatePlayers(slug: string, events: { event_type: string; payload: any }[]): Record<string, PlayerLine> {
-  if (slug === 'cricket') return aggregateCricketPlayers(events);
+  // Cricket gap 9: a super over's balls don't count in anyone's figures.
+  if (slug === 'cricket') return aggregateCricketPlayers(mainEvents(events));
   if (slug === 'football' || slug === 'hockey') return aggregateGoalPlayers(events);
   if (slug === 'basketball') return aggregatePointPlayers(events);
   return aggregateRallyPlayers(events);
@@ -1193,7 +1222,8 @@ export async function recomputeSummary(
     // side with no line-up at 10, as before.
     const { data: lineup } = await supabase.from('match_participants').select('team_side').eq('match_id', matchId);
     const allOut = allOutBySide(lineup ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands); // BUILD 3.2
-    for (const e of events) {
+    // Cricket gap 9: the match's innings are its own events; super overs are kept apart.
+    for (const e of mainEvents(events)) {
       const p: any = e.payload || {};
       const inn = sides[sideOf(p)];
       // F-15: who batted first, from play — the side on the first delivery. The
@@ -1373,6 +1403,12 @@ export async function recomputeSummary(
 
   const summary: Record<string, any> = { ...existing, A, B };
   if (slug === 'cricket') summary.first_batting_side = cricketFirstBat;
+  // Cricket gap 9: the super overs played ball by ball, each side's runs / balls / wickets.
+  if (slug === 'cricket') {
+    const sos = superOversOf(events, cricketFirstBat ?? 'A');
+    if (sos.length) summary.super_overs = sos;
+    else delete summary.super_overs;
+  }
   if (slug === 'chess') {
     summary.result = chessResult ?? 'No result yet';
     summary.winner_side = chessWinner;
@@ -1501,7 +1537,7 @@ export async function writeCricketInningsStats(matchId: string): Promise<void> {
     .order('created_at', { ascending: true });
   if (!events || events.length === 0) return;
 
-  const players = aggregateCricketPlayers(events as any[]);
+  const players = aggregateCricketPlayers(mainEvents(events as any[])); // gap 9: not the super overs
   const teamId = (side: 'A' | 'B'): string | null =>
     (side === 'A' ? match.team_a_id : match.team_b_id) ?? null;
   const rows = Object.entries(players)

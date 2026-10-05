@@ -7,6 +7,7 @@ import {
   updateMatch,
   addParticipants,
   selfAssignUmpire,
+  setMatchOfficials,
   cancelMatch,
   abandonMatch,
   voidMatch,
@@ -84,6 +85,8 @@ router.delete('/:id/follow', authenticateToken, unfollowMatch);
 router.get('/:id/chat', authenticateToken, getMatchChat);
 router.post('/:id/participants', authenticateToken, addParticipants);
 router.post('/:id/umpire/self-assign', authenticateToken, selfAssignUmpire);
+// Cricket gap 3: the organiser names a fixture's umpire and scorer.
+router.patch('/:id/officials', authenticateToken, setMatchOfficials);
 router.post('/:id/complete', authenticateToken, completeMatch);
 router.post('/:id/join', authenticateToken, joinOpenMatch);
 router.post('/:id/leave', authenticateToken, leaveMatch);

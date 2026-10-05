@@ -947,7 +947,7 @@ export async function setMatchTossHandler(req: Request, res: Response) {
 
   const { data: match } = await supabase
     .from('matches')
-    .select('id, created_by, umpire_id, status, score_summary, tournament_id, is_ranked, team_a_id, team_b_id, team_b_name')
+    .select('id, created_by, umpire_id, scorer_id, status, score_summary, tournament_id, is_ranked, team_a_id, team_b_id, team_b_name')
     .eq('id', id)
     .maybeSingle();
   if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1728,6 +1728,11 @@ export async function getMatch(req: Request, res: Response) {
     // shows "Requested" (or that it was declined) instead of the join button.
     matchWithRating.my_join_request = myJoinRequest === 'pending' || myJoinRequest === 'rejected' ? myJoinRequest : null;
     matchWithRating.umpire = umpire;
+    // Cricket gap 3: …and its scorer, when one is named (one more read only then).
+    matchWithRating.scorer = match.scorer_id
+      ? await Promise.resolve(supabase.from('users').select('id, name, username').eq('id', match.scorer_id).is('deleted_at', null).maybeSingle())
+        .then(({ data: u }) => u ?? null, () => null)
+      : null;
 
     // SC-287: authoritative "can this caller score/officiate this match" flag,
     // computed with the SAME canOfficiateMatch the scoring/toss/complete APIs
@@ -1892,7 +1897,7 @@ export async function updateMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id, status, team_a_id, team_b_id, tournament_id, is_ranked, team_a_name, team_b_name, sport_id, is_open, format, overs, rules')
+      .select('created_by, umpire_id, scorer_id, status, team_a_id, team_b_id, tournament_id, is_ranked, team_a_name, team_b_name, sport_id, is_open, format, overs, rules')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -2084,7 +2089,7 @@ export async function addParticipants(req: Request, res: Response) {
     }
     const { data: match } = await supabase
       .from('matches')
-      .select('created_by, umpire_id, status, tournament_id, is_ranked, team_a_id, team_b_id, sport_id, team_a_name, team_b_name, format, overs, rules')
+      .select('created_by, umpire_id, scorer_id, status, tournament_id, is_ranked, team_a_id, team_b_id, sport_id, team_a_name, team_b_name, format, overs, rules')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -2269,6 +2274,104 @@ export async function selfAssignUmpire(req: Request, res: Response) {
   }
 }
 
+// ── Cricket gap 3 (5 Oct 2026) · the fixture's umpire and scorer ─────────────
+// PATCH /matches/:id/officials { umpire_id?, scorer_id? } — null clears one.
+// The organiser names them (a tournament fixture: its organisers; a casual match:
+// its creator) while the match is scheduled or live. Each named person may then
+// score it (canOfficiateMatch) and is told by a notification. A ranked match's
+// officials are neutral: nobody who plays in it (UMPIRE_IS_PLAYER /
+// SCORER_IS_PLAYER), as for an umpire who picks a match up themselves.
+export async function setMatchOfficials(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const fields = (['umpire_id', 'scorer_id'] as const).filter((k) => k in body);
+    if (fields.length === 0) return res.status(400).json({ error: 'Send umpire_id or scorer_id (null to clear).', code: 'NOTHING_TO_SET' });
+    for (const k of fields) {
+      const v = body[k];
+      if (v !== null && (typeof v !== 'string' || !isUuid(v))) {
+        return res.status(400).json({ error: `${k === 'umpire_id' ? 'The umpire' : 'The scorer'} must be a person on SportClan, or none.`, code: 'BAD_OFFICIAL', field: k });
+      }
+    }
+    const { data: match } = await supabase
+      .from('matches')
+      .select('id, created_by, umpire_id, scorer_id, status, tournament_id, is_ranked, team_a_id, team_b_id, team_a_name, team_b_name, scheduled_at, ground_label')
+      .eq('id', id)
+      .maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    const allowed = match.tournament_id
+      ? await isTournamentOrganiser(match.tournament_id, userId)
+      : match.created_by === userId;
+    if (!allowed) {
+      return res.status(403).json({ error: match.tournament_id ? 'Only the tournament organiser can name a fixture’s umpire and scorer.' : 'Only the match’s creator can name its umpire and scorer.' });
+    }
+    if (match.status !== 'scheduled' && match.status !== 'live') {
+      return res.status(409).json({ error: 'This match is over, so its umpire and scorer can’t change.', code: 'MATCH_FINISHED' });
+    }
+    const named = fields.map((k) => body[k]).filter((v): v is string => typeof v === 'string');
+    if (named.length) {
+      const { data: people } = await supabase.from('users').select('id, deleted_at').in('id', named);
+      for (const k of fields) {
+        const v = body[k];
+        if (typeof v !== 'string') continue;
+        const u = (people ?? []).find((p: { id: string }) => p.id === v) as { deleted_at?: string | null } | undefined;
+        if (!u || u.deleted_at) return res.status(404).json({ error: `${k === 'umpire_id' ? 'That umpire' : 'That scorer'} isn’t on SportClan.`, code: 'OFFICIAL_NOT_FOUND', field: k });
+      }
+      if (match.is_ranked) {
+        const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', id);
+        const ids = (parts ?? []).map((p: { user_id: string }) => p.user_id);
+        for (const k of fields) {
+          const v = body[k];
+          if (typeof v === 'string' && await viewerCanPlay(match, v, ids)) {
+            return res.status(409).json({
+              error: k === 'umpire_id' ? 'They play in this ranked match, so they can’t be its umpire.' : 'They play in this ranked match, so they can’t be its scorer.',
+              code: k === 'umpire_id' ? 'UMPIRE_IS_PLAYER' : 'SCORER_IS_PLAYER', field: k,
+            });
+          }
+        }
+      }
+    }
+    const before = { umpire_id: match.umpire_id ?? null, scorer_id: (match as { scorer_id?: string | null }).scorer_id ?? null };
+    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    for (const k of fields) update[k] = body[k];
+    const { data, error } = await supabase.from('matches').update(update).eq('id', id).select('*').single();
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // Tell each newly named official (not the organiser naming themselves).
+    const label = match.team_a_name && match.team_b_name ? `${match.team_a_name} vs ${match.team_b_name}` : 'a match';
+    for (const k of fields) {
+      const v = body[k];
+      if (typeof v !== 'string' || v === userId || v === before[k]) continue;
+      try {
+        await notifyUser({
+          userId: v,
+          type: 'match_official_assigned',
+          title: k === 'umpire_id' ? 'You’re the umpire' : 'You’re the scorer',
+          body: `You’ve been named ${k === 'umpire_id' ? 'umpire' : 'scorer'} for ${label}. You can score it in the app.`,
+          data: { matchId: id, screen: 'MatchDetail' },
+        });
+      } catch {
+        // best-effort
+      }
+    }
+    const people = await officialsOf(data as { umpire_id?: string | null; scorer_id?: string | null });
+    return res.json({ match: data, ...people });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/** The umpire and scorer as { id, name, username } (or null), for the match page. */
+async function officialsOf(m: { umpire_id?: string | null; scorer_id?: string | null }) {
+  const ids = [m.umpire_id, m.scorer_id].filter((x): x is string => !!x);
+  if (!ids.length) return { umpire: null, scorer: null };
+  const { data } = await supabase.from('users').select('id, name, username').in('id', ids).is('deleted_at', null);
+  const by = (x?: string | null) => (x ? ((data ?? []) as Array<{ id: string }>).find((u) => u.id === x) ?? null : null);
+  return { umpire: by(m.umpire_id), scorer: by(m.scorer_id) };
+}
+
 // ── Follow a match (SC-A1) ────────────────────────────────────────────────────
 // POST /matches/:id/follow — get score/completion updates for a match.
 export async function followMatch(req: Request, res: Response) {
@@ -2399,7 +2502,7 @@ export async function abandonMatch(req: Request, res: Response) {
     const { advancing_team_id } = req.body || {};
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, umpire_id, status, tournament_id, round, group_label, next_match_id, team_a_id, team_b_id, team_a_name, team_b_name, sport_id, format, overs, rules, score_summary')
+      .select('id, created_by, umpire_id, scorer_id, status, tournament_id, round, group_label, next_match_id, team_a_id, team_b_id, team_a_name, team_b_name, sport_id, format, overs, rules, score_summary')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -2587,7 +2690,7 @@ export async function completeMatch(req: Request, res: Response) {
       // who was chasing, and a cricket win is described by wickets or by runs
       // depending on the answer. It was missing, so a successful chase reported
       // "won by N runs". See the note at the derivation call below.
-      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice, format, overs, rules, voided_at')
+      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, scorer_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice, format, overs, rules, voided_at')
       .eq('id', id)
       .maybeSingle();
     timer.mark('load');
@@ -3514,7 +3617,8 @@ export async function completeMatch(req: Request, res: Response) {
 
 /** Creator / umpire / tournament organiser, or an admin. */
 async function canVoidMatch(match: { created_by?: string | null; umpire_id?: string | null; tournament_id?: string | null }, userId: string): Promise<boolean> {
-  if (await canOfficiateMatch(match as never, userId)) return true;
+  // Cricket gap 3: a named scorer scores; voiding isn't theirs.
+  if (await canOfficiateMatch(match as never, userId, { scorers: false })) return true;
   const whitelist = (process.env.ADMIN_USER_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
   if (whitelist.includes(userId)) return true;
   const { data } = await supabase.from('users').select('is_admin').eq('id', userId).maybeSingle();
@@ -3593,7 +3697,7 @@ export async function voidMatch(req: Request, res: Response) {
 
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at, completed_at, updated_at, scheduled_at, team_a_id, team_b_id')
+      .select('id, created_by, umpire_id, scorer_id, tournament_id, sport_id, status, voided_at, completed_at, updated_at, scheduled_at, team_a_id, team_b_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -3684,7 +3788,7 @@ export async function unvoidMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at, team_a_id, team_b_id')
+      .select('id, created_by, umpire_id, scorer_id, tournament_id, sport_id, status, voided_at, team_a_id, team_b_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -3768,7 +3872,7 @@ export async function claimScoringLease(req: Request, res: Response) {
     const deviceId = deviceIdOf(req);
     if (!deviceId) return res.status(400).json({ error: 'A device id is required to claim scoring.' });
     const { data: match } = await supabase
-      .from('matches').select('id, created_by, umpire_id, tournament_id, status').eq('id', id).maybeSingle();
+      .from('matches').select('id, created_by, umpire_id, scorer_id, tournament_id, status').eq('id', id).maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: 'Only the scorer, umpire or organiser can score this match.' });
@@ -3855,7 +3959,7 @@ export async function takeOverScoringLease(req: Request, res: Response) {
       return res.status(400).json({ error: `Keep the reason under ${TAKEOVER_REASON_MAX} characters.`, code: 'REASON_TOO_LONG' });
     }
     const { data: match } = await supabase
-      .from('matches').select('id, created_by, umpire_id, tournament_id, status').eq('id', id).maybeSingle();
+      .from('matches').select('id, created_by, umpire_id, scorer_id, tournament_id, status').eq('id', id).maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: 'Only the scorer, umpire or organiser can take over.' });

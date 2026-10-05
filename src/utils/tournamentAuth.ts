@@ -70,11 +70,36 @@ export async function logAdminAction(
 // the tournament organiser set. (Structural gates — updateMatch/cancelMatch —
 // don't use this: they're handled inline, because updateMatch keeps umpire for
 // CASUAL matches only and cancelMatch never allows the umpire.)
+//
+// Cricket gap 3 (5 Oct 2026): SCORERS too — the scorer the organiser named for
+// this fixture (matches.scorer_id), and a tournament official with the scorer
+// role, who may score every fixture of that tournament. They score, toss, set
+// line-ups, complete and abandon like the umpire; voiding stays with the
+// organiser, umpire or an admin ({ scorers: false }).
 export async function canOfficiateMatch(
-  match: { tournament_id?: string | null; created_by?: string | null; umpire_id?: string | null },
+  match: { tournament_id?: string | null; created_by?: string | null; umpire_id?: string | null; scorer_id?: string | null },
   userId: string,
+  opts: { scorers?: boolean } = {},
 ): Promise<boolean> {
   if (match.umpire_id && match.umpire_id === userId) return true;
-  if (match.tournament_id) return isTournamentOrganiser(match.tournament_id, userId);
+  const scorers = opts.scorers !== false;
+  if (scorers && match.scorer_id && match.scorer_id === userId) return true;
+  if (match.tournament_id) {
+    if (await isTournamentOrganiser(match.tournament_id, userId)) return true;
+    return scorers && isTournamentScorer(match.tournament_id, userId);
+  }
   return !!match.created_by && match.created_by === userId;
+}
+
+/** Cricket gap 3: a tournament official with the scorer role (scores every fixture). */
+export async function isTournamentScorer(tournamentId: string, userId: string): Promise<boolean> {
+  if (!tournamentId || !userId) return false;
+  const { data } = await supabase
+    .from('tournament_officials')
+    .select('id')
+    .eq('tournament_id', tournamentId)
+    .eq('user_id', userId)
+    .eq('role', 'scorer')
+    .limit(1);
+  return (data ?? []).length > 0;
 }

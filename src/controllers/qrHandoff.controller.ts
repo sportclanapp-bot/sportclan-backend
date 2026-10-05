@@ -92,7 +92,7 @@ export async function uploadHandoff(req: Request, res: Response) {
       ? { data: null }
       : await supabase
         .from('matches')
-        .select('id, created_by, umpire_id, tournament_id, sport_id, status, voided_at, format, overs, rules')
+        .select('id, created_by, umpire_id, scorer_id, tournament_id, sport_id, status, voided_at, format, overs, rules')
         .eq('id', id!).maybeSingle();
     const auth = match ? await authorizeScorer(id!, p.u, p.d) : null;
     const refusal = handoffRefusal({

@@ -66,12 +66,12 @@ async function fanoutScoreUpdate(
 export async function authorizeScorer(matchId: string, userId: string, deviceId?: string | null) {
   const { data: match } = await supabase
     .from('matches')
-    .select('id, created_by, umpire_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules')
+    .select('id, created_by, umpire_id, scorer_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return { ok: false as const, status: 404, error: 'Match not found' };
   if (!(await canOfficiateMatch(match, userId))) {
-    return { ok: false as const, status: 403, error: match.tournament_id ? 'Only a tournament organiser or the umpire can score' : 'Only the umpire or creator can score' };
+    return { ok: false as const, status: 403, error: match.tournament_id ? 'Only a tournament organiser, the umpire or a scorer can score' : 'Only the umpire, the scorer or the creator can score' };
   }
   // SC-430: one scorer per match. Authorised is not the same as holding the pad —
   // two officiants scoring the same game do not corrupt anything, they simply BOTH

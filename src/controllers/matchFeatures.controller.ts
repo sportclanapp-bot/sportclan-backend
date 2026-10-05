@@ -33,7 +33,7 @@ async function loadScorableMatch(
 ): Promise<{ error?: { status: number; msg: string; code?: string } }> {
   const { data: match } = await supabase
     .from('matches')
-    .select('created_by, umpire_id, tournament_id, status')
+    .select('created_by, umpire_id, scorer_id, tournament_id, status')
     .eq('id', id)
     .maybeSingle();
   if (!match) return { error: { status: 404, msg: 'Match not found' } };
@@ -692,7 +692,7 @@ export async function getScoringEditLog(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, sport_id, team_a_name, team_b_name, created_by, umpire_id, tournament_id')
+      .select('id, sport_id, team_a_name, team_b_name, created_by, umpire_id, scorer_id, tournament_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });

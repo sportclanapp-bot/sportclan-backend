@@ -1,4 +1,5 @@
 -- 117 · sports.display_order in the app's one sport order (Home's, Cricket first).
+-- Applied by Dipak on 5 Oct 2026 (batch APPLY-gaps-batch-117-119.sql, part B).
 --
 -- The 001 seed left Cricket, Football, Basketball, Badminton, … and Pickleball /
 -- Carrom were appended at 12 and 13, so anything ordering by display_order listed

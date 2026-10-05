@@ -14,6 +14,8 @@ import { plural } from '../utils/plural';
 import { deletedIdSet } from '../utils/activeUser';
 import { targetUserHidden } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
+import { getSport, normSportSlug } from '../utils/sportCache';
+import { LEADER_STATS, leaderUserIds, tournamentLeaders, type LeaderMatch, type StatsRow } from '../utils/tournamentLeaders';
 
 // ────────────────────────────────────────────────────────────────────────────
 // TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
@@ -191,6 +193,14 @@ export async function getTournamentStandings(req: Request, res: Response) {
 // GET /tournaments/:id/top-performers
 // ────────────────────────────────────────────────────────────────────────────
 
+/** Cricket gap 2: the named accounts' names today, and which are deleted. */
+async function leaderAccounts(ids: string[]): Promise<Record<string, { name: string | null; deleted: boolean }>> {
+  if (ids.length === 0) return {};
+  const { data } = await supabase.from('users').select('id, name, deleted_at').in('id', ids);
+  return Object.fromEntries(((data ?? []) as Array<{ id: string; name: string | null; deleted_at: string | null }>)
+    .map((u) => [u.id, { name: u.name, deleted: !!u.deleted_at }]));
+}
+
 export async function getTournamentTopPerformers(req: Request, res: Response) {
   try {
     const { id } = req.params;
@@ -200,28 +210,32 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+    const slug = normSportSlug((await getSport(String(tournament.sport_id)))?.slug);
+    const cricket = slug === 'cricket';
 
     // Get all completed matches
+    // Cricket gap 2: and each one's per-player rollup (only that part of the summary).
     const { data: matches } = await supabase
       .from('matches')
-      .select('id, team_a_id, team_b_id, winner_team_id')
+      .select(cricket ? 'id, team_a_id, team_b_id, winner_team_id, status, players:score_summary->players' : 'id, team_a_id, team_b_id, winner_team_id')
       .eq('tournament_id', id)
       // BUILD 1.4: a walkover (abandoned with a winner) is a win here too.
       .in('status', ['completed', 'abandoned'])
       // SC-428: missed by the SC-424 sweep — a voided fixture was still counting
       // towards a team's tournament win tally.
       .is('voided_at', null);
+    const played = (matches ?? []) as unknown as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; players?: LeaderMatch['players'] }>;
 
     // Count wins per team
     const winCount = new Map<string, number>();
-    for (const m of matches ?? []) {
+    for (const m of played) {
       if (m.winner_team_id) {
         winCount.set(m.winner_team_id, (winCount.get(m.winner_team_id) ?? 0) + 1);
       }
     }
 
-    // Get team names
-    const teamIds = Array.from(winCount.keys());
+    // Get team names (every team that played, for the leaderboards too)
+    const teamIds = Array.from(new Set([...winCount.keys(), ...played.flatMap((m) => [m.team_a_id, m.team_b_id]).filter((x): x is string => !!x)]));
     const { data: teams } = await supabase
       .from('teams')
       .select('id, name')
@@ -233,7 +247,28 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
       .sort((a, b) => b.wins - a.wins)
       .slice(0, 3);
 
-    return res.json({ topWins });
+    // Cricket gap 2 (5 Oct 2026): the leaderboards. `topWins` stays for older
+    // apps; `performers` is the flat list the app's type always described (the
+    // endpoint never sent it); `leaders` is the same rows by stat.
+    if (!cricket) return res.json({ topWins, performers: [], leaders: null });
+    const older = played.filter((m) => !m.players || Object.keys(m.players).length === 0).map((m) => m.id);
+    let statsRows: StatsRow[] = [];
+    if (older.length) {
+      const { data: rows } = await supabase
+        .from('innings_stats')
+        .select('match_id, user_id, team_id, runs, balls_faced, sixes, is_out, bowling_overs, bowling_runs, bowling_wickets, catches, runouts, stumpings, user:user_id (name)')
+        .in('match_id', older);
+      statsRows = ((rows ?? []) as any[]).map((r) => ({ ...r, name: (Array.isArray(r.user) ? r.user[0]?.name : r.user?.name) ?? null }));
+    }
+    const leaderMatches = played.map((m) => ({ id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, players: m.players ?? null }));
+    const leaders = tournamentLeaders(
+      leaderMatches,
+      statsRows,
+      Object.fromEntries(teamMap) as Record<string, string>,
+      await leaderAccounts(leaderUserIds(leaderMatches, statsRows)),
+    );
+    const performers = LEADER_STATS.flatMap((s) => leaders[s]);
+    return res.json({ topWins, performers, leaders });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

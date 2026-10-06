@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { callToCourt, uncallMatch } from '../controllers/courtBoard.controller';
+import { getTieLineup, setTieLineup } from '../controllers/tieLineup.controller';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
   createMatch,
@@ -85,6 +86,8 @@ router.post('/:id/follow', authenticateToken, followMatch);
 router.delete('/:id/follow', authenticateToken, unfollowMatch);
 router.get('/:id/chat', authenticateToken, getMatchChat);
 router.post('/:id/participants', authenticateToken, addParticipants);
+router.get('/:id/tie-lineup', authenticateToken, getTieLineup); // badminton 7.16
+router.put('/:id/tie-lineup', authenticateToken, setTieLineup);
 router.post('/:id/umpire/self-assign', authenticateToken, selfAssignUmpire);
 // Cricket gap 3: the organiser names a fixture's umpire and scorer.
 router.patch('/:id/officials', authenticateToken, setMatchOfficials);

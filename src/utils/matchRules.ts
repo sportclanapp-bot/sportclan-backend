@@ -226,9 +226,26 @@ export const TT_TIES: Record<number, { name: string; order: string[] }> = {
   9: { name: 'Swaythling Cup', order: ['A v X', 'B v Y', 'C v Z', 'B v X', 'A v Z', 'C v Y', 'B v Z', 'C v X', 'A v Y'] },
 };
 
+/**
+ * Badminton 7.16 · a badminton team tie's rubbers, in the BWF team events'
+ * order (Thomas / Uber / Sudirman-style, as BAI inter-institutional ties):
+ * S1 D1 S2 D2 S3 for five, S1 D1 S2 for three. S = singles, D = doubles.
+ */
+export const BADMINTON_TIES: Record<number, string[]> = {
+  3: ['S1', 'D1', 'S2'],
+  5: ['S1', 'D1', 'S2', 'D2', 'S3'],
+};
+
+/** Badminton 7.16: players in a named rubber — 1 for S…, 2 for D…. */
+export function rubberPlayers(name: string): 1 | 2 {
+  return name.startsWith('D') ? 2 : 1;
+}
+
 /** BUILD 3.54: who plays each rubber, when the tie has a set order. */
 export function tieOrder(sport: string | null | undefined, rubbers: number | null | undefined): string[] | null {
-  return lengthKey(sport) === 'tabletennis' && rubbers ? TT_TIES[rubbers]?.order ?? null : null;
+  if (!rubbers) return null;
+  if (lengthKey(sport) === 'badminton') return BADMINTON_TIES[rubbers] ?? null; // 7.16
+  return lengthKey(sport) === 'tabletennis' ? TT_TIES[rubbers]?.order ?? null : null;
 }
 
 /**

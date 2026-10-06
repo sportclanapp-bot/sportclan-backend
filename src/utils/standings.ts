@@ -54,6 +54,10 @@ export type TeamStat = {
   rallyFor: number;
   rallyAgainst: number;
   rallyDiff: number;
+  /** Badminton 7.16 · games won and lost (every game of every rubber of a tie). */
+  gamesFor: number;
+  gamesAgainst: number;
+  gamesDiff: number;
 };
 
 /**
@@ -104,6 +108,17 @@ export function rallyPointsOf(m: GMatch): { a: number; b: number } {
   const sum = (x: unknown) => (Array.isArray(x) ? x.reduce((n: number, v: unknown) => n + (Number.isFinite(Number(v)) ? Number(v) : 0), 0) : 0);
   if (ss.walkover === true) return { a: 0, b: 0 }; // a walkover played no rallies
   return { a: sum(ss?.A?.sets), b: sum(ss?.B?.sets) };
+}
+
+/** Badminton 7.16: games each side won, from the games' points (0 for a walkover). */
+export function gamesWonOf(m: GMatch): { a: number; b: number } {
+  const ss: any = m.score_summary ?? {};
+  if (ss.walkover === true) return { a: 0, b: 0 };
+  const A = Array.isArray(ss?.A?.sets) ? ss.A.sets.map(Number) : [];
+  const B = Array.isArray(ss?.B?.sets) ? ss.B.sets.map(Number) : [];
+  let a = 0, b = 0;
+  for (let i = 0; i < Math.min(A.length, B.length); i++) { if (A[i] > B[i]) a++; else if (B[i] > A[i]) b++; }
+  return { a, b };
 }
 
 function scoresOf(m: GMatch): { a: number; b: number } {
@@ -213,7 +228,7 @@ export function computeStats(
   for (const id of teamIds) {
     table.set(id, {
       id, played: 0, won: 0, drawn: 0, lost: 0, points: 0, scored: 0, conceded: 0, diff: 0, noResult: 0,
-      runsScored: 0, oversFaced: 0, runsConceded: 0, oversBowled: 0, nrr: null, rallyFor: 0, rallyAgainst: 0, rallyDiff: 0,
+      runsScored: 0, oversFaced: 0, runsConceded: 0, oversBowled: 0, nrr: null, rallyFor: 0, rallyAgainst: 0, rallyDiff: 0, gamesFor: 0, gamesAgainst: 0, gamesDiff: 0,
     });
   }
   for (const m of matches) {
@@ -255,6 +270,9 @@ export function computeStats(
     const rp = rallyPointsOf(m); // badminton gap 10
     ra.rallyFor += rp.a; ra.rallyAgainst += rp.b;
     rb.rallyFor += rp.b; rb.rallyAgainst += rp.a;
+    const gw = gamesWonOf(m); // badminton 7.16
+    ra.gamesFor += gw.a; ra.gamesAgainst += gw.b;
+    rb.gamesFor += gw.b; rb.gamesAgainst += gw.a;
     if (m.winner_team_id === a || m.winner_team_id === b) {
       const [w, l] = m.winner_team_id === a ? [ra, rb] : [rb, ra];
       const [wp, lp] = resultPoints(m, pts, m.winner_team_id === a ? sa : sb, m.winner_team_id === a ? sb : sa);
@@ -276,12 +294,13 @@ export function computeStats(
   for (const r of table.values()) {
     r.diff = r.scored - r.conceded;
     r.rallyDiff = r.rallyFor - r.rallyAgainst;
+    r.gamesDiff = r.gamesFor - r.gamesAgainst;
     r.nrr = netRunRate(r);
   }
   return table;
 }
 
-type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff';
+type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff';
 
 const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 'sonneborn_berger'>, (s: TeamStat) => number> = {
   points: (s) => s.points,
@@ -299,6 +318,8 @@ const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 
   score_ratio: (s) => (s.conceded > 0 ? s.scored / s.conceded : s.scored > 0 ? 1e9 : 0),
   // Badminton gap 10: BWF's points difference — rally points won minus lost.
   points_diff: (s) => s.rallyDiff,
+  // Badminton 7.16: games difference over every rubber of a team tie.
+  games_diff: (s) => s.gamesDiff,
 };
 
 /**
@@ -341,6 +362,7 @@ function mapRule(token: string): Criterion | null {
   if (t === 'buchholz') return 'buchholz';
   if (t === 'sonneborn_berger' || t === 'sb' || t === 'sonneborn-berger') return 'sonneborn_berger';
   if (t === 'points_diff' || t === 'point_difference' || t === 'rally_points_diff' || t === 'points_difference') return 'points_diff'; // badminton gap 10
+  if (t === 'games_diff' || t === 'games_difference' || t === 'game_difference') return 'games_diff'; // badminton 7.16
   return null; // 'team_id' and unknowns handled by the terminator
 }
 

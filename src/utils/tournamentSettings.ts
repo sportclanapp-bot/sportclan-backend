@@ -290,6 +290,12 @@ export type Category = {
   /** Rating in the sport at most / at least this. */
   maxRating?: number | null;
   minRating?: number | null;
+  /**
+   * Badminton 7.11 · how age is counted: 'year' = the age a player turns in the
+   * tournament's year (age on 31 Dec — BAI's birth-year cut-off: U-15 is "born
+   * on or after 1 Jan of year − 14"). Absent = the age on the start date (as before).
+   */
+  ageBasis?: 'year' | null;
 };
 
 const isInt = (x: unknown, lo: number, hi: number) => typeof x === 'number' && Number.isInteger(x) && x >= lo && x <= hi;
@@ -298,8 +304,9 @@ export function categoryRefusal(c: unknown): Refusal | null {
   if (c === undefined || c === null) return null;
   if (typeof c !== 'object' || Array.isArray(c)) return refuse('A category must be an object.');
   const o = c as Record<string, unknown>;
-  const unknown = Object.keys(o).find((k) => !['gender', 'underAge', 'minAge', 'maxRating', 'minRating'].includes(k));
+  const unknown = Object.keys(o).find((k) => !['gender', 'underAge', 'minAge', 'maxRating', 'minRating', 'ageBasis'].includes(k));
   if (unknown) return refuse(`“${unknown}” isn’t part of a category.`);
+  if (o.ageBasis != null && o.ageBasis !== 'year') return refuse('Ages are on the start date, or by birth year.');
   if (o.gender != null && !['men', 'women', 'mixed'].includes(o.gender as string)) return refuse('A category is men’s, women’s, mixed or open.');
   if (o.underAge != null && !isInt(o.underAge, 6, 25)) return refuse('An under-age limit is 6 to 25.');
   if (o.minAge != null && !isInt(o.minAge, 30, 80)) return refuse('A minimum age is 30 to 80.');
@@ -315,6 +322,8 @@ export function storedCategory(c: Record<string, any> | null | undefined): Categ
   if (!c) return null;
   const out: Category = {};
   for (const k of ['gender', 'underAge', 'minAge', 'maxRating', 'minRating'] as const) if (c[k] != null) (out as Record<string, unknown>)[k] = c[k];
+  // 7.11: by birth year — only meaningful with an age limit.
+  if (c.ageBasis === 'year' && (out.underAge != null || out.minAge != null)) out.ageBasis = 'year';
   return Object.keys(out).length ? out : null;
 }
 
@@ -323,8 +332,8 @@ export function categoryLabel(c: Category | null | undefined): string | null {
   if (!c) return null;
   const parts: string[] = [];
   if (c.gender) parts.push(c.gender === 'men' ? 'Men’s' : c.gender === 'women' ? 'Women’s' : 'Mixed');
-  if (c.underAge != null) parts.push(`Under ${c.underAge}`);
-  if (c.minAge != null) parts.push(`${c.minAge} and over`);
+  if (c.underAge != null) parts.push(`Under ${c.underAge}${c.ageBasis === 'year' ? ' (by birth year)' : ''}`);
+  if (c.minAge != null) parts.push(`${c.minAge} and over${c.ageBasis === 'year' ? ' (by birth year)' : ''}`);
   if (c.minRating != null && c.maxRating != null) parts.push(`Rated ${c.minRating}–${c.maxRating}`);
   else if (c.maxRating != null) parts.push(`Rated up to ${c.maxRating}`);
   else if (c.minRating != null) parts.push(`Rated ${c.minRating} and up`);
@@ -343,6 +352,12 @@ export function ageOn(dob: string, on: Date): number | null {
   return age;
 }
 
+/** 7.11 · the age a player turns in `on`'s year (their age on 31 December): BAI's birth-year cut-off. */
+export function ageInYear(dob: string, on: Date): number | null {
+  const m = /^(\d{4})-/.exec(dob);
+  return m ? on.getUTCFullYear() - Number(m[1]) : null;
+}
+
 /** "Tara’s", "Kings’" — as the app's possessive(); this file takes no imports. */
 const poss = (n: string) => n + (/s$/i.test(n.trim()) ? '’' : '’s');
 
@@ -357,10 +372,19 @@ export function categoryProblem(c: Category | null | undefined, players: Categor
       if (p.gender !== want) return `This is a ${c.gender === 'men' ? 'men’s' : 'women’s'} event, and ${p.name} can’t play in it.`;
     }
     if (c.underAge != null || c.minAge != null) {
-      const age = p.dob ? ageOn(p.dob, on) : null;
+      // 7.11: by birth year, the age a player turns in the start date's year.
+      const byYear = c.ageBasis === 'year';
+      const age = p.dob ? (byYear ? ageInYear(p.dob, on) : ageOn(p.dob, on)) : null;
       if (age == null) return `${poss(p.name)} profile doesn’t list their date of birth, and this event has an age limit. Add it to the profile first.`;
-      if (c.underAge != null && age >= c.underAge) return `This is an under-${c.underAge} event, and ${p.name} is ${age} on the start date.`;
-      if (c.minAge != null && age < c.minAge) return `This event is for ${c.minAge} and over, and ${p.name} is ${age} on the start date.`;
+      const year = on.getUTCFullYear();
+      if (c.underAge != null && age >= c.underAge) {
+        return byYear ? `This is an under-${c.underAge} event by birth year (born ${year - c.underAge + 1} or later), and ${p.name} turns ${age} in ${year}.`
+          : `This is an under-${c.underAge} event, and ${p.name} is ${age} on the start date.`;
+      }
+      if (c.minAge != null && age < c.minAge) {
+        return byYear ? `This event is for ${c.minAge} and over by birth year (born ${year - c.minAge} or earlier), and ${p.name} turns ${age} in ${year}.`
+          : `This event is for ${c.minAge} and over, and ${p.name} is ${age} on the start date.`;
+      }
     }
     if (c.maxRating != null && p.rating != null && p.rating > c.maxRating) return `This event is for players rated up to ${c.maxRating}, and ${p.name} is rated ${Math.round(p.rating)}.`;
     if (c.minRating != null && (p.rating == null || p.rating < c.minRating)) {

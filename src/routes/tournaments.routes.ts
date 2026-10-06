@@ -9,6 +9,8 @@ import {
   updateEntry,
   updateTournament,
   joinByCode,
+  tournamentByCode,
+  entryCheck,
   getBracket,
   updateFixtures,
   getTournamentChat,
@@ -39,6 +41,9 @@ guardIdParams(router);
 router.post('/', authenticateToken, createTournament);
 router.get('/', authenticateToken, listTournaments);
 router.post('/join', authenticateToken, joinByCode);
+// 6 Oct 2026: a code's tournament, and which teams can enter it (before picking one).
+router.get('/code/:code', authenticateToken, tournamentByCode);
+router.post('/:id/entry-check', authenticateToken, entryCheck);
 router.get('/:id', authenticateToken, getTournament);
 router.get('/:id/bracket', authenticateToken, getBracket);
 router.patch('/:id', authenticateToken, updateTournament);

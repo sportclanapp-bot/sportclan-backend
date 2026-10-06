@@ -637,6 +637,80 @@ async function entryRefusal(
   return null;
 }
 
+// GET /tournaments/code/:code — the tournament a join code names, so the app
+// can offer only teams that can enter it (its sport; its category) before the
+// captain picks one. 6 Oct 2026: join by code listed every team the captain had.
+export async function tournamentByCode(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const code = String(req.params.code ?? '').trim().toUpperCase();
+    if (!code || code.length > 20) return res.status(400).json({ error: 'That isn’t a join code.', code: 'BAD_CODE' });
+    const { data: t } = await supabase
+      .from('tournaments')
+      .select('id, name, sport_id, status, format, entry_fee, settings, start_date')
+      .eq('entry_code', code)
+      .maybeSingle();
+    if (!t) return res.status(404).json({ error: 'No tournament has that code. Check it with the organiser.', code: 'TOURNAMENT_NOT_FOUND' });
+    const category = settingsOf(t as { settings?: unknown }).category ?? null;
+    return res.json({ tournament: { id: t.id, name: t.name, sport_id: t.sport_id, status: t.status, format: t.format, entry_fee: t.entry_fee, start_date: t.start_date, category } });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// POST /tournaments/:id/entry-check { team_ids, as: 'captain' | 'organiser' }
+// Each team: can it enter, and if not, why — the same checks the entry itself
+// runs (sport, category, full, closed, already entered, a player on two teams),
+// so a picker can say so beside the team instead of the entry being refused.
+// A captain asks about teams they run; an organiser about any team.
+export async function entryCheck(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const body = (req.body ?? {}) as { team_ids?: unknown; as?: unknown };
+    const ids = Array.isArray(body.team_ids) ? body.team_ids.filter((x): x is string => typeof x === 'string' && isUuid(x)) : [];
+    if (ids.length === 0 || ids.length > 30) return res.status(400).json({ error: 'Send 1 to 30 team ids.', code: 'BAD_TEAM_IDS' });
+    const asOrganiser = body.as === 'organiser';
+    const { data: tournament } = await supabase.from('tournaments').select(ENTRY_TOURNAMENT_COLS).eq('id', id).maybeSingle();
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+    if (asOrganiser && !(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only the organiser can check teams to add.' });
+    const [{ data: roles }, { data: entered }] = await Promise.all([
+      supabase.from('team_members').select('team_id, role').eq('user_id', userId).in('team_id', ids),
+      supabase.from('tournament_entries').select('team_id, status').eq('tournament_id', id).in('team_id', ids),
+    ]);
+    const runs = new Set(((roles ?? []) as Array<{ team_id: string; role: string }>).filter((r) => r.role === 'captain' || r.role === 'vice_captain').map((r) => r.team_id));
+    const live = new Map(((entered ?? []) as Array<{ team_id: string; status: string }>).map((e) => [e.team_id, e.status]));
+    const check = async (teamId: string) => {
+      if (!asOrganiser && !runs.has(teamId)) return { team_id: teamId, ok: false, code: 'NOT_CAPTAIN', reason: 'Only the team’s captain or a co-captain can enter it.' };
+      if (await isTeamDisbanded(teamId)) return { team_id: teamId, ok: false, code: 'TEAM_DISBANDED', reason: 'This team was disbanded.' };
+      const st = live.get(teamId);
+      if (st === 'pending' || st === 'approved') {
+        const reason = st === 'approved' ? 'Already in this tournament.'
+          : asOrganiser ? 'Already entered — approve it under Entries.' : 'Already entered — waiting for the organiser.';
+        return { team_id: teamId, ok: false, code: 'ALREADY_ENTERED', reason };
+      }
+      const refusal = await entryRefusal(tournament as EntryTournament, teamId, asOrganiser
+        ? { capCounts: ['approved'], deadline: false, overlap: true }
+        : { capCounts: ['pending', 'approved'], deadline: true, overlap: true });
+      return refusal
+        ? { team_id: teamId, ok: false, code: (refusal.body as { code?: string }).code ?? 'REFUSED', reason: String((refusal.body as { error?: string }).error ?? 'This team can’t enter.') }
+        : { team_id: teamId, ok: true, code: null, reason: null };
+    };
+    // Six teams at a time: one after another took ~6 s for nine teams on the
+    // device (each is a few queries); all thirty at once is too many queries.
+    const teams: Array<Awaited<ReturnType<typeof check>>> = new Array(ids.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(6, ids.length) }, async () => {
+      while (next < ids.length) { const i = next++; teams[i] = await check(ids[i]!); }
+    }));
+    return res.json({ teams });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 export async function directAddTeam(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -664,14 +738,18 @@ export async function directAddTeam(req: Request, res: Response) {
     const refusal = await entryRefusal(tournament as EntryTournament, team_id, { capCounts: ['approved'], deadline: false, overlap: false });
     if (refusal) return res.status(refusal.status).json(refusal.body);
 
-    // Check not already entered
+    // Check not already entered. 6 Oct 2026: a rejected or withdrawn entry is
+    // reopened as approved (as a captain's new entry reopens it); it used to be
+    // refused as "already registered", with no way for the organiser to add it.
     const { data: existing } = await supabase
       .from('tournament_entries')
-      .select('id')
+      .select('id, status')
       .eq('tournament_id', id)
       .eq('team_id', team_id)
       .maybeSingle();
-    if (existing) return res.status(400).json({ error: 'Team already registered' });
+    if (existing && existing.status !== 'rejected' && existing.status !== 'withdrawn') {
+      return res.status(400).json({ error: 'Team already registered', code: 'ALREADY_ENTERED' });
+    }
 
     // SC-240: no player may appear on two teams in the same tournament.
     const overlap = await rosterOverlapConflict(id, team_id);
@@ -682,11 +760,18 @@ export async function directAddTeam(req: Request, res: Response) {
       });
     }
 
-    const { data, error } = await supabase
-      .from('tournament_entries')
-      .insert({ tournament_id: id, team_id, status: 'approved' })
-      .select('*')
-      .single();
+    const { data, error } = existing
+      ? await supabase
+        .from('tournament_entries')
+        .update({ status: 'approved', entered_at: new Date().toISOString() })
+        .eq('id', existing.id)
+        .select('*')
+        .single()
+      : await supabase
+        .from('tournament_entries')
+        .insert({ tournament_id: id, team_id, status: 'approved' })
+        .select('*')
+        .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     void awardTournamentBadges(team_id); // SC-316: Tournament Veteran
     return res.json({ entry: data });

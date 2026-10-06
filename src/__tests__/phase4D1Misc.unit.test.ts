@@ -156,7 +156,8 @@ describe('stats and money', () => {
   });
   test('SC-283 (46f0095): a casual match with two real players counts matches played; ELO stays ranked-only', () => {
     const m = code('controllers/matches.controller.ts');
-    expect(m).toContain('if (!match.is_ranked && !walkover && participants && participants.length >= 2) {');
+    // Oct 2026: `unplayed` — a walkover; a retirement was played and counts.
+    expect(m).toContain('if (!match.is_ranked && !unplayed && participants && participants.length >= 2) {');
     expect(m).toContain('casualAttribution = true;');
   });
   test('SC-25 / Z-5b (da69331, 86aaed4): standings rows carry team_name / team_id, the diff and the sport', () => {

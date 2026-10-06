@@ -17,7 +17,8 @@ test('the time control comes from the match’s clock', () => {
 test('wired: completion (ranked 1v1 chess), void and restore, and the read endpoint', () => {
   const read = (p: string) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
   const m = read('controllers/matches.controller.ts');
-  expect(m).toContain("if (match.is_ranked && !walkover && normSportSlug(sportRow?.slug) === 'chess' && participants) {");
+  // Oct 2026: `unplayed` — a walkover; a retirement was played and is rated.
+  expect(m).toContain("if (match.is_ranked && !unplayed && normSportSlug(sportRow?.slug) === 'chess' && participants) {");
   expect(m).toContain('await applyChessTcDeltas(id, -1);');
   expect(m).toContain('await applyChessTcDeltas(id, 1);');
   expect(read('routes/users.routes.ts')).toContain("router.get('/:id/chess-ratings', authenticateToken, getChessRatings);");

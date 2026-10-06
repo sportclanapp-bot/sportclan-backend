@@ -2713,6 +2713,9 @@ export async function completeMatch(req: Request, res: Response) {
     const retired = req.body?.retired === true;
     const retiredTeamId = typeof req.body?.retired_team_id === 'string' ? req.body.retired_team_id as string : null;
     const walkover = walkoverIn === true || retired;
+    // Badminton (Oct 2026, Dipak): a retirement was played — it moves ratings (a loss
+    // for the side that retired). Only a true walkover is unrated.
+    const unplayed = walkover && !retired;
 
     // SC-376: let the recorder submit the SCORE alongside the result.
     //
@@ -3217,7 +3220,7 @@ export async function completeMatch(req: Request, res: Response) {
     // 1v1. Casual matches have no such requirement.
     // SC-254: a walkover is exempt from the lineup requirement — a forfeited
     // match has no lineup by definition; it just records the winner + advances.
-    if (match.is_ranked && !walkover) {
+    if (match.is_ranked && !unplayed) {
       const aCount = (participants ?? []).filter((p) => p.team_side === 'A').length;
       const bCount = (participants ?? []).filter((p) => p.team_side === 'B').length;
       if (aCount < 1 || bCount < 1) {
@@ -3233,7 +3236,7 @@ export async function completeMatch(req: Request, res: Response) {
     // empty, so the win-coins/streaks block and rating_change notifications below
     // are naturally skipped too). A forfeit is not a played game.
     const corePayloadProfiles: Array<Record<string, any>> = [];
-    if (match.is_ranked && !walkover && participants && participants.length > 0) {
+    if (match.is_ranked && !unplayed && participants && participants.length > 0) {
       const teamA = participants.filter((p) => p.team_side === 'A').map((p) => p.user_id);
       const teamB = participants.filter((p) => p.team_side === 'B').map((p) => p.user_id);
       allPlayerIds = [...teamA, ...teamB];
@@ -3314,7 +3317,7 @@ export async function completeMatch(req: Request, res: Response) {
     //   trajectory + SC-275 advanced-stats, which reads rating_history as the
     //   ranked universe). No migration.
     let casualAttribution = false;
-    if (!match.is_ranked && !walkover && participants && participants.length >= 2) {
+    if (!match.is_ranked && !unplayed && participants && participants.length >= 2) {
       casualAttribution = true;
       allPlayerIds = participants.map((p) => p.user_id);
       // Winner by SIDE — casual/free-text matches have no winner_team_id, so the
@@ -3389,7 +3392,7 @@ export async function completeMatch(req: Request, res: Response) {
     timer.mark('finalize');
     // BUILD 3.71: a ranked one-a-side chess game also moves both players' rating
     // in its time control (blitz, rapid, …) — beside the overall rating above.
-    if (match.is_ranked && !walkover && normSportSlug(sportRow?.slug) === 'chess' && participants) {
+    if (match.is_ranked && !unplayed && normSportSlug(sportRow?.slug) === 'chess' && participants) {
       const white = participants.filter((p) => p.team_side === 'A');
       const black = participants.filter((p) => p.team_side === 'B');
       if (white.length === 1 && black.length === 1) {
@@ -3605,7 +3608,7 @@ export async function completeMatch(req: Request, res: Response) {
       // explicit !walkover keeps the "no coins/streaks on a forfeit" intent local.)
       // SC-283: WIN-COINS stay RANKED-ONLY — coins are the economy anchor (they buy
       // gifts), a casual win must never mint currency.
-      if (match.is_ranked && !walkover && allPlayerIds.length > 0) {
+      if (match.is_ranked && !unplayed && allPlayerIds.length > 0) {
         // Award 5 coins to winners — idempotent per (user,match) via coin_events.
         if (winnerSide) {
           const winnerIds = (participants ?? []).filter((p) => p.team_side === winnerSide).map((p) => p.user_id);

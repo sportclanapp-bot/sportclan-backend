@@ -1,6 +1,7 @@
 /**
  * Badminton gap 6 (Oct 2026) · retirement: "ret." with the score as it stood;
- * the other side wins, no rating moves; and the BWF GCR group rule — a player
+ * the other side wins, and (Oct 2026, Dipak's decision) it is rated as a played
+ * match — a loss for the side that retired; a walkover stays unrated. And the BWF GCR group rule — a player
  * who withdraws or retires in the group stage has every group result deleted
  * (a tournament setting; tournaments without it keep results, as before).
  */
@@ -160,5 +161,26 @@ describe('the GCR group rule', () => {
     expect(settingsRefusal('badminton', 'round_robin', { withdrawnResults: 'maybe' })!.error).toBe('A withdrawn player’s group results are deleted or kept.');
     expect(storedSettings({ withdrawnResults: 'delete' })).toEqual({ v: 1, withdrawnResults: 'delete' });
     expect(storedSettings({ withdrawnResults: 'keep' }, { v: 1, withdrawnResults: 'delete' })).toEqual({ v: 1 });
+  });
+});
+
+describe('ratings (Dipak, Oct 2026): a retirement was played, a walkover wasn’t', () => {
+  const finalize = () => mockRpc.mock.calls.find((c) => c[0] === 'finalize_match')?.[1] as { p_results: { rating_history: Array<{ user_id: string; delta: number }>; profiles: unknown[] } } | undefined;
+  beforeEach(() => { mockRpc.mockClear(); mockSport = { slug: 'badminton', allows_draw: false }; parts = [{ user_id: 'ua', team_side: 'A' }, { user_id: 'ub', team_side: 'B' }]; });
+  test('a retirement in a ranked match: a loss for the side that retired, a win for the other', async () => {
+    setup({ status: 'live', is_ranked: true, score_summary: SCORE, rules: { v: 1, bestOf: 3, target: 21, cap: 30 }, format: 'bo3', overs: null });
+    const r = await call({ retired: true, retired_team_id: TA, winner_team_id: TB, winner_side: 'B', walkover_reason: 'Ankle' });
+    expect(r.statusCode).toBe(200);
+    const rh = finalize()!.p_results.rating_history;
+    expect(rh.map((x) => x.user_id).sort()).toEqual(['ua', 'ub']);
+    expect(rh.find((x) => x.user_id === 'ua')!.delta).toBeLessThan(0);
+    expect(rh.find((x) => x.user_id === 'ub')!.delta).toBeGreaterThan(0);
+  });
+  test('a walkover in a ranked match moves nothing (as before)', async () => {
+    setup({ status: 'scheduled', is_ranked: true, rules: { v: 1, bestOf: 3, target: 21, cap: 30 }, format: 'bo3', overs: null });
+    const r = await call({ walkover: true, winner_team_id: TB, winner_side: 'B' });
+    expect(r.statusCode).toBe(200);
+    expect(finalize()?.p_results.rating_history ?? []).toEqual([]);
+    expect(finalize()?.p_results.profiles ?? []).toEqual([]);
   });
 });

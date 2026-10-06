@@ -1,4 +1,5 @@
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
+import { plural } from '../utils/plural';
 import { selectAll } from '../utils/selectAll';
 import { joinChat } from '../utils/chatMembership';
 import { attachTeamNames } from '../utils/teamNames';
@@ -1618,7 +1619,7 @@ export async function getCommentary(req: Request, res: Response) {
         } else {
           isWicket = true;
           const how = wicketWords(p.wicket_type ?? p.type, p.fielder_name, p.bowler_name);
-          commentary = `OUT! ${batter}${how ? ` — ${how}` : ''}${p.runs != null ? ` — ${p.runs} runs` : ''}`;
+          commentary = `OUT! ${batter}${how ? ` — ${how}` : ''}${p.runs != null ? ` — ${plural(p.runs, 'run', 'runs')}` : ''}`;
         }
       } else if (ev.event_type === 'ball') {
         const runs = Number(p.runs ?? 0);
@@ -1634,7 +1635,7 @@ export async function getCommentary(req: Request, res: Response) {
           commentary = `${runs} run${runs === 1 ? '' : 's'}`;
         }
         // BUILD 3.14: box cricket — the ball hit the roof and the side loses runs.
-        if (penaltyRunsOf(p)) commentary = `Hit the roof · ${penaltyRunsOf(p)} runs`;
+        if (penaltyRunsOf(p)) commentary = `Hit the roof · ${plural(penaltyRunsOf(p), 'run', 'runs')}`;
         // V200 (visual review B08): say who — "Khan to Sharma, SIX!", the way
         // commentary reads — whenever the ball carries the names.
         commentary = ballWho(p, commentary);

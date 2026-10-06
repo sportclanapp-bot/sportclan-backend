@@ -116,6 +116,7 @@ export function tournamentLeaders(
     user_id: t.user_id, name: t.name, team_id: t.team_id, team_name: t.team_id ? teamNames[t.team_id] ?? null : null, stat, value, detail,
   });
   const played = (t: Tally) => `${t.matches.size} match${t.matches.size === 1 ? '' : 'es'}`;
+  const runs = (n: number) => `${n} run${n === 1 ? '' : 's'}`;
   const overs = (b: number) => `${Math.floor(b / 6)}${b % 6 ? `.${b % 6}` : ''}`;
   const top = (stat: LeaderStat, value: (t: Tally) => number, detail: (t: Tally) => string, tie: (a: Tally, b: Tally) => number = () => 0) =>
     all.filter((t) => value(t) > 0)
@@ -128,14 +129,14 @@ export function tournamentLeaders(
     // Ties: fewer balls faced (the quicker scorer) first.
     runs: top('runs', (t) => t.runs, (t) => `${played(t)}${t.balls ? ` · SR ${Math.round((t.runs * 100) / t.balls)}` : ''}`, (a, b) => a.balls - b.balls),
     // Ties: fewer runs conceded first.
-    wickets: top('wickets', (t) => t.wickets, (t) => `${played(t)} · ${overs(t.bowlBalls)} ov · ${t.bowlRuns} runs`, (a, b) => a.bowlRuns - b.bowlRuns),
+    wickets: top('wickets', (t) => t.wickets, (t) => `${played(t)} · ${overs(t.bowlBalls)} ov · ${runs(t.bowlRuns)}`, (a, b) => a.bowlRuns - b.bowlRuns),
     best_bowling: all.filter((t) => t.best && t.best.w > 0)
       .sort((a, b) => b.best!.w - a.best!.w || a.best!.r - b.best!.r || a.name.localeCompare(b.name))
       .slice(0, LEADERS_PER_STAT)
       .map((t) => row(t, 'best_bowling', t.best!.w, `${t.best!.w}/${t.best!.r}`)),
-    sixes: top('sixes', (t) => t.sixes, (t) => `${played(t)} · ${t.runs} runs`),
+    sixes: top('sixes', (t) => t.sixes, (t) => `${played(t)} · ${runs(t.runs)}`),
     catches: top('catches', (t) => t.catches, (t) => `${played(t)}${t.stumpings ? ` · ${t.stumpings} stumping${t.stumpings === 1 ? '' : 's'}` : ''}`),
-    player_of_tournament: top('player_of_tournament', pot, (t) => [`${t.runs} runs`, `${t.wickets} wkt${t.wickets === 1 ? '' : 's'}`, ...(t.catches + t.runouts + t.stumpings ? [`${t.catches + t.runouts + t.stumpings} in the field`] : [])].join(' · ')),
+    player_of_tournament: top('player_of_tournament', pot, (t) => [runs(t.runs), `${t.wickets} wkt${t.wickets === 1 ? '' : 's'}`, ...(t.catches + t.runouts + t.stumpings ? [`${t.catches + t.runouts + t.stumpings} in the field`] : [])].join(' · ')),
   };
 }
 

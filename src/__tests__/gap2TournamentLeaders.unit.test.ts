@@ -64,3 +64,9 @@ test('an account’s name today, even when the rollup has none (found on the loc
   expect(L2.runs.map((r) => [r.name, r.value])).toEqual([['Ravi K', 12]]);
   expect(tournamentLeaders([M1], [], TEAMS, { u1: { name: 'Ravi Kumar', deleted: false } }).runs[0]!.name).toBe('Ravi Kumar');
 });
+// Oct 2026 (pre-release pass, found on the device: "1 runs · 1 wkt").
+test('one run reads "1 run"', () => {
+  const one = tournamentLeaders([m('m9', 'tA', 'tB', { u9: { name: 'Solo', side: 'A', runs: 1, balls: 1, sixes: 0, bowl_balls: 6, bowl_runs: 1, bowl_wickets: 1 } })], [], TEAMS);
+  expect(one.player_of_tournament[0]!.detail).toBe('1 run · 1 wkt');
+  expect(one.wickets[0]!.detail).toBe('1 match · 1 ov · 1 run');
+});

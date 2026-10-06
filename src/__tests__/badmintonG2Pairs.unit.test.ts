@@ -46,7 +46,7 @@ jest.mock('../utils/blocks', () => ({
 jest.mock('../utils/tournamentChat', () => ({ syncTournamentChatMembers: jest.fn(), syncAfterSuccess: jest.fn(), canOpenTournamentChat: jest.fn(async () => false) }));
 
 // eslint-disable-next-line import/first
-import { enterSelf, addPlayersEntry, createPairInvite, answerPairInvite, getPairs, entryTeamName } from '../controllers/pairEntries.controller';
+import { enterSelf, addPlayersEntry, createPairInvite, answerPairInvite, getPairs, entryTeamName, relatedEntries } from '../controllers/pairEntries.controller';
 // eslint-disable-next-line import/first
 import { createEntry, updateEntry } from '../controllers/tournaments.controller';
 // eslint-disable-next-line import/first
@@ -230,5 +230,17 @@ describe('entry teams stay hidden', () => {
     expect(long.length).toBeLessThanOrEqual(60);
     expect(entryTeamName(['Solo'])).toBe('Solo');
     expect(fakeId()).toMatch(/^0{8}-/);
+  });
+});
+
+describe('gap 6 · after a retirement: the player’s other entries', () => {
+  test('this entry, and their entries in the tournament’s other events (organisers only)', async () => {
+    await run(enterSelf, RAVI, { id: MS });
+    await run(addPlayersEntry, ORG, { id: XD }, { user_ids: [RAVI, PRIYA] });
+    const msTeam = entriesOf(MS)[0].team_id;
+    const r = await run(relatedEntries, ORG, { id: MS, teamId: msTeam });
+    expect(r.body.this_entry).toEqual({ entry_id: entriesOf(MS)[0].id });
+    expect(r.body.others).toEqual([expect.objectContaining({ tournament_id: XD, entry_id: entriesOf(XD)[0].id, team_name: 'Ravi K / Priya' })]);
+    expect((await run(relatedEntries, RAVI, { id: MS, teamId: msTeam })).statusCode).toBe(403);
   });
 });

@@ -2,6 +2,7 @@ import { selectAll } from '../utils/selectAll';
 import { hideTestFor, excludeTest, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { tableInputs } from '../utils/tournamentSettings';
 import { rootTournamentId } from '../utils/tournamentEvents';
 import { sanitizeError } from '../utils/response';
 import { activeSportIds } from '../utils/sports';
@@ -79,8 +80,12 @@ export async function getTournamentStandings(req: Request, res: Response) {
     // this controller, which is how the display and the ranking came to disagree:
     // the column said NRR while the order was decided by `scored - conceded`.
     // One source of truth now produces both, so they cannot drift again.
-    const teamIds = (entries ?? []).map((e: any) => e.team_id).filter(Boolean);
-    const stats = computeStats(teamIds, (matches ?? []) as any, undefined, pts);
+    // Badminton gap 6: with withdrawnResults 'delete' (BWF GCR), a withdrawn
+    // entry and every result it played leave the table.
+    const tin = tableInputs((tournament as any).settings, (entries ?? []).map((e: any) => e.team_id).filter(Boolean),
+      (matches ?? []) as any[], (entries ?? []).filter((e: any) => e.status === 'withdrawn').map((e: any) => e.team_id));
+    const teamIds = tin.teamIds;
+    const stats = computeStats(teamIds, tin.matches as any, undefined, pts);
 
     const table = new Map<string, {
       teamId: string; team: string; teamShort: string | null; groupLabel: string | null; withdrawn: boolean;
@@ -89,6 +94,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
       nrr: number | null; runsScored: number; oversFaced: number; runsConceded: number; oversBowled: number;
     }>();
     for (const e of entries ?? []) {
+      if (!teamIds.includes(e.team_id)) continue; // gap 6: deleted with its results
       const t = e.team as any;
       const s = stats.get(e.team_id)!;
       // A withdrawn team that never played is a phantom row — it has no record
@@ -137,7 +143,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
       // points. That is exactly the display-vs-ranking split SC-89 exists to
       // prevent, and it reordered a live 3-point team below a 0-point one.
       const withdrawnIds = new Set(groupRows.filter((r) => r.withdrawn).map((r) => r.teamId));
-      const ranked = rankTeams(groupRows.map((r) => r.teamId), matches ?? [], tiebreakerRules, pts);
+      const ranked = rankTeams(groupRows.map((r) => r.teamId), tin.matches as any[], tiebreakerRules, pts);
       for (const id of ranked.filter((i) => !withdrawnIds.has(i))) orderIndex.set(id, running++);
       for (const id of ranked.filter((i) => withdrawnIds.has(i))) orderIndex.set(id, running++);
     }

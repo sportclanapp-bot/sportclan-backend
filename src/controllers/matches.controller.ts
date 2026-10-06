@@ -2705,7 +2705,14 @@ export async function completeMatch(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const timer = stepTimer();
-    const { winner_team_id, winner_side, walkover, walkover_reason, is_draw, idempotent } = req.body || {};
+    const { winner_team_id, winner_side, walkover: walkoverIn, walkover_reason, is_draw, idempotent } = req.body || {};
+    // Badminton gap 6: a retirement ("ret.") — a player can't go on. Decided for
+    // the other side with the score as it stood; like a walkover it needs no
+    // finished score and moves no rating, but the score is kept and the result
+    // reads "… won (… retired)".
+    const retired = req.body?.retired === true;
+    const retiredTeamId = typeof req.body?.retired_team_id === 'string' ? req.body.retired_team_id as string : null;
+    const walkover = walkoverIn === true || retired;
 
     // SC-376: let the recorder submit the SCORE alongside the result.
     //
@@ -2886,7 +2893,16 @@ export async function completeMatch(req: Request, res: Response) {
     // organiser-driven single-match walkover instead stays status='completed' — a
     // decided result that advances the bracket. A walkover must name a winner.
     if (walkover && !winner_team_id) {
-      return res.status(400).json({ error: 'A walkover needs a winning team.' });
+      return res.status(400).json({ error: retired ? 'A retirement needs the side that goes through.' : 'A walkover needs a winning team.' });
+    }
+    if (retired) {
+      const sides = [match.team_a_id, match.team_b_id];
+      if (!retiredTeamId || !sides.includes(retiredTeamId) || !sides.includes(winner_team_id) || retiredTeamId === winner_team_id) {
+        return res.status(400).json({ error: 'Name the side that retired; the other side wins.', code: 'BAD_RETIREMENT' });
+      }
+      if (match.status !== 'live') {
+        return res.status(409).json({ error: 'Only a match being played can end in a retirement — before it starts, give a walkover.', code: 'NOT_LIVE' });
+      }
     }
 
     // SC-23: knockout bracket matches can't end in a draw — a decisive winner is
@@ -3519,7 +3535,13 @@ export async function completeMatch(req: Request, res: Response) {
       // result, and override the score-derived text ("… won by 0 runs") with the
       // forfeit label. winner_team_id is always present on a walkover → winnerSide
       // is set here.
-      if (walkover && derivedSide) {
+      if (retired && derivedSide) {
+        // Badminton gap 6: the score at retirement stays; the result says who retired.
+        const rName = retiredTeamId === match.team_a_id ? aName : bName;
+        ss.retired = { team_id: retiredTeamId, side: retiredTeamId === match.team_a_id ? 'A' : 'B', ...(walkover_reason ? { reason: String(walkover_reason).slice(0, 200) } : {}) };
+        ss.result = `${derivedSide === 'A' ? aName : bName} won (${rName} retired)`;
+        resultForNotice = ss.result;
+      } else if (walkover && derivedSide) {
         ss.walkover = true;
         if (walkover_reason) ss.walkover_reason = String(walkover_reason).slice(0, 200);
         const wName = derivedSide === 'A' ? aName : bName;
@@ -3543,7 +3565,7 @@ export async function completeMatch(req: Request, res: Response) {
       // the pre-migration fallback, i.e. never in production.
       // Phase 3: decisive when a SIDE won — a singles or free-text win has no
       // team id, and keying on one recorded every such win as a draw.
-      patch.result_type = walkover ? 'walkover' : ((winner_team_id || patch.winner_team_id || derivedSide) ? 'decisive' : 'draw');
+      patch.result_type = retired ? 'retired' : walkover ? 'walkover' : ((winner_team_id || patch.winner_team_id || derivedSide) ? 'decisive' : 'draw');
       // SC-415: stamp when the match was ACTUALLY completed. The activity heatmap
       // used to bucket by scheduled_at, so a match completed on a different day
       // from its slot landed on the wrong day — or vanished entirely when the

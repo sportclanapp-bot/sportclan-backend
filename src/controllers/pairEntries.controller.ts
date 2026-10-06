@@ -426,3 +426,38 @@ export async function getPairs(req: Request, res: Response) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+// GET /tournaments/:id/teams/:teamId/related-entries — badminton gap 6. After a
+// retirement (GCR): this entry in this event, and every live entry its players
+// have in the tournament's other events, so the organiser can withdraw them.
+export async function relatedEntries(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const t = await loadTournament(String(req.params.id));
+    const teamId = String(req.params.teamId);
+    if (!t || !isUuid(teamId)) return res.status(404).json({ error: 'Not found' });
+    if (!(await isTournamentOrganiser(t.id, userId))) return res.status(403).json({ error: 'Only the organiser can see this.' });
+    const { data: own } = await supabase.from('tournament_entries').select('id, status').eq('tournament_id', t.id).eq('team_id', teamId).maybeSingle();
+    const { data: members } = await supabase.from('team_members').select('user_id').eq('team_id', teamId);
+    const players = ((members ?? []) as Array<{ user_id: string }>).map((m) => m.user_id);
+    let others: Array<{ tournament_id: string; event_label: string | null; entry_id: string; team_name: string | null; status: string }> = [];
+    if (t.parent_id && players.length) {
+      const { data: sibs } = await supabase.from('tournaments').select('id, event_label, status').eq('parent_id', t.parent_id).neq('id', t.id).in('status', ['upcoming', 'live']);
+      const sib = (sibs ?? []) as Array<{ id: string; event_label: string | null }>;
+      if (sib.length) {
+        const { data: ents } = await supabase.from('tournament_entries').select('id, tournament_id, team_id, status').in('tournament_id', sib.map((x) => x.id)).in('status', ['pending', 'approved']);
+        const rows = (ents ?? []) as Array<{ id: string; tournament_id: string; team_id: string; status: string }>;
+        const { data: mem2 } = rows.length ? await supabase.from('team_members').select('team_id, user_id').in('team_id', rows.map((r) => r.team_id)).in('user_id', players) : { data: [] };
+        const hit = new Set(((mem2 ?? []) as Array<{ team_id: string }>).map((m) => m.team_id));
+        const { data: names } = hit.size ? await supabase.from('teams').select('id, name').in('id', [...hit]) : { data: [] };
+        const nameOf = new Map(((names ?? []) as Array<{ id: string; name: string }>).map((x) => [x.id, x.name]));
+        const labelOf = new Map(sib.map((x) => [x.id, x.event_label]));
+        others = rows.filter((r) => hit.has(r.team_id)).map((r) => ({ tournament_id: r.tournament_id, event_label: labelOf.get(r.tournament_id) ?? null, entry_id: r.id, team_name: nameOf.get(r.team_id) ?? null, status: r.status }));
+      }
+    }
+    return res.json({ this_entry: own && ['pending', 'approved'].includes((own as { status: string }).status) ? { entry_id: (own as { id: string }).id } : null, others });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}

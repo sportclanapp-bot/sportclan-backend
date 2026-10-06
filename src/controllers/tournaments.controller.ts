@@ -68,7 +68,7 @@ import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
-import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal } from '../utils/tournamentSettings';
+import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, tableInputs } from '../utils/tournamentSettings';
 import { drawOrder } from '../utils/drawOrder';
 import { sharedScheduleFor } from '../utils/sharedCourts';
 import { eventLimitRefusal, eventLimitsRefusal, storedEventLimits } from '../utils/eventLimits';
@@ -1701,6 +1701,11 @@ export async function updateTournament(req: Request, res: Response) {
           && (await tournamentHasResult(id!))) {
         return res.status(409).json({ error: 'Results are already in, so the points can’t change.', code: 'POINTS_LOCKED' });
       }
+      // Badminton gap 6: so is what a withdrawal does to the table.
+      if ('withdrawnResults' in incoming && (incoming.withdrawnResults === 'delete') !== (current.withdrawnResults === 'delete')
+          && (await tournamentHasResult(id!))) {
+        return res.status(409).json({ error: 'Results are already in, so what a withdrawal does to the table can’t change.', code: 'WITHDRAWN_RULE_LOCKED' });
+      }
       // BUILD 4.8: so is a walkover's score (walkovers already recorded keep theirs).
       if (changedDrawKey(current, incoming, ['walkoverScore']) && (await tournamentHasResult(id!))) {
         return res.status(409).json({ error: 'Results are already in, so the walkover score can’t change.', code: 'WALKOVER_LOCKED' });
@@ -2821,8 +2826,10 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
     const { data: matches } = await supabase
       .from('matches').select('team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
       .eq('tournament_id', tournamentId).is('voided_at', null);
+    // Badminton gap 6: a withdrawn player's results deleted (BWF GCR), when the tournament says so.
+    const tin = tableInputs((t as any)?.settings, teamIds, (matches ?? []) as any[], await withdrawnTeamIds(tournamentId));
     const leader = rankTeams(
-      teamIds, (matches ?? []) as any[], ((t as any)?.tiebreaker_rules ?? []) as any[], await tournamentPoints(t as any),
+      tin.teamIds, tin.matches, ((t as any)?.tiebreaker_rules ?? []) as any[], await tournamentPoints(t as any),
     )[0];
     if (!leader) return null;
     const e = (entries ?? []).find((x) => x.team_id === leader);
@@ -2891,6 +2898,12 @@ export async function recrownAfterVoidChange(matchId: string): Promise<void> {
   }
 }
 
+/** Badminton gap 6: the teams withdrawn from this tournament (their results may be deleted from tables). */
+async function withdrawnTeamIds(tournamentId: string): Promise<string[]> {
+  const { data } = await supabase.from('tournament_entries').select('team_id').eq('tournament_id', tournamentId).eq('status', 'withdrawn');
+  return ((data ?? []) as Array<{ team_id: string }>).map((e) => e.team_id);
+}
+
 async function crownLeagueChampion(tournamentId: string): Promise<void> {
   if (await hasUnplayedFixtures(tournamentId)) return;
   const { data: entries } = await supabase
@@ -2913,7 +2926,8 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
   const tiebreakerRules = ((trow as any)?.tiebreaker_rules ?? []) as any[];
   const pts = await tournamentPoints(trow as any);
 
-  const ordered = rankTeams(teamIds, (matches ?? []) as any[], tiebreakerRules, pts);
+  const tin = tableInputs((trow as any)?.settings, teamIds as string[], (matches ?? []) as any[], await withdrawnTeamIds(tournamentId)); // gap 6
+  const ordered = rankTeams(tin.teamIds, tin.matches, tiebreakerRules, pts);
   const championId = ordered[0];
   if (!championId) return;
 
@@ -3247,7 +3261,7 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
 
   const { data: entries } = await supabase
     .from('tournament_entries')
-    .select('team_id, group_label, club, team:teams!team_id(id, name, short_name)')
+    .select('team_id, group_label, club, status, team:teams!team_id(id, name, short_name)')
     .eq('tournament_id', tournamentId)
     .not('group_label', 'is', null);
 
@@ -3263,24 +3277,32 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
 
   const nameOf: Record<string, string> = {};
   const groupTeams: Record<string, string[]> = {};
+  // Badminton gap 6: with withdrawnResults 'delete', a withdrawn entry leaves its group and its results go.
+  const goneIds = (trow as any)?.settings?.withdrawnResults === 'delete'
+    ? new Set(((entries ?? []) as Array<{ team_id: string; status?: string }>).filter((e) => e.status === 'withdrawn').map((e) => e.team_id))
+    : new Set<string>();
   for (const e of entries ?? []) {
+    if (goneIds.has(e.team_id as string)) continue;
     const label = (e.group_label as string) ?? '?';
     const tid = e.team_id as string;
     nameOf[tid] = (e.team as any)?.name ?? 'Team';
     (groupTeams[label] ??= []).push(tid);
   }
   const labels = Object.keys(groupTeams).sort();
+  const tableMatches = goneIds.size
+    ? groupMatches.filter((m) => !goneIds.has((m as { team_a_id?: string }).team_a_id ?? '') && !goneIds.has((m as { team_b_id?: string }).team_b_id ?? ''))
+    : groupMatches;
 
   // SC-89: rank each group with the full tiebreak ladder (points -> head-to-head
   // -> score-diff -> score-scored -> team_id), honouring the tournament's
   // configured tiebreaker_rules when set. team_id terminator = no strand.
-  const globalStats = computeStats(Object.keys(nameOf), groupMatches, undefined, pts);
+  const globalStats = computeStats(Object.keys(nameOf), tableMatches, undefined, pts);
   const ptsOf = (id: string) => globalStats.get(id)?.points ?? 0;
 
   // ranks[r] = every team that finished position r (0-based) in its group.
   const ranks: Array<Array<{ id: string; name: string }>> = [];
   for (const label of labels) {
-    const orderedIds = rankTeams(groupTeams[label], groupMatches, tiebreakerRules, pts);
+    const orderedIds = rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts);
     for (let r = 0; r < qualsPerGroup; r++) {
       const id = orderedIds[r];
       if (id) (ranks[r] ??= []).push({ id, name: nameOf[id] ?? 'Team' });
@@ -3299,7 +3321,7 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   // the lowest seeds, so they meet the group winners.
   if (settingsOf(trow as { settings?: unknown }).bestThirds) {
     const open = ko1.length * 2 - seeds.length;
-    const ranked = labels.map((label) => rankTeams(groupTeams[label], groupMatches, tiebreakerRules, pts));
+    const ranked = labels.map((label) => rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts));
     for (const id of bestPlacedAcrossGroups(ranked, qualsPerGroup, open, globalStats)) seeds.push({ id, name: nameOf[id] ?? 'Team' });
   }
   if (seeds.length < 2) return;

@@ -249,6 +249,12 @@ export type TournamentSettings = {
   minPlayers?: number;
   /** Cricket gap 9 · a tied knockout with no (more) super over possible goes to the higher seed / group finisher ('seed', the default when absent), more boundaries, or a toss. */
   tieFallback?: 'seed' | 'boundaries' | 'toss';
+  /**
+   * Badminton gap 6 · BWF GCR: when a player withdraws or retires during the
+   * group stage, all their group results are deleted ('delete'). Absent or
+   * 'keep' = the results they played stand for their opponents (as before).
+   */
+  withdrawnResults?: 'delete' | 'keep';
 };
 
 export const GRACE_MINUTES: [number, number] = [5, 60];
@@ -428,7 +434,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -451,6 +457,7 @@ export function settingsRefusal(sport: string | null | undefined, format: string
   // 0 clears a rule (an edit), like the rest.
   if (o.graceMinutes != null && o.graceMinutes !== 0 && !whole(o.graceMinutes, GRACE_MINUTES)) return refuse(`The grace time must be ${GRACE_MINUTES[0]} to ${GRACE_MINUTES[1]} minutes.`);
   if (o.tieFallback != null && o.tieFallback !== 'seed' && o.tieFallback !== 'boundaries' && o.tieFallback !== 'toss') return refuse('A tied knockout goes to the higher seed, more boundaries or a toss.');
+  if (o.withdrawnResults != null && o.withdrawnResults !== 'delete' && o.withdrawnResults !== 'keep') return refuse('A withdrawn player’s group results are deleted or kept.');
   if (o.minPlayers != null && o.minPlayers !== 0 && !whole(o.minPlayers, MIN_PLAYERS)) return refuse(`The fewest players a team can play with must be ${MIN_PLAYERS[0]} to ${MIN_PLAYERS[1]}.`);
   if (o.swiss != null) {
     if (format !== 'swiss') return refuse('Swiss rounds are for a Swiss tournament.');
@@ -519,6 +526,10 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
     else delete out.walkoverScore;
   }
   // Gap 9: the tie fallback ('seed' is the default, so it isn't stored).
+  if ('withdrawnResults' in s) {
+    if (s.withdrawnResults === 'delete') out.withdrawnResults = 'delete';
+    else delete out.withdrawnResults;
+  }
   if ('tieFallback' in s) {
     if (s.tieFallback && s.tieFallback !== 'seed') out.tieFallback = s.tieFallback;
     else delete out.tieFallback;
@@ -530,4 +541,21 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
     else delete out[k];
   }
   return out;
+}
+
+/**
+ * Badminton gap 6 · what a group table is built from. With `withdrawnResults:
+ * 'delete'` (BWF GCR), a withdrawn (or retired-and-withdrawn) entry leaves the
+ * table and every match it played is dropped; otherwise nothing changes.
+ */
+export function tableInputs<M extends { team_a_id?: string | null; team_b_id?: string | null }>(
+  settings: unknown, teamIds: string[], matches: M[], withdrawn: Iterable<string>,
+): { teamIds: string[]; matches: M[] } {
+  if ((settings as { withdrawnResults?: string } | null)?.withdrawnResults !== 'delete') return { teamIds, matches };
+  const gone = new Set(withdrawn);
+  if (gone.size === 0) return { teamIds, matches };
+  return {
+    teamIds: teamIds.filter((t) => !gone.has(t)),
+    matches: matches.filter((m) => !gone.has(m.team_a_id ?? '') && !gone.has(m.team_b_id ?? '')),
+  };
 }

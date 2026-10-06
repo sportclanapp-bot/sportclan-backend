@@ -14,7 +14,7 @@ jest.mock('../utils/supabase', () => {
     const q: string[] = [`from:${t}`];
     mockLog.push(q);
     const chain: any = {};
-    for (const m of ['select', 'in', 'not', 'eq', 'neq', 'is', 'limit', 'maybeSingle', 'single', 'update', 'delete', 'order', 'gt', 'gte', 'lt', 'upsert']) {
+    for (const m of ['select', 'in', 'not', 'eq', 'neq', 'is', 'limit', 'range', 'maybeSingle', 'single', 'update', 'delete', 'order', 'gt', 'gte', 'lt', 'upsert']) {
       chain[m] = jest.fn((...a: unknown[]) => { q.push(`${m}:${JSON.stringify(a)}`); return chain; });
     }
     chain.insert = jest.fn((row: unknown) => { q.push(`insert:${JSON.stringify(row)}`); return chain; });
@@ -192,17 +192,21 @@ describe('F5 · a finished match says so with a code', () => {
 
 describe('F7 · events list: bad limit or since is not a 500', () => {
   const list = async (query: object) => { const r = res(); await actual.listEvents({ userId: SCORER, params: { matchId: MID }, query } as any, r); return r; };
-  const limitOf = () => mockLog[0]?.find((c) => c.startsWith('limit:'));
+  // Oct 2026 sweep: a page is a range (one extra row says whether there is more).
+  const limitOf = () => mockLog[0]?.find((c) => c.startsWith('range:'));
   test('limit -5 → the default 500', async () => {
     expect((await list({ limit: '-5' })).statusCode).toBe(200);
-    expect(limitOf()).toBe('limit:[500]');
+    expect(limitOf()).toBe('range:[0,500]');
   });
-  test('limit 20 → 20; limit 5000 → 1000', async () => {
+  test('limit 20 → 20; limit 5000 → 1000; offset moves the page', async () => {
     await list({ limit: '20' });
-    expect(limitOf()).toBe('limit:[20]');
+    expect(limitOf()).toBe('range:[0,20]');
     mockLog = [];
     await list({ limit: '5000' });
-    expect(limitOf()).toBe('limit:[1000]');
+    expect(limitOf()).toBe('range:[0,1000]');
+    mockLog = [];
+    await list({ limit: '20', offset: '40' });
+    expect(limitOf()).toBe('range:[40,60]');
   });
   test.each([['garbage'], [['a', 'b']]])('since %j → 400', async (since) => {
     const r = await list({ since });

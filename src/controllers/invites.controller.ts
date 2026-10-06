@@ -1,3 +1,4 @@
+import { isRangeError, pageMeta, parsePagination } from '../utils/pagination';
 import { Request, Response } from 'express';
 import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
@@ -224,20 +225,29 @@ export async function withdrawInvite(req: Request, res: Response) {
 export async function listInvites(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-  const { data, error } = await supabase
-    .from('invites')
-    .select('id, sender_id, receiver_id, sport_id, message, status, created_at, responded_at, sender:sender_id (id, name, username, profile_picture_url), sport:sport_id (id, name, emoji)')
-    .eq('receiver_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(50);
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  // Oct 2026 sweep: the newest 50 were the whole list, and "N pending" was
+  // counted from them. Now paged (limit / offset, has_more, total), with the
+  // pending count from the database (fresh ones only — older are expired).
+  const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 50, maxLimit: 100 });
+  const [{ data, error, count }, { count: pendingCount }] = await Promise.all([
+    supabase
+      .from('invites')
+      .select('id, sender_id, receiver_id, sport_id, message, status, created_at, responded_at, sender:sender_id (id, name, username, profile_picture_url), sport:sport_id (id, name, emoji)', { count: 'exact' })
+      .eq('receiver_id', userId)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(p.from, p.to),
+    supabase.from('invites').select('id', { count: 'exact', head: true })
+      .eq('receiver_id', userId).eq('status', 'pending').gte('created_at', inviteFreshCutoffIso()),
+  ]);
+  if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
   // SC-332: a >48h-old pending invite is surfaced as 'expired' (not actionable),
   // whether or not the hygiene sweep has flipped its stored status yet.
   const nowMs = Date.now();
   const invites = (data || []).map((inv: any) =>
     isInviteExpired(inv, nowMs) ? { ...inv, status: 'expired' } : inv,
   );
-  return res.json({ invites });
+  return res.json({ invites, pending_count: pendingCount ?? 0, ...pageMeta(count, p) });
 }
 
 // SC-332: hygiene sweep — flip stale PENDING invites to 'expired'. NOT required for

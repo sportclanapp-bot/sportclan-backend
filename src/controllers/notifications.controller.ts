@@ -1,3 +1,4 @@
+import { selectAll } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { notifyUser } from '../utils/notify';
@@ -137,11 +138,15 @@ export async function weeklyDigest(req: Request, res: Response) {
   //
   // The participation row carries no timestamp, so the MATCH's does the dating,
   // exactly as the activity heatmap already does it.
-  const { data: myParticipations } = await supabase
+  // Oct 2026 sweep: it read 500 participations (in no order), so a player with
+  // more lost matches from the count. Completed ones only, every page.
+  const myParticipations = await selectAll<{ match_id: string; match: unknown }>((from, to) => supabase
     .from('match_participants')
-    .select('match_id, match:matches(status, updated_at, scheduled_at, voided_at)')
+    .select('id, match_id, match:matches!inner(status, updated_at, scheduled_at, voided_at)')
     .eq('user_id', userId)
-    .limit(500);
+    .eq('match.status', 'completed')
+    .order('id', { ascending: true })
+    .range(from, to)).catch(() => []);
   const sinceMs = new Date(sinceIso).getTime();
   const matches_played = (myParticipations ?? []).filter((row: any) => {
     const m = row.match;

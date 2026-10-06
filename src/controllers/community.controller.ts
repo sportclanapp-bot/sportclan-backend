@@ -1,3 +1,4 @@
+import { selectAll } from '../utils/selectAll';
 import {
   asDeletedPlaceholder, commentForWrite, commentGone, hiddenFrom, isDeletedPost, livePosts, postForWrite, postGone,
   profileCommentForWrite, profilePostForWrite,
@@ -367,22 +368,31 @@ export async function getSportStoryCounts(req: Request, res: Response) {
   // SC-106: block-filtered either direction (SC-82). B2-a: posts by a deleted
   // author are COUNTED now, because they are still in the feed — a story count
   // that disagrees with the list it is counting is worse than either number.
-  let query = supabase
-    .from('community_posts')
-    .select('sport_id, sport:sports!sport_id(id, name, emoji), author:users!author_id!inner(id)')
-    .gt('created_at', since)
-    .not('sport_id', 'is', null)
-    .is('scheduled_at', null); // SC-218: don't let unpublished scheduled posts inflate the story count
-  query = livePosts(query); // #1: nor deleted ones
-  query = excludeIds(query, 'author_id', await blockedUserIds(req.userId));
-  // B03 (V245, D3): the story count agrees with the feed it counts.
-  if (await hideTestFor(req.userId)) query = excludeTestEmbed(excludeTest(query), 'author');
-  const { data, error } = await query;
-
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  const blocked = await blockedUserIds(req.userId);
+  const hide = await hideTestFor(req.userId);
+  // Oct 2026 sweep: one read stopped at 1000 posts (PostgREST's cap), so a busy
+  // week's counts stopped there too. Every page is read.
+  let data: Array<{ sport_id: string; sport: unknown }>;
+  try {
+    data = await selectAll((from, to) => {
+      let query = supabase
+        .from('community_posts')
+        .select('id, sport_id, sport:sports!sport_id(id, name, emoji), author:users!author_id!inner(id)')
+        .gt('created_at', since)
+        .not('sport_id', 'is', null)
+        .is('scheduled_at', null); // SC-218: don't let unpublished scheduled posts inflate the story count
+      query = livePosts(query); // #1: nor deleted ones
+      query = excludeIds(query, 'author_id', blocked);
+      // B03 (V245, D3): the story count agrees with the feed it counts.
+      if (hide) query = excludeTestEmbed(excludeTest(query), 'author');
+      return query.order('id', { ascending: true }).range(from, to);
+    });
+  } catch (error) {
+    return res.status(500).json({ error: sanitizeError(error as never) });
+  }
 
   const counts = new Map<string, { sport_id: string; name: string; emoji: string; count: number }>();
-  for (const row of data || []) {
+  for (const row of data) {
     const sport: any = row.sport;
     if (!sport?.id) continue;
     const existing = counts.get(sport.id);

@@ -1,3 +1,4 @@
+import { selectAll } from '../utils/selectAll';
 import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { syncTournamentChatMembers, syncAfterSuccess, canOpenTournamentChat } from '../utils/tournamentChat';
@@ -668,17 +669,22 @@ type EntryOptionsTournament = EntryTournament & { name: string; format: string; 
  * so a captain of 127 teams was offered only the first page's.
  */
 async function myEntryOptions(tour: EntryOptionsTournament, userId: string) {
-  const { data: memberships } = await supabase
-    .from('team_members').select('team_id, role, team:teams!team_id(id, name, sport_id, deleted_at)')
-    .eq('user_id', userId);
   type Team = { id: string; name: string; sport_id: string | null; deleted_at: string | null };
-  const live = ((memberships ?? []) as Array<{ team_id: string; role: string; team: Team | Team[] | null }>)
+  const memberships = await selectAll<{ team_id: string; role: string; team: Team | Team[] | null }>((from, to) => supabase
+    .from('team_members').select('team_id, role, team:teams!team_id(id, name, sport_id, deleted_at)')
+    .eq('user_id', userId).order('team_id', { ascending: true }).range(from, to));
+  const live = memberships
     .map((m) => ({ role: m.role, team: Array.isArray(m.team) ? m.team[0] : m.team }))
     .filter((m): m is { role: string; team: Team } => !!m.team && !m.team.deleted_at);
   const runs = live.filter((m) => m.role === 'captain' || m.role === 'vice_captain');
   const ofSportAll = runs.filter((m) => !tour.sport_id || m.team.sport_id === tour.sport_id);
-  const ofSport = ofSportAll.slice(0, 100);
-  const verdicts = ofSport.length ? await entryVerdicts(tour, ofSport.map((m) => m.team.id), false, userId) : [];
+  // Every team, not the first 100 (Oct 2026 sweep): checked 100 at a time so
+  // each query's id list stays short.
+  const ofSport = ofSportAll;
+  const verdicts: EntryVerdict[] = [];
+  for (let i = 0; i < ofSport.length; i += 100) {
+    verdicts.push(...await entryVerdicts(tour, ofSport.slice(i, i + 100).map((m) => m.team.id), false, userId));
+  }
   const verdictOf = new Map(verdicts.map((v) => [v.team_id, v]));
   return {
     tournament: {

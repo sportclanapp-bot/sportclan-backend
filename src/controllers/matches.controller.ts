@@ -1,3 +1,5 @@
+import { escapeLike, orIlikeContains } from '../utils/likeSearch';
+import { selectAll } from '../utils/selectAll';
 import { joinChat } from '../utils/chatMembership';
 import { attachTeamNames } from '../utils/teamNames';
 import { myScheduledMatches, pickNextMatch } from '../utils/nextMatch';
@@ -613,6 +615,15 @@ export async function createMatch(req: Request, res: Response) {
  * then schedule), each row labelled, and counts that exclude voided and
  * abandoned matches — the same rule as the profile's officiated count.
  */
+/** The matches whose sides are named like `q` — a stored name, or a registered team's name. */
+async function matchesNamed<T extends { team_a_id?: string | null; team_b_id?: string | null; team_a_name?: string | null; team_b_name?: string | null }>(rows: T[], q: string): Promise<T[]> {
+  const needle = q.toLowerCase();
+  const { data: teams } = await supabase.from('teams').select('id').ilike('name', `%${escapeLike(q)}%`).limit(1000);
+  const teamIds = new Set(((teams ?? []) as Array<{ id: string }>).map((t) => t.id));
+  return rows.filter((m) => (m.team_a_name ?? '').toLowerCase().includes(needle) || (m.team_b_name ?? '').toLowerCase().includes(needle)
+    || (!!m.team_a_id && teamIds.has(m.team_a_id)) || (!!m.team_b_id && teamIds.has(m.team_b_id)));
+}
+
 export function buildHistory(
   rows: any[],
   sideOf: Map<string, string>,
@@ -650,13 +661,17 @@ export async function matchHistory(req: Request, res: Response) {
     const limit = Math.min(Math.max(Number((req.query as any).limit ?? 50) || 50, 1), 100);
     const offset = Math.max(Number((req.query as any).offset ?? 0) || 0, 0);
 
-    const [partsRes, umpRes] = await Promise.all([
-      supabase.from('match_participants').select('match_id, team_side').eq('user_id', target),
-      supabase.from('matches').select('id').eq('umpire_id', target),
+    // Oct 2026 sweep: each read stopped at 1000 rows (PostgREST's cap), so a
+    // player with more matches lost the rest — and the counts with them.
+    const [parts, umps] = await Promise.all([
+      selectAll<{ match_id: string; team_side: string }>((from, to) => supabase.from('match_participants')
+        .select('match_id, team_side').eq('user_id', target).order('match_id', { ascending: true }).range(from, to)),
+      selectAll<{ id: string }>((from, to) => supabase.from('matches')
+        .select('id').eq('umpire_id', target).order('id', { ascending: true }).range(from, to)),
     ]);
     const sideOf = new Map<string, string>();
-    for (const p of partsRes.data ?? []) sideOf.set(p.match_id as string, p.team_side as string);
-    const officiated = new Set((umpRes.data ?? []).map((m) => m.id as string));
+    for (const p of parts) sideOf.set(p.match_id as string, p.team_side as string);
+    const officiated = new Set(umps.map((m) => m.id as string));
     const ids = Array.from(new Set([...sideOf.keys(), ...officiated]));
     if (ids.length === 0) return res.json({ matches: [], played_count: 0, officiated_count: 0, has_more: false });
 
@@ -670,9 +685,17 @@ export async function matchHistory(req: Request, res: Response) {
       if (error) return res.status(500).json({ error: sanitizeError(error) });
       rows.push(...(data ?? []));
     }
-    const out = buildHistory(rows, sideOf, offset, limit);
+    // The counts are over the whole history; the list can be narrowed — by a
+    // team name (`q`) and with voided matches hidden (`voided=hide`) — on the
+    // server, so a search finds a match on any page (it searched one page).
+    const all = buildHistory(rows, sideOf, 0, 0);
+    const q = typeof (req.query as any).q === 'string' ? String((req.query as any).q).trim().slice(0, 60) : '';
+    const named = q ? await matchesNamed(rows, q) : rows;
+    const voidedCount = named.filter((m) => !!m.voided_at).length;
+    const shown = String((req.query as any).voided ?? '') === 'hide' ? named.filter((m) => !m.voided_at) : named;
+    const out = buildHistory(shown, sideOf, offset, limit);
     await attachTeamNames(out.matches);
-    return res.json(out);
+    return res.json({ ...out, played_count: all.played_count, officiated_count: all.officiated_count, voided_count: voidedCount, total: shown.length });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -737,10 +760,23 @@ export async function listOpenMatches(req: Request, res: Response) {
     // SC-335: don't suggest an open match in an out-of-scope sport.
     const activeIds = await activeSportIds();
     if (activeIds) query = query.in('sport_id', activeIds);
-    if (await hideTestFor(userId)) query = excludeTest(query); // B03 (V245, D3)
-    const { data, error } = await query;
+    const hideTest = await hideTestFor(userId);
+    if (hideTest) query = excludeTest(query); // B03 (V245, D3)
+    // Oct 2026 sweep: how many there are in all — the Sport Hub's "open" tile
+    // counted this list, which stops at 100. Same filters, counted by the
+    // database, less the ones you've already joined.
+    let countQ = supabase.from('matches').select('id', { count: 'exact', head: true })
+      .eq('is_open', true).eq('status', 'scheduled').gte('scheduled_at', cutoffIso)
+      .neq('created_by', userId).gt('players_needed', 0);
+    if (resolvedSportId) countQ = countQ.eq('sport_id', resolvedSportId);
+    if (city_id) countQ = countQ.eq('city_id', city_id);
+    if (activeIds) countQ = countQ.in('sport_id', activeIds);
+    if (hideTest) countQ = excludeTest(countQ);
+    if (joinedIds.size > 0 && joinedIds.size <= 200) countQ = countQ.not('id', 'in', `(${[...joinedIds].join(',')})`);
+    const [{ data, error }, { count: totalOpen }] = await Promise.all([query, countQ]);
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     const matches = (data ?? []).filter((m) => !joinedIds.has(m.id as string)).slice(0, 100);
+    const total = Math.max(totalOpen ?? 0, matches.length);
 
     // SC-273: relevance ranking. A deterministic, EXPLAINABLE weighted sort —
     // not AI/ML. We reorder the open matches by how relevant each is to THIS
@@ -827,10 +863,10 @@ export async function listOpenMatches(req: Request, res: Response) {
         t: m.scheduled_at ? new Date(m.scheduled_at as string).getTime() : Infinity,
       }));
       scored.sort((a, b) => (b.s - a.s) || (a.t - b.t) || String(a.m.id).localeCompare(String(b.m.id)));
-      return res.json({ matches: scored.map((x) => x.m) });
+      return res.json({ matches: scored.map((x) => x.m), total });
     }
 
-    return res.json({ matches });
+    return res.json({ matches, total });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -1323,11 +1359,36 @@ export async function listMatches(req: Request, res: Response) {
       : status === 'scheduled'
         ? query.order('scheduled_at', { ascending: true, nullsFirst: false })
         : query.order('scheduled_at', { ascending: false, nullsFirst: false });
-    if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
-    if (status) query = query.eq('status', status);
-    if (tournament_id) query = query.eq('tournament_id', tournament_id);
-    if (team_id) query = query.or(`team_a_id.eq.${team_id},team_b_id.eq.${team_id}`);
-    if (mine === '1') query = query.eq('created_by', userId);
+    // Oct 2026 sweep: a results screen searched team names (and counted voided
+    // matches) over the one page it had loaded. `q` narrows on the server — a
+    // stored side name, or a registered team's name — and `voided=hide` /
+    // voided_count replace the page-local filter and count.
+    const q = typeof (req.query as Record<string, unknown>).q === 'string' ? String((req.query as Record<string, unknown>).q).trim().slice(0, 60) : '';
+    let namedTeamIds: string[] = [];
+    if (q) {
+      const { data: named } = await supabase.from('teams').select('id').ilike('name', `%${escapeLike(q)}%`).limit(200);
+      namedTeamIds = ((named ?? []) as Array<{ id: string }>).map((t) => t.id);
+    }
+    const hideTestRows = !mine && !team_id && !tournament_id && (await hideTestFor(userId));
+    const activeIds = await activeSportIds();
+    // The filters, for the list and for its voided count alike.
+    const scope = <Q extends { eq: Function; or: Function; in: Function }>(qb: Q): Q => {
+      let x: any = qb;
+      if (resolvedSportId) x = x.eq('sport_id', resolvedSportId);
+      if (status) x = x.eq('status', status);
+      if (tournament_id) x = x.eq('tournament_id', tournament_id);
+      if (team_id) x = x.or(`team_a_id.eq.${team_id},team_b_id.eq.${team_id}`);
+      if (mine === '1') x = x.eq('created_by', userId);
+      if (q) {
+        const byName = orIlikeContains(['team_a_name', 'team_b_name'], q);
+        x = x.or(namedTeamIds.length ? `${byName},team_a_id.in.(${namedTeamIds.join(',')}),team_b_id.in.(${namedTeamIds.join(',')})` : byName);
+      }
+      if (activeIds) x = x.in('sport_id', activeIds);
+      if (hideTestRows) x = excludeTest(x);
+      return x as Q;
+    };
+    query = scope(query);
+    if (String((req.query as Record<string, unknown>).voided ?? '') === 'hide') query = notVoided(query);
     // SC-441 (M2): a voided match is not live and not upcoming, whatever its
     // `status` column still says. SC-424 swept the rollups but not this endpoint,
     // so the Sport Hub's "1 LIVE" counter and Home's "FEATURED · LIVE" were both
@@ -1350,14 +1411,15 @@ export async function listMatches(req: Request, res: Response) {
     // SC-335: never list a match in an out-of-scope sport (kabaddi/athletics seed
     // rows stay in the DB but must not surface). Skipped only if the sports read
     // fails (activeIds null) so a hiccup doesn't blank the list.
-    const activeIds = await activeSportIds();
-    if (activeIds) query = query.in('sport_id', activeIds);
-    // B03 (V245, D3): test fixtures are hidden from a real viewer's discovery
-    // lists (Home, Sport hub, results). Not from history scopes — your own
-    // matches, a team's, a tournament's fixtures — which are already about one
-    // subject the viewer chose.
-    if (!mine && !team_id && !tournament_id && (await hideTestFor(userId))) query = excludeTest(query);
-    const { data, error, count } = await query;
+    // (SC-335 out-of-scope sports and B03 test fixtures — hidden from a real
+    // viewer's discovery lists, not from history scopes — are in scope() above.)
+    const wantVoidedCount = finishedFirst;
+    const [{ data, error, count }, voided] = await Promise.all([
+      query,
+      wantVoidedCount
+        ? scope(supabase.from('matches').select('id', { count: 'exact', head: true })).not('voided_at', 'is', null)
+        : Promise.resolve({ count: null as number | null }),
+    ]);
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     const matches = data || [];
     // Independent (different fields) — together, not one after the other.
@@ -1365,7 +1427,7 @@ export async function listMatches(req: Request, res: Response) {
       attachChessElo(matches), // chess cards show both players' real ELO
       attachTeamNames(matches), // SC-366: live cards need real team names
     ]);
-    return res.json({ matches, ...pageMeta(count, p) });
+    return res.json({ matches, ...pageMeta(count, p), ...(voided.count != null ? { voided_count: voided.count } : {}) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

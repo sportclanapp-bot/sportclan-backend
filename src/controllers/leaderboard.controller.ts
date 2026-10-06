@@ -1,3 +1,4 @@
+import { selectAll } from '../utils/selectAll';
 import { hideTestFor, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -113,18 +114,26 @@ export async function getLeaderboard(req: Request, res: Response) {
       const now = new Date();
       // SC-91: IST calendar month (was server-local/UTC).
       const startOfMonth = istMonthStartIso(now);
-      const { data: deltas, error: dErr } = await supabase
-        .from('rating_history')
-        // SC-424: rating_history rows are kept when a match is voided (voiding is
-        // not a delete, and unvoid has to be able to put the rating back), so the
-        // exclusion has to happen on read — here, via the match row.
-        .select('user_id, delta, new_rating, match:matches!inner(id, voided_at)')
-        .eq('sport_id', sportId)
-        .is('match.voided_at', null)
-        .gte('created_at', startOfMonth)
-        // B02-F7: oldest first, so the last row a player gets is their latest rating.
-        .order('created_at', { ascending: true });
-      if (dErr) return res.status(500).json({ error: dErr.message });
+      // Oct 2026 sweep: one read stopped at 1000 rating changes (PostgREST's
+      // cap), so a busy month's ranking and total stopped there. Every page.
+      let deltas: Array<{ user_id: string; delta: number | null; new_rating: number | null }>;
+      try {
+        deltas = await selectAll((from, to) => supabase
+          .from('rating_history')
+          // SC-424: rating_history rows are kept when a match is voided (voiding is
+          // not a delete, and unvoid has to be able to put the rating back), so the
+          // exclusion has to happen on read — here, via the match row.
+          .select('id, user_id, delta, new_rating, match:matches!inner(id, voided_at)')
+          .eq('sport_id', sportId)
+          .is('match.voided_at', null)
+          .gte('created_at', startOfMonth)
+          // B02-F7: oldest first, so the last row a player gets is their latest rating.
+          .order('created_at', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to));
+      } catch (dErr) {
+        return res.status(500).json({ error: (dErr as { message?: string }).message ?? 'Internal server error' });
+      }
 
       const agg = new Map<string, Row>();
       for (const row of deltas || []) {

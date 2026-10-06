@@ -2,6 +2,7 @@ import { logThenDeleteEvent, recordScoreAfter } from '../utils/scoringAudit';
 import { Request, Response } from 'express';
 import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
+import { isRangeError } from '../utils/pagination';
 import { supabase } from '../utils/supabase';
 import { pendingRankedOpponent } from '../utils/singles';
 import { tennisReplayEvents, type TennisScore } from '../utils/tennisCore';
@@ -706,22 +707,30 @@ export async function listEvents(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const matchId = String(req.params.matchId);
-    const { since, limit } = req.query as Record<string, unknown>;
+    const { since, limit, offset } = req.query as Record<string, unknown>;
     // B06-F7: a bad limit or since went straight to PostgREST and came back a 500.
     const n = typeof limit === 'string' && /^\d+$/.test(limit) ? parseInt(limit, 10) : 0;
+    const off = typeof offset === 'string' && /^\d+$/.test(offset) ? Math.min(parseInt(offset, 10), 10_000_000) : 0;
     if (since != null && (typeof since !== 'string' || Number.isNaN(Date.parse(since)))) {
       return res.status(400).json({ error: 'since must be a date' });
     }
+    // Oct 2026 sweep: the app read one answer (500 events, no "more") and
+    // replayed it as the whole match — a 50-over game has more. Pages now have
+    // a stable order (created_at, then id: an offline batch shares one
+    // timestamp), an offset, and has_more.
+    const size = n >= 1 ? Math.min(n, 1000) : 500;
     let query = supabase
       .from('match_events')
       .select('*')
       .eq('match_id', matchId)
       .order('created_at', { ascending: true })
-      .limit(n >= 1 ? Math.min(n, 1000) : 500);
+      .order('id', { ascending: true })
+      .range(off, off + size); // one extra row says whether there is more
     if (since) query = query.gt('created_at', since);
     const { data, error } = await query;
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ events: data || [] });
+    if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
+    const rows = data || [];
+    return res.json({ events: rows.slice(0, size), has_more: rows.length > size, next_offset: off + Math.min(rows.length, size) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

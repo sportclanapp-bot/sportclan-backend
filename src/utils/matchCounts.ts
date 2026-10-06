@@ -1,3 +1,4 @@
+import { selectAll } from './selectAll';
 import { supabase } from './supabase';
 /**
  * SC-413 · ONE rule for "does this match count toward a user's record".
@@ -73,13 +74,23 @@ export async function countParticipantsByMatch(matchIds: string[]): Promise<Map<
   const out = new Map<string, number>();
   if (!matchIds.length) return out;
   const unique = Array.from(new Set(matchIds));
-  const { data, error } = await supabase
-    .from('match_participants')
-    .select('match_id')
-    .in('match_id', unique);
-  if (error || !data) return out;
-  for (const r of data as { match_id: string }[]) {
-    out.set(r.match_id, (out.get(r.match_id) ?? 0) + 1);
+  // Oct 2026 sweep: one read of every participant row stopped at 1000 rows
+  // (PostgREST's cap) — a few hundred matches — so the rest counted 0 players
+  // and dropped out of the record. 100 matches at a time, every page read.
+  for (let i = 0; i < unique.length; i += 100) {
+    const chunk = unique.slice(i, i + 100);
+    let rows: { match_id: string }[];
+    try {
+      rows = await selectAll<{ match_id: string }>((from, to) => supabase
+        .from('match_participants')
+        .select('match_id')
+        .in('match_id', chunk)
+        .order('id', { ascending: true })
+        .range(from, to));
+    } catch {
+      return out;
+    }
+    for (const r of rows) out.set(r.match_id, (out.get(r.match_id) ?? 0) + 1);
   }
   return out;
 }

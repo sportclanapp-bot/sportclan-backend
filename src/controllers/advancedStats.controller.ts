@@ -1,3 +1,4 @@
+import { selectAll } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
@@ -64,16 +65,19 @@ export async function getAdvancedStats(req: Request, res: Response) {
 
   try {
     // ── Universe: this user's ranked matches for the sport (rating_history) ──
-    const { data: rh } = await supabase
+    // Oct 2026 sweep: one read stopped at 1000 rows (PostgREST's cap); a player
+    // with more ranked matches lost the rest (and "ranked matches" with them).
+    const history = await selectAll<any>((from, to) => supabase
       .from('rating_history')
       // SC-424: voided matches drop out of the ranked universe this whole screen
       // is built from (form guide, rating trajectory, opponent splits).
-      .select('match_id, old_rating, new_rating, delta, created_at, match:matches!inner(id, voided_at)')
+      .select('id, match_id, old_rating, new_rating, delta, created_at, match:matches!inner(id, voided_at)')
       .eq('user_id', targetId)
       .eq('sport_id', sportId)
       .is('match.voided_at', null)
-      .order('created_at', { ascending: true });
-    const history = rh ?? [];
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to)).catch(() => []);
 
     const { data: prof } = await supabase
       .from('user_sport_profiles').select('rating')
@@ -326,14 +330,17 @@ export async function getTeamInsights(req: Request, res: Response) {
     if (!team) return res.status(404).json({ error: 'Team not found' });
 
     // Completed matches this team played (as side A or B).
-    const { data: matchRows } = await supabase
+    // Oct 2026 sweep: one read stopped at 1000 matches (PostgREST's cap), and
+    // played / won / lost with it. Every page is read.
+    const matches = await selectAll<{ id: string; winner_team_id: string | null; scheduled_at: string | null; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null }>((from, to) => supabase
       .from('matches')
       .select('id, winner_team_id, scheduled_at, team_a_id, team_b_id, team_a_name, team_b_name')
       .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`)
       .eq('status', 'completed')
       .is('voided_at', null) // SC-424
-      .order('scheduled_at', { ascending: false });
-    const matches = matchRows ?? [];
+      .order('scheduled_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, to));
 
     let w = 0, l = 0, d = 0;
     for (const m of matches) {
@@ -357,9 +364,16 @@ export async function getTeamInsights(req: Request, res: Response) {
     let topScorers: Array<{ userId: string; name: string; runs: number }> = [];
     let topWicketTakers: Array<{ userId: string; name: string; wickets: number }> = [];
     if (matchIds.length && memberIds.size) {
-      const { data: innings } = await supabase
-        .from('innings_stats').select('user_id, runs, bowling_wickets').in('match_id', matchIds);
-      if (innings && innings.length) {
+      // Oct 2026 sweep: one `in` over every match id (too long a request past a
+      // few hundred) and one read (1000 rows). 100 matches at a time, every page.
+      const innings: Array<{ user_id: string; runs: unknown; bowling_wickets: unknown }> = [];
+      for (let i = 0; i < matchIds.length; i += 100) {
+        const chunk = matchIds.slice(i, i + 100);
+        innings.push(...await selectAll<{ user_id: string; runs: unknown; bowling_wickets: unknown }>((from, to) => supabase
+          .from('innings_stats').select('id, user_id, runs, bowling_wickets').in('match_id', chunk)
+          .order('id', { ascending: true }).range(from, to)).catch(() => []));
+      }
+      if (innings.length) {
         cricket = true;
         const runsBy = new Map<string, number>();
         const wktsBy = new Map<string, number>();

@@ -1,3 +1,4 @@
+import { selectAll } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
@@ -204,13 +205,20 @@ export async function listExpenses(req: Request, res: Response) {
     const denied = await requireLedgerAccess(id!, userId);
     if (denied) return res.status(denied.status).json(denied.body);
 
-    const { data, error } = await supabase
-      .from('team_expenses')
-      .select('*, payer:users!paid_by(id, name, profile_picture_url), creator:users!created_by(id, name)')
-      .eq('team_id', id)
-      .order('created_at', { ascending: false });
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ expenses: data ?? [] });
+    // Oct 2026 sweep: every expense, not the first 1000 (PostgREST's cap).
+    let data: unknown[];
+    try {
+      data = await selectAll((from, to) => supabase
+        .from('team_expenses')
+        .select('*, payer:users!paid_by(id, name, profile_picture_url), creator:users!created_by(id, name)')
+        .eq('team_id', id)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .range(from, to));
+    } catch (error) {
+      return res.status(500).json({ error: sanitizeError(error as never) });
+    }
+    return res.json({ expenses: data });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -538,10 +546,13 @@ export async function getExpenseSummary(req: Request, res: Response) {
     const denied = await requireLedgerAccess(id!, userId);
     if (denied) return res.status(denied.status).json(denied.body);
 
-    const { data: expenses } = await supabase
+    // Oct 2026 sweep: the totals summed the first 1000 expenses only.
+    const expenses = await selectAll<{ amount: unknown; split_among: string[] | null }>((from, to) => supabase
       .from('team_expenses')
-      .select('amount, split_among')
-      .eq('team_id', id);
+      .select('id, amount, split_among')
+      .eq('team_id', id)
+      .order('id', { ascending: true })
+      .range(from, to)).catch(() => []);
 
     // SC-417: every figure derives from each expense's CAPTURED split_among, not
     // from the live member count. Removing a member no longer rewrites what an

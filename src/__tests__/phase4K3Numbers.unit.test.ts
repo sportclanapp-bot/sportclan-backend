@@ -92,7 +92,7 @@ describe('SC-370 · review count and average cover every review, not the 50-row 
   it('K3-18 (c1ee88e): 120 reviews → count 120 and the true mean', async () => {
     const page = Array.from({ length: 50 }, (_, i) => ({ id: `r${i}`, rating: 5 }));
     const all = [...Array.from({ length: 50 }, () => ({ rating: 5 })), ...Array.from({ length: 70 }, () => ({ rating: 1 }))];
-    mockNext = (q) => (q[0] === 'from:user_reviews' ? (has(q, 'limit:[50]') ? { data: page } : { data: all }) : { data: null });
+    mockNext = (q) => (q[0] === 'from:user_reviews' ? (has(q, 'select:["id, rating') ? { data: page } : { data: all }) : { data: null });
     const r = await call(getReviews, { params: { id: ME } });
     expect(r.body.count).toBe(120);
     expect(r.body.avgRating).toBe(Math.round(((50 * 5 + 70) / 120) * 10) / 10);

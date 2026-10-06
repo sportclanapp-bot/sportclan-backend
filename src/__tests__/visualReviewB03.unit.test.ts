@@ -64,11 +64,12 @@ describe('every public discovery read applies it', () => {
     ['controllers/features.controller.ts', /if \(await hideTestFor\(userId\)\) nearbyQ = excludeTest\(nearbyQ\);/],
     ['controllers/features.controller.ts', /profiles\.filter\(\(p\) => !testIds\.has\(p\.user_id as string\)/], // player of week
     ['controllers/community.controller.ts', /if \(!viewingOwn && \(await hideTestFor\(req\.userId\)\)\) q = excludeTestEmbed\(excludeTest\(q\), 'author'\);/],
-    ['controllers/community.controller.ts', /if \(await hideTestFor\(req\.userId\)\) query = excludeTestEmbed\(excludeTest\(query\), 'author'\);/], // story counts
+    ['controllers/community.controller.ts', /const hide = await hideTestFor\(req\.userId\);[\s\S]*if \(hide\) query = excludeTestEmbed\(excludeTest\(query\), 'author'\);/], // story counts (every page, Oct 2026)
     ['controllers/community.controller.ts', /if \(hideTest\) cq = excludeTestEmbed\(cq, 'author'\);/], // comments
     ['controllers/community.controller.ts', /if \(await hideTestFor\(req\.userId\)\) mentionQ = excludeTest\(mentionQ\);/],
-    ['controllers/matches.controller.ts', /if \(!mine && !team_id && !tournament_id && \(await hideTestFor\(userId\)\)\) query = excludeTest\(query\);/],
-    ['controllers/matches.controller.ts', /if \(await hideTestFor\(userId\)\) query = excludeTest\(query\);/], // open matches
+    // Oct 2026 sweep: the list's filters live in one scope() (list and voided count alike).
+    ['controllers/matches.controller.ts', /const hideTestRows = !mine && !team_id && !tournament_id && \(await hideTestFor\(userId\)\);[\s\S]*if \(hideTestRows\) x = excludeTest\(x\);/],
+    ['controllers/matches.controller.ts', /const hideTest = await hideTestFor\(userId\);\s*if \(hideTest\) query = excludeTest\(query\);/], // open matches (and its count)
     ['controllers/teams.controller.ts', /else if \(await hideTestFor\(userId\)\) query = excludeTest\(query\);/],
     ['controllers/tournaments.controller.ts', /else if \(await hideTestFor\(userId\)\) query = excludeTest\(query\);/],
     ['controllers/leaderboard.controller.ts', /if \(hideTest\) qb = qb\.eq\('tu\.is_test_seed', false\);/],

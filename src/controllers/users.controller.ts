@@ -1,3 +1,5 @@
+import { orIlikeContains } from '../utils/likeSearch';
+import { selectAll } from '../utils/selectAll';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { isAdminUser } from '../middleware/admin.middleware';
@@ -15,7 +17,7 @@ import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTyp
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
 import { istDay } from '../utils/appTime';
-import { parsePagination } from '../utils/pagination';
+import { isRangeError, parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
 import { stepTimer } from '../utils/stepTimer';
 import { getSport } from '../utils/sportCache';
@@ -344,17 +346,18 @@ export async function getUserById(req: Request, res: Response) {
   const [followersRes, followingRes, giftsRes] = await Promise.all([
     supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('following_id', id),
     supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('follower_id', id),
-    // Aggregate gifts received grouped by gift type for the profile display
-    supabase.from('gift_transactions')
-      .select('gift_id, gift_emoji, gift_name')
+    // Aggregate gifts received grouped by gift type for the profile display.
+    // Oct 2026 sweep: it grouped the newest 100, so the counts stopped there.
+    selectAll<{ gift_id: string; gift_emoji: string; gift_name: string }>((from, to) => supabase.from('gift_transactions')
+      .select('id, gift_id, gift_emoji, gift_name')
       .eq('receiver_id', id)
-      .order('created_at', { ascending: false })
-      .limit(100),
+      .order('id', { ascending: true })
+      .range(from, to)).catch(() => []),
   ]);
 
   // Group gifts by type with count
   const giftMap = new Map<string, { emoji: string; name: string; count: number }>();
-  for (const g of giftsRes.data ?? []) {
+  for (const g of giftsRes) {
     const existing = giftMap.get(g.gift_id);
     if (existing) existing.count++;
     else giftMap.set(g.gift_id, { emoji: g.gift_emoji, name: g.gift_name, count: 1 });
@@ -418,7 +421,7 @@ export async function getUserById(req: Request, res: Response) {
     pending_invite_sport_ids: pendingInvites.map((p) => p.sport_id),
     pending_invites: pendingInvites,
     gifts: Array.from(giftMap.values()),
-    totalGifts: giftsRes.data?.length ?? 0,
+    totalGifts: giftsRes.length,
   });
 }
 
@@ -854,10 +857,15 @@ export async function getFollowers(req: Request, res: Response) {
   // blocked user never surfaces even in a third party's follower list.
   const p = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   const blocked = await blockedUserIds(req.userId);
-  const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
+  // Oct 2026 sweep: a name search ran over the rows already loaded; `q`
+  // searches the whole list on the server.
+  const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 50) : '';
+  let base = supabase
     .from('follow_relationships')
     .select('follower_id, users:follower_id!inner (id, name, username, profile_picture_url, bio)')
-    .eq('following_id', id)
+    .eq('following_id', id);
+  if (q) base = base.or(orIlikeContains(['name', 'username'], q.replace(/^@/, '')), { referencedTable: 'users' });
+  const { data, error } = await excludeIds(excludeDeletedEmbed(base
     .order('created_at', { ascending: false })
     .range(p.from, p.to), 'users'), 'follower_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
@@ -875,10 +883,15 @@ export async function getFollowing(req: Request, res: Response) {
   // anyone the viewer has blocked either direction from a third party's list.
   const pg = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   const blocked = await blockedUserIds(req.userId);
-  const { data, error } = await excludeIds(excludeDeletedEmbed(supabase
+  // Oct 2026 sweep: `q` searches the whole list on the server (the gift
+  // picker's search ran over the loaded rows only).
+  const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 50) : '';
+  let base = supabase
     .from('follow_relationships')
     .select('following_id, users:following_id!inner (id, name, username, profile_picture_url, bio)')
-    .eq('follower_id', id)
+    .eq('follower_id', id);
+  if (q) base = base.or(orIlikeContains(['name', 'username'], q.replace(/^@/, '')), { referencedTable: 'users' });
+  const { data, error } = await excludeIds(excludeDeletedEmbed(base
     .order('created_at', { ascending: false })
     .range(pg.from, pg.to), 'users'), 'following_id', blocked);
   if (error) return res.status(500).json({ error: error.message });
@@ -1788,13 +1801,17 @@ export async function getReviews(req: Request, res: Response) {
     // Block edge (optionalAuth) is unchanged: reviews by anyone the viewer has
     // blocked either direction are still hidden from THAT viewer.
     const blocked = await blockedUserIds(req.userId);
+    // Oct 2026 sweep: the newest 50 were the whole list. Paged now (limit /
+    // offset, has_more).
+    const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 50, maxLimit: 100 });
     const { data, error } = await excludeIds(supabase
       .from('user_reviews')
       .select('id, rating, comment, created_at, reviewer:users!reviewer_id!inner(id, name, profile_picture_url, deleted_at)')
       .eq('reviewed_id', id)
       .order('created_at', { ascending: false })
-      .limit(50), 'reviewer_id', blocked);
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+      .order('id', { ascending: false })
+      .range(p.from, p.to), 'reviewer_id', blocked);
+    if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
 
     // SC-370: `count` and `avgRating` used to be computed from `data` — which is
     // the DISPLAY PAGE (.limit(50)). So a provider with more than 50 reviews
@@ -1805,15 +1822,19 @@ export async function getReviews(req: Request, res: Response) {
     // B2-a: and it keeps COUNTING towards the average, for the same reason —
     // a rating that was honestly given does not become wrong because the person
     // who gave it left.
-    const { data: allRatings } = await excludeIds(supabase
+    // Oct 2026 sweep: that read itself stopped at 1000 rows (PostgREST's cap);
+    // every page is read now.
+    const allRatings = await selectAll<{ rating: number | null }>((from, to) => excludeIds(supabase
       .from('user_reviews')
       .select('rating, reviewer:users!reviewer_id!inner(id)')
-      .eq('reviewed_id', id), 'reviewer_id', blocked);
-    const ratings = (allRatings ?? []).map((r: any) => r.rating as number).filter((n) => typeof n === 'number');
+      .eq('reviewed_id', id)
+      .order('id', { ascending: true })
+      .range(from, to), 'reviewer_id', blocked));
+    const ratings = allRatings.map((r) => r.rating as number).filter((n) => typeof n === 'number');
     const avgRating = ratings.length > 0
       ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10
       : null;
-    return res.json({ reviews: data ?? [], avgRating, count: ratings.length });
+    return res.json({ reviews: data ?? [], avgRating, count: ratings.length, has_more: p.offset + (data ?? []).length < ratings.length, limit: p.limit, offset: p.offset });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

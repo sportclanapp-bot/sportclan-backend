@@ -1,3 +1,4 @@
+import { selectAll } from '../utils/selectAll';
 import { hideTestFor, excludeTest, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -446,12 +447,16 @@ export async function getSeasonRecap(req: Request, res: Response) {
       supabase.from('user_sport_profiles')
         .select('sport_id, rating, matches_played, wins, losses, draws')
         .eq('user_id', id),
-      supabase.from('match_participants')
+      // Oct 2026 sweep: one read stopped at 1000 rows (PostgREST's cap), and the
+      // 90-day matches / W-L-D with it. Every page is read.
+      selectAll((from, to) => supabase.from('match_participants')
         // SC-413: is_ranked is required to apply the SC-283 rule below.
         // SC-424: voided_at is selected so countsTowardRecord can exclude it.
         .select('match_id, team_side, match:matches!inner(id, sport_id, status, is_ranked, winner_team_id, team_a_id, team_b_id, score_summary, created_at, voided_at)')
         .eq('user_id', id)
-        .gte('match.created_at', since),
+        .gte('match.created_at', since)
+        .order('match_id', { ascending: true })
+        .range(from, to)).then((data) => ({ data })),
       supabase.from('gift_transactions')
         .select('id', { count: 'exact', head: true })
         .eq('receiver_id', id)

@@ -370,7 +370,8 @@ describe('F5/F10 · the fixture editor', () => {
   test('getTournament sends each entry\'s team_id', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'tournaments.controller.ts'), 'utf8');
     // Gap 10: organisers also get fee_paid_at, fee_note (the select is built per viewer).
-    expect(src).toContain(".select(`id, team_id, status, seed, group_label, club, entered_at,${organiser ? ' fee_paid_at, fee_note,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`)");
+    // Oct 2026: the columns live in entryCols (shared by the tournament and the entries page).
+    expect(src).toContain("const entryCols = (organiser: boolean) => `id, team_id, status, seed, group_label, club, entered_at,${organiser ? ' fee_paid_at, fee_note,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`;");
   });
 });
 

@@ -6,6 +6,7 @@ import {
   addEvents,
   listTournaments,
   getTournament,
+  getEntriesPage,
   createEntry,
   directAddTeam,
   updateEntry,
@@ -84,6 +85,7 @@ router.post('/:id/pair-invites/:inviteId/:action', authenticateToken, answerPair
 router.get('/:id/court-board', authenticateToken, getCourtBoard);
 // Badminton gap 8: winner, runner-up, semi-finalists (per event), with the players.
 router.get('/:id/placings', authenticateToken, getPlacings);
+router.get('/:id/entries', authenticateToken, getEntriesPage); // Oct 2026: entries a page at a time
 // Badminton gap 6: after a retirement, the entry here and its players' entries in the other events.
 router.get('/:id/teams/:teamId/related-entries', authenticateToken, relatedEntries);
 router.post('/:id/next-to-court', authenticateToken, nextToCourt);

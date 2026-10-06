@@ -9,7 +9,13 @@
 type Row = Record<string, any>;
 type Filter = (r: Row) => boolean;
 /** A column, or an embedded table's ("match.sport_id"), as PostgREST filters them. */
-const at = (r: Row, c: string): any => (c.includes('.') ? c.split('.').reduce((o: any, k) => o?.[k], r) : r[c]);
+const at = (r: Row, c: string): any => {
+  if (!c.includes('.')) return r[c];
+  // Through a list (an embedded one-to-many): every value along it.
+  return c.split('.').reduce((o: any, k) => (Array.isArray(o) ? o.flatMap((x) => { const v = x?.[k]; return Array.isArray(v) ? v : [v]; }) : o?.[k]), r);
+};
+/** eq on a path through a list: any of its values. */
+const same = (v: any, want: unknown) => (Array.isArray(v) ? v.includes(want) : v === want);
 
 let seq = 0;
 export const fakeId = () => `00000000-0000-4000-8000-${String(++seq).padStart(12, '0')}`;
@@ -45,7 +51,7 @@ export function fakeDb(seed: Record<string, Row[]> = {}, opts: { maxRows?: numbe
       update(set: Row) { op = 'update'; payload = set; log.push({ table: name, op: 'update', arg: set }); return b; },
       upsert(rows: Row | Row[]) { op = 'insert'; payload = rows; return b; },
       delete() { op = 'delete'; log.push({ table: name, op: 'delete' }); return b; },
-      eq(c: string, v: unknown) { filters.push((r) => at(r, c) === v); return b; },
+      eq(c: string, v: unknown) { filters.push((r) => same(at(r, c), v)); return b; },
       neq(c: string, v: unknown) { filters.push((r) => at(r, c) !== v); return b; },
       in(c: string, vs: unknown[]) { filters.push((r) => vs.includes(at(r, c))); return b; },
       is(c: string, v: null) { filters.push((r) => (at(r, c) ?? null) === v); return b; },

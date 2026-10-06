@@ -64,6 +64,7 @@ import {
   type SchedulingConfig, type FixtureShape, type SlotAssign,
 } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser, authorizeCarveout, logAdminAction } from '../utils/tournamentAuth';
+import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
@@ -618,6 +619,89 @@ async function attachEventSummaries(rows: Array<Record<string, unknown>>): Promi
   for (const r of rows) if (r.is_parent) { r.events = byParent.get(r.id as string) ?? []; r.events_count = (r.events as unknown[]).length; }
 }
 
+/** The entry columns the app reads (the fee only for an organiser). */
+const entryCols = (organiser: boolean) => `id, team_id, status, seed, group_label, club, entered_at,${organiser ? ' fee_paid_at, fee_note,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`;
+
+export type EntrySummary = {
+  approved: number; pending: number; withdrawn: number; rejected: number; total: number;
+  /** Organisers: approved entries marked paid. */
+  fee_paid?: number;
+  /** Groups → knockout: approved entries per group label (null = not placed), for the draw's check. */
+  groups?: Array<{ label: string | null; count: number }>;
+};
+
+/** Oct 2026 · the counts behind the tournament page (no list needed). */
+export async function entrySummary(tournamentId: string, organiser: boolean, groups: boolean): Promise<EntrySummary> {
+  const count = async (status: string, extra?: (q: any) => any) => {
+    let q: any = supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', tournamentId).eq('status', status);
+    if (extra) q = extra(q);
+    return ((await q).count ?? 0) as number;
+  };
+  const [approved, pending, withdrawn, rejected] = await Promise.all(['approved', 'pending', 'withdrawn', 'rejected'].map((st) => count(st)));
+  const out: EntrySummary = { approved, pending, withdrawn, rejected, total: approved + pending + withdrawn + rejected };
+  if (organiser) out.fee_paid = await count('approved', (q) => q.not('fee_paid_at', 'is', null));
+  if (groups) {
+    const rows = await allRows<{ group_label: string | null }>(() => supabase.from('tournament_entries').select('group_label').eq('tournament_id', tournamentId).eq('status', 'approved'));
+    const by = new Map<string | null, number>();
+    for (const r of rows) by.set(r.group_label ?? null, (by.get(r.group_label ?? null) ?? 0) + 1);
+    out.groups = [...by].map(([label, c]) => ({ label, count: c }));
+  }
+  return out;
+}
+
+/** Oct 2026 · the entries the page needs without the list: the viewer's teams', and the champion's. */
+async function keyEntries(tournamentId: string, userId: string, organiser: boolean, championTeamId: string | null): Promise<unknown[]> {
+  // The viewer's teams' entries, joined in the database (a member of thousands
+  // of teams no longer reads them all first), and the champion's.
+  const [mine, champ] = await Promise.all([
+    allRows<Record<string, unknown>>(() => supabase.from('tournament_entries')
+      .select(`${entryCols(organiser)}, mem:teams!team_id!inner(m:team_members!inner(user_id))`)
+      .eq('tournament_id', tournamentId).eq('mem.m.user_id', userId)),
+    championTeamId
+      ? supabase.from('tournament_entries').select(entryCols(organiser)).eq('tournament_id', tournamentId).eq('team_id', championTeamId).maybeSingle().then((r) => r.data as unknown as Record<string, unknown> | null)
+      : Promise.resolve(null),
+  ]);
+  const out = mine.map(({ mem: _mem, ...e }) => e);
+  if (champ && !out.some((e) => e.id === champ.id)) out.push(champ);
+  return out;
+}
+
+const ENTRY_PAGE_MAX = 100;
+
+// GET /tournaments/:id/entries?status=approved|pending|withdrawn|rejected&offset=&limit=&q=
+// Oct 2026 (Dipak: no full download) · one page of a tournament's entries, in
+// the order the page shows them (seed, then entry time), with the total.
+export async function getEntriesPage(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const id = String(req.params.id);
+    if (!isUuid(id)) return res.status(404).json({ error: 'Tournament not found' });
+    const { data: t } = await supabase.from('tournaments').select('id').eq('id', id).maybeSingle();
+    if (!t) return res.status(404).json({ error: 'Tournament not found' });
+    const status = String(req.query.status ?? 'approved');
+    if (!['approved', 'pending', 'withdrawn', 'rejected'].includes(status)) return res.status(400).json({ error: 'Unknown status.', code: 'BAD_STATUS' });
+    const offset = Math.max(0, Math.min(10_000_000, parseInt(String(req.query.offset ?? '0'), 10) || 0));
+    const limit = Math.max(1, Math.min(ENTRY_PAGE_MAX, parseInt(String(req.query.limit ?? '50'), 10) || 50));
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 60) : '';
+    const organiser = await isTournamentOrganiser(id, userId);
+    // A name search goes through the team (an inner join, so the entry drops when it doesn't match).
+    const cols = q ? entryCols(organiser).replace('team:team_id (', 'team:team_id!inner (') : entryCols(organiser);
+    let query: any = supabase.from('tournament_entries').select(cols, { count: 'exact' }).eq('tournament_id', id).eq('status', status);
+    if (q) query = query.ilike('team.name', `%${escapeLike(q)}%`);
+    const { data, count, error } = await query
+      .order('seed', { ascending: true, nullsFirst: false })
+      .order('entered_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + limit - 1);
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    const rows = (data ?? []) as unknown[];
+    return res.json({ entries: rows, total: count ?? rows.length, has_more: offset + rows.length < (count ?? 0) });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 // GET /tournaments/:id
 export async function getTournament(req: Request, res: Response) {
   const userId = req.userId;
@@ -633,11 +717,21 @@ export async function getTournament(req: Request, res: Response) {
     // Cricket gap 10 (5 Oct 2026): who has paid the entry fee is the organisers'
     // record — read only for them; nobody else gets the columns.
     const organiser = await isTournamentOrganiser(id, userId);
-    const entries = await allRows(() => supabase
-      .from('tournament_entries')
-      // Phase 3 B08-F5: team_id too — the fixture editor keys its team chips on it.
-      .select(`id, team_id, status, seed, group_label, club, entered_at,${organiser ? ' fee_paid_at, fee_note,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`)
-      .eq('tournament_id', id));
+    // Oct 2026 (Dipak: no full download): an app that pages entries gets the
+    // counts and only the entries it needs here (the viewer's own, the
+    // champion's); the list comes from GET /tournaments/:id/entries. An older
+    // app gets every entry, as before.
+    const paged = clientHas(req, 'entries_paged');
+    const [entries, entry_summary] = paged
+      ? await Promise.all([
+        keyEntries(id, userId, organiser, (tournament as { champion_team_id?: string | null }).champion_team_id ?? null),
+        entrySummary(id, organiser, (tournament as { format?: string }).format === 'groups_knockout'),
+      ])
+      : [await allRows(() => supabase
+        .from('tournament_entries')
+        // Phase 3 B08-F5: team_id too — the fixture editor keys its team chips on it.
+        .select(`${entryCols(organiser)}`)
+        .eq('tournament_id', id)), undefined];
     // SC-293: authoritative fixture count so the Overview's Quick Stats agrees
     // with the Bracket + Officials tabs. Was: the FE showed fixtures.length, but
     // fixtures are only fetched on the Bracket tab → the Overview (landing tab)
@@ -666,7 +760,7 @@ export async function getTournament(req: Request, res: Response) {
       family.parent = parent ?? null;
       family.events = await eventsOf(pid);
     }
-    return res.json({ tournament, entries: entries || [], can_open_chat, ...family });
+    return res.json({ tournament, entries: entries || [], can_open_chat, ...family, ...(paged ? { entries_paged: true, entry_summary } : {}) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

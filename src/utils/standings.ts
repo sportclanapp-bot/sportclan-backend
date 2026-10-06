@@ -46,6 +46,14 @@ export type TeamStat = {
   oversBowled: number;
   /** runsScored/oversFaced − runsConceded/oversBowled. null when no overs are known. */
   nrr: number | null;
+  /**
+   * Badminton gap 10 · rally points: every game's points, won and lost (from
+   * score_summary.A/B.sets), for BWF's "points difference" tie-break. 0 for a
+   * sport or match without them.
+   */
+  rallyFor: number;
+  rallyAgainst: number;
+  rallyDiff: number;
 };
 
 /**
@@ -88,6 +96,14 @@ export function pointsFor(sportSlug: string | null | undefined, settings?: any):
   const p = settings && typeof settings === 'object' ? settings.points : null;
   if (p && typeof p === 'object' && typeof p.win === 'number' && typeof p.draw === 'number' && typeof p.loss === 'number') return p as PointsModel;
   return pointsModelFor(sportSlug);
+}
+
+/** Badminton gap 10: each side's rally points over the games played (0 when the summary has none). */
+export function rallyPointsOf(m: GMatch): { a: number; b: number } {
+  const ss: any = m.score_summary ?? {};
+  const sum = (x: unknown) => (Array.isArray(x) ? x.reduce((n: number, v: unknown) => n + (Number.isFinite(Number(v)) ? Number(v) : 0), 0) : 0);
+  if (ss.walkover === true) return { a: 0, b: 0 }; // a walkover played no rallies
+  return { a: sum(ss?.A?.sets), b: sum(ss?.B?.sets) };
 }
 
 function scoresOf(m: GMatch): { a: number; b: number } {
@@ -197,7 +213,7 @@ export function computeStats(
   for (const id of teamIds) {
     table.set(id, {
       id, played: 0, won: 0, drawn: 0, lost: 0, points: 0, scored: 0, conceded: 0, diff: 0, noResult: 0,
-      runsScored: 0, oversFaced: 0, runsConceded: 0, oversBowled: 0, nrr: null,
+      runsScored: 0, oversFaced: 0, runsConceded: 0, oversBowled: 0, nrr: null, rallyFor: 0, rallyAgainst: 0, rallyDiff: 0,
     });
   }
   for (const m of matches) {
@@ -236,6 +252,9 @@ export function computeStats(
     ra.played++; rb.played++;
     ra.scored += sa; ra.conceded += sb;
     rb.scored += sb; rb.conceded += sa;
+    const rp = rallyPointsOf(m); // badminton gap 10
+    ra.rallyFor += rp.a; ra.rallyAgainst += rp.b;
+    rb.rallyFor += rp.b; rb.rallyAgainst += rp.a;
     if (m.winner_team_id === a || m.winner_team_id === b) {
       const [w, l] = m.winner_team_id === a ? [ra, rb] : [rb, ra];
       const [wp, lp] = resultPoints(m, pts, m.winner_team_id === a ? sa : sb, m.winner_team_id === a ? sb : sa);
@@ -256,12 +275,13 @@ export function computeStats(
   }
   for (const r of table.values()) {
     r.diff = r.scored - r.conceded;
+    r.rallyDiff = r.rallyFor - r.rallyAgainst;
     r.nrr = netRunRate(r);
   }
   return table;
 }
 
-type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger';
+type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff';
 
 const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 'sonneborn_berger'>, (s: TeamStat) => number> = {
   points: (s) => s.points,
@@ -277,6 +297,8 @@ const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 
   // game ratio. Nothing conceded reads as a very large ratio (or 0 with
   // nothing scored either), never a division by zero.
   score_ratio: (s) => (s.conceded > 0 ? s.scored / s.conceded : s.scored > 0 ? 1e9 : 0),
+  // Badminton gap 10: BWF's points difference — rally points won minus lost.
+  points_diff: (s) => s.rallyDiff,
 };
 
 /**
@@ -318,6 +340,7 @@ function mapRule(token: string): Criterion | null {
   if (t === 'score_ratio' || t === 'set_ratio' || t === 'game_ratio' || t === 'goal_ratio') return 'score_ratio';
   if (t === 'buchholz') return 'buchholz';
   if (t === 'sonneborn_berger' || t === 'sb' || t === 'sonneborn-berger') return 'sonneborn_berger';
+  if (t === 'points_diff' || t === 'point_difference' || t === 'rally_points_diff' || t === 'points_difference') return 'points_diff'; // badminton gap 10
   return null; // 'team_id' and unknowns handled by the terminator
 }
 

@@ -120,7 +120,7 @@ export function storedPoints(p: Record<string, any>): PointsTemplate {
 
 export type TiebreakToken =
   | 'head_to_head' | 'wins' | 'nrr' | 'score_diff' | 'score_scored' | 'score_ratio'
-  | 'buchholz' | 'sonneborn_berger';
+  | 'buchholz' | 'sonneborn_berger' | 'points_diff';
 
 const ALIASES: Record<string, TiebreakToken> = {
   head_to_head: 'head_to_head', h2h: 'head_to_head', head2head: 'head_to_head', headtohead: 'head_to_head',
@@ -131,6 +131,8 @@ const ALIASES: Record<string, TiebreakToken> = {
   score_ratio: 'score_ratio', set_ratio: 'score_ratio', game_ratio: 'score_ratio', goal_ratio: 'score_ratio',
   buchholz: 'buchholz',
   sonneborn_berger: 'sonneborn_berger', sb: 'sonneborn_berger', 'sonneborn-berger': 'sonneborn_berger',
+  // Badminton gap 10: rally points won minus lost (BWF's last tie-break).
+  points_diff: 'points_diff', point_difference: 'points_diff', points_difference: 'points_diff', rally_points_diff: 'points_diff',
 };
 
 /** A stored or typed name as its canonical token, or null for one the table doesn't know. */
@@ -141,8 +143,9 @@ export function tiebreakToken(x: unknown): TiebreakToken | null {
 /** The tie-breaks this sport can use (run rate is cricket's; Buchholz and Sonneborn-Berger chess's). */
 export function tiebreaksFor(sport: string | null | undefined): TiebreakToken[] {
   const key = sportKeyOf(sport);
-  const all: TiebreakToken[] = ['head_to_head', 'wins', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'buchholz', 'sonneborn_berger'];
-  return all.filter((t) => (t === 'nrr' ? key === 'cricket' : t === 'buchholz' || t === 'sonneborn_berger' ? key === 'chess' : true));
+  const all: TiebreakToken[] = ['head_to_head', 'wins', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'points_diff', 'buchholz', 'sonneborn_berger'];
+  const rally = key === 'badminton' || key === 'tabletennis' || key === 'volleyball' || key === 'pickleball';
+  return all.filter((t) => (t === 'nrr' ? key === 'cricket' : t === 'buchholz' || t === 'sonneborn_berger' ? key === 'chess' : t === 'points_diff' ? rally : true));
 }
 
 /** How a tie-break reads for this sport ("Goal difference", "Set ratio"). */
@@ -162,6 +165,7 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
     case 'score_ratio': return `${unit} ratio`;
     case 'buchholz': return 'Buchholz';
     case 'sonneborn_berger': return 'Sonneborn-Berger';
+    case 'points_diff': return 'Points difference';
   }
 }
 
@@ -184,6 +188,8 @@ export function tiebreakPresetsFor(sport: string | null | undefined): Array<{ ke
     case 'hockey': out.push({ key: 'fih', label: 'FIH (wins first)', order: ['wins', 'score_diff', 'score_scored', 'head_to_head'] }); break;
     case 'volleyball': out.push({ key: 'fivb', label: 'FIVB (wins, set ratio)', order: ['wins', 'score_ratio', 'head_to_head'] }); break;
     case 'tabletennis': out.push({ key: 'ittf', label: 'ITTF (head-to-head, game ratio)', order: ['head_to_head', 'score_ratio'] }); break;
+    // Badminton gap 10: BWF GCR — matches won (the points), head-to-head, games difference, points difference.
+    case 'badminton': out.push({ key: 'bwf', label: 'BWF (head-to-head, games, points)', order: ['head_to_head', 'score_diff', 'points_diff'] }); break;
     case 'chess':
       out.push({ key: 'fide_rr', label: 'Sonneborn-Berger', order: ['sonneborn_berger', 'head_to_head', 'wins'] });
       out.push({ key: 'fide_swiss', label: 'Buchholz', order: ['buchholz', 'sonneborn_berger', 'wins'] });

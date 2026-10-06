@@ -91,6 +91,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
       teamId: string; team: string; teamShort: string | null; groupLabel: string | null; withdrawn: boolean;
       played: number; won: number; lost: number; drawn: number; points: number;
       scored: number; conceded: number; diff: number; noResult: number;
+      points_for: number; points_against: number; points_diff: number;
       nrr: number | null; runsScored: number; oversFaced: number; runsConceded: number; oversBowled: number;
     }>();
     for (const e of entries ?? []) {
@@ -106,6 +107,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
         withdrawn: (e as any).status === 'withdrawn',
         played: s.played, won: s.won, lost: s.lost, drawn: s.drawn, points: s.points,
         scored: s.scored, conceded: s.conceded, diff: s.diff,
+        points_for: s.rallyFor, points_against: s.rallyAgainst, points_diff: s.rallyDiff, // badminton gap 10: rally points
         noResult: s.noResult, // BUILD 4.1
         // NRR is a cricket column; other sports keep the null the FE renders as '—'.
         nrr: isCricket ? s.nrr : null,

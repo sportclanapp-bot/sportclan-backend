@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { callToCourt, uncallMatch } from '../controllers/courtBoard.controller';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
   createMatch,
@@ -87,6 +88,9 @@ router.post('/:id/participants', authenticateToken, addParticipants);
 router.post('/:id/umpire/self-assign', authenticateToken, selfAssignUmpire);
 // Cricket gap 3: the organiser names a fixture's umpire and scorer.
 router.patch('/:id/officials', authenticateToken, setMatchOfficials);
+// Badminton gap 5: call a fixture to its court (both sides and the umpire are told), or undo it.
+router.post('/:id/call', authenticateToken, callToCourt);
+router.post('/:id/uncall', authenticateToken, uncallMatch);
 router.post('/:id/complete', authenticateToken, completeMatch);
 router.post('/:id/join', authenticateToken, joinOpenMatch);
 router.post('/:id/leave', authenticateToken, leaveMatch);

@@ -32,6 +32,7 @@ import {
   getTournamentOfficials,
 } from '../controllers/features.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
+import { getCourtBoard, nextToCourt, runningLate } from '../controllers/courtBoard.controller';
 import { enterSelf, addPlayersEntry, createPairInvite, answerPairInvite, getPairs } from '../controllers/pairEntries.controller';
 import {
   getOfflinePack, claimHub, heartbeatHub, releaseHub, takeOverHub,
@@ -76,6 +77,10 @@ router.post('/:id/entries/players', authenticateToken, addPlayersEntry);
 router.get('/:id/pairs', authenticateToken, getPairs);
 router.post('/:id/pair-invites', authenticateToken, createPairInvite);
 router.post('/:id/pair-invites/:inviteId/:action', authenticateToken, answerPairInvite);
+// Badminton gap 5: the court board, sending the next match to a free court, running late.
+router.get('/:id/court-board', authenticateToken, getCourtBoard);
+router.post('/:id/next-to-court', authenticateToken, nextToCourt);
+router.post('/:id/running-late', authenticateToken, runningLate);
 
 // SC-433 · the offline tournament hub. The pack is everything the organiser's
 // phone needs for a day with no signal; the lease keeps it to one phone; the

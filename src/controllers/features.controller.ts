@@ -2,6 +2,7 @@ import { selectAll } from '../utils/selectAll';
 import { hideTestFor, excludeTest, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { rootTournamentId } from '../utils/tournamentEvents';
 import { sanitizeError } from '../utils/response';
 import { activeSportIds } from '../utils/sports';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers, matchAudienceIds } from '../utils/notify';
@@ -288,7 +289,6 @@ export async function addTournamentOfficial(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const { id } = req.params;
     const { user_id, role } = req.body || {};
     if (!user_id || !role) return res.status(400).json({ error: 'user_id and role required' });
     // Phase 3 B08-F11: a bad id or an unknown person 500'd, and the role took
@@ -297,6 +297,7 @@ export async function addTournamentOfficial(req: Request, res: Response) {
     if (typeof role !== 'string' || !OFFICIAL_ROLES.includes(role)) {
       return res.status(400).json({ error: `role must be one of: ${OFFICIAL_ROLES.join(', ')}` });
     }
+    const id = await rootTournamentId(String(req.params.id)); // badminton gap 1: kept on the tournament
 
     const { data: tournament } = await supabase.from('tournaments').select('created_by').eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -334,7 +335,8 @@ export async function removeTournamentOfficial(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const { id, officialId } = req.params;
+    const { officialId } = req.params;
+    const id = await rootTournamentId(String(req.params.id)); // badminton gap 1
     const { data: tournament } = await supabase.from('tournaments').select('created_by').eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
 
@@ -358,7 +360,7 @@ export async function removeTournamentOfficial(req: Request, res: Response) {
 
 export async function getTournamentOfficials(req: Request, res: Response) {
   try {
-    const { id } = req.params;
+    const id = await rootTournamentId(String(req.params.id)); // badminton gap 1: the tournament's officials
     // B08-F19: an unknown tournament is a 404, not an empty list.
     const { data: tournament } = await supabase.from('tournaments').select('id').eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });

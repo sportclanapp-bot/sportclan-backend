@@ -42,7 +42,7 @@ export async function sweepTournamentsDue(): Promise<{ started: number }> {
       .update({ status: 'live' })
       .eq('id', t.id)
       .eq('status', 'upcoming');
-    if (!error) started += 1;
+    if (!error) { started += 1; await refreshParentOf(t.id); } // badminton gap 1
   }
   return { started };
 }
@@ -72,6 +72,10 @@ import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTie
 import { drawOrder } from '../utils/drawOrder';
 import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSeparation';
 import { swissFirstRound, swissNextRound, type SwissRound } from '../utils/swiss';
+import {
+  SHARED_KEYS, EVENT_KEYS, eventsListRefusal, eventName, entryKindRefusal, eventLabelRefusal, refreshParentStatus, refreshParentOf,
+  clientHas, eventsOf, ENTER_AN_EVENT, familyIds, sameSharedValue, rootTournamentId,
+} from '../utils/tournamentEvents';
 
 function generateEntryCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -153,239 +157,376 @@ function groupsEditRefusal(
   return null;
 }
 
+type RowBuild = { refusal: Record<string, unknown> } | { row: Record<string, unknown> };
+
+/**
+ * A create body's checks and the row it inserts (everything but the entry code
+ * and the creator). Badminton gap 1: the same checks make a tournament, the
+ * parent of a tournament with events (`parent` — the events carry the format,
+ * size and rules, so those aren't asked of it) and each event.
+ */
+async function tournamentRowFrom(body: Record<string, any>, kind: 'single' | 'parent' | 'event'): Promise<RowBuild> {
+  const {
+    sport_id,
+    name,
+    description,
+    format,
+    city_id,
+    city,
+    venue,
+    start_date,
+    end_date,
+    entry_fee,
+    max_teams,
+    prize_pool,
+    banner_url,
+    logo_url,
+    tiebreaker_rules,
+    sport_metadata,
+    sponsor_name,
+    sponsor_logo_url,
+    organiser_name,
+    organiser_mobile,
+    registration_deadline,
+    daily_start_time,
+    daily_end_time,
+    match_duration_minutes,
+    buffer_minutes,
+    ground_count,
+    ground_names,
+    home_away,
+    match_rules,
+    num_groups,
+    group_size,
+    qualifiers_per_group,
+    settings,
+    entry_kind,
+  } = body;
+  const bad = (b: Record<string, unknown>): RowBuild => ({ refusal: b });
+  if (!sport_id || !name || !format) {
+    return bad({ error: 'sport_id, name, format are required' });
+  }
+  // Phase 3 B08-F11/F12: a real name, and dates/money/schedule numbers that
+  // mean something — not "   ", {"a":1}, 'soon' or -5.
+  const cBad = tournamentNameRefusal(name) ?? tournamentDetailsRefusal(body);
+  if (cBad) return bad(cBad);
+  // SC-95/96: bound name/description; validate image URLs (were unbounded/arbitrary).
+  const tLong = firstTooLong({ name, description }, [['name', LIMITS.tournamentNameMax], ['description', LIMITS.descriptionMax]]);
+  if (tLong) return bad({ error: `${tLong[0]} must be ${tLong[1]} characters or fewer` });
+  const tBadUrl = firstDisallowedImageUrl({ banner_url, logo_url, sponsor_logo_url }, ['banner_url', 'logo_url', 'sponsor_logo_url']);
+  if (tBadUrl) return bad({ error: `${tBadUrl} must be an uploaded image URL`, code: 'INVALID_IMAGE_URL' });
+  // Validate format (SC-37) — unknown enum previously 500'd on insert.
+  if (!isValidTournamentFormat(format)) {
+    return bad({ error: `Invalid format. Must be one of: ${TOURNAMENT_FORMATS.join(', ')}` });
+  }
+  const parent = kind === 'parent';
+  const haBad = parent ? null : homeAwayRefusal(format, home_away);
+  if (haBad) return bad(haBad);
+  // BUILD 2.4: the organiser's rules per stage, checked by the shared validator.
+  const createSportSlug = normSportSlug((await getSport(String(sport_id)))?.slug);
+  const mrBad = parent ? null : tournamentRulesRefusal(createSportSlug, match_rules);
+  if (mrBad) return bad(mrBad);
+  // BUILD 4.11: open entry is settings.entry. Apps before it send `is_open:
+  // true` on every create with no choice behind it, so that field stays
+  // ignored — honouring it would turn every older app's tournament open.
+  // BUILD Stage 4: the tournament-wide settings, checked by the shared validator.
+  const setBad = parent ? null : settingsRefusal(createSportSlug, format, settings);
+  if (setBad) return bad(setBad);
+  // BUILD 4.15: a Swiss is chess, with its rounds.
+  if (!parent && format === 'swiss') {
+    const swBad = swissCreateRefusal(createSportSlug, settings);
+    if (swBad) return bad(swBad);
+  }
+  // BUILD 4.2: tie-break names are checked (they were stored as sent, and an
+  // unknown one was silently skipped by the table).
+  const tbBad = parent ? null : tiebreakRefusal(createSportSlug, tiebreaker_rules);
+  if (tbBad) return bad(tbBad);
+  // Badminton gap 2: who enters — a team, one player or a pair.
+  const ekBad = parent ? null : entryKindRefusal(createSportSlug, entry_kind);
+  if (ekBad) return bad(ekBad);
+  // Bound max_teams (SC-39) — 0/1/absurd values previously created degenerate
+  // tournaments. A parent has no entries of its own, so no size.
+  const maxTeamsNum = Number(max_teams);
+  if (!parent && (
+    !Number.isInteger(maxTeamsNum) ||
+    maxTeamsNum < LIMITS.tournamentMinTeams ||
+    maxTeamsNum > LIMITS.tournamentMaxTeams
+  )) {
+    return bad({ error: `max_teams must be between ${LIMITS.tournamentMinTeams} and ${LIMITS.tournamentMaxTeams}` });
+  }
+  // Validate the sport (unknown/malformed/deactivated → clean 400, not a 500).
+  const sportErr = await validateSportForCreate(sport_id);
+  if (sportErr) return bad({ error: sportErr });
+  // Whitelist only string values in sport_metadata to avoid arbitrary
+  // shape injection. Empty strings and __custom__ sentinel are dropped.
+  const metadata: Record<string, string> = {};
+  if (sport_metadata && typeof sport_metadata === 'object') {
+    for (const [k, v] of Object.entries(sport_metadata)) {
+      if (typeof v === 'string' && v && v !== '__custom__') {
+        metadata[k] = v;
+      }
+    }
+  }
+
+  // SC-58: optional groups_knockout configuration (organizer-chosen group
+  // count / size + qualifiers per group, incl. top-1). Validated here and only
+  // persisted when provided, so the insert stays compatible even if migration
+  // 038 (which adds these columns) has not been applied yet.
+  const groupsConfigFields: Record<string, number> = {};
+  const cfgInt = (v: unknown) => (v === undefined || v === null || parent ? null : Number(v));
+  const ng = cfgInt(num_groups);
+  if (ng !== null) {
+    // BUILD 4.3: 2 to 16 groups (it was 1 to 64; the app never sent it).
+    if (!Number.isInteger(ng) || ng < GROUPS_MIN || ng > GROUPS_MAX) {
+      return bad({ error: `Groups must be ${GROUPS_MIN} to ${GROUPS_MAX}.`, code: 'BAD_GROUPS' });
+    }
+    groupsConfigFields.num_groups = ng;
+  }
+  const gs = cfgInt(group_size);
+  if (gs !== null) {
+    if (!Number.isInteger(gs) || gs < 2 || gs > 64) {
+      return bad({ error: 'group_size must be an integer between 2 and 64' });
+    }
+    groupsConfigFields.group_size = gs;
+  }
+  const qpg = cfgInt(qualifiers_per_group);
+  if (qpg !== null) {
+    // BUILD 4.4: 1 to 4 through from each group (it was 1 to 32).
+    if (!Number.isInteger(qpg) || qpg < QUALIFIERS_MIN || qpg > QUALIFIERS_MAX) {
+      return bad({ error: `Teams through from each group must be ${QUALIFIERS_MIN} to ${QUALIFIERS_MAX}.`, code: 'BAD_GROUPS' });
+    }
+    groupsConfigFields.qualifiers_per_group = qpg;
+  }
+  // SC-110: for groups_knockout, qualifiers_per_group cannot exceed group_size
+  // (you can't advance more teams from a group than the group contains).
+  if (format === 'groups_knockout' && gs !== null && qpg !== null && qpg > gs) {
+    return bad({ error: 'qualifiers_per_group cannot exceed group_size' });
+  }
+  // BUILD 4.3: every group needs 2 teams, so a group count the tournament
+  // can't fill could never be drawn.
+  if (format === 'groups_knockout' && ng !== null && maxTeamsNum < ng * 2) {
+    return bad({ error: `${ng} groups need at least ${ng * 2} teams; max teams is ${maxTeamsNum}.`, code: 'GROUPS_TOO_SMALL' });
+  }
+  // BUILD 1.12: the group size is a cap — a tournament that takes more teams
+  // than its groups can hold could never be drawn.
+  if (format === 'groups_knockout' && ng !== null && gs !== null && maxTeamsNum > ng * gs) {
+    return bad({
+      error: `Max teams (${maxTeamsNum}) is more than ${ng} groups of ${gs} can hold (${ng * gs}).`,
+      code: 'GROUPS_TOO_SMALL',
+    });
+  }
+
+  return {
+    row: {
+      sport_id,
+      name: String(name).trim(),
+      description: description || null,
+      format,
+      city_id: city_id || null,
+      city: city || null,
+      venue: venue || null,
+      start_date: start_date || null,
+      end_date: end_date || null,
+      entry_fee: entry_fee ?? 0,
+      max_teams: parent ? null : max_teams ?? null,
+      prize_pool: prize_pool ?? null,
+      banner_url: banner_url || null,
+      logo_url: logo_url || null,
+      // BUILD 4.2; BUILD 4.15: a Swiss without its own order ranks on Buchholz, then Sonneborn-Berger, then wins.
+      tiebreaker_rules: !parent && Array.isArray(tiebreaker_rules) && tiebreaker_rules.length ? storedTiebreaks(tiebreaker_rules)
+        : !parent && format === 'swiss' ? ['buchholz', 'sonneborn_berger', 'wins'] : [],
+      sport_metadata: metadata,
+      sponsor_name: sponsor_name || null,
+      sponsor_logo_url: sponsor_logo_url || null,
+      organiser_name: organiser_name || null,
+      organiser_mobile: organiser_mobile || null,
+      registration_deadline: registration_deadline || null,
+      // Scheduling (feature): daily window + grounds + duration drive fixture
+      // slotting at generate time. All optional — absent → sequential fallback.
+      daily_start_time: daily_start_time || null,
+      daily_end_time: daily_end_time || null,
+      match_duration_minutes: match_duration_minutes ?? null,
+      buffer_minutes: buffer_minutes ?? null,
+      ground_count: ground_count ?? null,
+      ground_names: Array.isArray(ground_names) && ground_names.length > 0 ? ground_names : null,
+      home_away: homeAwayFor(format), // BUILD 1.11
+      match_rules: parent ? null : storedStageRules(createSportSlug, match_rules), // BUILD 2.4
+      settings: !parent && settings ? storedSettings(settings) : null, // BUILD Stage 4
+      // Badminton gaps 1–2. Only written when they differ from the column
+      // defaults, so a plain tournament's insert is exactly as before.
+      ...(parent ? { is_parent: true } : {}),
+      ...(!parent && typeof entry_kind === 'string' && entry_kind !== 'team' ? { entry_kind } : {}),
+      ...groupsConfigFields,
+    },
+  };
+}
+
+/** A join code no tournament has (retrying a few times on a collision). */
+async function freshEntryCode(): Promise<string> {
+  let entry_code = generateEntryCode();
+  for (let i = 0; i < 5; i++) {
+    const { data: existing } = await supabase
+      .from('tournaments')
+      .select('id')
+      .eq('entry_code', entry_code)
+      .maybeSingle();
+    if (!existing) break;
+    entry_code = generateEntryCode();
+  }
+  return entry_code;
+}
+
+/**
+ * Badminton gap 1: the rows for these events of `parent` — each event's own
+ * settings over the parent's shared ones, checked like any tournament. Returns
+ * the first refusal (naming the event) or the rows to insert.
+ */
+async function eventRowsFor(
+  parent: Record<string, any>,
+  events: Array<Record<string, any>>,
+  startOrder: number,
+  probe = false,
+): Promise<{ refusal: Record<string, unknown> } | { rows: Array<Record<string, unknown>> }> {
+  const rows: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    const label = String(ev.label).trim();
+    const body: Record<string, any> = { sport_id: parent.sport_id };
+    for (const k of SHARED_KEYS) body[k] = parent[k];
+    for (const k of EVENT_KEYS) if (k in ev) body[k] = ev[k];
+    body.entry_kind = ev.entry_kind;
+    body.name = eventName(String(parent.name), label);
+    if (body.format === undefined) body.format = parent.format;
+    // An event without its own fee or prize takes the tournament's.
+    if (body.entry_fee === undefined) body.entry_fee = parent.entry_fee;
+    if (body.prize_pool === undefined) body.prize_pool = parent.prize_pool;
+    const built = await tournamentRowFrom(body, 'event');
+    if ('refusal' in built) {
+      const r = built.refusal as { error?: string };
+      return { refusal: { ...built.refusal, error: `${label}: ${r.error ?? 'check this event'}`, event: label } };
+    }
+    rows.push({
+      ...built.row,
+      sport_metadata: parent.sport_metadata ?? {},
+      parent_id: parent.id,
+      event_label: label,
+      event_order: Math.min(99, startOrder + i),
+      created_by: parent.created_by,
+      entry_code: probe ? null : await freshEntryCode(),
+    });
+  }
+  return { rows };
+}
+
+/** Best-effort: the tournament's group chat, its creator in it as admin. */
+async function createTournamentChat(name: string, userId: string): Promise<string | null> {
+  try {
+    const { data: chat } = await supabase
+      .from('chats')
+      .insert({ is_group: true, name: `${name} Chat`, created_by: userId })
+      .select('id')
+      .single();
+    if (!chat) return null;
+    await supabase.from('chat_participants').insert({ chat_id: chat.id, user_id: userId, role: 'admin' });
+    return chat.id as string;
+  } catch {
+    return null; /* chat creation is best-effort */
+  }
+}
+
 export async function createTournament(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     // SC-434: hosting a tournament used to need Premium. There are no tiers any
     // more — anyone signed in can run one.
-
-    const {
-      sport_id,
-      name,
-      description,
-      format,
-      city_id,
-      city,
-      venue,
-      start_date,
-      end_date,
-      entry_fee,
-      max_teams,
-      prize_pool,
-      banner_url,
-      logo_url,
-      tiebreaker_rules,
-      sport_metadata,
-      sponsor_name,
-      sponsor_logo_url,
-      organiser_name,
-      organiser_mobile,
-      registration_deadline,
-      daily_start_time,
-      daily_end_time,
-      match_duration_minutes,
-      buffer_minutes,
-      ground_count,
-      ground_names,
-      day_windows,
-      home_away,
-      match_rules,
-      num_groups,
-      group_size,
-      qualifiers_per_group,
-      settings,
-    } = req.body || {};
-    if (!sport_id || !name || !format) {
-      return res.status(400).json({ error: 'sport_id, name, format are required' });
+    const body = (req.body || {}) as Record<string, any>;
+    // Badminton gap 1: a tournament made of events. The parent takes the shared
+    // details; each event its own format, size, category, rules and fee.
+    const events = body.events;
+    const withEvents = events !== undefined && events !== null;
+    if (withEvents) {
+      const evBad = eventsListRefusal(events);
+      if (evBad) return res.status(400).json(evBad);
     }
-    // Phase 3 B08-F11/F12: a real name, and dates/money/schedule numbers that
-    // mean something — not "   ", {"a":1}, 'soon' or -5.
-    const cBad = tournamentNameRefusal(name) ?? tournamentDetailsRefusal(req.body || {});
-    if (cBad) return res.status(400).json(cBad);
-    // SC-95/96: bound name/description; validate image URLs (were unbounded/arbitrary).
-    const tLong = firstTooLong({ name, description }, [['name', LIMITS.tournamentNameMax], ['description', LIMITS.descriptionMax]]);
-    if (tLong) return res.status(400).json({ error: `${tLong[0]} must be ${tLong[1]} characters or fewer` });
-    const tBadUrl = firstDisallowedImageUrl({ banner_url, logo_url, sponsor_logo_url }, ['banner_url', 'logo_url', 'sponsor_logo_url']);
-    if (tBadUrl) return res.status(400).json({ error: `${tBadUrl} must be an uploaded image URL`, code: 'INVALID_IMAGE_URL' });
-    // Validate format (SC-37) — unknown enum previously 500'd on insert.
-    if (!isValidTournamentFormat(format)) {
-      return res.status(400).json({
-        error: `Invalid format. Must be one of: ${TOURNAMENT_FORMATS.join(', ')}`,
-      });
-    }
-    const haBad = homeAwayRefusal(format, home_away);
-    if (haBad) return res.status(400).json(haBad);
-    // BUILD 2.4: the organiser's rules per stage, checked by the shared validator.
-    const createSportSlug = normSportSlug((await getSport(String(sport_id)))?.slug);
-    const mrBad = tournamentRulesRefusal(createSportSlug, match_rules);
-    if (mrBad) return res.status(400).json(mrBad);
-    // BUILD 4.11: open entry is settings.entry. Apps before it send `is_open:
-    // true` on every create with no choice behind it, so that field stays
-    // ignored — honouring it would turn every older app's tournament open.
-    // BUILD Stage 4: the tournament-wide settings, checked by the shared validator.
-    const setBad = settingsRefusal(createSportSlug, format, settings);
-    if (setBad) return res.status(400).json(setBad);
-    // BUILD 4.15: a Swiss is chess, with its rounds.
-    if (format === 'swiss') {
-      const swBad = swissCreateRefusal(createSportSlug, settings);
-      if (swBad) return res.status(400).json(swBad);
-    }
-    // BUILD 4.2: tie-break names are checked (they were stored as sent, and an
-    // unknown one was silently skipped by the table).
-    const tbBad = tiebreakRefusal(createSportSlug, tiebreaker_rules);
-    if (tbBad) return res.status(400).json(tbBad);
-    // Bound max_teams (SC-39) — 0/1/absurd values previously created degenerate
-    // tournaments.
-    const maxTeamsNum = Number(max_teams);
-    if (
-      !Number.isInteger(maxTeamsNum) ||
-      maxTeamsNum < LIMITS.tournamentMinTeams ||
-      maxTeamsNum > LIMITS.tournamentMaxTeams
-    ) {
-      return res.status(400).json({
-        error: `max_teams must be between ${LIMITS.tournamentMinTeams} and ${LIMITS.tournamentMaxTeams}`,
-      });
-    }
-    // Validate the sport (unknown/malformed/deactivated → clean 400, not a 500).
-    const sportErr = await validateSportForCreate(sport_id);
-    if (sportErr) return res.status(400).json({ error: sportErr });
-    // Whitelist only string values in sport_metadata to avoid arbitrary
-    // shape injection. Empty strings and __custom__ sentinel are dropped.
-    const metadata: Record<string, string> = {};
-    if (sport_metadata && typeof sport_metadata === 'object') {
-      for (const [k, v] of Object.entries(sport_metadata)) {
-        if (typeof v === 'string' && v && v !== '__custom__') {
-          metadata[k] = v;
-        }
-      }
+    const parentBody = withEvents ? { ...body, format: body.format ?? events[0]?.format ?? 'knockout' } : body;
+    const built = await tournamentRowFrom(parentBody, withEvents ? 'parent' : 'single');
+    if ('refusal' in built) return res.status(400).json(built.refusal);
+    // Each event is checked before anything is written.
+    if (withEvents) {
+      const probe = await eventRowsFor({ ...built.row, id: null, created_by: userId }, events, 0, true);
+      if ('refusal' in probe) return res.status(400).json(probe.refusal);
     }
 
-    // SC-58: optional groups_knockout configuration (organizer-chosen group
-    // count / size + qualifiers per group, incl. top-1). Validated here and only
-    // persisted when provided, so the insert stays compatible even if migration
-    // 038 (which adds these columns) has not been applied yet.
-    const groupsConfigFields: Record<string, number> = {};
-    const cfgInt = (v: unknown) => (v === undefined || v === null ? null : Number(v));
-    const ng = cfgInt(num_groups);
-    if (ng !== null) {
-      // BUILD 4.3: 2 to 16 groups (it was 1 to 64; the app never sent it).
-      if (!Number.isInteger(ng) || ng < GROUPS_MIN || ng > GROUPS_MAX) {
-        return res.status(400).json({ error: `Groups must be ${GROUPS_MIN} to ${GROUPS_MAX}.`, code: 'BAD_GROUPS' });
-      }
-      groupsConfigFields.num_groups = ng;
-    }
-    const gs = cfgInt(group_size);
-    if (gs !== null) {
-      if (!Number.isInteger(gs) || gs < 2 || gs > 64) {
-        return res.status(400).json({ error: 'group_size must be an integer between 2 and 64' });
-      }
-      groupsConfigFields.group_size = gs;
-    }
-    const qpg = cfgInt(qualifiers_per_group);
-    if (qpg !== null) {
-      // BUILD 4.4: 1 to 4 through from each group (it was 1 to 32).
-      if (!Number.isInteger(qpg) || qpg < QUALIFIERS_MIN || qpg > QUALIFIERS_MAX) {
-        return res.status(400).json({ error: `Teams through from each group must be ${QUALIFIERS_MIN} to ${QUALIFIERS_MAX}.`, code: 'BAD_GROUPS' });
-      }
-      groupsConfigFields.qualifiers_per_group = qpg;
-    }
-    // SC-110: for groups_knockout, qualifiers_per_group cannot exceed group_size
-    // (you can't advance more teams from a group than the group contains).
-    if (format === 'groups_knockout' && gs !== null && qpg !== null && qpg > gs) {
-      return res.status(400).json({ error: 'qualifiers_per_group cannot exceed group_size' });
-    }
-    // BUILD 4.3: every group needs 2 teams, so a group count the tournament
-    // can't fill could never be drawn.
-    if (format === 'groups_knockout' && ng !== null && maxTeamsNum < ng * 2) {
-      return res.status(400).json({ error: `${ng} groups need at least ${ng * 2} teams; max teams is ${maxTeamsNum}.`, code: 'GROUPS_TOO_SMALL' });
-    }
-    // BUILD 1.12: the group size is a cap — a tournament that takes more teams
-    // than its groups can hold could never be drawn.
-    if (format === 'groups_knockout' && ng !== null && gs !== null && maxTeamsNum > ng * gs) {
-      return res.status(400).json({
-        error: `Max teams (${maxTeamsNum}) is more than ${ng} groups of ${gs} can hold (${ng * gs}).`,
-        code: 'GROUPS_TOO_SMALL',
-      });
-    }
-
-    // Generate unique entry code (retry a few times on collision)
-    let entry_code = generateEntryCode();
-    for (let i = 0; i < 5; i++) {
-      const { data: existing } = await supabase
-        .from('tournaments')
-        .select('id')
-        .eq('entry_code', entry_code)
-        .maybeSingle();
-      if (!existing) break;
-      entry_code = generateEntryCode();
-    }
-
+    const entry_code = await freshEntryCode();
     const { data: tournament, error } = await supabase
       .from('tournaments')
-      .insert({
-        sport_id,
-        name: String(name).trim(),
-        description: description || null,
-        format,
-        city_id: city_id || null,
-        city: city || null,
-        venue: venue || null,
-        start_date: start_date || null,
-        end_date: end_date || null,
-        entry_fee: entry_fee ?? 0,
-        max_teams: max_teams ?? null,
-        prize_pool: prize_pool ?? null,
-        banner_url: banner_url || null,
-        logo_url: logo_url || null,
-        entry_code,
-        created_by: userId,
-        // BUILD 4.2; BUILD 4.15: a Swiss without its own order ranks on Buchholz, then Sonneborn-Berger, then wins.
-        tiebreaker_rules: Array.isArray(tiebreaker_rules) && tiebreaker_rules.length ? storedTiebreaks(tiebreaker_rules)
-          : format === 'swiss' ? ['buchholz', 'sonneborn_berger', 'wins'] : [],
-        sport_metadata: metadata,
-        sponsor_name: sponsor_name || null,
-        sponsor_logo_url: sponsor_logo_url || null,
-        organiser_name: organiser_name || null,
-        organiser_mobile: organiser_mobile || null,
-        registration_deadline: registration_deadline || null,
-        // Scheduling (feature): daily window + grounds + duration drive fixture
-        // slotting at generate time. All optional — absent → sequential fallback.
-        daily_start_time: daily_start_time || null,
-        daily_end_time: daily_end_time || null,
-        match_duration_minutes: match_duration_minutes ?? null,
-        buffer_minutes: buffer_minutes ?? null,
-        ground_count: ground_count ?? null,
-        ground_names: Array.isArray(ground_names) && ground_names.length > 0 ? ground_names : null,
-        home_away: homeAwayFor(format), // BUILD 1.11
-        match_rules: storedStageRules(createSportSlug, match_rules), // BUILD 2.4
-        settings: settings ? storedSettings(settings) : null, // BUILD Stage 4
-        ...groupsConfigFields,
-      })
+      .insert({ ...built.row, entry_code, created_by: userId })
       .select('*')
       .single();
     if (error || !tournament) return res.status(500).json({ error: sanitizeError(error) || 'Failed to create tournament' });
 
-    // Auto-create tournament group chat (best-effort)
-    try {
-      const { data: chat } = await supabase
-        .from('chats')
-        .insert({ is_group: true, name: `${name} Chat`, created_by: userId })
-        .select('id')
-        .single();
-      if (chat) {
-        await supabase.from('chat_participants').insert({ chat_id: chat.id, user_id: userId, role: 'admin' });
-        // Store the chat reference on the tournament — we use a loose
-        // metadata approach since there's no dedicated FK column yet.
-        await supabase.from('tournaments').update({ sport_metadata: { ...metadata, _chat_id: chat.id } }).eq('id', tournament.id);
-      }
-    } catch { /* chat creation is best-effort */ }
+    // Auto-create tournament group chat (best-effort). Store the chat reference
+    // on the tournament — a loose metadata link, there's no FK column for it.
+    const metadata = (built.row.sport_metadata ?? {}) as Record<string, string>;
+    const chatId = await createTournamentChat(String(built.row.name), userId);
+    if (chatId) {
+      await supabase.from('tournaments').update({ sport_metadata: { ...metadata, _chat_id: chatId } }).eq('id', tournament.id);
+      (tournament as Record<string, unknown>).sport_metadata = { ...metadata, _chat_id: chatId };
+    }
 
     // Per-day window overrides (optional).
-    await upsertDayWindows(tournament.id, day_windows);
+    await upsertDayWindows(tournament.id, body.day_windows);
+
+    if (withEvents) {
+      // The events share the parent's chat (one chat for the whole tournament).
+      const made = await eventRowsFor(tournament as Record<string, any>, events, 0);
+      if ('refusal' in made) return res.status(400).json(made.refusal);
+      const { data: eventRows, error: evErr } = await supabase.from('tournaments').insert(made.rows).select('*');
+      if (evErr || !eventRows) {
+        // All or nothing: an event that won't insert takes the parent with it.
+        await supabase.from('tournaments').delete().eq('id', tournament.id);
+        return res.status(500).json({ error: sanitizeError(evErr) || 'Failed to create the events' });
+      }
+      const sorted = [...(eventRows as Array<Record<string, any>>)].sort((a, b) => (a.event_order ?? 0) - (b.event_order ?? 0));
+      return res.json({ tournament: { ...tournament, events: sorted } });
+    }
 
     return res.json({ tournament });
   } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// POST /tournaments/:id/events — badminton gap 1: add events to a tournament
+// made of events (before it's finished). Any organiser.
+export async function addEvents(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const { data: parent } = await supabase.from('tournaments').select('*').eq('id', id).maybeSingle();
+    if (!parent) return res.status(404).json({ error: 'Tournament not found' });
+    if (!(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only the organiser can add events.' });
+    if (!(parent as { is_parent?: boolean }).is_parent) {
+      return res.status(409).json({ error: 'Events are added to a tournament made of events.', code: 'NOT_A_PARENT' });
+    }
+    if (parent.status === 'completed' || parent.status === 'cancelled') {
+      return res.status(409).json({ error: parent.status === 'completed' ? 'This tournament is finished.' : 'This tournament was cancelled.', code: 'TOURNAMENT_FINISHED' });
+    }
+    const { data: existing } = await supabase.from('tournaments').select('event_label, event_order').eq('parent_id', id);
+    const have = (existing ?? []) as Array<{ event_label: string | null; event_order: number | null }>;
+    const events = (req.body || {}).events;
+    const evBad = eventsListRefusal(events, have.map((e) => e.event_label ?? '').filter(Boolean));
+    if (evBad) return res.status(400).json(evBad);
+    const next = have.reduce((m, e) => Math.max(m, (e.event_order ?? -1) + 1), 0);
+    const made = await eventRowsFor(parent as Record<string, any>, events, next);
+    if ('refusal' in made) return res.status(400).json(made.refusal);
+    const { data: rows, error } = await supabase.from('tournaments').insert(made.rows).select('*');
+    if (error || !rows) return res.status(500).json({ error: sanitizeError(error) || 'Failed to add the events' });
+    await refreshParentStatus(id);
+    return res.json({ events: rows });
+  } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
@@ -415,12 +556,37 @@ export async function listTournaments(req: Request, res: Response) {
     if (mine === '1') query = query.eq('created_by', userId);
     // B03 (V245, D3): test tournaments are hidden from real viewers' lists.
     else if (await hideTestFor(userId)) query = excludeTest(query);
+    // Badminton gap 1: an app that knows events lists a tournament made of
+    // events once (its events inside it); an older app gets each event as a
+    // tournament of its own ("Open · Men's singles") and never the parent,
+    // which it couldn't enter or draw.
+    const grouped = clientHas(req, 'events');
+    query = grouped ? query.is('parent_id', null) : query.eq('is_parent', false);
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ tournaments: data || [], ...pageMeta(count, p) });
+    const rows = (data || []) as Array<Record<string, unknown>>;
+    if (grouped) await attachEventSummaries(rows);
+    return res.json({ tournaments: rows, ...pageMeta(count, p) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+/** Badminton gap 1: each parent on a list page carries its events' labels and kinds. */
+async function attachEventSummaries(rows: Array<Record<string, unknown>>): Promise<void> {
+  const parents = rows.filter((r) => r.is_parent).map((r) => r.id as string);
+  if (parents.length === 0) return;
+  const { data } = await supabase
+    .from('tournaments')
+    .select('id, parent_id, event_label, event_order, entry_kind, status')
+    .in('parent_id', parents)
+    .order('event_order', { ascending: true });
+  const byParent = new Map<string, Array<Record<string, unknown>>>();
+  for (const e of (data ?? []) as Array<Record<string, unknown>>) {
+    const k = e.parent_id as string;
+    byParent.set(k, [...(byParent.get(k) ?? []), { id: e.id, label: e.event_label, entry_kind: e.entry_kind, status: e.status }]);
+  }
+  for (const r of rows) if (r.is_parent) { r.events = byParent.get(r.id as string) ?? []; r.events_count = (r.events as unknown[]).length; }
 }
 
 // GET /tournaments/:id
@@ -458,7 +624,20 @@ export async function getTournament(req: Request, res: Response) {
     // B02 (N2): whether THIS viewer may open the tournament chat, so the app can
     // hide a button that would only answer 403. Signed-out viewers can't.
     const can_open_chat = req.userId ? await canOpenTournamentChat(String(tournament.id), req.userId) : false;
-    return res.json({ tournament, entries: entries || [], can_open_chat });
+    // Badminton gap 1: a parent lists its events (status brought up to date);
+    // an event names its tournament and its sibling events.
+    const family: Record<string, unknown> = {};
+    if ((tournament as { is_parent?: boolean }).is_parent) {
+      const st = await refreshParentStatus(String(tournament.id));
+      if (st) (tournament as { status?: string }).status = st;
+      family.events = await eventsOf(String(tournament.id));
+    } else if ((tournament as { parent_id?: string | null }).parent_id) {
+      const pid = String((tournament as { parent_id: string }).parent_id);
+      const { data: parent } = await supabase.from('tournaments').select('id, name, status, entry_code').eq('id', pid).maybeSingle();
+      family.parent = parent ?? null;
+      family.events = await eventsOf(pid);
+    }
+    return res.json({ tournament, entries: entries || [], can_open_chat, ...family });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -535,9 +714,12 @@ type EntryTournament = {
   created_by?: string | null;
   settings?: unknown; // BUILD 4.11 open entry, 4.14 category
   start_date?: string | null; // BUILD 4.14 ages on the start date
+  is_parent?: boolean | null; // badminton gap 1
+  parent_id?: string | null;
+  entry_kind?: string | null; // badminton gap 2
 };
 type EntryRefusal = { status: number; body: { error: string; code: string } };
-const ENTRY_TOURNAMENT_COLS = 'id, name, status, sport_id, max_teams, registration_deadline, fixtures_generated, created_by, settings, start_date';
+const ENTRY_TOURNAMENT_COLS = 'id, name, status, sport_id, max_teams, registration_deadline, fixtures_generated, created_by, settings, start_date, is_parent, parent_id, entry_kind';
 
 /**
  * Phase 3 · B08-F2/F4/F8/F9: the rules EVERY way into a tournament passes — a
@@ -577,6 +759,8 @@ async function entryRefusal(
   teamId: string,
   opts: { capCounts: Array<'pending' | 'approved'>; deadline: boolean; overlap: boolean },
 ): Promise<EntryRefusal | null> {
+  // Badminton gap 1: a tournament made of events is entered through an event.
+  if (t.is_parent) return { status: 409, body: ENTER_AN_EVENT };
   if (t.status === 'completed' || t.status === 'cancelled') {
     return {
       status: 409,
@@ -649,12 +833,17 @@ export async function tournamentByCode(req: Request, res: Response) {
     if (!code || code.length > 20) return res.status(400).json({ error: 'That isn’t a join code.', code: 'BAD_CODE' });
     const { data: t } = await supabase
       .from('tournaments')
-      .select('id, name, sport_id, status, format, entry_fee, settings, start_date')
+      .select('id, name, sport_id, status, format, entry_fee, settings, start_date, is_parent, parent_id, entry_kind, event_label')
       .eq('entry_code', code)
       .maybeSingle();
     if (!t) return res.status(404).json({ error: 'No tournament has that code. Check it with the organiser.', code: 'TOURNAMENT_NOT_FOUND' });
     const category = settingsOf(t as { settings?: unknown }).category ?? null;
-    return res.json({ tournament: { id: t.id, name: t.name, sport_id: t.sport_id, status: t.status, format: t.format, entry_fee: t.entry_fee, start_date: t.start_date, category } });
+    // Badminton gaps 1–2: a code for a tournament made of events lists them, to pick one.
+    const fam = t as { is_parent?: boolean; parent_id?: string | null; entry_kind?: string; event_label?: string | null };
+    const extra = fam.is_parent
+      ? { is_parent: true, events: await eventsOf(String(t.id)) }
+      : { entry_kind: fam.entry_kind ?? 'team', parent_id: fam.parent_id ?? null, event_label: fam.event_label ?? null };
+    return res.json({ tournament: { id: t.id, name: t.name, sport_id: t.sport_id, status: t.status, format: t.format, entry_fee: t.entry_fee, start_date: t.start_date, category, ...extra } });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -714,7 +903,10 @@ export async function joinOptions(req: Request, res: Response) {
     if (!code || code.length > 20) return res.status(400).json({ error: 'That isn’t a join code.', code: 'BAD_CODE' });
     const { data: t } = await supabase.from('tournaments').select(`${ENTRY_TOURNAMENT_COLS}, format, entry_fee`).eq('entry_code', code).maybeSingle();
     if (!t) return res.status(404).json({ error: 'No tournament has that code. Check it with the organiser.', code: 'TOURNAMENT_NOT_FOUND' });
-    return res.json(await myEntryOptions(t as EntryOptionsTournament, userId));
+    const out = await myEntryOptions(t as EntryOptionsTournament, userId);
+    // Badminton gap 1: a tournament made of events is entered through one of them.
+    if ((t as { is_parent?: boolean }).is_parent) return res.json({ ...out, is_parent: true, events: await eventsOf(String(t.id)) });
+    return res.json(out);
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -802,6 +994,7 @@ async function entryVerdicts(tournament: EntryTournament, ids: string[], asOrgan
   const clashIdOf = new Map<string, string>();
   const no = (teamId: string, code: string, reason: string) => ({ team_id: teamId, ok: false, code, reason });
   const verdicts = ids.map((teamId) => {
+    if (t.is_parent) return no(teamId, ENTER_AN_EVENT.code, ENTER_AN_EVENT.error);
     if (!asOrganiser && !runs.has(teamId)) return no(teamId, 'NOT_CAPTAIN', 'Only the team’s captain or a co-captain can enter it.');
     const team = teamById.get(teamId);
     if (team?.deleted_at) return no(teamId, 'TEAM_DISBANDED', 'This team was disbanded.');
@@ -1214,7 +1407,7 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules, sport_metadata, num_groups, group_size, qualifiers_per_group, max_teams, registration_deadline')
+      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules, sport_metadata, num_groups, group_size, qualifiers_per_group, max_teams, registration_deadline, parent_id, is_parent, event_label, entry_kind')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -1349,12 +1542,68 @@ export async function updateTournament(req: Request, res: Response) {
       'buffer_minutes',
       'ground_count',
       'ground_names',
+      'event_label', // badminton gap 1
+      'entry_kind', // badminton gap 2
     ];
     const update: Record<string, any> = {};
     for (const key of allowedKeys) {
       if (req.body && key in req.body) update[key] = req.body[key];
     }
     if (typeof update.name === 'string') update.name = update.name.trim();
+    // Badminton gaps 1–2: what a tournament made of events, and an event, may change.
+    const fam = tournament as { parent_id?: string | null; is_parent?: boolean | null; event_label?: string | null; entry_kind?: string | null };
+    let parentRow: Record<string, unknown> | null = null;
+    if (fam.is_parent) {
+      // The events carry format, size, fee, category and rules — each its own.
+      for (const k of EVENT_KEYS) delete update[k];
+      delete update.event_label;
+      delete update.entry_kind;
+      if (update.status === 'completed' && tournament.status !== 'completed') {
+        const { data: evs } = await supabase.from('tournaments').select('status').eq('parent_id', id);
+        if (((evs ?? []) as Array<{ status: string }>).some((e) => e.status !== 'completed' && e.status !== 'cancelled')) {
+          return res.status(409).json({ error: 'Finish or cancel every event first.', code: 'EVENTS_UNFINISHED' });
+        }
+      }
+    } else if (fam.parent_id) {
+      const { data: pr } = await supabase.from('tournaments').select(`name, ${SHARED_KEYS.join(', ')}`).eq('id', fam.parent_id).maybeSingle();
+      parentRow = (pr ?? null) as Record<string, unknown> | null;
+      // Shared things are set on the tournament for all its events; an older
+      // app's edit form sends them back unchanged, which is fine.
+      for (const k of SHARED_KEYS) {
+        if (!(k in update)) continue;
+        if (parentRow && !sameSharedValue(k, update[k], parentRow[k])) {
+          return res.status(409).json({
+            error: `Venue, dates, courts and schedule are set on ${String(parentRow.name ?? 'the tournament')} for all its events.`,
+            code: 'SHARED_WITH_EVENTS', field: k,
+          });
+        }
+        delete update[k];
+      }
+      if ('event_label' in update) {
+        const lb = eventLabelRefusal(update.event_label);
+        if (lb) return res.status(400).json(lb);
+        const label = String(update.event_label).trim();
+        const { data: sibs } = await supabase.from('tournaments').select('id, event_label').eq('parent_id', fam.parent_id);
+        if (((sibs ?? []) as Array<{ id: string; event_label: string | null }>).some((x) => x.id !== id && (x.event_label ?? '').trim().toLowerCase() === label.toLowerCase())) {
+          return res.status(400).json({ error: `There are two events called ${label}.`, code: 'DUPLICATE_EVENT' });
+        }
+        update.event_label = label;
+        update.name = eventName(String(parentRow?.name ?? tournament.name ?? ''), label);
+      }
+    } else {
+      delete update.event_label;
+    }
+    if ('entry_kind' in update) {
+      if (update.entry_kind === fam.entry_kind) delete update.entry_kind;
+      else {
+        const slug = normSportSlug((await getSport(String((tournament as { sport_id?: string }).sport_id)))?.slug);
+        const ek = entryKindRefusal(slug, update.entry_kind ?? 'team');
+        if (ek) return res.status(400).json(ek);
+        const { count: anyEntries } = await supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id).in('status', ['pending', 'approved']);
+        if ((anyEntries ?? 0) > 0) return res.status(409).json({ error: 'Entries are in, so who enters (team, singles or doubles) can’t change.', code: 'ENTRY_KIND_LOCKED' });
+        update.entry_kind = update.entry_kind ?? 'team';
+      }
+    }
     // BUILD 2.4: stage rules are copied onto fixtures at the draw, so they're
     // fixed once it's made; before, they're checked like create's.
     if ('match_rules' in update) {
@@ -1472,8 +1721,34 @@ export async function updateTournament(req: Request, res: Response) {
         'tournament', id, `status → ${req.body?.status} on "${tournament.name ?? id}"`);
     }
 
-    // Per-day window overrides (optional).
-    await upsertDayWindows(id, req.body?.day_windows);
+    // Per-day window overrides (optional). An event plays in its tournament's.
+    if (!fam.parent_id) await upsertDayWindows(id, req.body?.day_windows);
+
+    // Badminton gap 1: the events follow their tournament's shared details and
+    // name; cancelling the tournament cancels its unfinished events; an event's
+    // status moves its tournament's.
+    if (fam.is_parent) {
+      try {
+        const shared: Record<string, unknown> = {};
+        for (const k of SHARED_KEYS) if (k in update) shared[k] = update[k];
+        if (Object.keys(shared).length) await supabase.from('tournaments').update(shared).eq('parent_id', id);
+        if (typeof update.name === 'string' && update.name !== tournament.name) {
+          const { data: evs } = await supabase.from('tournaments').select('id, event_label').eq('parent_id', id);
+          for (const ev of (evs ?? []) as Array<{ id: string; event_label: string | null }>) {
+            await supabase.from('tournaments').update({ name: eventName(update.name, ev.event_label ?? '') }).eq('id', ev.id);
+          }
+        }
+        if (update.status === 'cancelled' && tournament.status !== 'cancelled') {
+          const { data: open } = await supabase.from('tournaments').select('id, name').eq('parent_id', id).in('status', ['upcoming', 'live']);
+          for (const ev of (open ?? []) as Array<{ id: string; name: string | null }>) {
+            await supabase.from('tournaments').update({ status: 'cancelled', updated_at: new Date().toISOString() }).eq('id', ev.id);
+            try { await cancelTournamentSideEffects(ev.id, ev.name ?? null, userId); } catch { /* best-effort */ }
+          }
+        }
+      } catch { /* best-effort */ }
+    } else if (fam.parent_id && update.status !== undefined && update.status !== tournament.status) {
+      await refreshParentOf(id);
+    }
 
     // CHANGE NOTIF: a schedule/location change (start/end date, venue, or the
     // window/grounds that move fixtures) affects everyone entered — notify the
@@ -1615,10 +1890,12 @@ async function notifyTournamentUpdated(
   tournamentName: string | null,
   actorId: string,
 ): Promise<void> {
+  // Badminton gap 1: a tournament made of events tells everyone in any event, once.
+  const ids = await familyIds(tournamentId);
   const { data: entries } = await supabase
     .from('tournament_entries')
     .select('team_id')
-    .eq('tournament_id', tournamentId)
+    .in('tournament_id', ids)
     .eq('status', 'approved');
   const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
   if (teamIds.length === 0) return;
@@ -1648,7 +1925,7 @@ export async function getTournamentOrganisers(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const { id } = req.params;
+    const id = await rootTournamentId(String(req.params.id)); // badminton gap 1: kept on the tournament
     const { data: t } = await supabase
       .from('tournaments')
       .select('created_by, creator:users!created_by(id, name, username, profile_picture_url)')
@@ -1675,7 +1952,7 @@ export async function addTournamentOrganiser(req: Request, res: Response) {
   try {
     // B02 (V022, D7): the chat follows the entries and organisers.
     syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
-    const { id } = req.params;
+    const id = await rootTournamentId(String(req.params.id)); // badminton gap 1: kept on the tournament
     const { user_id } = req.body || {};
     if (!user_id || !isUuid(user_id)) return res.status(400).json({ error: 'A valid user_id is required.' });
     const { data: t } = await supabase.from('tournaments').select('created_by, name').eq('id', id).maybeSingle();
@@ -1734,7 +2011,8 @@ export async function removeTournamentOrganiser(req: Request, res: Response) {
   try {
     // B02 (V022, D7): the chat follows the entries and organisers.
     syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
-    const { id, userId: targetId } = req.params;
+    const { userId: targetId } = req.params;
+    const id = await rootTournamentId(String(req.params.id)); // badminton gap 1
     const { data: t } = await supabase.from('tournaments').select('created_by, name').eq('id', id).maybeSingle();
     if (!t) return res.status(404).json({ error: 'Tournament not found' });
     const isSelf = targetId === userId;
@@ -1762,7 +2040,7 @@ export async function reassignTournamentOrganiser(req: Request, res: Response) {
   try {
     // B02 (V022, D7): the chat follows the entries and organisers.
     syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
-    const { id } = req.params;
+    const id = await rootTournamentId(String(req.params.id)); // badminton gap 1: the whole tournament
     const { user_id } = req.body || {};
     if (!user_id || !isUuid(user_id)) return res.status(400).json({ error: 'A valid user_id is required.' });
     const { data: t } = await supabase.from('tournaments').select('created_by, name').eq('id', id).maybeSingle();
@@ -1773,6 +2051,7 @@ export async function reassignTournamentOrganiser(req: Request, res: Response) {
     if (!target) return res.status(404).json({ error: 'User not found.' });
 
     await supabase.from('tournaments').update({ created_by: user_id, updated_at: new Date().toISOString() }).eq('id', id);
+    await supabase.from('tournaments').update({ created_by: user_id }).eq('parent_id', id); // its events
     // The new organiser can't also be a co-organiser (would be redundant).
     await supabase.from('tournament_organisers').delete().eq('tournament_id', id).eq('user_id', user_id);
     if (auth.viaAdmin) {
@@ -2606,6 +2885,7 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
     .maybeSingle();
   if (crowned) {
     await notifyTournamentChampion(tournamentId, championId, nameOf[championId] ?? null, crowned.name ?? null);
+    await refreshParentOf(tournamentId); // badminton gap 1
   }
 }
 
@@ -2846,6 +3126,7 @@ async function completeBracketIfDone(tournamentId: string, knownFinal: FinalRow 
     .maybeSingle();
   if (crowned) {
     await notifyTournamentChampion(tournamentId, winnerId, championName as string | null, crowned.name ?? null);
+    await refreshParentOf(tournamentId); // badminton gap 1
   }
 }
 
@@ -3058,10 +3339,13 @@ function buildTournamentScheduleConfig(
 async function loadDayWindows(tournamentId: string): Promise<Map<string, { startMin: number; endMin: number }>> {
   const map = new Map<string, { startMin: number; endMin: number }>();
   try {
+    // Badminton gap 1: an event plays in its tournament's day windows.
+    const { data: own } = await supabase.from('tournaments').select('parent_id').eq('id', tournamentId).maybeSingle();
+    const windowsOf = (own as { parent_id?: string | null } | null)?.parent_id || tournamentId;
     const { data } = await supabase
       .from('tournament_days')
       .select('day_date, start_time, end_time')
-      .eq('tournament_id', tournamentId);
+      .eq('tournament_id', windowsOf);
     for (const row of data ?? []) {
       const ymd = String(row.day_date).slice(0, 10);
       map.set(ymd, {
@@ -3157,13 +3441,19 @@ export async function generateFixtures(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, status, sport_id, format, city_id, venue, start_date, end_date, created_by, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names, match_rules, settings')
+      .select('id, status, sport_id, format, city_id, venue, start_date, end_date, created_by, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names, match_rules, settings, is_parent, parent_id')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     if (!(await isTournamentOrganiser(id, userId))) {
       return res.status(403).json({ error: 'Only the organiser can generate fixtures' });
     }
+    // Badminton gap 1: each event is drawn on its own.
+    if ((tournament as { is_parent?: boolean }).is_parent) {
+      return res.status(409).json({ error: 'Make the draw for each event.', code: 'DRAW_PER_EVENT' });
+    }
+    // …and its tournament's status follows (the draw can make an event live).
+    if ((tournament as { parent_id?: string | null }).parent_id) syncAfterSuccess(res, () => refreshParentOf(String(id)));
     // B08-F4: a draw on a cancelled (or finished) tournament wrote a fresh status
     // over it — "cancelled" came back as "upcoming" with a fixture scheduled.
     if (tournament.status === 'cancelled' || tournament.status === 'completed') {

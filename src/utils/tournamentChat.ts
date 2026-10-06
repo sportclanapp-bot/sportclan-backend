@@ -21,6 +21,7 @@
 import { joinChat, leaveChat } from './chatMembership';
 import type { Response } from 'express';
 import { supabase } from './supabase';
+import { familyIds } from './tournamentEvents';
 
 export interface ChatAudience {
   organisers: Set<string>;
@@ -32,10 +33,13 @@ export interface ChatAudience {
  * sync must never remove people on the strength of a failed query.
  */
 export async function tournamentChatAudience(tournamentId: string): Promise<ChatAudience | null> {
+  // Badminton gap 1: one chat for a tournament and all its events — its
+  // organisers and the players of every event.
+  const ids = await familyIds(tournamentId);
   const [tRes, coRes, entRes] = await Promise.all([
     supabase.from('tournaments').select('created_by').eq('id', tournamentId).maybeSingle(),
-    supabase.from('tournament_organisers').select('user_id').eq('tournament_id', tournamentId),
-    supabase.from('tournament_entries').select('team_id').eq('tournament_id', tournamentId).eq('status', 'approved'),
+    supabase.from('tournament_organisers').select('user_id').in('tournament_id', ids),
+    supabase.from('tournament_entries').select('team_id').in('tournament_id', ids).eq('status', 'approved'),
   ]);
   if (tRes.error || coRes.error || entRes.error || !tRes.data) return null;
   const organisers = new Set<string>();

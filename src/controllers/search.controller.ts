@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { clientHas } from '../utils/tournamentEvents';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds } from '../utils/blocks';
 import { escapeLike, orIlikeContains } from '../utils/likeSearch'; // SC-237
@@ -45,7 +46,7 @@ export async function search(req: Request, res: Response) {
     case 'teams':
       return searchTeams(res, query, sportId, p, hide);
     case 'tournaments':
-      return searchTournaments(res, query, sportId, p, hide);
+      return searchTournaments(res, query, sportId, p, hide, clientHas(req, 'events'));
     case 'umpires':
       return searchUmpires(res, query, sportId, p, callerId, hide);
     case 'coaches':
@@ -155,7 +156,7 @@ async function searchTeams(res: Response, q: string, sportId: string | undefined
   return res.json({ data: rows, has_more: rows.length === p.limit });
 }
 
-async function searchTournaments(res: Response, q: string, sportId: string | undefined, p: Pagination, hide = false) {
+async function searchTournaments(res: Response, q: string, sportId: string | undefined, p: Pagination, hide = false, grouped = false) {
   let query = supabase
     .from('tournaments')
     .select(`
@@ -169,6 +170,9 @@ async function searchTournaments(res: Response, q: string, sportId: string | und
     .range(p.from, p.to);
 
   if (sportId) query = query.eq('sport_id', sportId);
+  // Badminton gap 1: a tournament made of events is found once by an app that
+  // knows events; older apps find each event, never the parent.
+  query = grouped ? query.is('parent_id', null) : query.eq('is_parent', false);
   const { data, error } = await noTest(query, hide);
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ data: data || [], has_more: (data || []).length === p.limit });

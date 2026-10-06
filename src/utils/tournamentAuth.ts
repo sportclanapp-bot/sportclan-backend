@@ -7,6 +7,7 @@
 // are creator-only, OR an admin (attributed via admin_actions). A co-organiser
 // canNOT do the carve-outs — they can't nuke the cup or lock the creator out.
 import { supabase } from './supabase';
+import { familyLookupIds } from './tournamentEvents';
 
 /** Creator OR a co-organiser row. NO admin (admins only get the narrow carve-outs). */
 export async function isTournamentOrganiser(
@@ -15,12 +16,14 @@ export async function isTournamentOrganiser(
 ): Promise<boolean> {
   if (!tournamentId || !userId) return false;
   const { data: t } = await supabase
-    .from('tournaments').select('created_by').eq('id', tournamentId).maybeSingle();
+    .from('tournaments').select('created_by, parent_id').eq('id', tournamentId).maybeSingle();
   if (t?.created_by === userId) return true;
+  // Badminton gap 1: an event's organisers are its tournament's (kept on the parent).
+  const ids = t?.parent_id ? [tournamentId, t.parent_id as string] : [tournamentId];
   const { data: co } = await supabase
     .from('tournament_organisers').select('user_id')
-    .eq('tournament_id', tournamentId).eq('user_id', userId).maybeSingle();
-  return !!co;
+    .in('tournament_id', ids).eq('user_id', userId).limit(1);
+  return (co ?? []).length > 0;
 }
 
 export async function userIsAdmin(userId: string | null | undefined): Promise<boolean> {
@@ -94,10 +97,12 @@ export async function canOfficiateMatch(
 /** Cricket gap 3: a tournament official with the scorer role (scores every fixture). */
 export async function isTournamentScorer(tournamentId: string, userId: string): Promise<boolean> {
   if (!tournamentId || !userId) return false;
+  // Badminton gap 1: a tournament's officials work every one of its events.
+  const ids = await familyLookupIds(tournamentId);
   const { data } = await supabase
     .from('tournament_officials')
     .select('id')
-    .eq('tournament_id', tournamentId)
+    .in('tournament_id', ids)
     .eq('user_id', userId)
     .eq('role', 'scorer')
     .limit(1);

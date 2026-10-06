@@ -100,7 +100,8 @@ describe('GET /tournaments/code/:code', () => {
   test('names the tournament, its sport and category (code in capitals)', async () => {
     const r = await run(tournamentByCode, { params: { code: ' abc234 ' } });
     expect(r.statusCode).toBe(200);
-    expect(r.body.tournament).toEqual({ id: T, name: 'P3 U-19 Cup', sport_id: 'ck', status: 'upcoming', format: 'knockout', entry_fee: 500, start_date: '2026-10-20', category: { underAge: 19 } });
+    // Badminton gaps 1–2 add the entry kind and the event's place (a plain tournament: team, no parent).
+    expect(r.body.tournament).toEqual({ id: T, name: 'P3 U-19 Cup', sport_id: 'ck', status: 'upcoming', format: 'knockout', entry_fee: 500, start_date: '2026-10-20', category: { underAge: 19 }, entry_kind: 'team', parent_id: null, event_label: null });
     expect(arg(mockLog.find((q) => q[0] === 'from:tournaments')!, 'eq')).toEqual(['entry_code', 'ABC234']);
   });
   test('no such code → 404 TOURNAMENT_NOT_FOUND; nonsense → 400', async () => {

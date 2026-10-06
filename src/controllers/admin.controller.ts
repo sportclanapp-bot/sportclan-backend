@@ -63,7 +63,8 @@ export async function getStats(_req: Request, res: Response) {
         supabase
           .from('tournaments')
           .select('id', { count: 'exact', head: true })
-          .eq('status', 'live'),
+          .eq('status', 'live')
+          .eq('is_parent', false), // badminton gap 1: count events, not their parent too
       ),
       safeCount(
         supabase

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
   createTournament,
+  addEvents,
   listTournaments,
   getTournament,
   createEntry,
@@ -51,6 +52,7 @@ router.get('/:id/my-teams', authenticateToken, myTeamsForEntry);
 router.get('/:id', authenticateToken, getTournament);
 router.get('/:id/bracket', authenticateToken, getBracket);
 router.patch('/:id', authenticateToken, updateTournament);
+router.post('/:id/events', authenticateToken, addEvents); // badminton gap 1
 router.patch('/:id/fixtures', authenticateToken, updateFixtures);
 router.post('/:id/generate-fixtures', authenticateToken, generateFixtures);
 router.get('/:id/analytics', authenticateToken, getTournamentAnalytics);

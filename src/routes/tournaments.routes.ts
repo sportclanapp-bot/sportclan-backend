@@ -10,6 +10,8 @@ import {
   updateTournament,
   joinByCode,
   tournamentByCode,
+  joinOptions,
+  myTeamsForEntry,
   entryCheck,
   getBracket,
   updateFixtures,
@@ -43,7 +45,9 @@ router.get('/', authenticateToken, listTournaments);
 router.post('/join', authenticateToken, joinByCode);
 // 6 Oct 2026: a code's tournament, and which teams can enter it (before picking one).
 router.get('/code/:code', authenticateToken, tournamentByCode);
+router.get('/code/:code/teams', authenticateToken, joinOptions);
 router.post('/:id/entry-check', authenticateToken, entryCheck);
+router.get('/:id/my-teams', authenticateToken, myTeamsForEntry);
 router.get('/:id', authenticateToken, getTournament);
 router.get('/:id/bracket', authenticateToken, getBracket);
 router.patch('/:id', authenticateToken, updateTournament);

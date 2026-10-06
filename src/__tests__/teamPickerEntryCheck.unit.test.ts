@@ -41,7 +41,7 @@ jest.mock('../utils/notify', () => ({
 }));
 
 // eslint-disable-next-line import/first
-import { directAddTeam, entryCheck, tournamentByCode } from '../controllers/tournaments.controller';
+import { directAddTeam, entryCheck, joinOptions, myTeamsForEntry, tournamentByCode } from '../controllers/tournaments.controller';
 
 const T = '22222222-2222-4222-8222-222222222222';
 const id = (n: number) => `33333333-3333-4333-8333-33333333333${n}`;
@@ -196,3 +196,69 @@ describe('the organiser adds a team that was rejected or withdrew', () => {
     expect([r.statusCode, r.body.code]).toEqual([400, 'ALREADY_ENTERED']);
   });
 });
+
+describe('GET /tournaments/code/:code/teams · join by code in one request', () => {
+  const FOOTBALL = id(0);
+  const withMemberships = (rows: Array<{ team_id: string; role: string; name: string; sport?: string; gone?: boolean }>) => {
+    const base = mockNext;
+    mockNext = (q) => (q[0] === 'from:team_members' && arg(q, 'select')?.[0]?.includes('team:teams')
+      ? { data: rows.map((r) => ({ team_id: r.team_id, role: r.role, team: { id: r.team_id, name: r.name, sport_id: r.sport ?? 'ck', deleted_at: r.gone ? '2026-10-01' : null } })) }
+      : base(q));
+  };
+  test('the tournament, and the caller\'s own teams of its sport with their verdicts', async () => {
+    withMemberships([
+      { team_id: OK, role: 'vice_captain', name: 'Alpha' },
+      { team_id: OLD, role: 'captain', name: 'Veterans' },
+      { team_id: PENDING, role: 'captain', name: 'Waiting XI' },
+      { team_id: FOOTBALL, role: 'captain', name: 'Kickers', sport: 'fb' },
+      { team_id: GONE, role: 'captain', name: 'Gone XI', gone: true },
+    ]);
+    const r = await run(joinOptions, { params: { code: ' abc234 ' } });
+    expect(r.statusCode).toBe(200);
+    expect(r.body.tournament).toMatchObject({ id: T, name: 'P3 U-19 Cup', sport_id: 'ck', category: { underAge: 19 } });
+    expect(r.body.teams).toEqual([
+      { id: OK, name: 'Alpha', sport_id: 'ck', my_role: 'vice_captain', ok: true, code: null, reason: null },
+      { id: OLD, name: 'Veterans', sport_id: 'ck', my_role: 'captain', ok: false, code: 'CATEGORY', reason: 'This is an under-19 event, and Arjun is 26 on the start date.' },
+      { id: PENDING, name: 'Waiting XI', sport_id: 'ck', my_role: 'captain', ok: false, code: 'ALREADY_ENTERED', reason: 'Already entered — waiting for the organiser.' },
+    ]);
+    expect(r.body.other_sport_teams).toBe(1); // the football team; the disbanded one isn't counted
+    expect(arg(mockLog.find((q) => q[0] === 'from:tournaments')!, 'eq')).toEqual(['entry_code', 'ABC234']);
+    expect(r.body.member_teams).toBe(4); // every live team they're on
+  });
+  test('no team of its sport → an empty list and the count of the others; a plain player is counted as a member', async () => {
+    withMemberships([{ team_id: FOOTBALL, role: 'captain', name: 'Kickers', sport: 'fb' }, { team_id: NOT_MINE, role: 'player', name: 'Friends XI' }]);
+    const r = await run(joinOptions, { params: { code: 'ABC234' } });
+    expect([r.body.teams, r.body.other_sport_teams, r.body.member_teams]).toEqual([[], 1, 2]);
+  });
+  test('an unknown code → 404 TOURNAMENT_NOT_FOUND; nonsense → 400; it only reads', async () => {
+    withMemberships([]);
+    const base = mockNext;
+    mockNext = (q) => (q[0] === 'from:tournaments' ? { data: null } : base(q));
+    const r = await run(joinOptions, { params: { code: 'NOPE11' } });
+    expect([r.statusCode, r.body.code]).toEqual([404, 'TOURNAMENT_NOT_FOUND']);
+    expect((await run(joinOptions, { params: { code: '' } })).statusCode).toBe(400);
+    expect(mockLog.some((q) => has(q, 'insert:') || has(q, 'update:'))).toBe(false);
+  });
+});
+
+describe('GET /tournaments/:id/my-teams · Apply to enter in one request', () => {
+  test('the same answer by tournament id; every team, not a first page', async () => {
+    const many = Array.from({ length: 120 }, (_, i) => `55555555-5555-4555-8555-${String(i).padStart(12, '0')}`);
+    const base = mockNext;
+    mockNext = (q) => (q[0] === 'from:team_members' && arg(q, 'select')?.[0]?.includes('team:teams')
+      ? { data: [{ team_id: OK, role: 'captain', team: { id: OK, name: 'Alpha', sport_id: 'ck', deleted_at: null } }, ...many.map((t) => ({ team_id: t, role: 'captain', team: { id: t, name: 'X', sport_id: 'fb', deleted_at: null } }))] }
+      : base(q));
+    const r = await run(myTeamsForEntry, { params: { id: T } });
+    expect(r.statusCode).toBe(200);
+    expect(r.body.teams.map((t: { id: string }) => t.id)).toEqual([OK]);
+    expect(r.body.other_sport_teams).toBe(120);
+    expect(arg(mockLog.find((q) => q[0] === 'from:tournaments')!, 'eq')).toEqual(['id', T]);
+  });
+  test('not a tournament → 404', async () => {
+    expect((await run(myTeamsForEntry, { params: { id: 'nope' } })).statusCode).toBe(404);
+    const base = mockNext;
+    mockNext = (q) => (q[0] === 'from:tournaments' ? { data: null } : base(q));
+    expect((await run(myTeamsForEntry, { params: { id: T } })).statusCode).toBe(404);
+  });
+});
+

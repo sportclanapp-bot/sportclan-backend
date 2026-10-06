@@ -659,6 +659,187 @@ export async function tournamentByCode(req: Request, res: Response) {
   }
 }
 
+type EntryOptionsTournament = EntryTournament & { name: string; format: string; entry_fee: number | null; start_date: string | null; settings?: unknown };
+
+/**
+ * The teams the caller can try to enter this tournament with — their own teams
+ * of its sport, captain or co-captain, not disbanded — each with its verdict,
+ * plus how many they run in other sports. Not paged: "my teams" is (100 a page),
+ * so a captain of 127 teams was offered only the first page's.
+ */
+async function myEntryOptions(tour: EntryOptionsTournament, userId: string) {
+  const { data: memberships } = await supabase
+    .from('team_members').select('team_id, role, team:teams!team_id(id, name, sport_id, deleted_at)')
+    .eq('user_id', userId);
+  type Team = { id: string; name: string; sport_id: string | null; deleted_at: string | null };
+  const live = ((memberships ?? []) as Array<{ team_id: string; role: string; team: Team | Team[] | null }>)
+    .map((m) => ({ role: m.role, team: Array.isArray(m.team) ? m.team[0] : m.team }))
+    .filter((m): m is { role: string; team: Team } => !!m.team && !m.team.deleted_at);
+  const runs = live.filter((m) => m.role === 'captain' || m.role === 'vice_captain');
+  const ofSportAll = runs.filter((m) => !tour.sport_id || m.team.sport_id === tour.sport_id);
+  const ofSport = ofSportAll.slice(0, 100);
+  const verdicts = ofSport.length ? await entryVerdicts(tour, ofSport.map((m) => m.team.id), false, userId) : [];
+  const verdictOf = new Map(verdicts.map((v) => [v.team_id, v]));
+  return {
+    tournament: {
+      id: tour.id, name: tour.name, sport_id: tour.sport_id, status: tour.status, format: tour.format,
+      entry_fee: tour.entry_fee, start_date: tour.start_date, category: settingsOf(tour as { settings?: unknown }).category ?? null,
+    },
+    teams: ofSport.map((m) => {
+      const v = verdictOf.get(m.team.id);
+      return { id: m.team.id, name: m.team.name, sport_id: m.team.sport_id, my_role: m.role, ok: v?.ok ?? true, code: v?.code ?? null, reason: v?.reason ?? null };
+    }),
+    // teams the caller runs in other sports — "this tournament is for another sport"
+    other_sport_teams: runs.length - ofSportAll.length,
+    // every team they're on, any role — "captain a team" vs "join a team first"
+    member_teams: live.length,
+  };
+}
+
+// GET /tournaments/code/:code/teams — join by code in one request: the
+// tournament the code names and the caller's teams for it, each with its
+// verdict. 7 Oct 2026: the app made two round trips (the lookup and "my teams",
+// then the check), ~3.7 s on live.
+export async function joinOptions(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const code = String(req.params.code ?? '').trim().toUpperCase();
+    if (!code || code.length > 20) return res.status(400).json({ error: 'That isn’t a join code.', code: 'BAD_CODE' });
+    const { data: t } = await supabase.from('tournaments').select(`${ENTRY_TOURNAMENT_COLS}, format, entry_fee`).eq('entry_code', code).maybeSingle();
+    if (!t) return res.status(404).json({ error: 'No tournament has that code. Check it with the organiser.', code: 'TOURNAMENT_NOT_FOUND' });
+    return res.json(await myEntryOptions(t as EntryOptionsTournament, userId));
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// GET /tournaments/:id/my-teams — the same for "Apply to enter" on the
+// tournament's page (it used "my teams" — paged — and then the check).
+export async function myTeamsForEntry(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    if (!isUuid(id)) return res.status(404).json({ error: 'Tournament not found' });
+    const { data: t } = await supabase.from('tournaments').select(`${ENTRY_TOURNAMENT_COLS}, format, entry_fee`).eq('id', id).maybeSingle();
+    if (!t) return res.status(404).json({ error: 'Tournament not found' });
+    return res.json(await myEntryOptions(t as EntryOptionsTournament, userId));
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/** One entry verdict per team: can it enter, and if not, the entry's own reason. */
+export type EntryVerdict = { team_id: string; ok: boolean; code: string | null; reason: string | null };
+
+/**
+ * The verdicts for these teams entering this tournament — the checks the entry
+ * itself makes, in its order (as the captain asking, or as the organiser
+ * adding). Shared by POST /:id/entry-check and GET /code/:code/teams.
+ */
+async function entryVerdicts(tournament: EntryTournament, ids: string[], asOrganiser: boolean, userId: string): Promise<EntryVerdict[]> {
+  // 7 Oct 2026: every query is made once for all the teams (about eight, most
+  // in parallel), and each team is then judged in memory by the entry's own
+  // rules in the entry's order. One team at a time took ~0.45 s per team on
+  // live (4.7 s for nine), and join by code waited for it.
+  const t = tournament as EntryTournament & { settings?: unknown; start_date?: string | null };
+  const id = t.id;
+  const capCounts: Array<'pending' | 'approved'> = asOrganiser ? ['approved'] : ['pending', 'approved'];
+  const category = settingsOf(t as { settings?: unknown }).category;
+  const [{ data: roles }, { data: entered }, { data: teamRows }, { count: taken }, { data: rosterRows }, { data: liveEntries }] = await Promise.all([
+    supabase.from('team_members').select('team_id, role').eq('user_id', userId).in('team_id', ids),
+    supabase.from('tournament_entries').select('team_id, status').eq('tournament_id', id).in('team_id', ids),
+    supabase.from('teams').select('id, sport_id, deleted_at').in('id', ids),
+    t.max_teams
+      ? supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id).in('status', capCounts)
+      : Promise.resolve({ count: 0 }),
+    supabase.from('team_members').select('team_id, user_id').in('team_id', ids),
+    supabase.from('tournament_entries').select('team_id').eq('tournament_id', id).in('status', ['pending', 'approved']),
+  ]);
+  const runs = new Set(((roles ?? []) as Array<{ team_id: string; role: string }>).filter((r) => r.role === 'captain' || r.role === 'vice_captain').map((r) => r.team_id));
+  const live = new Map(((entered ?? []) as Array<{ team_id: string; status: string }>).map((e) => [e.team_id, e.status]));
+  const teamById = new Map(((teamRows ?? []) as Array<{ id: string; sport_id: string | null; deleted_at: string | null }>).map((r) => [r.id, r]));
+  const rosterOf = new Map<string, string[]>();
+  for (const r of (rosterRows ?? []) as Array<{ team_id: string; user_id: string | null }>) {
+    if (!r.user_id) continue;
+    const list = rosterOf.get(r.team_id) ?? [];
+    if (!list.includes(r.user_id)) list.push(r.user_id);
+    rosterOf.set(r.team_id, list);
+  }
+  const enteredTeamIds = [...new Set(((liveEntries ?? []) as Array<{ team_id: string | null }>).map((e) => e.team_id).filter((x): x is string => !!x))];
+  const allPlayers = [...new Set([...rosterOf.values()].flat())];
+  const ratingsNeeded = !!category && !!t.sport_id && (category.maxRating != null || category.minRating != null);
+  const [{ data: enteredMembers }, { data: users }, { data: profs }, { data: sport }] = await Promise.all([
+    enteredTeamIds.length && allPlayers.length
+      ? supabase.from('team_members').select('team_id, user_id').in('team_id', enteredTeamIds).in('user_id', allPlayers)
+      : Promise.resolve({ data: [] }),
+    category && allPlayers.length
+      ? supabase.from('users').select('id, name, username, gender, dob').in('id', allPlayers)
+      : Promise.resolve({ data: [] }),
+    ratingsNeeded && allPlayers.length
+      ? supabase.from('user_sport_profiles').select('user_id, rating').eq('sport_id', t.sport_id as string).in('user_id', allPlayers)
+      : Promise.resolve({ data: [] }),
+    t.sport_id && ids.some((tid) => { const r = teamById.get(tid); return !!r?.sport_id && r.sport_id !== t.sport_id; })
+      ? supabase.from('sports').select('name').eq('id', t.sport_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const userById = new Map(((users ?? []) as Array<{ id: string; name?: string | null; username?: string | null; gender?: string | null; dob?: string | null }>).map((u) => [u.id, u]));
+  const ratingOf = new Map<string, number>();
+  for (const p of (profs ?? []) as Array<{ user_id: string; rating: number | null }>) if (p.rating != null) ratingOf.set(p.user_id, Number(p.rating));
+  const teamsOfPlayer = new Map<string, string[]>();
+  for (const m of (enteredMembers ?? []) as Array<{ team_id: string; user_id: string }>) {
+    teamsOfPlayer.set(m.user_id, [...(teamsOfPlayer.get(m.user_id) ?? []), m.team_id]);
+  }
+  const sportName = typeof (sport as { name?: unknown } | null)?.name === 'string' ? (sport as { name: string }).name.toLowerCase() : null;
+  const on = t.start_date && Number.isFinite(Date.parse(t.start_date)) ? new Date(t.start_date) : new Date();
+  const clashIdOf = new Map<string, string>();
+  const no = (teamId: string, code: string, reason: string) => ({ team_id: teamId, ok: false, code, reason });
+  const verdicts = ids.map((teamId) => {
+    if (!asOrganiser && !runs.has(teamId)) return no(teamId, 'NOT_CAPTAIN', 'Only the team’s captain or a co-captain can enter it.');
+    const team = teamById.get(teamId);
+    if (team?.deleted_at) return no(teamId, 'TEAM_DISBANDED', 'This team was disbanded.');
+    const st = live.get(teamId);
+    if (st === 'pending' || st === 'approved') {
+      return no(teamId, 'ALREADY_ENTERED', st === 'approved' ? 'Already in this tournament.'
+        : asOrganiser ? 'Already entered — approve it under Entries.' : 'Already entered — waiting for the organiser.');
+    }
+    // entryRefusal's checks, in its order.
+    if (t.status === 'completed' || t.status === 'cancelled') {
+      return no(teamId, 'TOURNAMENT_FINISHED', t.status === 'completed' ? 'This tournament is finished.' : 'This tournament was cancelled.');
+    }
+    if (!asOrganiser && t.registration_deadline && new Date(t.registration_deadline) < new Date()) return no(teamId, 'REGISTRATION_CLOSED', 'Registration closed');
+    if (t.fixtures_generated) return no(teamId, 'REGISTRATION_CLOSED', 'Registration is closed — the bracket has already been generated.');
+    if (!team) return no(teamId, 'TEAM_NOT_FOUND', 'Team not found');
+    if (t.sport_id && team.sport_id && team.sport_id !== t.sport_id) {
+      return no(teamId, 'WRONG_SPORT', sportName ? `This is a ${sportName} tournament — enter a ${sportName} team.` : 'This tournament is for another sport — enter a team of its sport.');
+    }
+    if (t.max_teams && (taken ?? 0) >= t.max_teams) return no(teamId, 'TOURNAMENT_FULL', 'Tournament is full');
+    const roster = rosterOf.get(teamId) ?? [];
+    if (category && roster.length) {
+      const players = roster.filter((u) => userById.has(u)).map((u) => {
+        const x = userById.get(u)!;
+        return { name: x.name || x.username || 'A player', gender: x.gender ?? null, dob: x.dob ?? null, rating: ratingOf.get(u) ?? null };
+      });
+      const why = categoryProblem(category, players, on);
+      if (why) return no(teamId, 'CATEGORY', why);
+    }
+    const clash = roster.flatMap((u) => teamsOfPlayer.get(u) ?? []).find((other) => other !== teamId);
+    if (clash) { clashIdOf.set(teamId, clash); return no(teamId, 'ROSTER_OVERLAP', '…'); }
+    return { team_id: teamId, ok: true, code: null, reason: null };
+  });
+  const clashIds = [...new Set(clashIdOf.values())];
+  if (clashIds.length) {
+    const { data: names } = await supabase.from('teams').select('id, name').in('id', clashIds);
+    const nameOf = new Map(((names ?? []) as Array<{ id: string; name: string | null }>).map((r) => [r.id, r.name]));
+    for (const v of verdicts) {
+      const c = clashIdOf.get(v.team_id);
+      if (c) v.reason = `A player on this team is already registered with ${nameOf.get(c) ?? 'another team'} in this tournament.`;
+    }
+  }
+  return verdicts;
+}
+
 // POST /tournaments/:id/entry-check { team_ids, as: 'captain' | 'organiser' }
 // Each team: can it enter, and if not, why — the same checks the entry itself
 // runs (sport, category, full, closed, already entered, a player on two teams),
@@ -676,104 +857,7 @@ export async function entryCheck(req: Request, res: Response) {
     const { data: tournament } = await supabase.from('tournaments').select(ENTRY_TOURNAMENT_COLS).eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     if (asOrganiser && !(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only the organiser can check teams to add.' });
-    // 7 Oct 2026: every query is made once for all the teams (about eight, most
-    // in parallel), and each team is then judged in memory by the entry's own
-    // rules in the entry's order. One team at a time took ~0.45 s per team on
-    // live (4.7 s for nine), and join by code waited for it.
-    const t = tournament as EntryTournament & { settings?: unknown; start_date?: string | null };
-    const capCounts: Array<'pending' | 'approved'> = asOrganiser ? ['approved'] : ['pending', 'approved'];
-    const category = settingsOf(t as { settings?: unknown }).category;
-    const [{ data: roles }, { data: entered }, { data: teamRows }, { count: taken }, { data: rosterRows }, { data: liveEntries }] = await Promise.all([
-      supabase.from('team_members').select('team_id, role').eq('user_id', userId).in('team_id', ids),
-      supabase.from('tournament_entries').select('team_id, status').eq('tournament_id', id).in('team_id', ids),
-      supabase.from('teams').select('id, sport_id, deleted_at').in('id', ids),
-      t.max_teams
-        ? supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id).in('status', capCounts)
-        : Promise.resolve({ count: 0 }),
-      supabase.from('team_members').select('team_id, user_id').in('team_id', ids),
-      supabase.from('tournament_entries').select('team_id').eq('tournament_id', id).in('status', ['pending', 'approved']),
-    ]);
-    const runs = new Set(((roles ?? []) as Array<{ team_id: string; role: string }>).filter((r) => r.role === 'captain' || r.role === 'vice_captain').map((r) => r.team_id));
-    const live = new Map(((entered ?? []) as Array<{ team_id: string; status: string }>).map((e) => [e.team_id, e.status]));
-    const teamById = new Map(((teamRows ?? []) as Array<{ id: string; sport_id: string | null; deleted_at: string | null }>).map((r) => [r.id, r]));
-    const rosterOf = new Map<string, string[]>();
-    for (const r of (rosterRows ?? []) as Array<{ team_id: string; user_id: string | null }>) {
-      if (!r.user_id) continue;
-      const list = rosterOf.get(r.team_id) ?? [];
-      if (!list.includes(r.user_id)) list.push(r.user_id);
-      rosterOf.set(r.team_id, list);
-    }
-    const enteredTeamIds = [...new Set(((liveEntries ?? []) as Array<{ team_id: string | null }>).map((e) => e.team_id).filter((x): x is string => !!x))];
-    const allPlayers = [...new Set([...rosterOf.values()].flat())];
-    const ratingsNeeded = !!category && !!t.sport_id && (category.maxRating != null || category.minRating != null);
-    const [{ data: enteredMembers }, { data: users }, { data: profs }, { data: sport }] = await Promise.all([
-      enteredTeamIds.length && allPlayers.length
-        ? supabase.from('team_members').select('team_id, user_id').in('team_id', enteredTeamIds).in('user_id', allPlayers)
-        : Promise.resolve({ data: [] }),
-      category && allPlayers.length
-        ? supabase.from('users').select('id, name, username, gender, dob').in('id', allPlayers)
-        : Promise.resolve({ data: [] }),
-      ratingsNeeded && allPlayers.length
-        ? supabase.from('user_sport_profiles').select('user_id, rating').eq('sport_id', t.sport_id as string).in('user_id', allPlayers)
-        : Promise.resolve({ data: [] }),
-      t.sport_id && ids.some((tid) => { const r = teamById.get(tid); return !!r?.sport_id && r.sport_id !== t.sport_id; })
-        ? supabase.from('sports').select('name').eq('id', t.sport_id).maybeSingle()
-        : Promise.resolve({ data: null }),
-    ]);
-    const userById = new Map(((users ?? []) as Array<{ id: string; name?: string | null; username?: string | null; gender?: string | null; dob?: string | null }>).map((u) => [u.id, u]));
-    const ratingOf = new Map<string, number>();
-    for (const p of (profs ?? []) as Array<{ user_id: string; rating: number | null }>) if (p.rating != null) ratingOf.set(p.user_id, Number(p.rating));
-    const teamsOfPlayer = new Map<string, string[]>();
-    for (const m of (enteredMembers ?? []) as Array<{ team_id: string; user_id: string }>) {
-      teamsOfPlayer.set(m.user_id, [...(teamsOfPlayer.get(m.user_id) ?? []), m.team_id]);
-    }
-    const sportName = typeof (sport as { name?: unknown } | null)?.name === 'string' ? (sport as { name: string }).name.toLowerCase() : null;
-    const on = t.start_date && Number.isFinite(Date.parse(t.start_date)) ? new Date(t.start_date) : new Date();
-    const clashIdOf = new Map<string, string>();
-    const no = (teamId: string, code: string, reason: string) => ({ team_id: teamId, ok: false, code, reason });
-    const verdicts = ids.map((teamId) => {
-      if (!asOrganiser && !runs.has(teamId)) return no(teamId, 'NOT_CAPTAIN', 'Only the team’s captain or a co-captain can enter it.');
-      const team = teamById.get(teamId);
-      if (team?.deleted_at) return no(teamId, 'TEAM_DISBANDED', 'This team was disbanded.');
-      const st = live.get(teamId);
-      if (st === 'pending' || st === 'approved') {
-        return no(teamId, 'ALREADY_ENTERED', st === 'approved' ? 'Already in this tournament.'
-          : asOrganiser ? 'Already entered — approve it under Entries.' : 'Already entered — waiting for the organiser.');
-      }
-      // entryRefusal's checks, in its order.
-      if (t.status === 'completed' || t.status === 'cancelled') {
-        return no(teamId, 'TOURNAMENT_FINISHED', t.status === 'completed' ? 'This tournament is finished.' : 'This tournament was cancelled.');
-      }
-      if (!asOrganiser && t.registration_deadline && new Date(t.registration_deadline) < new Date()) return no(teamId, 'REGISTRATION_CLOSED', 'Registration closed');
-      if (t.fixtures_generated) return no(teamId, 'REGISTRATION_CLOSED', 'Registration is closed — the bracket has already been generated.');
-      if (!team) return no(teamId, 'TEAM_NOT_FOUND', 'Team not found');
-      if (t.sport_id && team.sport_id && team.sport_id !== t.sport_id) {
-        return no(teamId, 'WRONG_SPORT', sportName ? `This is a ${sportName} tournament — enter a ${sportName} team.` : 'This tournament is for another sport — enter a team of its sport.');
-      }
-      if (t.max_teams && (taken ?? 0) >= t.max_teams) return no(teamId, 'TOURNAMENT_FULL', 'Tournament is full');
-      const roster = rosterOf.get(teamId) ?? [];
-      if (category && roster.length) {
-        const players = roster.filter((u) => userById.has(u)).map((u) => {
-          const x = userById.get(u)!;
-          return { name: x.name || x.username || 'A player', gender: x.gender ?? null, dob: x.dob ?? null, rating: ratingOf.get(u) ?? null };
-        });
-        const why = categoryProblem(category, players, on);
-        if (why) return no(teamId, 'CATEGORY', why);
-      }
-      const clash = roster.flatMap((u) => teamsOfPlayer.get(u) ?? []).find((other) => other !== teamId);
-      if (clash) { clashIdOf.set(teamId, clash); return no(teamId, 'ROSTER_OVERLAP', '…'); }
-      return { team_id: teamId, ok: true, code: null, reason: null };
-    });
-    const clashIds = [...new Set(clashIdOf.values())];
-    if (clashIds.length) {
-      const { data: names } = await supabase.from('teams').select('id, name').in('id', clashIds);
-      const nameOf = new Map(((names ?? []) as Array<{ id: string; name: string | null }>).map((r) => [r.id, r.name]));
-      for (const v of verdicts) {
-        const c = clashIdOf.get(v.team_id);
-        if (c) v.reason = `A player on this team is already registered with ${nameOf.get(c) ?? 'another team'} in this tournament.`;
-      }
-    }
-    const teams = verdicts;
+    const teams = await entryVerdicts(tournament as EntryTournament, ids, asOrganiser, userId);
     return res.json({ teams });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

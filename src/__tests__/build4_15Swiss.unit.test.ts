@@ -85,7 +85,9 @@ test('a bye is a win’s points and a game played in the table', () => {
 test('rules: chess only, with rounds; the rounds are fixed after the draw, the server’s own count isn’t an edit', () => {
   expect(swissCreateRefusal('football', { swiss: { rounds: 5 } })?.error).toBe('Swiss is for chess.');
   expect(swissCreateRefusal('chess', {})?.error).toBe('A Swiss needs its number of rounds.');
-  expect(settingsRefusal('chess', 'swiss', { swiss: { rounds: 12 } })?.error).toBe('A Swiss has 2 to 11 rounds.');
+  // Oct 2026 (Dipak): no fixed top of 11 — at least 2; against the field where it's known.
+  expect(settingsRefusal('chess', 'swiss', { swiss: { rounds: 12 } })).toBeNull();
+  expect(settingsRefusal('chess', 'swiss', { swiss: { rounds: 1 } })?.error).toBe('A Swiss has at least 2 rounds.');
   expect(settingsRefusal('chess', 'knockout', { swiss: { rounds: 5 } })?.error).toBe('Swiss rounds are for a Swiss tournament.');
   expect(swissRoundsFor(8)).toBe(4);
   expect(swissRoundsFor(64)).toBe(7);

@@ -68,7 +68,7 @@ import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
-import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, tableInputs } from '../utils/tournamentSettings';
+import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, swissRoundsProblem, tableInputs } from '../utils/tournamentSettings';
 import { drawOrder } from '../utils/drawOrder';
 import { sharedScheduleFor } from '../utils/sharedCourts';
 import { fillEntryLineups, doublesRulesSport } from '../utils/entryLineups';
@@ -239,6 +239,10 @@ async function tournamentRowFrom(body: Record<string, any>, kind: 'single' | 'pa
   if (!parent && format === 'swiss') {
     const swBad = swissCreateRefusal(createSportSlug, settings);
     if (swBad) return bad(swBad);
+    // Oct 2026: rounds up to one fewer than the players (no fixed top of 11).
+    const players = Number.isInteger(Number(max_teams)) ? Number(max_teams) : null;
+    const rBad = swissRoundsProblem((settings as { swiss?: { rounds?: unknown } }).swiss?.rounds, players);
+    if (rBad) return bad({ error: rBad, code: 'INVALID_TOURNAMENT_SETTINGS' });
   }
   // BUILD 4.2: tie-break names are checked (they were stored as sent, and an
   // unknown one was silently skipped by the table).
@@ -1734,6 +1738,13 @@ export async function updateTournament(req: Request, res: Response) {
       const fmt = 'format' in update ? update.format : (tournament as { format?: string }).format;
       const bad = settingsRefusal(slug, fmt, update.settings);
       if (bad) return res.status(400).json(bad);
+      // Oct 2026: a Swiss's rounds against its size (one fewer than the players at most).
+      const sw = (update.settings as { swiss?: { rounds?: unknown } } | null)?.swiss;
+      if (sw && sw.rounds !== undefined) {
+        const players = Number(update.max_teams ?? (tournament as { max_teams?: number | null }).max_teams);
+        const rBad = swissRoundsProblem(sw.rounds, Number.isInteger(players) ? players : null);
+        if (rBad) return res.status(400).json({ error: rBad, code: 'INVALID_TOURNAMENT_SETTINGS' });
+      }
       const current = settingsOf(tournament as { settings?: unknown });
       const incoming = (update.settings ?? {}) as Record<string, unknown>;
       if ('points' in incoming && JSON.stringify(incoming.points ?? null) !== JSON.stringify(current.points ?? null)

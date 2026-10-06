@@ -273,7 +273,15 @@ export type TournamentSettings = {
 export const GRACE_MINUTES: [number, number] = [5, 60];
 export const MIN_PLAYERS: [number, number] = [2, 15];
 
-export const SWISS_ROUNDS: [number, number] = [2, 11];
+/** Oct 2026 (Dipak): a Swiss has at least 2 rounds and at most one fewer than its players (no fixed top). */
+export const SWISS_MIN_ROUNDS = 2;
+
+/** Why these rounds don't suit a Swiss of `players` (unknown: only the minimum), or null. */
+export function swissRoundsProblem(rounds: unknown, players?: number | null): string | null {
+  if (!(typeof rounds === 'number' && Number.isInteger(rounds) && rounds >= SWISS_MIN_ROUNDS)) return `A Swiss has at least ${SWISS_MIN_ROUNDS} rounds.`;
+  if (players != null && Number.isFinite(players) && players >= 3 && rounds > players - 1) return `${players} players can play at most ${players - 1} Swiss rounds without meeting twice.`;
+  return null;
+}
 
 /** Why a new Swiss can't be created (chess only, with its rounds), or null. */
 export function swissCreateRefusal(sport: string | null | undefined, settings: unknown): Refusal | null {
@@ -283,7 +291,7 @@ export function swissCreateRefusal(sport: string | null | undefined, settings: u
   return null;
 }
 /** A sensible number of rounds for a field: enough to separate a winner (log₂ N, rounded up), plus one. */
-export const swissRoundsFor = (teams: number): number => Math.min(SWISS_ROUNDS[1], Math.max(SWISS_ROUNDS[0], Math.ceil(Math.log2(Math.max(2, teams))) + 1));
+export const swissRoundsFor = (teams: number): number => Math.min(Math.max(SWISS_MIN_ROUNDS, teams - 1), Math.max(SWISS_MIN_ROUNDS, Math.ceil(Math.log2(Math.max(2, teams))) + 1));
 
 // ── 4.14 · categories ────────────────────────────────────────────────────────
 
@@ -499,7 +507,9 @@ export function settingsRefusal(sport: string | null | undefined, format: string
   if (o.swiss != null) {
     if (format !== 'swiss') return refuse('Swiss rounds are for a Swiss tournament.');
     const r = (o.swiss as { rounds?: unknown }).rounds;
-    if (!(typeof r === 'number' && Number.isInteger(r) && r >= SWISS_ROUNDS[0] && r <= SWISS_ROUNDS[1])) return refuse(`A Swiss has ${SWISS_ROUNDS[0]} to ${SWISS_ROUNDS[1]} rounds.`);
+    // Oct 2026: no fixed top — against the field's size where the caller knows it.
+    const bad = swissRoundsProblem(r);
+    if (bad) return refuse(bad);
   }
   const catBad = categoryRefusal(o.category);
   if (catBad) return catBad;

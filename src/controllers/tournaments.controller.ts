@@ -3436,18 +3436,25 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
 // Build the scheduler config from the tournament row. When the daily window /
 // duration aren't set, fall back to an unbounded single-ground sequential
 // schedule so create still works. end_date absent (but window set) → single day.
-function buildTournamentScheduleConfig(
+export function buildTournamentScheduleConfig(
   t: any,
   startDateYmd: string,
   dayWindows?: Map<string, { startMin: number; endMin: number }>,
 ): SchedulingConfig {
   const hasWindow = !!(t.daily_start_time && t.daily_end_time && t.match_duration_minutes);
   if (!hasWindow) {
+    // Oct 2026 (Dipak): no day hours — still across every court / ground the
+    // organiser set (it put everything on Ground 1), with their match length and
+    // gap when given, 9 am to 9 pm assumed. The app tells the organiser to add
+    // day hours for a realistic schedule.
     return {
       startDateYmd, endDateYmd: null,
       dailyStartMin: 9 * 60, dailyEndMin: 21 * 60,
-      durationMin: 60, bufferMin: 10,
-      groundCount: 1, groundNames: null, bounded: false,
+      durationMin: Math.max(1, Number(t.match_duration_minutes ?? 60) || 60),
+      bufferMin: Math.max(0, Number(t.buffer_minutes ?? 10)),
+      groundCount: Math.max(1, Number(t.ground_count ?? 1) || 1),
+      groundNames: Array.isArray(t.ground_names) ? (t.ground_names as string[]) : null,
+      bounded: false,
       restMin: settingsOf(t).restMinutes ?? 0, // BUILD 4.9
     };
   }

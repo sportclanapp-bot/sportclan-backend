@@ -70,6 +70,8 @@ import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
 import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal } from '../utils/tournamentSettings';
 import { drawOrder } from '../utils/drawOrder';
+import { sharedScheduleFor } from '../utils/sharedCourts';
+import { eventLimitRefusal, eventLimitsRefusal, storedEventLimits } from '../utils/eventLimits';
 import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSeparation';
 import { swissFirstRound, swissNextRound, type SwissRound } from '../utils/swiss';
 import {
@@ -244,6 +246,9 @@ async function tournamentRowFrom(body: Record<string, any>, kind: 'single' | 'pa
   // Badminton gap 2: who enters — a team, one player or a pair.
   const ekBad = parent ? null : entryKindRefusal(createSportSlug, entry_kind);
   if (ekBad) return bad(ekBad);
+  // Badminton gap 3: how many events a player may enter (a tournament made of events).
+  const elBad = parent ? eventLimitsRefusal(body.event_limits) : null;
+  if (elBad) return bad(elBad);
   // Bound max_teams (SC-39) — 0/1/absurd values previously created degenerate
   // tournaments. A parent has no entries of its own, so no size.
   const maxTeamsNum = Number(max_teams);
@@ -351,7 +356,9 @@ async function tournamentRowFrom(body: Record<string, any>, kind: 'single' | 'pa
       ground_names: Array.isArray(ground_names) && ground_names.length > 0 ? ground_names : null,
       home_away: homeAwayFor(format), // BUILD 1.11
       match_rules: parent ? null : storedStageRules(createSportSlug, match_rules), // BUILD 2.4
-      settings: !parent && settings ? storedSettings(settings) : null, // BUILD Stage 4
+      // BUILD Stage 4; badminton gap 3: a parent's settings are its limit of events per player.
+      settings: parent ? (storedEventLimits(body.event_limits) ? { v: 1, eventLimits: storedEventLimits(body.event_limits) } : null)
+        : settings ? storedSettings(settings) : null,
       // Badminton gaps 1–2. Only written when they differ from the column
       // defaults, so a plain tournament's insert is exactly as before.
       ...(parent ? { is_parent: true } : {}),
@@ -633,7 +640,7 @@ export async function getTournament(req: Request, res: Response) {
       family.events = await eventsOf(String(tournament.id));
     } else if ((tournament as { parent_id?: string | null }).parent_id) {
       const pid = String((tournament as { parent_id: string }).parent_id);
-      const { data: parent } = await supabase.from('tournaments').select('id, name, status, entry_code').eq('id', pid).maybeSingle();
+      const { data: parent } = await supabase.from('tournaments').select('id, name, status, entry_code, settings').eq('id', pid).maybeSingle();
       family.parent = parent ?? null;
       family.events = await eventsOf(pid);
     }
@@ -811,6 +818,15 @@ async function entryRefusal(
   if (category) {
     const why = await categoryRefusalFor(category, teamId, t.sport_id ?? null, (t as { start_date?: string | null }).start_date ?? null);
     if (why) return { status: 400, body: { error: why, code: 'CATEGORY' } };
+  }
+  // Badminton gap 3: the tournament's limit of events per player (its roster).
+  if (t.parent_id) {
+    const { data: roster } = await supabase.from('team_members').select('user_id').eq('team_id', teamId);
+    const ids = [...new Set(((roster ?? []) as Array<{ user_id: string }>).map((r) => r.user_id))];
+    const { data: ppl } = ids.length ? await supabase.from('users').select('id, name, username').in('id', ids) : { data: [] };
+    const lim = await eventLimitRefusal(t as { id: string; parent_id: string | null; entry_kind?: string | null; settings?: unknown }, ids,
+      new Map(((ppl ?? []) as Array<{ id: string }>).map((u) => [u.id, u])), null);
+    if (lim) return { status: lim.status, body: { error: lim.body.error, code: lim.body.code } };
   }
   // SC-240: no player may appear on two teams in the same tournament.
   if (opts.overlap) {
@@ -1566,6 +1582,16 @@ export async function updateTournament(req: Request, res: Response) {
     if (fam.is_parent) {
       // The events carry format, size, fee, category and rules — each its own.
       for (const k of EVENT_KEYS) delete update[k];
+      // Badminton gap 3: the parent's own setting is the limit of events per player.
+      if (req.body && 'event_limits' in req.body) {
+        const elBad = eventLimitsRefusal(req.body.event_limits);
+        if (elBad) return res.status(400).json(elBad);
+        const limits = storedEventLimits(req.body.event_limits);
+        const cur = ((tournament as { settings?: Record<string, unknown> | null }).settings ?? {}) as Record<string, unknown>;
+        const next: Record<string, unknown> = { v: 1, ...cur };
+        if (limits) next.eventLimits = limits; else delete next.eventLimits;
+        update.settings = next;
+      }
       delete update.event_label;
       delete update.entry_kind;
       if (update.status === 'completed' && tournament.status !== 'completed') {
@@ -1663,7 +1689,8 @@ export async function updateTournament(req: Request, res: Response) {
     // BUILD Stage 4: settings are checked like create's and merged over the
     // stored ones (an edit sends only what changes). The points template is
     // fixed once any result stands — a table can't be re-scored under people.
-    if ('settings' in update) {
+    // (A parent's settings are only its event limits, set above.)
+    if ('settings' in update && !fam.is_parent) {
       const slug = normSportSlug((await getSport(String((tournament as { sport_id?: string }).sport_id)))?.slug);
       const fmt = 'format' in update ? update.format : (tournament as { format?: string }).format;
       const bad = settingsRefusal(slug, fmt, update.settings);
@@ -3582,6 +3609,11 @@ export async function generateFixtures(req: Request, res: Response) {
     const fallbackStartIso = new Date(`${startDateYmd}T00:00:00.000Z`).toISOString();
     const dayWindows = await loadDayWindows(id);
     const schedCfg = buildTournamentScheduleConfig(tournament, startDateYmd, dayWindows);
+    // Badminton gap 3: an event shares its tournament's courts and players with
+    // the other events — the slots they hold are taken, and a player's matches
+    // across events are kept apart with the rest between them.
+    const sharedSched = await sharedScheduleFor(tournament as { id: string; parent_id?: string | null }, entries.map((e) => String(e.team_id)), startDateYmd, schedCfg.durationMin);
+    if (sharedSched) Object.assign(schedCfg, sharedSched);
     const format = (tournament.format ?? 'knockout').toLowerCase();
     // BUILD 1.3: tournament cricket fixtures had no overs, so they played the
     // 20-over default while NRR never knew the quota (the ICC all-out rule

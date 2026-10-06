@@ -131,6 +131,12 @@ describe('creating a tournament made of events', () => {
     expect(r.body.code).toBe('BAD_ENTRY_KIND');
     expect(inserts('tournaments')).toHaveLength(0);
   });
+  test('gap 3: the tournament keeps its limit of events per player', async () => {
+    await create({ ...OPEN, events: EVENTS, event_limits: { singles: 1, doubles: 1, mixed: 1, total: null } });
+    expect(inserts('tournaments')[0].settings).toEqual({ v: 1, eventLimits: { singles: 1, doubles: 1, mixed: 1 } });
+    const bad = await create({ ...OPEN, events: EVENTS, event_limits: { singles: 0 } });
+    expect(bad.body.code).toBe('BAD_EVENT_LIMITS');
+  });
   test('an older app’s create is written exactly as before (no parent or entry-kind keys)', async () => {
     mockSportSlug = 'cricket';
     const r = await create({ ...OPEN, format: 'knockout', max_teams: 8 });
@@ -278,6 +284,13 @@ describe('editing', () => {
     const r = await edit(PARENT_ROW, { status: 'cancelled' }, PARENT_ROW, [{ id: E1, name: 'Open · MS' }]);
     expect(r.statusCode).toBe(200);
     expect(updates('tournaments').some((u) => u.set.status === 'cancelled' && arg(u.q, 'eq')[1] === E1)).toBe(true);
+  });
+  test('gap 3: the parent changes (or clears) its limit of events per player', async () => {
+    await edit({ ...PARENT_ROW, settings: { v: 1, eventLimits: { total: 3 } } }, { event_limits: { singles: 1 } });
+    expect(updates('tournaments')[0].set.settings).toEqual({ v: 1, eventLimits: { singles: 1 } });
+    await edit({ ...PARENT_ROW, settings: { v: 1, eventLimits: { total: 3 } } }, { event_limits: null });
+    expect(updates('tournaments')[0].set.settings).toEqual({ v: 1 });
+    expect((await edit(PARENT_ROW, { event_limits: { total: 99 } })).body.code).toBe('BAD_EVENT_LIMITS');
   });
   test('who enters can change only before anyone has entered', async () => {
     const r = await edit({ ...EVENT_ROW, entry_kind: 'team' }, { entry_kind: 'doubles' });

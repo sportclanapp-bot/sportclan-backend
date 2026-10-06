@@ -29,6 +29,14 @@ export interface SchedulingConfig {
   // teams aren't known at the draw, so each round starts at least this long
   // after the previous round's last match ends.
   restMin?: number;
+  // Badminton gap 3: events of one tournament share its courts. Slots the other
+  // events already hold (court + time, on this schedule's minute clock), and
+  // each player's other matches, so a player in two events is never on two
+  // courts at once and gets the rest between them. `playersOf` maps a team (an
+  // entry) to its players.
+  busyGrounds?: Array<{ ground: string; start: number; end: number }>;
+  playersOf?: Map<string, string[]>;
+  playerBusy?: Map<string, Array<[number, number]>>;
 }
 
 export interface FixtureShape {
@@ -128,6 +136,21 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
 
   const rawCapacity = totalTimeSlots * G;
   const usedGround: boolean[][] = Array.from({ length: totalTimeSlots }, () => new Array(G).fill(false));
+  // Badminton gap 3: a court another event holds at that time is taken.
+  const shared = (cfg.busyGrounds?.length ?? 0) > 0 || (cfg.playerBusy?.size ?? 0) > 0;
+  if (cfg.busyGrounds?.length) {
+    for (const bz of cfg.busyGrounds) {
+      const g = Array.from({ length: G }, (_, i) => groundLabelFor(i, cfg.groundNames)).indexOf(bz.ground);
+      if (g === -1) continue;
+      for (let o = 0; o < totalTimeSlots; o++) {
+        const at = timeSlotMeta[o]!.dayIndex * 1440 + timeSlotMeta[o]!.wallMin;
+        if (at < bz.end && at + D > bz.start) usedGround[o]![g] = true;
+      }
+    }
+  }
+  const playerBusy = new Map<string, Array<[number, number]>>();
+  for (const [p, list] of cfg.playerBusy ?? []) playerBusy.set(p, [...list]);
+  const playersFor = (teamId: string | null): string[] => (teamId && cfg.playersOf?.get(teamId)) || [];
   const teamsAt: Array<Set<string>> = Array.from({ length: totalTimeSlots }, () => new Set<string>());
 
   const assignments = new Map<string, SlotAssign>();
@@ -155,7 +178,8 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
         `These ${N} fixtures need ${N} slots, but the schedule (${G} ground${G > 1 ? 's' : ''} at ` +
         `${D} min/match across ${days} day${days > 1 ? 's' : ''}) fits only ${rawCapacity}. ` +
         `Add a ground, extend to ${needDays} day${needDays > 1 ? 's' : ''}, or shorten the match duration` +
-        (R > 0 ? ` — or the ${R}-minute rest between a team’s matches.` : '.'),
+        (R > 0 ? ` — or the ${R}-minute rest between a team’s matches.` : '.') +
+        (shared ? ' The courts are shared with the tournament’s other events, and a player in two events can’t play both at once.' : ''),
     };
   };
 
@@ -179,6 +203,13 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
         if (at < prevRoundEnd + R) continue;
         if (hasTeams && (at < (teamFree.get(f.team_a_id!) ?? -Infinity) || at < (teamFree.get(f.team_b_id!) ?? -Infinity))) continue;
       }
+      // Badminton gap 3: none of these players is playing (or resting) in another event then.
+      if (hasTeams && playerBusy.size > 0) {
+        const at = absStart(order);
+        const clash = [...playersFor(f.team_a_id), ...playersFor(f.team_b_id)]
+          .some((p) => (playerBusy.get(p) ?? []).some(([s0, e0]) => at < e0 + R && at + D + R > s0));
+        if (clash) continue;
+      }
       const groundIdx = usedGround[order].findIndex((u) => !u);
       if (groundIdx === -1) continue; // this time-slot's grounds are all taken
       usedGround[order][groundIdx] = true;
@@ -196,6 +227,11 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
       if (R > 0 && hasTeams) {
         teamFree.set(f.team_a_id!, absStart(order) + D + R);
         teamFree.set(f.team_b_id!, absStart(order) + D + R);
+      }
+      if (hasTeams && cfg.playersOf) {
+        for (const p of [...playersFor(f.team_a_id), ...playersFor(f.team_b_id)]) {
+          playerBusy.set(p, [...(playerBusy.get(p) ?? []), [absStart(order), absStart(order) + D]]);
+        }
       }
       placed = true;
       break;
@@ -242,4 +278,11 @@ export function formatTimeIst(scheduledAt: string | null | undefined): string | 
 export function addDaysYmd(startYmd: string, n: number): string {
   const [y, m, d] = startYmd.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/** A stored UTC instant on the schedule's minute clock (minutes from 00:00 IST on its start date). */
+export function absMinutesOf(iso: string, startYmd: string): number {
+  const [y, m, d] = startYmd.split('-').map(Number);
+  const base = Date.UTC(y, m - 1, d) - TOURNAMENT_TZ_OFFSET_MIN * 60000;
+  return Math.round((Date.parse(iso) - base) / 60000);
 }

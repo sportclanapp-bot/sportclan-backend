@@ -175,21 +175,29 @@ describe('SC-396 · sport-slug normalisation is one rule', () => {
 describe('SC-396 · client limits mirror the server', () => {
   // The FE mirror must not drift from the BE source of truth.
   const FE_MIRROR = {
-    tournamentMinTeams: 2, tournamentMaxTeams: 64, expenseMaxAmount: 99_999_999.99,
+    // Oct 2026 (Dipak): no tournament size cap — only the minimum is mirrored.
+    tournamentMinTeams: 2, expenseMaxAmount: 99_999_999.99,
     expenseTitleMax: 120, venueMax: 120, postTextMax: 500, bioMax: 500,
     teamNameMax: 60, tournamentNameMax: 120, descriptionMax: 2000,
     groupNameMax: 60, urlMax: 2048,
   };
   // Array caps are a SEPARATE object on the server — the mirror keeps that split.
   const FE_ARRAY_MIRROR = {
-    mentions: 20, participants: 50, forwardChats: 20,
-    batchIds: 500, splitAmong: 50, sportIds: 30,
+    // Oct 2026: participants and splitAmong are no longer capped.
+    mentions: 20, forwardChats: 20,
+    batchIds: 500, sportIds: 30,
   };
 
   it('every mirrored key matches the server value', () => {
     for (const [k, v] of Object.entries(FE_MIRROR)) {
       expect((LIMITS as Record<string, number>)[k]).toBe(v);
     }
+  });
+
+  it('no tournament size cap, no line-up or split cap (Oct 2026)', () => {
+    expect('tournamentMaxTeams' in LIMITS).toBe(false);
+    expect('participants' in ARRAY_LIMITS).toBe(false);
+    expect('splitAmong' in ARRAY_LIMITS).toBe(false);
   });
 
   it('array caps mirror ARRAY_LIMITS, not LIMITS', () => {

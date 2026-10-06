@@ -1,4 +1,4 @@
-import { selectAll } from '../utils/selectAll';
+import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
 import { hideTestFor, excludeTest, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -44,21 +44,21 @@ export async function getTournamentStandings(req: Request, res: Response) {
     //     if A beat B and B then withdrew, A's win vanished from A's own row.
     //     Its unplayed fixtures are walkovers (abandoned) and never score, so a
     //     withdrawal still awards nothing for matches that won't happen.
-    const { data: entries } = await supabase
+    const entries = await allRows(() => supabase
       .from('tournament_entries')
       .select('team_id, group_label, status, team:teams!team_id(id, name, short_name)')
       .eq('tournament_id', id)
-      .in('status', ['approved', 'withdrawn']);
+      .in('status', ['approved', 'withdrawn']));
 
     // Get completed matches
-    const { data: allMatches } = await supabase
+    const allMatches = await allRows(() => supabase
       .from('matches')
       .select('id, team_a_id, team_b_id, winner_team_id, score_summary, status, overs, group_label, round')
       .eq('tournament_id', id)
       // BUILD 1.4: a walkover after a withdrawal is stored abandoned WITH a
       // winner; it's a win. (A no-winner abandon is skipped by computeStats.)
       .in('status', ['completed', 'abandoned'])
-      .is('voided_at', null); // SC-424: a voided fixture is not a played fixture
+      .is('voided_at', null)); // SC-424: a voided fixture is not a played fixture · Oct 2026: every row
     // FORMATS (28 Sep): a groups → knockout table is the GROUP table. It counted
     // every completed match, so once the knockout began a team's semi-final and
     // final added to its group played/won/points, while the order (ranked on
@@ -225,7 +225,7 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
 
     // Get all completed matches
     // Cricket gap 2: and each one's per-player rollup (only that part of the summary).
-    const { data: matches } = await supabase
+    const matches = await allRows(() => supabase
       .from('matches')
       .select(cricket ? 'id, team_a_id, team_b_id, winner_team_id, status, players:score_summary->players' : 'id, team_a_id, team_b_id, winner_team_id')
       .eq('tournament_id', id)
@@ -233,7 +233,7 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
       .in('status', ['completed', 'abandoned'])
       // SC-428: missed by the SC-424 sweep — a voided fixture was still counting
       // towards a team's tournament win tally.
-      .is('voided_at', null);
+      .is('voided_at', null)); // Oct 2026: every row
     const played = (matches ?? []) as unknown as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; players?: LeaderMatch['players'] }>;
 
     // Count wins per team
@@ -246,10 +246,10 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
 
     // Get team names (every team that played, for the leaderboards too)
     const teamIds = Array.from(new Set([...winCount.keys(), ...played.flatMap((m) => [m.team_a_id, m.team_b_id]).filter((x): x is string => !!x)]));
-    const { data: teams } = await supabase
+    const teams = await selectAllIn(teamIds, (c, f, to) => supabase
       .from('teams')
       .select('id, name')
-      .in('id', teamIds.length > 0 ? teamIds : ['__none__']);
+      .in('id', c).order('id').range(f, to));
     const teamMap = new Map((teams ?? []).map((t: any) => [t.id, t.name]));
 
     const topWins = Array.from(winCount.entries())
@@ -264,10 +264,11 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
     const older = played.filter((m) => !m.players || Object.keys(m.players).length === 0).map((m) => m.id);
     let statsRows: StatsRow[] = [];
     if (older.length) {
-      const { data: rows } = await supabase
+      // Oct 2026: every row (22 a match — an unpaged read stopped at about 45 matches).
+      const rows = await selectAllIn(older, (c, f, to) => supabase
         .from('innings_stats')
         .select('match_id, user_id, team_id, runs, balls_faced, sixes, is_out, bowling_overs, bowling_runs, bowling_wickets, catches, runouts, stumpings, user:user_id (name)')
-        .in('match_id', older);
+        .in('match_id', c).order('id').range(f, to));
       statsRows = ((rows ?? []) as any[]).map((r) => ({ ...r, name: (Array.isArray(r.user) ? r.user[0]?.name : r.user?.name) ?? null }));
     }
     const leaderMatches = played.map((m) => ({ id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, players: m.players ?? null }));
@@ -755,9 +756,12 @@ async function groupCount(
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   if (ids.length === 0) return counts;
-  let q: any = supabase.from(table).select(col).in(col, ids).limit(50000);
-  if (apply) q = apply(q);
-  const { data } = await q;
+  // Oct 2026: every row (a .limit above 1000 was silently 1000), ids in chunks.
+  const data = await selectAllIn(ids, (c, f, to) => {
+    let q: any = supabase.from(table).select(col).in(col, c);
+    if (apply) q = apply(q);
+    return q.order('id').range(f, to);
+  });
   for (const r of (data ?? []) as any[]) {
     const k = r[col] as string;
     counts.set(k, (counts.get(k) ?? 0) + 1);
@@ -1144,12 +1148,12 @@ export async function runWeeklyDigest(): Promise<{ sent: number }> {
   const sentOn = istDateStr();
 
   // Active users = logged in within 30 days.
-  const { data: activeUsers } = await supabase
+  // Oct 2026: every active user (it stopped at 500).
+  const activeUsers = await allRows(() => supabase
     .from('users')
     .select('id, name')
     .gte('last_active_at', monthAgo)
-    .is('deleted_at', null) // SC-140: never notify a soft-deleted account
-    .limit(500);
+    .is('deleted_at', null)); // SC-140: never notify a soft-deleted account
 
   // SC-140: prefs gate the ROW (one bulk lookup).
   const dgAllowed = new Set(await allowedRecipients((activeUsers ?? []).map((u) => u.id as string), 'weekly_digest'));
@@ -1169,13 +1173,13 @@ export async function runWeeklyDigest(): Promise<{ sent: number }> {
       // joined through the match_participants→matches FK.
       const matches = new Map<string, number>();
       {
-        const { data: mp } = await supabase
+        const mp = await selectAllIn(ids, (c, f, to) => supabase
           .from('match_participants')
           .select('user_id, matches!inner(scheduled_at)')
-          .in('user_id', ids)
+          .in('user_id', c)
           .gte('matches.scheduled_at', weekAgo)
           .lte('matches.scheduled_at', nowIso)
-          .limit(50000);
+          .order('id').range(f, to));
         for (const r of (mp ?? []) as Array<{ user_id: string }>) {
           matches.set(r.user_id, (matches.get(r.user_id) ?? 0) + 1);
         }

@@ -133,6 +133,8 @@ describe('SC-371 · team member_count is a real count', () => {
     const r = await call(getTeam, { params: { id: TEAM } });
     const t = r.body.team ?? r.body;
     expect(t.member_count).toBe(50);
-    expect(t.is_full).toBe(true);
+    // Oct 2026 (Dipak): no member cap — never full, no max_members.
+    expect(t.is_full).toBe(false);
+    expect(t.max_members).toBeUndefined();
   });
 });

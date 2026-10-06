@@ -23,22 +23,8 @@ function generateJoinCode(): string {
 }
 
 // POST /teams — create a team. FREE for all users (Change #6).
-/**
- * SC-359 · a team's hard member cap. One number for every team and every sport —
- * deliberately NOT per-sport squad sizes, which would need a whole config surface
- * and still wouldn't stop a 5-a-side team collecting 40 reserves.
- */
-export const TEAM_MAX_MEMBERS = Number(process.env.TEAM_MAX_MEMBERS) || 50;
-
-/**
- * SC-359 · the capacity DECISION, extracted as a pure function so the 49/50/51
- * boundary is unit-testable without standing up a 50-member team (which would
- * need 50 real accounts). `joinGate` below is the only caller, so testing this
- * tests the real rule, not a copy of it.
- */
-export function isAtCapacity(currentMembers: number, max: number = TEAM_MAX_MEMBERS): boolean {
-  return currentMembers >= max;
-}
+// Oct 2026 (Dipak): a team has no member cap (SC-359's 50 is gone). A club can
+// hold every member it has; the sport's players-a-side still applies per match.
 
 /**
  * SC-359 · the join code is a credential — it is the whole gate on an `open`
@@ -63,15 +49,6 @@ async function myTeamIds(userId: string | undefined, teamIds: string[]): Promise
     .eq('user_id', userId)
     .in('team_id', teamIds);
   return new Set((data ?? []).map((r: { team_id: string }) => r.team_id));
-}
-
-/** Current member count for a team. */
-async function memberCount(teamId: string): Promise<number> {
-  const { count } = await supabase
-    .from('team_members')
-    .select('id', { count: 'exact', head: true })
-    .eq('team_id', teamId);
-  return count ?? 0;
 }
 
 /** SC-359: true when this user was REMOVED by a manager (not a voluntary leaver). */
@@ -100,15 +77,6 @@ async function joinGate(
       body: {
         error: 'You were removed from this team, so you can’t rejoin. Ask the captain to add you back.',
         code: 'REMOVED_FROM_TEAM',
-      },
-    };
-  }
-  if (isAtCapacity(await memberCount(teamId))) {
-    return {
-      status: 409,
-      body: {
-        error: `This team is full (${TEAM_MAX_MEMBERS} members).`,
-        code: 'TEAM_FULL',
       },
     };
   }
@@ -320,8 +288,8 @@ export async function getTeam(req: Request, res: Response) {
     // one added page and the number silently under-reports. Ask the database.
     const realMemberCount = memberTotal ?? (members || []).length;
     (team as { member_count?: number }).member_count = realMemberCount;
-    (team as { max_members?: number }).max_members = TEAM_MAX_MEMBERS;
-    (team as { is_full?: boolean }).is_full = realMemberCount >= TEAM_MAX_MEMBERS;
+    // Oct 2026: no cap — no max_members (older apps then show the plain count), never full.
+    (team as { is_full?: boolean }).is_full = false;
     // D10 (visual review V148): disbandTeam refuses a team with any match or
     // tournament entry. Saying so up front lets the app show Disband disabled
     // with the reason, instead of a red button that fails on the second tap.
@@ -392,11 +360,6 @@ export async function addTeamMember(req: Request, res: Response) {
       : 'player';
     if (assignedRole === undefined) {
       return res.status(403).json({ error: 'Only the captain can add a co-captain' });
-    }
-    // SC-359: capacity applies to captain-initiated adds too — otherwise the cap
-    // is trivially bypassed by the one person most able to bypass it.
-    if (isAtCapacity(await memberCount(id))) {
-      return res.status(409).json({ error: `This team is full (${TEAM_MAX_MEMBERS} members).`, code: 'TEAM_FULL' });
     }
     // B07-F3b: every join path refuses a person blocked (either direction) with
     // a current member; the captain-add path skipped it, putting someone into a

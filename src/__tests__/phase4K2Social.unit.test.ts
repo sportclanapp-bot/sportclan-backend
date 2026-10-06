@@ -153,10 +153,11 @@ describe('K2-10a · user-supplied arrays are capped (AUDIT-5)', () => {
     const r = await call(updateAvailability, { body: { sport_ids: uuids(31) } });
     expect([r.statusCode, r.body.error]).toEqual([400, 'Too many sport_ids (max 30)']);
   });
-  it('K2-10a (d02809c): an expense split among 51 → 400', async () => {
+  // Oct 2026 (Dipak): teams have no size cap, so neither does a split.
+  it('K2-10a: an expense split among 51 is not refused for its number', async () => {
     mockNext = (q) => (q[0] === 'from:team_members' ? { data: { id: 'm', role: 'captain' } } : { data: null });
     const r = await call(addExpense, { params: { id: TEAM }, body: { title: 'Ground', amount: 100, split_among: uuids(51) } });
-    expect([r.statusCode, r.body.error]).toEqual([400, 'Too many split_among entries (max 50)']);
+    expect(r.body?.error ?? '').not.toMatch(/Too many split_among/);
   });
 });
 

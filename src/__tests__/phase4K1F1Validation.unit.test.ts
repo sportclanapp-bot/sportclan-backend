@@ -129,10 +129,11 @@ describe('K1-41b (d5aa529) · SC-37/39 tournament format and size, team name', (
     expect(r.body.error).toMatch(/^Invalid format\. Must be one of: knockout, league, round_robin, groups_knockout, swiss/);
     expect(writes()).toHaveLength(0);
   });
-  it.each([1, 0, 65, 2.5])('K1-41b (d5aa529): max_teams %p → 400', async (n) => {
+  // Oct 2026 (Dipak): no upper cap — 65 (or 512) is fine; below 2 or fractional still refused.
+  it.each([1, 0, 2.5])('K1-41b (d5aa529): max_teams %p → 400', async (n) => {
     const r = await call(createTournament, { body: { ...base, max_teams: n } });
     expect(r.statusCode).toBe(400);
-    expect(r.body.error).toBe('max_teams must be between 2 and 64');
+    expect(r.body.error).toBe('max_teams must be a whole number, at least 2');
   });
   it('K1-41b (d5aa529): a team name over 60 characters is refused', () => {
     expect(cleanTeamName('x'.repeat(61)).error).toBe('Team name must be 60 characters or fewer');

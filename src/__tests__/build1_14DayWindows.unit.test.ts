@@ -45,7 +45,7 @@ jest.mock('../utils/notify', () => ({
 // eslint-disable-next-line import/first
 import { createTournament } from '../controllers/tournaments.controller';
 // eslint-disable-next-line import/first
-import { dayWindowsRefusal, tournamentDetailsRefusal, DAY_WINDOWS_MAX } from '../utils/tournamentRules';
+import { dayWindowsRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
 
 const day = (day_date: unknown, start_time: unknown = '09:00', end_time: unknown = '18:00') => ({ day_date, start_time, end_time });
 
@@ -69,9 +69,11 @@ describe('BUILD 1.14 · dayWindowsRefusal', () => {
   ])('%s → refused', (_n, w, msg) => {
     expect(dayWindowsRefusal(w, '2026-10-05', '2026-10-06')).toEqual({ error: msg, code: 'INVALID_DAY_WINDOWS' });
   });
-  test('at most DAY_WINDOWS_MAX days', () => {
-    const many = Array.from({ length: DAY_WINDOWS_MAX + 1 }, (_, i) => day(new Date(Date.UTC(2026, 9, 1 + i)).toISOString().slice(0, 10)));
-    expect(dayWindowsRefusal(many)?.code).toBe('INVALID_DAY_WINDOWS');
+  // Oct 2026 (Dipak): no cap on the days — a 90-day league's hours, each day inside its dates.
+  test('any number of days', () => {
+    const many = Array.from({ length: 90 }, (_, i) => day(new Date(Date.UTC(2026, 9, 1 + i)).toISOString().slice(0, 10)));
+    expect(dayWindowsRefusal(many)).toBeNull();
+    expect(dayWindowsRefusal(many, '2026-10-01', '2026-12-29')).toBeNull();
   });
   test('an edit checks against the stored dates', () => {
     expect(tournamentDetailsRefusal({ day_windows: [day('2026-10-09')] }, { start_date: '2026-10-05', end_date: '2026-10-06' })?.code).toBe('INVALID_DAY_WINDOWS');

@@ -233,6 +233,9 @@ export async function listPosts(req: Request, res: Response) {
   // avatar. `deleted_at` rides along so the app knows not to offer a tap
   // through to a profile that 404s. The PERSON stays hidden everywhere else —
   // search, discovery, rosters, the leaderboard — exactly as before.
+  // Oct 2026 (no caps): Following filters on the follow itself, in the database
+  // (it sent every followed id in the URL — at most 2000, and a long list broke).
+  const followJoin = mode === 'following' && req.userId ? ',\n      fol:users!author_id!inner(f:follow_relationships!following_id!inner(follower_id))' : '';
   let q = supabase
     .from('community_posts')
     .select(`
@@ -240,7 +243,7 @@ export async function listPosts(req: Request, res: Response) {
       author:users!author_id!inner(id, name, username, profile_picture_url, deleted_at),
       sport:sports!sport_id(id, name, emoji),
       city:cities!city_id(id, name),
-      match:${matchJoin}(id, team_a_id, team_b_id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)
+      match:${matchJoin}(id, team_a_id, team_b_id, team_a_name, team_b_name, status, winner_team_id, score_summary, sport_id, venue, tournament_id)${followJoin}
     `)
     .limit(pageSize);
   // Hard-delete list #1: a deleted post is in no feed, no profile grid.
@@ -267,16 +270,14 @@ export async function listPosts(req: Request, res: Response) {
   // viewer or one who follows nobody gets an empty feed (not the global one).
   if (mode === 'following') {
     if (!req.userId) return res.json({ items: [], posts: [], nextCursor: null, hasMore: false });
-    const { data: fr } = await supabase
+    const { count: follows } = await supabase
       .from('follow_relationships')
-      .select('following_id')
-      .eq('follower_id', req.userId)
-      .limit(2000);
-    const followingIds = (fr ?? []).map((r: { following_id: string }) => r.following_id);
-    if (followingIds.length === 0) {
+      .select('id', { count: 'exact', head: true })
+      .eq('follower_id', req.userId);
+    if (!follows) {
       return res.json({ items: [], posts: [], nextCursor: null, hasMore: false });
     }
-    q = q.in('author_id', followingIds);
+    q = q.eq('fol.f.follower_id', req.userId);
   } else if (mode === 'tournaments') {
     // Only posts whose inner-joined match actually belongs to a tournament.
     q = q.not('match.tournament_id', 'is', null);
@@ -311,7 +312,9 @@ export async function listPosts(req: Request, res: Response) {
 
   if (result.error) return res.status(500).json({ error: sanitizeError(result.error) });
 
-  const items = result.data || [];
+  const items = (result.data || []) as unknown as Array<Record<string, any>>;
+  // Oct 2026: the Following filter's join isn't part of a post.
+  for (const it of items) delete it.fol;
   await attachMyVotes(items as Array<{ id: string; poll_options?: unknown; my_vote_option_id?: string | null }>, req.userId);
   // SC-348: real per-viewer liked-state so the heart persists across refetch and
   // agrees between feed + detail (was: never sent → heart reset to empty on refetch).

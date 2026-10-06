@@ -14,7 +14,12 @@ const at = (r: Row, c: string): any => (c.includes('.') ? c.split('.').reduce((o
 let seq = 0;
 export const fakeId = () => `00000000-0000-4000-8000-${String(++seq).padStart(12, '0')}`;
 
-export function fakeDb(seed: Record<string, Row[]> = {}) {
+/**
+ * `maxRows` (Oct 2026): answer at most this many rows a request, as PostgREST
+ * does (1000) — so a test can show an unpaged read losing rows, and a paged
+ * one (`.range()` in a loop: selectAll) getting them all.
+ */
+export function fakeDb(seed: Record<string, Row[]> = {}, opts: { maxRows?: number } = {}) {
   const tables: Record<string, Row[]> = {};
   for (const [k, v] of Object.entries(seed)) tables[k] = v.map((r) => ({ ...r }));
   const t = (name: string) => (tables[name] ??= []);
@@ -66,13 +71,14 @@ export function fakeDb(seed: Record<string, Row[]> = {}) {
       for (const [c, asc] of [...order].reverse()) out.sort((a, z) => ((a[c] ?? '') < (z[c] ?? '') ? -1 : (a[c] ?? '') > (z[c] ?? '') ? 1 : 0) * (asc ? 1 : -1));
       if (range) out = out.slice(range[0], range[1] + 1);
       if (lim != null) out = out.slice(0, lim);
+      if (opts.maxRows != null) out = out.slice(0, opts.maxRows);
       return out;
     }
-    function finish(rows: Row[]) {
+    function finish(rows: Row[], total = rows.length) {
       const copy = rows.map((r) => ({ ...r }));
       if (single === 'one') return copy.length === 1 ? { data: copy[0], error: null } : { data: null, error: { message: 'not one row' } };
       if (single === 'maybe') return { data: copy[0] ?? null, error: null };
-      return { data: head ? null : copy, error: null, ...(wantCount ? { count: rows.length } : {}) };
+      return { data: head ? null : copy, error: null, ...(wantCount ? { count: total } : {}) };
     }
     function run() {
       const rows = t(name);
@@ -102,7 +108,8 @@ export function fakeDb(seed: Record<string, Row[]> = {}) {
         tables[name] = keep;
         return finish(gone);
       }
-      return finish(shape(rows.filter(match)));
+      const all = rows.filter(match);
+      return finish(shape(all), all.length);
     }
     return b;
   }

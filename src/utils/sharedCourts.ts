@@ -7,6 +7,7 @@
  * taken, and each player's matches in those events are kept apart (with the
  * event's rest between them), per player, not per team.
  */
+import { selectAllIn } from './selectAll';
 import { supabase } from './supabase';
 import { absMinutesOf } from './scheduleFixtures';
 
@@ -21,16 +22,16 @@ export async function sharedScheduleFor(
   const siblings = (sibs ?? []) as Array<{ id: string; match_duration_minutes: number | null }>;
   const durOf = new Map(siblings.map((x) => [x.id, Math.max(1, Number(x.match_duration_minutes ?? durationMin) || durationMin)]));
   const matches = siblings.length
-    ? ((await supabase.from('matches')
+    ? (await selectAllIn(siblings.map((x) => x.id), (c, f, to) => supabase.from('matches')
       .select('tournament_id, scheduled_at, ground_label, team_a_id, team_b_id, status, voided_at')
-      .in('tournament_id', siblings.map((x) => x.id))
-      .not('scheduled_at', 'is', null)).data ?? []) as Array<{ tournament_id: string; scheduled_at: string; ground_label: string | null; team_a_id: string | null; team_b_id: string | null; status: string; voided_at: string | null }>
+      .in('tournament_id', c)
+      .not('scheduled_at', 'is', null).order('id').range(f, to))) as Array<{ tournament_id: string; scheduled_at: string; ground_label: string | null; team_a_id: string | null; team_b_id: string | null; status: string; voided_at: string | null }>
     : [];
   const live = matches.filter((m) => !m.voided_at && m.status !== 'cancelled' && m.status !== 'completed' && m.status !== 'abandoned');
   const teamIds = [...new Set([...ownTeamIds, ...live.flatMap((m) => [m.team_a_id, m.team_b_id]).filter((x): x is string => !!x)])];
   const playersOf = new Map<string, string[]>();
   if (teamIds.length) {
-    const { data: members } = await supabase.from('team_members').select('team_id, user_id').in('team_id', teamIds);
+    const members = await selectAllIn(teamIds, (c, f, to) => supabase.from('team_members').select('team_id, user_id').in('team_id', c).order('id').range(f, to));
     for (const r of (members ?? []) as Array<{ team_id: string; user_id: string }>) playersOf.set(r.team_id, [...(playersOf.get(r.team_id) ?? []), r.user_id]);
   }
   const busyGrounds: Array<{ ground: string; start: number; end: number }> = [];

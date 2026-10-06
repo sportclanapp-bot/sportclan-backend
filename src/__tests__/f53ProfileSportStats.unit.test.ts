@@ -39,7 +39,7 @@ test('the profile reads the rollups, not created_by', () => {
 });
 
 test('only this sport\'s completed, unvoided matches count', () => {
-  const parts = src.slice(src.indexOf('const partsP = Promise.resolve(supabase'), src.indexOf('cityP.catch('));
+  const parts = src.slice(src.indexOf('const partsP = allRows(() => supabase'), src.indexOf('cityP.catch(')); // Oct 2026: every row
   expect(parts).toContain(".is('match.voided_at', null)");
   expect(parts).toContain(".eq('match.sport_id', sportId)");
   expect(parts).toContain(".eq('match.status', 'completed')");

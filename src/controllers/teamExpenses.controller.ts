@@ -2,7 +2,7 @@ import { selectAll } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
-import { LIMITS, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
+import { LIMITS } from '../utils/validation';
 import { isTeamManager } from '../utils/teamAuth';
 import { parsePagination } from '../utils/pagination';
 import { summariseLedger, splitExpense } from '../utils/expenseSplit';
@@ -254,9 +254,7 @@ function validateExpenseFields(body: Record<string, any>, partial: boolean): str
       return `category must be one of: ${EXPENSE_CATEGORIES.join(', ')}`;
     }
   }
-  if (tooManyItems(split_among, ARRAY_LIMITS.splitAmong)) {
-    return `Too many split_among entries (max ${ARRAY_LIMITS.splitAmong})`;
-  }
+  // Oct 2026 (Dipak): no cap on how many share an expense (teams have no size cap).
   // B07-F12: notes were stored whatever their type or length (an object, 5,000
   // characters) and the ledger rendered every character.
   if (body.notes != null && body.notes !== '') {

@@ -116,12 +116,12 @@ describe('K2-2a · addParticipants: finished line-ups are frozen, sides are A/B 
   });
 });
 
-describe('K2-10b · addParticipants caps the array (AUDIT-5)', () => {
-  it('K2-10b (d02809c): 51 participants → 400 before any query', async () => {
+// Oct 2026 (Dipak): a line-up has no size cap (AUDIT-5's 50 is gone); the sport's rules still apply.
+describe('K2-10b · addParticipants takes any number', () => {
+  it('K2-10b: 51 participants are not refused for their number', async () => {
     const participants = Array.from({ length: 51 }, (_, i) => ({ user_id: `u${i}`, team_side: 'A' }));
     const r = await call(addParticipants, { body: { participants } });
-    expect([r.statusCode, r.body.error]).toEqual([400, 'Too many participants (max 50)']);
-    expect(mockLog).toHaveLength(0);
+    expect(r.body?.error ?? '').not.toMatch(/Too many participants/);
   });
 });
 
@@ -147,12 +147,14 @@ describe('K2-2j · only a completed match can be rated (SC-108)', () => {
   });
 });
 
-describe('K2-6c · commentary reads a bounded event log (SC-117)', () => {
-  it('K2-6c (cdba317): match_events is read with limit 2000', async () => {
+// Oct 2026: every event, read 1000 at a time (a limit of 2000 was silently 1000).
+describe('K2-6c · commentary reads the whole event log, paged', () => {
+  it('K2-6c: match_events is read with .range(), no limit', async () => {
     mockNext = (q) => (q[0] === 'from:matches' ? { data: matchRow({ status: 'live' }) } : { data: [] });
     await call(getCommentary, {});
     const ev = mockLog.find((q) => q[0] === 'from:match_events')!;
-    expect(ev).toContain('limit:[2000]');
+    expect(ev).toContain('range:[0,999]');
+    expect(ev.some((c) => c.startsWith('limit:'))).toBe(false);
   });
 });
 

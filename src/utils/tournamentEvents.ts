@@ -21,7 +21,6 @@ import { LIMITS } from './validation';
 import { sportKeyOf } from './tournamentSettings';
 import type { TournamentStatus } from './tournamentStatus';
 
-export const EVENTS_MAX = 40;
 export const EVENT_LABEL_MAX = 60;
 export const ENTRY_KINDS = ['team', 'singles', 'doubles'] as const;
 export type EntryKind = typeof ENTRY_KINDS[number];
@@ -79,10 +78,9 @@ export function eventLabelRefusal(label: unknown): Refusal | null {
   return null;
 }
 
-/** The events list on a create (or "add events"): 1 to 40, each named once. */
+/** The events list on a create (or "add events"): at least one, each named once (Oct 2026: no cap). */
 export function eventsListRefusal(events: unknown, existingLabels: string[] = []): Refusal | null {
   if (!Array.isArray(events) || events.length === 0) return { error: 'Add at least one event.', code: 'BAD_EVENTS' };
-  if (events.length + existingLabels.length > EVENTS_MAX) return { error: `A tournament has up to ${EVENTS_MAX} events.`, code: 'BAD_EVENTS' };
   const seen = new Set(existingLabels.map((l) => l.trim().toLowerCase()));
   for (const e of events) {
     if (!e || typeof e !== 'object' || Array.isArray(e)) return { error: 'Each event needs its details.', code: 'BAD_EVENTS' };

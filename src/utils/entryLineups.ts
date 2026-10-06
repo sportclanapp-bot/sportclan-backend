@@ -5,6 +5,7 @@
  * at the draw, and when a winner moves on to the next round. A tournament
  * entered by teams is left alone (captains pick their line-ups, as before).
  */
+import { allRows, selectAllIn } from './selectAll';
 import { supabase } from './supabase';
 
 export async function fillEntryLineups(tournamentId: string): Promise<number> {
@@ -12,14 +13,15 @@ export async function fillEntryLineups(tournamentId: string): Promise<number> {
     const { data: t } = await supabase.from('tournaments').select('entry_kind').eq('id', tournamentId).maybeSingle();
     const kind = (t as { entry_kind?: string } | null)?.entry_kind;
     if (kind !== 'singles' && kind !== 'doubles') return 0;
-    const { data: ms } = await supabase.from('matches').select('id, team_a_id, team_b_id, status')
-      .eq('tournament_id', tournamentId).in('status', ['scheduled', 'live']).is('voided_at', null);
+    const ms = await allRows(() => supabase.from('matches').select('id, team_a_id, team_b_id, status')
+      .eq('tournament_id', tournamentId).in('status', ['scheduled', 'live']).is('voided_at', null));
     const matches = ((ms ?? []) as Array<{ id: string; team_a_id: string | null; team_b_id: string | null }>).filter((m) => m.team_a_id || m.team_b_id);
     if (matches.length === 0) return 0;
-    const [{ data: parts }, { data: mem }] = await Promise.all([
-      supabase.from('match_participants').select('match_id, team_side').in('match_id', matches.map((m) => m.id)),
-      supabase.from('team_members').select('team_id, user_id, role')
-        .in('team_id', [...new Set(matches.flatMap((m) => [m.team_a_id, m.team_b_id]).filter(Boolean) as string[])]),
+    // Oct 2026: any number of matches and players — id lists in chunks, every row.
+    const [parts, mem] = await Promise.all([
+      selectAllIn(matches.map((m) => m.id), (c, f, to) => supabase.from('match_participants').select('match_id, team_side').in('match_id', c).order('id').range(f, to)),
+      selectAllIn([...new Set(matches.flatMap((m) => [m.team_a_id, m.team_b_id]).filter(Boolean) as string[])], (c, f, to) => supabase.from('team_members').select('team_id, user_id, role')
+        .in('team_id', c).order('id').range(f, to)),
     ]);
     const has = new Set(((parts ?? []) as Array<{ match_id: string; team_side: string }>).map((p) => `${p.match_id}:${p.team_side}`));
     const playersOf = new Map<string, string[]>();

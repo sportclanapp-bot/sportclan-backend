@@ -1,5 +1,5 @@
 import { orIlikeContains } from '../utils/likeSearch';
-import { selectAll } from '../utils/selectAll';
+import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { racketStats, type RacketMatch } from '../utils/racketStats';
@@ -1157,14 +1157,18 @@ export async function getActivityHeatmap(req: Request, res: Response) {
 
   // Fetch this user's match participations joined with the match row so we
   // can tell who won. Cast team_side to 'A' | 'B' for the winner check.
-  const { data, error } = await supabase
-    .from('match_participants')
-    // SC-415: completed_at is the day the match was really played.
-    .select('team_side, match:matches(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, score_summary, updated_at, voided_at)')
-    .eq('user_id', id)
-    .limit(500);
-
-  if (error) return res.status(500).json({ error: error.message });
+  // Oct 2026: every participation (it read 500, oldest first, so a busy
+  // player's recent days fell off the 84-day grid).
+  let data: any[];
+  try {
+    data = await allRows(() => supabase
+      .from('match_participants')
+      // SC-415: completed_at is the day the match was really played.
+      .select('team_side, match:matches(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, score_summary, updated_at, voided_at)')
+      .eq('user_id', id));
+  } catch (error) {
+    return res.status(500).json({ error: (error as { message?: string })?.message ?? 'Internal server error' });
+  }
 
   // SC-334: count matches + wins PER DAY (not just a shade) so each cell is
   // inspectable — the FE tooltip shows "N matches · M wins" and the legend maps
@@ -1447,13 +1451,14 @@ export async function getSportProfile(req: Request, res: Response) {
   // had no sport or status filter, so once the stats read the credited player a
   // basketball profile summed that player's badminton and carrom points too
   // (75 for a player with 5), and abandoned matches counted.
-  const partsP = Promise.resolve(supabase
+  // Oct 2026: every match (an unpaged read stopped at 1000).
+  const partsP = allRows(() => supabase
     .from('match_participants')
     .select('match_id, match:matches!inner(id, voided_at, sport_id, status)')
     .eq('user_id', id)
     .is('match.voided_at', null)
     .eq('match.sport_id', sportId)
-    .eq('match.status', 'completed'));
+    .eq('match.status', 'completed')).then((data) => ({ data }));
   cityP.catch(() => undefined);
   partsP.catch(() => undefined);
   const [hidden, inactive, { data: profile }] = await Promise.all([
@@ -1571,11 +1576,12 @@ export async function getSportProfile(req: Request, res: Response) {
       // innings_stats row for the user with no match filter whatsoever, so a
       // voided match's innings still moved their batting average, strike rate,
       // highest score, 50s/100s and bowling economy — permanently.
-      const { data: innings } = matchIds.length === 0 ? { data: [] } : await supabase
+      // Oct 2026: every match (it read the first 500).
+      const innings = await selectAllIn(matchIds, (c, f, to) => supabase
         .from('innings_stats')
         .select('runs, balls_faced, fours, sixes, is_out, bowling_overs, bowling_runs, bowling_wickets, catches, runouts')
         .eq('user_id', id)
-        .in('match_id', matchIds.slice(0, 500));
+        .in('match_id', c).order('id').range(f, to));
 
       if (innings && innings.length > 0) {
         const totalRuns = innings.reduce((s, i) => s + (i.runs ?? 0), 0);
@@ -1620,10 +1626,11 @@ export async function getSportProfile(req: Request, res: Response) {
         };
       } else {
         // Fallback to match_events aggregation
-        const { data: events } = await supabase
+        // Oct 2026: every match (it read the first 100), every event.
+        const events = await selectAllIn(matchIds, (c, f, to) => supabase
           .from('match_events')
           .select('match_id, event_type, payload, created_by')
-          .in('match_id', matchIds.slice(0, 100));
+          .in('match_id', c).order('id').range(f, to));
         // SC-371: attribute a ball to the BATSMAN who faced it, not to whoever
         // entered it. `created_by` is the scorer — usually the umpire or captain
         // — so a player who never scores a match got 0 runs while the scorer was
@@ -1673,7 +1680,8 @@ export async function getSportProfile(req: Request, res: Response) {
       // sends ('goal', 'yellow_card') by who ENTERED them, so a player credited
       // with a goal read 0 and the scorer would have got everyone's. It reads
       // the same per-player rollup as the scorecard now: the credited player_id.
-      const { data: events } = await supabase.from('match_events').select('event_type, payload').in('match_id', matchIds.slice(0, 100));
+      // Oct 2026: every match (it read the first 100) — only this player's events.
+      const events = await selectAllIn(matchIds, (c, f, to) => supabase.from('match_events').select('event_type, payload').in('match_id', c).eq('payload->>player_id', id).order('id').range(f, to));
       const ev = (events ?? []) as { event_type: string; payload: any }[];
       const line = aggregateGoalPlayers(ev)[id];
       const cards = (kind: string) => ev.filter((e) => e.event_type === 'card' && e.payload?.player_id === id && e.payload?.kind === kind).length;
@@ -1686,7 +1694,8 @@ export async function getSportProfile(req: Request, res: Response) {
       };
     } else if (slug === 'basketball' && matchIds.length > 0) {
       // F-53: the credited player's points (payload.value), not the scorer's.
-      const { data: events } = await supabase.from('match_events').select('event_type, payload').in('match_id', matchIds.slice(0, 100));
+      // Oct 2026: every match (it read the first 100) — only this player's events.
+      const events = await selectAllIn(matchIds, (c, f, to) => supabase.from('match_events').select('event_type, payload').in('match_id', c).eq('payload->>player_id', id).order('id').range(f, to));
       const ev = (events ?? []) as { event_type: string; payload: any }[];
       sportStats = {
         total_points: aggregatePointPlayers(ev)[id]?.points ?? 0,
@@ -1697,26 +1706,22 @@ export async function getSportProfile(req: Request, res: Response) {
       // (The serve columns are never written for these sports; tennis keeps them.)
       const side = new Map<string, 'A' | 'B'>();
       const sideSize = new Map<string, number>();
-      const ms: RacketMatch[] = [];
-      for (let i = 0; i < matchIds.length && i < 1000; i += 100) {
-        const ids = matchIds.slice(i, i + 100);
-        const [{ data: ps }, { data: rows }] = await Promise.all([
-          supabase.from('match_participants').select('match_id, user_id, team_side').in('match_id', ids),
-          supabase.from('matches').select('id, team_a_id, team_b_id, winner_team_id, score_summary').in('id', ids),
-        ]);
-        const all = (ps ?? []) as Array<{ match_id: string; user_id: string; team_side: 'A' | 'B' | null }>;
-        for (const r of all) if (r.user_id === id && r.team_side) side.set(r.match_id, r.team_side);
-        for (const r of all) if (r.team_side && side.get(r.match_id) === r.team_side) sideSize.set(r.match_id, (sideSize.get(r.match_id) ?? 0) + 1);
-        ms.push(...((rows ?? []) as RacketMatch[]));
-      }
+      // Oct 2026: every match, every row (no cap).
+      const [all, ms] = await Promise.all([
+        selectAllIn<{ match_id: string; user_id: string; team_side: 'A' | 'B' | null }>(matchIds, (c, f, to) => supabase.from('match_participants').select('match_id, user_id, team_side').in('match_id', c).order('id').range(f, to)),
+        selectAllIn<RacketMatch>(matchIds, (c, f, to) => supabase.from('matches').select('id, team_a_id, team_b_id, winner_team_id, score_summary').in('id', c).order('id').range(f, to)),
+      ]);
+      for (const r of all) if (r.user_id === id && r.team_side) side.set(r.match_id, r.team_side);
+      for (const r of all) if (r.team_side && side.get(r.match_id) === r.team_side) sideSize.set(r.match_id, (sideSize.get(r.match_id) ?? 0) + 1);
       sportStats = racketStats(ms, side, sideSize);
     } else if (slug === 'tennis' && matchIds.length > 0) {
       // Serve stats from match_participants + point stats from events
-      const { data: myParts } = await supabase
+      // Oct 2026: every match (it read the first 100).
+      const myParts = await selectAllIn(matchIds, (c, f, to) => supabase
         .from('match_participants')
         .select('aces, double_faults, first_serve_in, first_serve_total, break_points_won, break_points_faced')
         .eq('user_id', id)
-        .in('match_id', matchIds.slice(0, 100));
+        .in('match_id', c).order('id').range(f, to));
       const totalAces = (myParts ?? []).reduce((s, p) => s + (p.aces ?? 0), 0);
       const totalDF = (myParts ?? []).reduce((s, p) => s + (p.double_faults ?? 0), 0);
       const fsIn = (myParts ?? []).reduce((s, p) => s + (p.first_serve_in ?? 0), 0);
@@ -1726,7 +1731,7 @@ export async function getSportProfile(req: Request, res: Response) {
 
       // Point events
       // F-53: points credited to this player, not every point this player entered as scorer.
-      const { data: events } = await supabase.from('match_events').select('event_type, payload').in('match_id', matchIds.slice(0, 100));
+      const events = await selectAllIn(matchIds, (c, f, to) => supabase.from('match_events').select('event_type, payload').in('match_id', c).eq('payload->>player_id', id).order('id').range(f, to));
       const pointsWon = aggregateRallyPlayers((events ?? []) as { event_type: string; payload: any }[])[id]?.points ?? 0;
 
       sportStats = {

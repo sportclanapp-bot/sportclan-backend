@@ -36,7 +36,7 @@ import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate, activeSportIds } from '../utils/sports';
-import { isTerminalMatchStatus, ARRAY_LIMITS, tooManyItems, LIMITS, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
+import { isTerminalMatchStatus, LIMITS, isCount, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner, recrownAfterVoidChange, tournamentSettingsOf } from './tournaments.controller';
 import { recomputeSummary, writeCricketInningsStats, bestOfState } from './scoring.controller';
@@ -88,21 +88,29 @@ async function opponentNotAcceptedRefusal(match: {
 async function lastChessSide(userId: string, opponentId: string, chessSportId: string): Promise<'A' | 'B' | null> {
   // The creator's chess games, newest first (a long-time player has hundreds of
   // matches — an unordered read of their line-ups missed the latest one).
-  const { data: games } = await supabase
-    .from('matches')
-    .select('id, created_at, mine:match_participants!inner(user_id, team_side)')
-    .eq('sport_id', chessSportId)
-    .eq('mine.user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(100);
-  const rows = (games ?? []) as Array<{ id: string; mine?: Array<{ team_side: string }> }>;
-  if (rows.length === 0) return null;
-  const { data: theirs } = await supabase
-    .from('match_participants').select('match_id').eq('user_id', opponentId).in('match_id', rows.map((g) => g.id));
-  const shared = new Set(((theirs ?? []) as Array<{ match_id: string }>).map((r) => r.match_id));
-  const last = rows.find((g) => shared.has(g.id));
-  const s = last?.mine?.[0]?.team_side;
-  return s === 'A' || s === 'B' ? s : null;
+  // Oct 2026: page back through every game until the last one against them
+  // (it looked at the latest 100 only).
+  const PAGE = 100;
+  for (let from = 0; ; from += PAGE) {
+    const { data: games } = await supabase
+      .from('matches')
+      .select('id, created_at, mine:match_participants!inner(user_id, team_side)')
+      .eq('sport_id', chessSportId)
+      .eq('mine.user_id', userId)
+      .order('created_at', { ascending: false }).order('id', { ascending: false })
+      .range(from, from + PAGE - 1);
+    const rows = (games ?? []) as Array<{ id: string; mine?: Array<{ team_side: string }> }>;
+    if (rows.length === 0) return null;
+    const { data: theirs } = await supabase
+      .from('match_participants').select('match_id').eq('user_id', opponentId).in('match_id', rows.map((g) => g.id));
+    const shared = new Set(((theirs ?? []) as Array<{ match_id: string }>).map((r) => r.match_id));
+    const last = rows.find((g) => shared.has(g.id));
+    if (last) {
+      const s = last.mine?.[0]?.team_side;
+      return s === 'A' || s === 'B' ? s : null;
+    }
+    if (rows.length < PAGE) return null;
+  }
 }
 
 /** A little clock skew is allowed: "now" on the phone can be a minute behind. */
@@ -251,7 +259,6 @@ export async function createMatchRefusal(args: {
  * players_needed was stored, and a fractional one failed the insert with a 500.
  * Absent (or null) is fine: each keeps its default. Exported for tests.
  */
-export const PLAYERS_NEEDED_MAX = 30;
 export function createFieldRefusal(body: {
   is_ranked?: unknown;
   is_open?: unknown;
@@ -265,8 +272,9 @@ export function createFieldRefusal(body: {
     }
   }
   const n = body.players_needed;
-  if (n != null && (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n > PLAYERS_NEEDED_MAX)) {
-    return { status: 400, error: `Players needed must be a whole number from 0 to ${PLAYERS_NEEDED_MAX}.`, code: 'BAD_PLAYERS_NEEDED' };
+  // Oct 2026 (Dipak): no top — any whole number, 0 or more.
+  if (n != null && !isCount(n, 0)) {
+    return { status: 400, error: 'Players needed must be a whole number, 0 or more.', code: 'BAD_PLAYERS_NEEDED' };
   }
   // A malformed city id failed the insert with a 500 (F-19: "bad UUIDs give 500").
   const c = body.city_id;
@@ -1543,13 +1551,18 @@ export async function getCommentary(req: Request, res: Response) {
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
 
-    const { data: events, error } = await supabase
-      .from('match_events')
-      .select('id, event_type, period, clock_seconds, payload, created_at')
-      .eq('match_id', id)
-      .order('created_at', { ascending: true })
-      .limit(2000); // SC-117: safety cap (matches scoring.listEvents ceiling)
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // Oct 2026: every event (it stopped at 2000 — really 1000 — so a long match lost its later commentary).
+    let events: Array<{ id: string; event_type: string; period: number | null; clock_seconds: number | null; payload: any; created_at: string }>;
+    try {
+      events = await selectAll((f, to) => supabase
+        .from('match_events')
+        .select('id, event_type, period, clock_seconds, payload, created_at')
+        .eq('match_id', id)
+        .order('created_at', { ascending: true }).order('id', { ascending: true })
+        .range(f, to));
+    } catch (error) {
+      return res.status(500).json({ error: sanitizeError(error as never) });
+    }
 
     // The sport by its slug: this compared the sport's UUID with 'cric', which
     // is never true, so a cricket timeline never got its over.ball labels.
@@ -2147,9 +2160,7 @@ export async function addParticipants(req: Request, res: Response) {
     if (!Array.isArray(participants) || participants.length === 0) {
       return res.status(400).json({ error: 'participants array is required' });
     }
-    if (tooManyItems(participants, ARRAY_LIMITS.participants)) {
-      return res.status(400).json({ error: `Too many participants (max ${ARRAY_LIMITS.participants})` });
-    }
+    // Oct 2026 (Dipak): no cap on a line-up's size (the sport's own rules still apply).
     const { data: match } = await supabase
       .from('matches')
       .select('created_by, umpire_id, scorer_id, status, tournament_id, is_ranked, team_a_id, team_b_id, sport_id, team_a_name, team_b_name, format, overs, rules')

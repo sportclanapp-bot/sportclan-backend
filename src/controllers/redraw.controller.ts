@@ -5,6 +5,7 @@
  * ready for "Generate fixtures" again; everyone entered is told. A knockout's
  * bye, or a Swiss bye, doesn't count as started. Sport-neutral.
  */
+import { allRows, selectAllIn } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { isUuid } from '../utils/uuid';
@@ -38,9 +39,9 @@ export async function redraw(req: Request, res: Response) {
     if (row.is_parent) return res.status(400).json({ error: 'Each event has its own draw — make it again on the event.', code: 'REDRAW_AN_EVENT' });
     if (row.status === 'completed' || row.status === 'cancelled') return res.status(409).json({ error: 'This tournament is over.', code: 'TOURNAMENT_OVER' });
     if (!row.fixtures_generated) return res.status(409).json({ error: 'There’s no draw yet.', code: 'NOT_DRAWN' });
-    const { data: ms } = await supabase.from('matches')
+    const ms = await allRows(() => supabase.from('matches')
       .select('id, status, team_a_id, team_b_id, team_a_name, team_b_name, score_summary, voided_at')
-      .eq('tournament_id', id);
+      .eq('tournament_id', id));
     const matches = (ms ?? []) as M[];
     if (drawStarted(matches)) {
       return res.status(409).json({ error: 'A match has started, so the draw can’t be made again. Edit a fixture instead.', code: 'DRAW_STARTED' });
@@ -58,10 +59,10 @@ export async function redraw(req: Request, res: Response) {
     if (row.parent_id) await refreshParentOf(id);
     // Everyone entered hears it once.
     try {
-      const { data: ents } = await supabase.from('tournament_entries').select('team_id').eq('tournament_id', id).eq('status', 'approved');
+      const ents = await allRows(() => supabase.from('tournament_entries').select('team_id').eq('tournament_id', id).eq('status', 'approved'));
       const teamIds = [...new Set(((ents ?? []) as Array<{ team_id: string | null }>).map((e) => e.team_id).filter(Boolean))] as string[];
       if (teamIds.length) {
-        const { data: mem } = await supabase.from('team_members').select('user_id').in('team_id', teamIds);
+        const mem = await selectAllIn(teamIds, (c, f, to) => supabase.from('team_members').select('user_id').in('team_id', c).order('id').range(f, to));
         const ids = [...new Set(((mem ?? []) as Array<{ user_id: string }>).map((m) => m.user_id))].filter((u) => u !== userId);
         if (ids.length) {
           await notifyUsers(ids, {

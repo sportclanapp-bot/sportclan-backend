@@ -101,7 +101,8 @@ test('checked: worded, and against what is already set', async () => {
   expect(scheduleRefusal({ daily_start_time: '7am' })!.error).toBe('Day hours are HH:MM, e.g. 08:00.');
   expect(scheduleRefusal({ match_duration_minutes: 0 })!.error).toBe('A match is 5 to 600 minutes.');
   expect(scheduleRefusal({ buffer_minutes: -1 })!.error).toBe('The gap between matches is 0 to 240 minutes.');
-  expect(scheduleRefusal({ ground_count: 0 })!.error).toBe('1 to 50 courts or grounds.');
+  expect(scheduleRefusal({ ground_count: 0 })!.error).toBe('At least one court or ground.');
+  expect(scheduleRefusal({ ground_count: 120, ground_names: Array.from({ length: 120 }, (_, i) => `Court ${i + 1}`) })).toBeNull(); // Oct 2026: no cap
   expect(scheduleRefusal({ ground_names: ['Court 1', 'court 1'] })!.error).toBe('Two courts have the same name.');
   // cleared values are fine (blank = not set); an untouched form is fine
   expect(scheduleRefusal({ daily_start_time: null, match_duration_minutes: null, ground_names: null })).toBeNull();

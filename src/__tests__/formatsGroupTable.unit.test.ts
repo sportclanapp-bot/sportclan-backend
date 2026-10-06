@@ -15,6 +15,7 @@ jest.mock('../utils/supabase', () => {
       is: (c: string, v: null) => { filters.push((r) => (r[c] ?? null) === v); return q; },
       in: (c: string, v: unknown[]) => { filters.push((r) => v.includes(r[c])); return q; },
       order: () => q,
+      range: () => q, // Oct 2026: reads page with .range() (selectAll)
       maybeSingle: () => Promise.resolve({ data: run()[0] ?? null, error: null }),
       then: (resolve: (v: unknown) => unknown) => resolve({ data: run(), error: null }),
     };

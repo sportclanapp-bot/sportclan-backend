@@ -21,7 +21,7 @@ export function isValidTournamentFormat(format?: string | null): boolean {
 // ── Bounds (SC-38 / SC-39 + length caps) ─────────────────────────────────────
 export const LIMITS = {
   tournamentMinTeams: 2,
-  tournamentMaxTeams: 64,
+  // Oct 2026 (Dipak): no app cap on a tournament's size — only what an int column holds.
   // SC-360: team_expenses.amount is NUMERIC(10,2) → the largest storable value
   // is 99999999.99. The old ceiling of 100_000_000 was ABOVE that, so the one
   // value the guard let through at its own boundary overflowed the column and
@@ -46,12 +46,20 @@ export const LIMITS = {
 // Caps chosen to sit well above real UI limits (never break legit use).
 export const ARRAY_LIMITS = {
   mentions: 20,
-  participants: 50,
   forwardChats: 20,
   batchIds: 500,
-  splitAmong: 50,
   sportIds: 30,
 } as const;
+
+/**
+ * Oct 2026 (Dipak) · no app-imposed caps on quantities. A count is a whole
+ * number from `min` up to what an int column can hold (2,147,483,647) — the
+ * storage's limit, not a product one.
+ */
+export const INT_MAX = 2_147_483_647;
+export function isCount(v: unknown, min = 1): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= INT_MAX;
+}
 
 /**
  * N320 side finding 4: community_posts.post_type was stored as sent — a post

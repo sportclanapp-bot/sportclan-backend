@@ -27,6 +27,7 @@ jest.mock('../utils/supabase', () => {
       not: (c: string, _op: string, v: null) => { filters.push((r) => (r[c] ?? null) !== v); return q; },
       in: (c: string, v: unknown[]) => { filters.push((r) => v.includes(r[c])); return q; },
       order: () => q,
+      range: () => q, // Oct 2026: reads page with .range() (selectAll)
       limit: () => q,
       maybeSingle: () => Promise.resolve({ data: run()[0] ?? null, error: null }),
       then: (resolve: (v: unknown) => unknown) => { const rows = run(); return resolve({ data: head ? null : rows, count: rows.length, error: null }); },

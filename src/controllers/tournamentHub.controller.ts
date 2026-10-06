@@ -5,6 +5,7 @@
  * the bracket, rank the table, decide who plays next — is a LOCAL VIEW over data
  * it downloaded here, and syncs back through paths that already exist.
  */
+import { allRows } from '../utils/selectAll';
 import type { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { deviceIdOf } from '../utils/deviceHeader';
@@ -53,16 +54,17 @@ export async function getOfflinePack(req: Request, res: Response) {
       .eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
 
-    const [{ data: entries }, { data: fixtures }, { data: organisers }] = await Promise.all([
-      supabase.from('tournament_entries')
+    // Oct 2026: every entry and fixture (an unpaged read stopped at 1000).
+    const [entries, fixtures, { data: organisers }] = await Promise.all([
+      allRows(() => supabase.from('tournament_entries')
         // Phase 3 B08-F13: the status, so the hub's table keeps only the teams in it.
         .select('id, team_id, status, group_label, team:teams(id, name, short_name, logo_url)')
-        .eq('tournament_id', id),
-      supabase.from('matches')
+        .eq('tournament_id', id)),
+      allRows(() => supabase.from('matches')
         .select('id, team_a_id, team_b_id, team_a_name, team_b_name, status, winner_team_id, score_summary, round, match_no, group_label, scheduled_at, venue, ground_label, voided_at, next_match_id, next_slot, third_place, overs, format, rules, umpire_id, updated_at')
         .eq('tournament_id', id)
         .order('round', { ascending: true })
-        .order('match_no', { ascending: true }),
+        .order('match_no', { ascending: true })),
       supabase.from('tournament_organisers').select('user_id').eq('tournament_id', id),
     ]);
 

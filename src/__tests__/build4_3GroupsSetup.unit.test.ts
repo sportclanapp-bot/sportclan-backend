@@ -62,10 +62,10 @@ const onInsert = () => { mockLog = []; mockNext = (q) => (q[0] === 'from:tournam
 
 describe('BUILD 4.3 / 4.4 · on create', () => {
   test.each([
-    [{ num_groups: 1 }, 'Groups must be 2 to 16.'],
-    [{ num_groups: 17 }, 'Groups must be 2 to 16.'],
-    [{ qualifiers_per_group: 5 }, 'Teams through from each group must be 1 to 4.'],
-    [{ qualifiers_per_group: 0 }, 'Teams through from each group must be 1 to 4.'],
+    // Oct 2026 (Dipak): no upper caps — at least 2 groups, at least 1 through.
+    [{ num_groups: 1 }, 'Groups must be at least 2.'],
+    [{ num_groups: 2.5 }, 'Groups must be at least 2.'],
+    [{ qualifiers_per_group: 0 }, 'At least 1 team must go through from each group.'],
   ])('%j → 400', async (extra, err) => {
     onInsert();
     const r = await run(createTournament, { body: { ...tBody, ...extra } });
@@ -100,7 +100,7 @@ describe('BUILD 4.3 / 4.4 / 4.5 · on edit', () => {
   });
   test('out of range → 400; more qualifiers than a group holds → 400', async () => {
     on(row());
-    expect((await run(updateTournament, { body: { num_groups: 20 } })).body.code).toBe('BAD_GROUPS');
+    expect((await run(updateTournament, { body: { num_groups: 1 } })).body.code).toBe('BAD_GROUPS'); // Oct 2026: only below 2
     on(row({ group_size: 3 }));
     expect((await run(updateTournament, { body: { qualifiers_per_group: 4 } })).body.error).toBe('qualifiers_per_group cannot exceed group_size');
   });

@@ -1,4 +1,3 @@
-import { selectAll } from '../utils/selectAll';
 import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { syncTournamentChatMembers, syncAfterSuccess, canOpenTournamentChat } from '../utils/tournamentChat';
@@ -51,7 +50,8 @@ import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
-import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
+import { allRows, selectAll, selectAllIn, IN_CHUNK } from '../utils/selectAll';
+import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, isCount, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { rankTeams, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, type PointsModel } from '../utils/standings';
 import { crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
@@ -123,10 +123,9 @@ export function homeAwayRefusal(format: unknown, homeAway: unknown): { error: st
 }
 
 /** BUILD 4.3 / 4.4: the groups a groups → knockout draw can have, and how many go through from each. */
+// Oct 2026: no upper caps — at least 2 groups, at least 1 through (and no more than a group holds).
 const GROUPS_MIN = 2;
-const GROUPS_MAX = 16;
 const QUALIFIERS_MIN = 1;
-const QUALIFIERS_MAX = 4;
 
 /**
  * BUILD 4.3 / 4.4 · an edit's groups set-up: before the draw only, in range,
@@ -147,9 +146,9 @@ function groupsEditRefusal(
   const gs = 'group_size' in body ? int(body.group_size) : row.group_size ?? null;
   const q = 'qualifiers_per_group' in body ? int(body.qualifiers_per_group) : row.qualifiers_per_group ?? 2;
   const bad = (error: string) => ({ status: 400, body: { error, code: 'BAD_GROUPS' } });
-  if (ng !== null && (!Number.isInteger(ng) || ng < GROUPS_MIN || ng > GROUPS_MAX)) return bad(`Groups must be ${GROUPS_MIN} to ${GROUPS_MAX}.`);
-  if (gs !== null && (!Number.isInteger(gs) || gs < 2 || gs > 64)) return bad('group_size must be an integer between 2 and 64');
-  if (q === null || !Number.isInteger(q) || q < QUALIFIERS_MIN || q > QUALIFIERS_MAX) return bad(`Teams through from each group must be ${QUALIFIERS_MIN} to ${QUALIFIERS_MAX}.`);
+  if (ng !== null && !isCount(ng, GROUPS_MIN)) return bad(`Groups must be at least ${GROUPS_MIN}.`);
+  if (gs !== null && !isCount(gs, 2)) return bad('group_size must be a whole number, at least 2');
+  if (q === null || !isCount(q, QUALIFIERS_MIN)) return bad(`At least ${QUALIFIERS_MIN} team must go through from each group.`);
   if (gs !== null && q > gs) return bad('qualifiers_per_group cannot exceed group_size');
   const maxTeams = 'max_teams' in body ? Number(body.max_teams) : row.max_teams ?? null;
   if (row.format === 'groups_knockout' && ng !== null && maxTeams != null && maxTeams < ng * 2) {
@@ -253,13 +252,10 @@ async function tournamentRowFrom(body: Record<string, any>, kind: 'single' | 'pa
   if (elBad) return bad(elBad);
   // Bound max_teams (SC-39) — 0/1/absurd values previously created degenerate
   // tournaments. A parent has no entries of its own, so no size.
+  // Oct 2026: no upper cap — at least 2 (a draw needs two).
   const maxTeamsNum = Number(max_teams);
-  if (!parent && (
-    !Number.isInteger(maxTeamsNum) ||
-    maxTeamsNum < LIMITS.tournamentMinTeams ||
-    maxTeamsNum > LIMITS.tournamentMaxTeams
-  )) {
-    return bad({ error: `max_teams must be between ${LIMITS.tournamentMinTeams} and ${LIMITS.tournamentMaxTeams}` });
+  if (!parent && !isCount(maxTeamsNum, LIMITS.tournamentMinTeams)) {
+    return bad({ error: `max_teams must be a whole number, at least ${LIMITS.tournamentMinTeams}` });
   }
   // Validate the sport (unknown/malformed/deactivated → clean 400, not a 500).
   const sportErr = await validateSportForCreate(sport_id);
@@ -283,24 +279,24 @@ async function tournamentRowFrom(body: Record<string, any>, kind: 'single' | 'pa
   const cfgInt = (v: unknown) => (v === undefined || v === null || parent ? null : Number(v));
   const ng = cfgInt(num_groups);
   if (ng !== null) {
-    // BUILD 4.3: 2 to 16 groups (it was 1 to 64; the app never sent it).
-    if (!Number.isInteger(ng) || ng < GROUPS_MIN || ng > GROUPS_MAX) {
-      return bad({ error: `Groups must be ${GROUPS_MIN} to ${GROUPS_MAX}.`, code: 'BAD_GROUPS' });
+    // BUILD 4.3: at least 2 groups (Oct 2026: no upper cap).
+    if (!isCount(ng, GROUPS_MIN)) {
+      return bad({ error: `Groups must be at least ${GROUPS_MIN}.`, code: 'BAD_GROUPS' });
     }
     groupsConfigFields.num_groups = ng;
   }
   const gs = cfgInt(group_size);
   if (gs !== null) {
-    if (!Number.isInteger(gs) || gs < 2 || gs > 64) {
-      return bad({ error: 'group_size must be an integer between 2 and 64' });
+    if (!isCount(gs, 2)) {
+      return bad({ error: 'group_size must be a whole number, at least 2' });
     }
     groupsConfigFields.group_size = gs;
   }
   const qpg = cfgInt(qualifiers_per_group);
   if (qpg !== null) {
-    // BUILD 4.4: 1 to 4 through from each group (it was 1 to 32).
-    if (!Number.isInteger(qpg) || qpg < QUALIFIERS_MIN || qpg > QUALIFIERS_MAX) {
-      return bad({ error: `Teams through from each group must be ${QUALIFIERS_MIN} to ${QUALIFIERS_MAX}.`, code: 'BAD_GROUPS' });
+    // BUILD 4.4: at least 1 through from each group (Oct 2026: no upper cap).
+    if (!isCount(qpg, QUALIFIERS_MIN)) {
+      return bad({ error: `At least ${QUALIFIERS_MIN} team must go through from each group.`, code: 'BAD_GROUPS' });
     }
     groupsConfigFields.qualifiers_per_group = qpg;
   }
@@ -390,6 +386,18 @@ async function freshEntryCode(): Promise<string> {
  * settings over the parent's shared ones, checked like any tournament. Returns
  * the first refusal (naming the event) or the rows to insert.
  */
+/** Oct 2026: `n` unused entry codes in one or two queries (it was one query per event). */
+async function freshEntryCodes(n: number): Promise<string[]> {
+  const out = new Set<string>();
+  for (let round = 0; out.size < n && round < 6; round++) {
+    const want = Array.from({ length: (n - out.size) * 2 }, generateEntryCode).filter((c) => !out.has(c));
+    const found = await selectAllIn(want, (c, f, to) => supabase.from('tournaments').select('entry_code').in('entry_code', c).order('id').range(f, to)).catch(() => []);
+    const taken = new Set((Array.isArray(found) ? found as Array<{ entry_code?: string }> : []).map((x) => x.entry_code));
+    for (const c of want) if (!taken.has(c) && out.size < n) out.add(c);
+  }
+  return [...out];
+}
+
 async function eventRowsFor(
   parent: Record<string, any>,
   events: Array<Record<string, any>>,
@@ -397,8 +405,9 @@ async function eventRowsFor(
   probe = false,
 ): Promise<{ refusal: Record<string, unknown> } | { rows: Array<Record<string, unknown>> }> {
   const rows: Array<Record<string, unknown>> = [];
-  for (let i = 0; i < events.length; i++) {
-    const ev = events[i];
+  // Oct 2026 (no caps — 100+ events): every event's row built at once, the codes in one go.
+  const codes = probe ? [] : await freshEntryCodes(events.length);
+  const builtAll = await Promise.all(events.map((ev) => {
     const label = String(ev.label).trim();
     const body: Record<string, any> = { sport_id: parent.sport_id };
     for (const k of SHARED_KEYS) body[k] = parent[k];
@@ -409,7 +418,11 @@ async function eventRowsFor(
     // An event without its own fee or prize takes the tournament's.
     if (body.entry_fee === undefined) body.entry_fee = parent.entry_fee;
     if (body.prize_pool === undefined) body.prize_pool = parent.prize_pool;
-    const built = await tournamentRowFrom(body, 'event');
+    return tournamentRowFrom(body, 'event');
+  }));
+  for (let i = 0; i < events.length; i++) {
+    const label = String(events[i]!.label).trim();
+    const built = builtAll[i]!;
     if ('refusal' in built) {
       const r = built.refusal as { error?: string };
       return { refusal: { ...built.refusal, error: `${label}: ${r.error ?? 'check this event'}`, event: label } };
@@ -419,9 +432,9 @@ async function eventRowsFor(
       sport_metadata: parent.sport_metadata ?? {},
       parent_id: parent.id,
       event_label: label,
-      event_order: Math.min(99, startOrder + i),
+      event_order: startOrder + i, // Oct 2026: no cap (needs the event_order CHECK dropped)
       created_by: parent.created_by,
-      entry_code: probe ? null : await freshEntryCode(),
+      entry_code: probe ? null : codes[i] ?? await freshEntryCode(),
     });
   }
   return { rows };
@@ -495,6 +508,7 @@ export async function createTournament(req: Request, res: Response) {
       if (evErr || !eventRows) {
         // All or nothing: an event that won't insert takes the parent with it.
         await supabase.from('tournaments').delete().eq('id', tournament.id);
+        if ((evErr as { code?: string } | null)?.code === '23514') return res.status(409).json({ error: 'A tournament can’t have more than 100 events yet. Try again later.', code: 'EVENTS_LIMIT_DB' });
         return res.status(500).json({ error: sanitizeError(evErr) || 'Failed to create the events' });
       }
       const sorted = [...(eventRows as Array<Record<string, any>>)].sort((a, b) => (a.event_order ?? 0) - (b.event_order ?? 0));
@@ -532,6 +546,8 @@ export async function addEvents(req: Request, res: Response) {
     const made = await eventRowsFor(parent as Record<string, any>, events, next);
     if ('refusal' in made) return res.status(400).json(made.refusal);
     const { data: rows, error } = await supabase.from('tournaments').insert(made.rows).select('*');
+    // Until migration 123 is applied the database still holds a tournament to 100 events.
+    if ((error as { code?: string } | null)?.code === '23514') return res.status(409).json({ error: 'This tournament can’t take more events yet. Try again later.', code: 'EVENTS_LIMIT_DB' });
     if (error || !rows) return res.status(500).json({ error: sanitizeError(error) || 'Failed to add the events' });
     await refreshParentStatus(id);
     return res.json({ events: rows });
@@ -613,11 +629,11 @@ export async function getTournament(req: Request, res: Response) {
     // Cricket gap 10 (5 Oct 2026): who has paid the entry fee is the organisers'
     // record — read only for them; nobody else gets the columns.
     const organiser = await isTournamentOrganiser(id, userId);
-    const { data: entries } = await supabase
+    const entries = await allRows(() => supabase
       .from('tournament_entries')
       // Phase 3 B08-F5: team_id too — the fixture editor keys its team chips on it.
       .select(`id, team_id, status, seed, group_label, club, entered_at,${organiser ? ' fee_paid_at, fee_note,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`)
-      .eq('tournament_id', id);
+      .eq('tournament_id', id));
     // SC-293: authoritative fixture count so the Overview's Quick Stats agrees
     // with the Bracket + Officials tabs. Was: the FE showed fixtures.length, but
     // fixtures are only fetched on the Bracket tab → the Overview (landing tab)
@@ -671,22 +687,27 @@ async function rosterOverlapConflict(
   const userIds = Array.from(new Set((roster ?? []).map((m) => m.user_id).filter(Boolean)));
   if (userIds.length === 0) return null;
 
-  const { data: entries } = await supabase
+  const entries = await allRows(() => supabase
     .from('tournament_entries')
     .select('team_id')
     .eq('tournament_id', tournamentId)
     .in('status', ['pending', 'approved'])
-    .neq('team_id', teamId);
+    .neq('team_id', teamId));
   const otherTeamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
   if (otherTeamIds.length === 0) return null;
 
-  const { data: clash } = await supabase
-    .from('team_members')
-    .select('team_id')
-    .in('team_id', otherTeamIds)
-    .in('user_id', userIds)
-    .limit(1)
-    .maybeSingle();
+  // Oct 2026: any number of entered teams — checked a chunk at a time.
+  let clash: { team_id: string } | null = null;
+  for (let i = 0; i < otherTeamIds.length && !clash; i += IN_CHUNK) {
+    const { data } = await supabase
+      .from('team_members')
+      .select('team_id')
+      .in('team_id', otherTeamIds.slice(i, i + IN_CHUNK))
+      .in('user_id', userIds)
+      .limit(1)
+      .maybeSingle();
+    clash = (data as { team_id: string } | null) ?? null;
+  }
   if (!clash) return null;
   const { data: clashTeam } = await supabase
     .from('teams')
@@ -750,10 +771,10 @@ async function categoryRefusalFor(
   const { data: roster } = await supabase.from('team_members').select('user_id').eq('team_id', teamId);
   const ids = Array.from(new Set(((roster ?? []) as Array<{ user_id: string | null }>).map((m) => m.user_id).filter((x): x is string => !!x)));
   if (ids.length === 0) return null;
-  const { data: users } = await supabase.from('users').select('id, name, username, gender, dob').in('id', ids);
+  const users = await selectAllIn(ids, (c, f, to) => supabase.from('users').select('id, name, username, gender, dob').in('id', c).order('id').range(f, to));
   const ratings = new Map<string, number>();
   if (sportId && (category.maxRating != null || category.minRating != null)) {
-    const { data: profs } = await supabase.from('user_sport_profiles').select('user_id, rating').eq('sport_id', sportId).in('user_id', ids);
+    const profs = await selectAllIn(ids, (c, f, to) => supabase.from('user_sport_profiles').select('user_id, rating').eq('sport_id', sportId).in('user_id', c).order('user_id').range(f, to));
     for (const p of (profs ?? []) as Array<{ user_id: string; rating: number | null }>) if (p.rating != null) ratings.set(p.user_id, Number(p.rating));
   }
   const on = startDate && Number.isFinite(Date.parse(startDate)) ? new Date(startDate) : new Date();
@@ -823,9 +844,9 @@ async function entryRefusal(
   }
   // Badminton gap 3: the tournament's limit of events per player (its roster).
   if (t.parent_id) {
-    const { data: roster } = await supabase.from('team_members').select('user_id').eq('team_id', teamId);
+    const roster = await allRows(() => supabase.from('team_members').select('user_id').eq('team_id', teamId));
     const ids = [...new Set(((roster ?? []) as Array<{ user_id: string }>).map((r) => r.user_id))];
-    const { data: ppl } = ids.length ? await supabase.from('users').select('id, name, username').in('id', ids) : { data: [] };
+    const ppl = await selectAllIn(ids, (c, f, to) => supabase.from('users').select('id, name, username').in('id', c).order('id').range(f, to));
     const lim = await eventLimitRefusal(t as { id: string; parent_id: string | null; entry_kind?: string | null; settings?: unknown }, ids,
       new Map(((ppl ?? []) as Array<{ id: string }>).map((u) => [u.id, u])), null);
     if (lim) return { status: lim.status, body: { error: lim.body.error, code: lim.body.code } };
@@ -972,15 +993,16 @@ async function entryVerdicts(tournament: EntryTournament, ids: string[], asOrgan
   const id = t.id;
   const capCounts: Array<'pending' | 'approved'> = asOrganiser ? ['approved'] : ['pending', 'approved'];
   const category = settingsOf(t as { settings?: unknown }).category;
-  const [{ data: roles }, { data: entered }, { data: teamRows }, { count: taken }, { data: rosterRows }, { data: liveEntries }] = await Promise.all([
-    supabase.from('team_members').select('team_id, role').eq('user_id', userId).in('team_id', ids),
-    supabase.from('tournament_entries').select('team_id, status').eq('tournament_id', id).in('team_id', ids),
-    supabase.from('teams').select('id, sport_id, deleted_at').in('id', ids),
+  // Oct 2026: any number of teams (no cap) — the id lists in chunks, every row.
+  const [roles, entered, teamRows, { count: taken }, rosterRows, liveEntries] = await Promise.all([
+    selectAllIn(ids, (c, f, to) => supabase.from('team_members').select('team_id, role').eq('user_id', userId).in('team_id', c).order('team_id').range(f, to)),
+    selectAllIn(ids, (c, f, to) => supabase.from('tournament_entries').select('team_id, status').eq('tournament_id', id).in('team_id', c).order('team_id').range(f, to)),
+    selectAllIn(ids, (c, f, to) => supabase.from('teams').select('id, sport_id, deleted_at').in('id', c).order('id').range(f, to)),
     t.max_teams
       ? supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id).in('status', capCounts)
       : Promise.resolve({ count: 0 }),
-    supabase.from('team_members').select('team_id, user_id').in('team_id', ids),
-    supabase.from('tournament_entries').select('team_id').eq('tournament_id', id).in('status', ['pending', 'approved']),
+    selectAllIn(ids, (c, f, to) => supabase.from('team_members').select('team_id, user_id').in('team_id', c).order('id').range(f, to)),
+    allRows(() => supabase.from('tournament_entries').select('team_id').eq('tournament_id', id).in('status', ['pending', 'approved'])),
   ]);
   const runs = new Set(((roles ?? []) as Array<{ team_id: string; role: string }>).filter((r) => r.role === 'captain' || r.role === 'vice_captain').map((r) => r.team_id));
   const live = new Map(((entered ?? []) as Array<{ team_id: string; status: string }>).map((e) => [e.team_id, e.status]));
@@ -995,12 +1017,21 @@ async function entryVerdicts(tournament: EntryTournament, ids: string[], asOrgan
   const enteredTeamIds = [...new Set(((liveEntries ?? []) as Array<{ team_id: string | null }>).map((e) => e.team_id).filter((x): x is string => !!x))];
   const allPlayers = [...new Set([...rosterOf.values()].flat())];
   const ratingsNeeded = !!category && !!t.sport_id && (category.maxRating != null || category.minRating != null);
+  // Oct 2026: any number of teams and players — id lists in chunks, every row.
+  const membersOfEntered = async () => {
+    const out: Array<{ team_id: string; user_id: string }> = [];
+    for (let i = 0; i < enteredTeamIds.length; i += IN_CHUNK) {
+      const teamChunk = enteredTeamIds.slice(i, i + IN_CHUNK);
+      out.push(...await selectAllIn<{ team_id: string; user_id: string }>(allPlayers, (c, f, to) => supabase.from('team_members').select('team_id, user_id').in('team_id', teamChunk).in('user_id', c).order('id').range(f, to)));
+    }
+    return { data: out };
+  };
   const [{ data: enteredMembers }, { data: users }, { data: profs }, { data: sport }] = await Promise.all([
     enteredTeamIds.length && allPlayers.length
-      ? supabase.from('team_members').select('team_id, user_id').in('team_id', enteredTeamIds).in('user_id', allPlayers)
+      ? membersOfEntered()
       : Promise.resolve({ data: [] }),
     category && allPlayers.length
-      ? supabase.from('users').select('id, name, username, gender, dob').in('id', allPlayers)
+      ? selectAllIn(allPlayers, (c, f, to) => supabase.from('users').select('id, name, username, gender, dob').in('id', c).order('id').range(f, to)).then((data) => ({ data }))
       : Promise.resolve({ data: [] }),
     ratingsNeeded && allPlayers.length
       ? supabase.from('user_sport_profiles').select('user_id, rating').eq('sport_id', t.sport_id as string).in('user_id', allPlayers)
@@ -1079,7 +1110,7 @@ export async function entryCheck(req: Request, res: Response) {
     const { id } = req.params;
     const body = (req.body ?? {}) as { team_ids?: unknown; as?: unknown };
     const ids = Array.isArray(body.team_ids) ? body.team_ids.filter((x): x is string => typeof x === 'string' && isUuid(x)) : [];
-    if (ids.length === 0 || ids.length > 30) return res.status(400).json({ error: 'Send 1 to 30 team ids.', code: 'BAD_TEAM_IDS' });
+    if (ids.length === 0) return res.status(400).json({ error: 'Send at least one team id.', code: 'BAD_TEAM_IDS' });
     const asOrganiser = body.as === 'organiser';
     const { data: tournament } = await supabase.from('tournaments').select(ENTRY_TOURNAMENT_COLS).eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -1309,8 +1340,8 @@ export async function updateEntry(req: Request, res: Response) {
     }
     // B08-F11: a seed is a whole number and a group a short label (text in the
     // integer column 500'd).
-    if (seed !== undefined && seed !== null && !(Number.isInteger(seed) && seed >= 1 && seed <= 256)) {
-      return res.status(400).json({ error: 'seed must be a whole number from 1 to 256.' });
+    if (seed !== undefined && seed !== null && !isCount(seed, 1)) {
+      return res.status(400).json({ error: 'seed must be a whole number, 1 or more.' });
     }
     if (group_label !== undefined && group_label !== null && !(typeof group_label === 'string' && group_label.trim().length >= 1 && group_label.trim().length <= 8)) {
       return res.status(400).json({ error: 'group_label must be a short label, like A.' });
@@ -1480,9 +1511,9 @@ export async function updateTournament(req: Request, res: Response) {
     const body = req.body || {};
     if (body.max_teams !== undefined) {
       const mt = Number(body.max_teams);
-      if (!Number.isInteger(mt) || mt < LIMITS.tournamentMinTeams || mt > LIMITS.tournamentMaxTeams) {
+      if (!isCount(mt, LIMITS.tournamentMinTeams)) {
         return res.status(400).json({
-          error: `max_teams must be between ${LIMITS.tournamentMinTeams} and ${LIMITS.tournamentMaxTeams}`,
+          error: `max_teams must be a whole number, at least ${LIMITS.tournamentMinTeams}`,
         });
       }
     }
@@ -1853,18 +1884,18 @@ async function cancelTournamentSideEffects(
     .in('status', ['scheduled', 'live']);
 
   // (b) Notify the captain of every still-registered team.
-  const { data: entries } = await supabase
+  const entries = await allRows(() => supabase
     .from('tournament_entries')
     .select('team_id')
     .eq('tournament_id', tournamentId)
-    .in('status', ['pending', 'approved']);
+    .in('status', ['pending', 'approved']));
   const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
   if (teamIds.length === 0) return;
-  const { data: captains } = await supabase
+  const captains = await selectAllIn(teamIds, (c, f, to) => supabase
     .from('team_members')
     .select('user_id')
-    .in('team_id', teamIds)
-    .eq('role', 'captain');
+    .in('team_id', c)
+    .eq('role', 'captain').order('id').range(f, to));
   const captainIds = Array.from(new Set((captains ?? []).map((c) => c.user_id).filter(Boolean)));
   if (captainIds.length === 0) return;
   await notifyUsers(
@@ -1891,17 +1922,17 @@ async function notifyTournamentChampion(
   championName: string | null,
   tournamentName: string | null,
 ): Promise<void> {
-  const { data: entries } = await supabase
+  const entries = await allRows(() => supabase
     .from('tournament_entries')
     .select('team_id')
     .eq('tournament_id', tournamentId)
-    .eq('status', 'approved');
+    .eq('status', 'approved'));
   const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
   if (teamIds.length === 0) return;
-  const { data: members } = await supabase
+  const members = await selectAllIn(teamIds, (c, f, to) => supabase
     .from('team_members')
     .select('user_id, team_id')
-    .in('team_id', teamIds);
+    .in('team_id', c).order('id').range(f, to));
   // Partition into champion-team members vs. the rest. ROSTER_OVERLAP (SC-240)
   // guarantees a user is on at most one entered team per tournament, so these
   // two sets are disjoint.
@@ -1942,14 +1973,14 @@ async function notifyTournamentUpdated(
 ): Promise<void> {
   // Badminton gap 1: a tournament made of events tells everyone in any event, once.
   const ids = await familyIds(tournamentId);
-  const { data: entries } = await supabase
+  const entries = await allRows(() => supabase
     .from('tournament_entries')
     .select('team_id')
     .in('tournament_id', ids)
-    .eq('status', 'approved');
+    .eq('status', 'approved'));
   const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
   if (teamIds.length === 0) return;
-  const { data: members } = await supabase.from('team_members').select('user_id').in('team_id', teamIds);
+  const members = await selectAllIn(teamIds, (c, f, to) => supabase.from('team_members').select('user_id').in('team_id', c).order('id').range(f, to));
   const userIds = Array.from(new Set((members ?? []).map((m) => m.user_id).filter(Boolean)));
   if (userIds.length === 0) return;
   await notifyUsers(
@@ -2026,12 +2057,12 @@ export async function addTournamentOrganiser(req: Request, res: Response) {
     // entered in THIS tournament. Allowed (community tournaments have playing
     // organisers) — surfaced, not blocked.
     let warning: string | undefined;
-    const { data: entries } = await supabase
-      .from('tournament_entries').select('team_id').eq('tournament_id', id).in('status', ['approved', 'pending']);
+    const entries = await allRows(() => supabase
+      .from('tournament_entries').select('team_id').eq('tournament_id', id).in('status', ['approved', 'pending']));
     const teamIds = (entries ?? []).map((e) => e.team_id);
     if (teamIds.length > 0) {
-      const { data: cap } = await supabase
-        .from('team_members').select('team_id').eq('user_id', user_id).eq('role', 'captain').in('team_id', teamIds);
+      const cap = await selectAllIn(teamIds as string[], (c, f, to) => supabase
+        .from('team_members').select('team_id').eq('user_id', user_id).eq('role', 'captain').in('team_id', c).order('id').range(f, to));
       if (cap && cap.length > 0) {
         warning = `${target.name ?? 'This user'} captains a team competing in this tournament — heads up on the conflict of interest.`;
       }
@@ -2422,12 +2453,12 @@ export async function updateFixtures(req: Request, res: Response) {
       // (the organiser knows their ground) — never block. A clash = another
       // match of this tournament at the SAME scheduled_at sharing a team.
       if (patch.scheduled_at && data.scheduled_at && (data.team_a_id || data.team_b_id)) {
-        const { data: siblings } = await supabase
+        const siblings = await allRows(() => supabase
           .from('matches')
           .select('id, team_a_id, team_b_id, team_a_name, team_b_name')
           .eq('tournament_id', id)
           .eq('scheduled_at', data.scheduled_at)
-          .neq('id', fixtureId);
+          .neq('id', fixtureId));
         const teamIds = new Set([data.team_a_id, data.team_b_id].filter(Boolean));
         for (const s of siblings ?? []) {
           const clashId = [s.team_a_id, s.team_b_id].find((t) => t && teamIds.has(t));
@@ -2833,14 +2864,15 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
     .from('tournaments').select('format, tiebreaker_rules, sport_id, settings').eq('id', tournamentId).maybeSingle();
   const fmt = (t as any)?.format;
   if (fmt === 'round_robin' || fmt === 'league' || fmt === 'swiss') { // BUILD 4.15: a Swiss is won on the table
-    const { data: entries } = await supabase
+    const entries = await allRows(() => supabase
       .from('tournament_entries').select('team_id, team:teams!team_id(id, name, short_name)')
-      .eq('tournament_id', tournamentId).eq('status', 'approved');
+      .eq('tournament_id', tournamentId).eq('status', 'approved'));
     const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id as string).filter(Boolean)));
     if (teamIds.length === 0) return null;
-    const { data: matches } = await supabase
-      .from('matches').select('team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
-      .eq('tournament_id', tournamentId).is('voided_at', null);
+    // Oct 2026: every match (a 64-team league has 2016; an unpaged read stops at 1000).
+    const matches = await allRows(() => supabase
+      .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
+      .eq('tournament_id', tournamentId).is('voided_at', null));
     // Badminton gap 6: a withdrawn player's results deleted (BWF GCR), when the tournament says so.
     const tin = tableInputs((t as any)?.settings, teamIds, (matches ?? []) as any[], await withdrawnTeamIds(tournamentId));
     const leader = rankTeams(
@@ -2915,27 +2947,27 @@ export async function recrownAfterVoidChange(matchId: string): Promise<void> {
 
 /** Badminton gap 6: the teams withdrawn from this tournament (their results may be deleted from tables). */
 async function withdrawnTeamIds(tournamentId: string): Promise<string[]> {
-  const { data } = await supabase.from('tournament_entries').select('team_id').eq('tournament_id', tournamentId).eq('status', 'withdrawn');
+  const data = await allRows(() => supabase.from('tournament_entries').select('team_id').eq('tournament_id', tournamentId).eq('status', 'withdrawn'));
   return ((data ?? []) as Array<{ team_id: string }>).map((e) => e.team_id);
 }
 
 async function crownLeagueChampion(tournamentId: string): Promise<void> {
   if (await hasUnplayedFixtures(tournamentId)) return;
-  const { data: entries } = await supabase
+  const entries = await allRows(() => supabase
     .from('tournament_entries')
     .select('team_id, team:teams!team_id(id, name, short_name)')
     .eq('tournament_id', tournamentId)
-    .eq('status', 'approved');
+    .eq('status', 'approved'));
   const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
   if (teamIds.length === 0) return;
   const nameOf: Record<string, string> = {};
   for (const e of entries ?? []) nameOf[e.team_id as string] = (e.team as any)?.name ?? 'Team';
 
-  const { data: matches } = await supabase
+  const matches = await allRows(() => supabase
     .from('matches')
-    .select('team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
+    .select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
     .eq('tournament_id', tournamentId)
-    .is('voided_at', null); // SC-424: a voided fixture is not a played fixture
+    .is('voided_at', null)); // SC-424: a voided fixture is not a played fixture · Oct 2026: every row
   const { data: trow } = await supabase
     .from('tournaments').select('tiebreaker_rules, sport_id, settings').eq('id', tournamentId).maybeSingle();
   const tiebreakerRules = ((trow as any)?.tiebreaker_rules ?? []) as any[];
@@ -3013,15 +3045,15 @@ async function swissAfterResult(tournamentId: string): Promise<void> {
     .eq('settings->swiss->>paired', String(paired))
     .select('id');
   if (!claim || claim.length === 0) return;
-  const { data: entries } = await supabase
+  const entries = await allRows(() => supabase
     .from('tournament_entries').select('team_id, seed, entered_at, team:teams!team_id(id, name, short_name)')
-    .eq('tournament_id', tournamentId).eq('status', 'approved');
+    .eq('tournament_id', tournamentId).eq('status', 'approved'));
   const seeded = drawOrder(((entries ?? []) as Array<{ team_id: string; seed?: number | null; entered_at?: string | null }>), settingsOf(t as { settings?: unknown }).seeding ?? null);
   const ids = seeded.map((e) => e.team_id);
   const nameOf = new Map(((entries ?? []) as Array<{ team_id: string; team?: { name?: string } | null }>).map((e) => [e.team_id, e.team?.name ?? 'Player']));
-  const { data: matches } = await supabase
-    .from('matches').select('team_a_id, team_b_id, winner_team_id, status, score_summary, scheduled_at, overs')
-    .eq('tournament_id', tournamentId).is('voided_at', null);
+  const matches = await allRows(() => supabase
+    .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, scheduled_at, overs')
+    .eq('tournament_id', tournamentId).is('voided_at', null)); // Oct 2026: every row
   const ms = (matches ?? []) as Array<{ team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; score_summary: any; scheduled_at: string | null }>;
   const pts = await tournamentPoints(t as any);
   const ranked = rankTeams(ids, ms as any[], ((t as any).tiebreaker_rules ?? []) as any[], pts);
@@ -3142,9 +3174,9 @@ async function placeSemiLoser(m: SemiRow, winnerId: string): Promise<void> {
   const { data: final } = await supabase
     .from('matches').select('id, next_match_id, third_place').eq('id', m.next_match_id).maybeSingle();
   if (!final || final.next_match_id || (final as { third_place?: boolean }).third_place) return;
-  const { data: tps } = await supabase
+  const tps = await allRows(() => supabase
     .from('matches').select('id, status, team_a_id, team_b_id, team_a_name, team_b_name, third_place')
-    .eq('tournament_id', m.tournament_id).is('next_match_id', null).is('group_label', null);
+    .eq('tournament_id', m.tournament_id).is('next_match_id', null).is('group_label', null));
   const tp = (tps ?? []).find((x) => (x as { third_place?: boolean }).third_place) as Record<string, any> | undefined;
   if (!tp) return;
   // A bye semi (one team) has no loser: its slot is a BYE.
@@ -3182,6 +3214,8 @@ async function completeBracketIfDone(tournamentId: string, knownFinal: FinalRow 
   // The final that was just decided, or — when the third-place match was — the final, looked up.
   let final: FinalRow | undefined = knownFinal ?? undefined;
   if (!final) {
+    // Oct 2026: the top three rounds are enough to find the final (a league's
+    // thousands of unlinked matches no longer get read here).
     const { data: rows } = await supabase
       .from('matches')
       .select('winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, round, third_place')
@@ -3189,7 +3223,8 @@ async function completeBracketIfDone(tournamentId: string, knownFinal: FinalRow 
       .is('next_match_id', null)
       .is('group_label', null)
       .is('voided_at', null)
-      .order('round', { ascending: false });
+      .order('round', { ascending: false })
+      .limit(3);
     final = (Array.isArray(rows) ? rows : []).find((r) => !(r as { third_place?: boolean }).third_place) as FinalRow | undefined;
   }
   const winnerId = final?.winner_team_id as string | null | undefined;
@@ -3218,12 +3253,12 @@ async function completeBracketIfDone(tournamentId: string, knownFinal: FinalRow 
 // valid opponent (empty slot, or the opponent has ALSO withdrawn) the match is
 // abandoned with no winner and nothing advances.
 async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise<void> {
-  const { data: matches } = await supabase
+  const matches = await allRows(() => supabase
     .from('matches')
     .select('id, team_a_id, team_b_id, status, sport_id, format, overs, rules, score_summary')
     .eq('tournament_id', tournamentId)
     .in('status', ['scheduled', 'live'])
-    .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`);
+    .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`));
   const now = new Date().toISOString();
   for (const mt of matches ?? []) {
     const opponentId = mt.team_a_id === teamId ? mt.team_b_id : mt.team_a_id;
@@ -3259,33 +3294,32 @@ async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise
 // the group standings (top 2 per group, cross-paired to avoid an immediate
 // same-group rematch). Idempotent. SC-23 (groups→KO transition).
 async function maybeSeedKnockout(tournamentId: string): Promise<void> {
-  const { data: groupMatches } = await supabase
+  const groupMatches = await allRows(() => supabase
     .from('matches')
     .select('id, status, winner_team_id, team_a_id, team_b_id, score_summary, overs')
     .eq('tournament_id', tournamentId)
     .eq('round', 0)
-    // SC-424: a voided group fixture neither blocks seeding nor seeds a team.
-    .is('voided_at', null);
+    // SC-424: a voided group fixture neither blocks seeding nor seeds a team. Oct 2026: every row.
+    .is('voided_at', null));
   if (!groupMatches || groupMatches.length === 0) return;
   // BUILD 1.4: an abandoned group match is finished too (a no-result or a
   // walkover). Waiting for it to complete held the knockout back forever.
   if (groupMatches.some((g) => g.status !== 'completed' && g.status !== 'abandoned')) return;
 
-  const { data: ko1 } = await supabase
+  const ko1 = await allRows(() => supabase
     .from('matches')
     .select('id, match_no, team_a_id, team_b_id')
     .eq('tournament_id', tournamentId)
     .is('group_label', null)
-    .eq('round', 1)
-    .order('match_no', { ascending: true });
+    .eq('round', 1), 'match_no');
   if (!ko1 || ko1.length === 0) return;
   if (ko1.some((k) => k.team_a_id || k.team_b_id)) return; // already seeded
 
-  const { data: entries } = await supabase
+  const entries = await allRows(() => supabase
     .from('tournament_entries')
     .select('team_id, group_label, club, status, team:teams!team_id(id, name, short_name)')
     .eq('tournament_id', tournamentId)
-    .not('group_label', 'is', null);
+    .not('group_label', 'is', null));
 
   // SC-58: deterministic standings (wins desc, then team id — NEVER DB row
   // order) + config-driven qualifiers per group + a properly SEEDED bracket so
@@ -3558,14 +3592,14 @@ export async function generateFixtures(req: Request, res: Response) {
     // fell on arbitrary teams. Order: the organiser's explicit `seed` when set
     // (1 = strongest), then entry time, then team_id as the terminator so the
     // sequence is total and repeatable.
-    const { data: fetched } = await supabase
+    const fetched = await allRows(() => supabase
       .from('tournament_entries')
       .select('id, team_id, seed, entered_at, group_label, club, team:teams!team_id(id, name, short_name)')
       .eq('tournament_id', id)
       .eq('status', 'approved')
       .order('seed', { ascending: true, nullsFirst: false })
       .order('entered_at', { ascending: true })
-      .order('team_id', { ascending: true });
+      .order('team_id', { ascending: true }));
     // BUILD 4.6: the tournament's seeding — entry time, a random draw, or the
     // organiser's seeds (absent: seeds when set, then entry time, as above).
     const seeding = settingsOf(tournament as { settings?: unknown }).seeding ?? null;

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { selectAllIn } from '../utils/selectAll';
 import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
 import { chunks, IN_CHUNK } from '../utils/inChunks';
@@ -31,8 +32,9 @@ async function notAGroup(chatId: string): Promise<{ status: number; body: object
 /** B09-F5/F6: which of these ids are real, live (not deleted) accounts. */
 async function liveUserIds(ids: string[]): Promise<Set<string>> {
   if (ids.length === 0) return new Set();
-  const { data } = await supabase.from('users').select('id').in('id', ids).is('deleted_at', null);
-  return new Set((data ?? []).map((u: { id: string }) => u.id));
+  // Oct 2026: any number of people (no group cap) — read in chunks.
+  const data = await selectAllIn<{ id: string }>(ids, (c, from, to) => supabase.from('users').select('id').in('id', c).is('deleted_at', null).order('id').range(from, to));
+  return new Set(data.map((u) => u.id));
 }
 
 /** B09-F5/F20: a group name is a string with something in it. */
@@ -544,9 +546,7 @@ export async function createGroup(req: Request, res: Response) {
   if (member_ids.length === 0) {
     return res.status(400).json({ error: 'At least one member required' });
   }
-  if (member_ids.length > 49) {
-    return res.status(400).json({ error: 'Max 50 members per group' });
-  }
+  // Oct 2026 (Dipak): a group chat has no member cap.
   const live = await liveUserIds(member_ids);
   if (member_ids.some((m) => !live.has(m))) {
     return res.status(404).json({ error: 'Some of these people aren’t on SportClan.', code: 'USER_NOT_FOUND' });
@@ -675,16 +675,7 @@ export async function addMember(req: Request, res: Response) {
     return res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
   }
 
-  // Check group size
-  const { count } = await supabase
-    .from('chat_participants')
-    .select('id', { count: 'exact', head: true })
-    .is('left_at', null)
-    .eq('chat_id', id);
-
-  if ((count ?? 0) >= 50) {
-    return res.status(400).json({ error: 'Max 50 members per group' });
-  }
+  // Oct 2026 (Dipak): a group chat has no member cap.
 
   // SC-96: block gate — don't force the new member into a shared group chat with
   // anyone they're blocked-either-direction with (mirrors joinTeamByCode). Covers

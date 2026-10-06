@@ -120,7 +120,7 @@ describe('creating a tournament made of events', () => {
   test('an event that doesn’t pass is refused by name, and nothing is written', async () => {
     const r = await create({ ...OPEN, events: [EVENTS[0], { label: 'Boys U-15', max_teams: 1 }] });
     expect(r.statusCode).toBe(400);
-    expect(r.body.error).toMatch(/^Boys U-15: max_teams must be between/);
+    expect(r.body.error).toMatch(/^Boys U-15: max_teams must be a whole number, at least 2/);
     expect(inserts('tournaments')).toHaveLength(0);
   });
   test('two events with one name, no events, or doubles in a team sport are refused', async () => {
@@ -290,7 +290,9 @@ describe('editing', () => {
     expect(updates('tournaments')[0].set.settings).toEqual({ v: 1, eventLimits: { singles: 1 } });
     await edit({ ...PARENT_ROW, settings: { v: 1, eventLimits: { total: 3 } } }, { event_limits: null });
     expect(updates('tournaments')[0].set.settings).toEqual({ v: 1 });
-    expect((await edit(PARENT_ROW, { event_limits: { total: 99 } })).body.code).toBe('BAD_EVENT_LIMITS');
+    expect((await edit(PARENT_ROW, { event_limits: { total: 0 } })).body.code).toBe('BAD_EVENT_LIMITS');
+    // Oct 2026 (Dipak): no top on the organiser's own limit.
+    expect((await edit(PARENT_ROW, { event_limits: { total: 99 } })).statusCode).toBe(200);
   });
   test('who enters can change only before anyone has entered', async () => {
     const r = await edit({ ...EVENT_ROW, entry_kind: 'team' }, { entry_kind: 'doubles' });
@@ -334,9 +336,10 @@ describe('the rules, on their own', () => {
     expect(long.length).toBeLessThanOrEqual(120);
     expect(long.endsWith('… · Women’s doubles U-17')).toBe(true);
   });
-  test('up to 40 events', () => {
-    expect(eventsListRefusal(Array.from({ length: 40 }, (_, i) => ({ label: `E${i}` })))).toBeNull();
-    expect(eventsListRefusal(Array.from({ length: 41 }, (_, i) => ({ label: `E${i}` })))!.code).toBe('BAD_EVENTS');
+  // Oct 2026 (Dipak): no cap on events (it was 40).
+  test('any number of events', () => {
+    expect(eventsListRefusal(Array.from({ length: 41 }, (_, i) => ({ label: `E${i}` })))).toBeNull();
+    expect(eventsListRefusal(Array.from({ length: 150 }, (_, i) => ({ label: `E${i}` })), ['Z'])).toBeNull();
     expect(eventsListRefusal([{ label: 'B' }], ['A', 'b'])!.code).toBe('DUPLICATE_EVENT');
     expect(eventsListRefusal([{ label: '' }])!.code).toBe('BAD_EVENT_LABEL');
   });

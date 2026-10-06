@@ -5,11 +5,12 @@
  * settings.eventLimits); checked whenever a player — alone, in a pair or on a
  * team — enters one of its events.
  */
+import { selectAllIn } from './selectAll';
 import { supabase } from './supabase';
+import { isCount } from './validation';
 
 export type EventClass = 'singles' | 'doubles' | 'mixed' | 'team';
 export type EventLimits = { total?: number | null; singles?: number | null; doubles?: number | null; mixed?: number | null };
-export const EVENT_LIMIT_MAX = 40;
 const KEYS = ['total', 'singles', 'doubles', 'mixed'] as const;
 
 /** Which kind of event this is, for the limits: singles, doubles, mixed doubles, or a team event. */
@@ -28,8 +29,9 @@ export function eventLimitsRefusal(raw: unknown): { error: string; code: string 
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (!(KEYS as readonly string[]).includes(k)) return { error: `Unknown event limit: ${k}.`, code: 'BAD_EVENT_LIMITS' };
     if (v === null) continue;
-    if (!Number.isInteger(v) || (v as number) < 1 || (v as number) > EVENT_LIMIT_MAX) {
-      return { error: `An event limit is 1 to ${EVENT_LIMIT_MAX}, or blank for none.`, code: 'BAD_EVENT_LIMITS' };
+    // The organiser's own limit: optional (blank = none), at least 1 (Oct 2026: no top).
+    if (!isCount(v, 1)) {
+      return { error: 'An event limit is 1 or more, or blank for none.', code: 'BAD_EVENT_LIMITS' };
     }
   }
   return null;
@@ -81,12 +83,12 @@ export async function eventLimitRefusal(
   const events = ((sibs ?? []) as Array<{ id: string; entry_kind: string | null; settings: unknown; status: string }>).filter((e) => e.status !== 'cancelled');
   if (events.length === 0) return null;
   const classOf = new Map(events.map((e) => [e.id, eventClass(e)]));
-  const { data: entries } = await supabase.from('tournament_entries').select('tournament_id, team_id')
-    .in('tournament_id', events.map((e) => e.id)).in('status', ['pending', 'approved']);
+  const entries = await selectAllIn(events.map((e) => e.id), (c, f, to) => supabase.from('tournament_entries').select('tournament_id, team_id')
+    .in('tournament_id', c).in('status', ['pending', 'approved']).order('id').range(f, to));
   const rows = (entries ?? []) as Array<{ tournament_id: string; team_id: string }>;
   if (rows.length === 0) return null;
-  const { data: members } = await supabase.from('team_members').select('team_id, user_id')
-    .in('team_id', [...new Set(rows.map((r) => r.team_id))]).in('user_id', userIds);
+  const members = await selectAllIn([...new Set(rows.map((r) => r.team_id))], (c, f, to) => supabase.from('team_members').select('team_id, user_id')
+    .in('team_id', c).in('user_id', userIds).order('id').range(f, to));
   const eventsOfTeam = new Map<string, string[]>();
   for (const r of rows) eventsOfTeam.set(r.team_id, [...(eventsOfTeam.get(r.team_id) ?? []), r.tournament_id]);
   const mine = eventClass(t);

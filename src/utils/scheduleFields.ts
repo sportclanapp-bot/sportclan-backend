@@ -5,6 +5,7 @@
  * app's form keeps working). Sport-neutral.
  */
 import type { Refusal } from './tournamentSettings';
+import { isCount } from './validation';
 
 const refuse = (error: string, field: string): Refusal & { field: string } => ({ error, code: 'BAD_SCHEDULE', field } as Refusal & { field: string });
 const TIME = /^([01]\d|2[0-3]):[0-5]\d(:\d\d)?$/;
@@ -24,11 +25,12 @@ export function scheduleRefusal(body: Record<string, unknown>, cur: Record<strin
   }
   if (has('match_duration_minutes') && !isInt(body.match_duration_minutes, 5, 600)) return refuse('A match is 5 to 600 minutes.', 'match_duration_minutes');
   if (has('buffer_minutes') && !isInt(body.buffer_minutes, 0, 240)) return refuse('The gap between matches is 0 to 240 minutes.', 'buffer_minutes');
-  if (has('ground_count') && !isInt(body.ground_count, 1, 50)) return refuse('1 to 50 courts or grounds.', 'ground_count');
+  // Oct 2026: no cap on courts — at least one.
+  if (has('ground_count') && !isCount(body.ground_count, 1)) return refuse('At least one court or ground.', 'ground_count');
   if ('ground_names' in body && body.ground_names !== null) {
     const n = body.ground_names;
-    if (!Array.isArray(n) || n.length > 50 || n.some((x) => typeof x !== 'string' || !x.trim() || x.trim().length > 40)) {
-      return refuse('Up to 50 names, each 1 to 40 characters.', 'ground_names');
+    if (!Array.isArray(n) || n.some((x) => typeof x !== 'string' || !x.trim() || x.trim().length > 40)) {
+      return refuse('Each name is 1 to 40 characters.', 'ground_names');
     }
     if (new Set(n.map((x: string) => x.trim().toLowerCase())).size !== n.length) return refuse('Two courts have the same name.', 'ground_names');
   }

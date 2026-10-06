@@ -1,3 +1,4 @@
+import { selectAll } from '../utils/selectAll';
 import { isAdminUser } from '../middleware/admin.middleware';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { AuditRow, LogContext, cricketBallLabels, editLine } from '../utils/editLog';
@@ -585,7 +586,6 @@ export async function deleteMatchEvent(req: Request, res: Response) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-export const INNINGS_STATS_MAX_ROWS = 50;
 /** Caps for one innings line; a count must be a whole number from 0 to its cap. */
 const INNINGS_CAPS: Record<string, number> = {
   runs: 500, balls_faced: 600, fours: 150, sixes: 150,
@@ -631,9 +631,7 @@ export async function upsertInningsStats(req: Request, res: Response) {
     if (!Array.isArray(stats) || stats.length === 0) {
       return res.status(400).json({ error: 'stats array required' });
     }
-    if (stats.length > INNINGS_STATS_MAX_ROWS) {
-      return res.status(400).json({ error: `Too many rows (max ${INNINGS_STATS_MAX_ROWS})` });
-    }
+    // Oct 2026 (Dipak): no cap on the rows (each is still checked below).
     const gate = await loadScorableMatch(id, userId, deviceIdOf(req));
     if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg, ...(gate.error.code ? { code: gate.error.code } : {}) });
     // Phase 3 B05-F15: these rows feed career stats, so each is checked — any
@@ -699,13 +697,18 @@ export async function getScoringEditLog(req: Request, res: Response) {
     if (!(await canOfficiateMatch(match, userId)) && !(await isAdminUser(userId))) {
       return res.status(403).json({ error: 'Only the organiser, scorer or umpire can see the scoring log.', code: 'NOT_MATCH_OFFICIAL' });
     }
-    const { data: rows, error } = await supabase
-      .from('match_event_audit')
-      .select('id, action, changed_by, created_at, event_id, old_payload, new_payload, score_before, score_after')
-      .eq('match_id', id)
-      .order('created_at', { ascending: false })
-      .limit(500);
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    let rows: unknown[];
+    try {
+      // Oct 2026: the match's whole scoring log (it stopped at 500).
+      rows = await selectAll((f, to) => supabase
+        .from('match_event_audit')
+        .select('id, action, changed_by, created_at, event_id, old_payload, new_payload, score_before, score_after')
+        .eq('match_id', id)
+        .order('created_at', { ascending: false }).order('id', { ascending: false })
+        .range(f, to));
+    } catch (error) {
+      return res.status(500).json({ error: sanitizeError(error as never) });
+    }
     const list = (rows ?? []) as AuditRow[];
 
     const people = [...new Set(list.map((r) => r.changed_by).filter(Boolean))];
@@ -719,9 +722,10 @@ export async function getScoringEditLog(req: Request, res: Response) {
     // Cricket: an edited ball still on the match reads "ball 4.3".
     let labels = new Map<string, string>();
     if (sport === 'cricket' && list.some((r) => r.action === 'edit' && r.event_id)) {
-      const { data: events } = await supabase
+      // Oct 2026: every ball (it stopped at 2000 — really 1000).
+      const events = await selectAll((f, to) => supabase
         .from('match_events').select('id, event_type, payload').eq('match_id', id)
-        .order('created_at', { ascending: true }).limit(2000);
+        .order('created_at', { ascending: true }).order('id', { ascending: true }).range(f, to));
       labels = cricketBallLabels((events ?? []) as Array<{ id: string; event_type: string; payload?: Record<string, unknown> | null }>);
     }
 

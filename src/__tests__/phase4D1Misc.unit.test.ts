@@ -146,7 +146,8 @@ describe('notifications and schedules', () => {
 describe('stats and money', () => {
   test('SC-424 (abf8174): cricket career stats read innings only from the user\'s unvoided matches', () => {
     const sp = fnBody('controllers/users.controller.ts', 'getSportProfile');
-    expect(sp).toMatch(/\.from\('innings_stats'\)[\s\S]{0,300}\.eq\('user_id', id\)\s*\.in\('match_id', matchIds\.slice\(0, 500\)\)/);
+    // Oct 2026: every match, in chunks (it read the first 500).
+    expect(sp).toMatch(/selectAllIn\(matchIds, \(c, f, to\) => supabase\s*\.from\('innings_stats'\)[\s\S]{0,300}\.eq\('user_id', id\)\s*\.in\('match_id', c\)/);
     expect(sp).toContain("match:matches!inner(id, voided_at, sport_id, status)");
   });
   test('SC-434a (76633b5): kudos coins go through awardCoins (ledgered, idempotent), not read-add-write', () => {

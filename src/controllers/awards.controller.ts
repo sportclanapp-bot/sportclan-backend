@@ -5,6 +5,7 @@
  * each with its players, for the awards poster and a certificate per player.
  * Sport-neutral. A tournament made of events answers for every event.
  */
+import { allRows } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { isUuid } from '../utils/uuid';
@@ -47,14 +48,14 @@ export function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; ti
 }
 
 async function placingsFor(t: { id: string; format: string; status: string; sport_id: string | null; tiebreaker_rules?: unknown; settings?: unknown }): Promise<Placing[]> {
-  const { data: ms } = await supabase.from('matches')
+  const ms = await allRows(() => supabase.from('matches')
     .select('id, team_a_id, team_b_id, team_a_name, team_b_name, winner_team_id, status, round, group_label, third_place, voided_at, score_summary, overs')
-    .eq('tournament_id', t.id);
+    .eq('tournament_id', t.id));
   const matches = (ms ?? []) as M[];
   let base: Array<{ place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string }> = [];
   if (t.format === 'knockout' || t.format === 'groups_knockout') base = knockoutPlacings(matches);
   else if (t.status === 'completed') {
-    const { data: ents } = await supabase.from('tournament_entries').select('team_id, status, team:teams!team_id(id, name)').eq('tournament_id', t.id).in('status', ['approved', 'withdrawn']);
+    const ents = await allRows(() => supabase.from('tournament_entries').select('team_id, status, team:teams!team_id(id, name)').eq('tournament_id', t.id).in('status', ['approved', 'withdrawn']));
     const rows = (ents ?? []) as Array<{ team_id: string; status: string; team: { name?: string } | Array<{ name?: string }> | null }>;
     const nameOf = new Map(rows.map((r) => [r.team_id, (Array.isArray(r.team) ? r.team[0]?.name : r.team?.name) ?? 'Team']));
     const tin = tableInputs(t.settings, rows.filter((r) => r.status === 'approved').map((r) => r.team_id),

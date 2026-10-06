@@ -19,6 +19,7 @@
  * team lists, search or pickers, and their roster can't be changed through the
  * team routes.
  */
+import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { isUuid } from '../utils/uuid';
@@ -58,13 +59,14 @@ async function people(ids: string[]): Promise<Map<string, Person>> {
 
 /** The players already in a live (pending / approved) entry of this event: user → entry. */
 async function enteredPlayers(tournamentId: string): Promise<Map<string, { entry_id: string; team_id: string; status: string }>> {
-  const { data: entries } = await supabase
-    .from('tournament_entries').select('id, team_id, status').eq('tournament_id', tournamentId).in('status', ['pending', 'approved']);
+  // Oct 2026: every entry and player (an event has no size cap).
+  const entries = await allRows(() => supabase
+    .from('tournament_entries').select('id, team_id, status').eq('tournament_id', tournamentId).in('status', ['pending', 'approved']));
   const rows = (entries ?? []) as Array<{ id: string; team_id: string; status: string }>;
   const out = new Map<string, { entry_id: string; team_id: string; status: string }>();
   if (rows.length === 0) return out;
   const byTeam = new Map(rows.map((r) => [r.team_id, r]));
-  const { data: members } = await supabase.from('team_members').select('team_id, user_id').in('team_id', rows.map((r) => r.team_id));
+  const members = await selectAllIn(rows.map((r) => r.team_id), (c, f, to) => supabase.from('team_members').select('team_id, user_id').in('team_id', c).order('id').range(f, to));
   for (const m of (members ?? []) as Array<{ team_id: string; user_id: string }>) {
     const e = byTeam.get(m.team_id);
     if (e) out.set(m.user_id, { entry_id: e.id, team_id: e.team_id, status: e.status });
@@ -397,10 +399,11 @@ export async function getPairs(req: Request, res: Response) {
       const other = [...entered.entries()].find(([u, e]) => u !== userId && e.entry_id === mine.entry_id);
       if (other) { const p = (await people([other[0]])).get(other[0]); partner = { id: other[0], name: nameOf(p) }; }
     }
-    const { data: rows } = await supabase.from('tournament_pair_invites')
+    // Oct 2026: every open invite (it stopped at 500).
+    const rows = await selectAll((f, to) => supabase.from('tournament_pair_invites')
       .select('id, inviter_id, invitee_id, entry_id, status, note, created_at')
       .eq('tournament_id', t.id).in('status', ['open', 'pending'])
-      .order('created_at', { ascending: false }).limit(500);
+      .order('created_at', { ascending: false }).order('id', { ascending: false }).range(f, to));
     const invites = (rows ?? []) as Invite[];
     const ids = [...new Set(invites.flatMap((i) => [i.inviter_id, i.invitee_id]).filter((x): x is string => !!x))];
     const { data: users } = ids.length

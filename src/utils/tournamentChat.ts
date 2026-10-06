@@ -18,6 +18,7 @@
  * that makes the chat equal the audience. A missed trigger is then corrected by
  * the next one, and the sync is idempotent.
  */
+import { selectAllIn } from './selectAll';
 import { joinChat, leaveChat } from './chatMembership';
 import type { Response } from 'express';
 import { supabase } from './supabase';
@@ -39,7 +40,8 @@ export async function tournamentChatAudience(tournamentId: string): Promise<Chat
   const [tRes, coRes, entRes] = await Promise.all([
     supabase.from('tournaments').select('created_by').eq('id', tournamentId).maybeSingle(),
     supabase.from('tournament_organisers').select('user_id').in('tournament_id', ids),
-    supabase.from('tournament_entries').select('team_id').in('tournament_id', ids).eq('status', 'approved'),
+    selectAllIn(ids, (c, f, to) => supabase.from('tournament_entries').select('team_id').in('tournament_id', c).eq('status', 'approved').order('id').range(f, to))
+      .then((data) => ({ data, error: null }), (error: unknown) => ({ data: null, error })),
   ]);
   if (tRes.error || coRes.error || entRes.error || !tRes.data) return null;
   const organisers = new Set<string>();
@@ -49,8 +51,9 @@ export async function tournamentChatAudience(tournamentId: string): Promise<Chat
   const teamIds = (entRes.data ?? []).map((e) => e.team_id as string).filter(Boolean);
   const players = new Set<string>();
   if (teamIds.length > 0) {
-    const { data: members, error } = await supabase.from('team_members').select('user_id').in('team_id', teamIds);
-    if (error) return null;
+    // Oct 2026: every member of every team (no caps), read in chunks.
+    let members: Array<{ user_id: string }>;
+    try { members = await selectAllIn(teamIds, (c, f, to) => supabase.from('team_members').select('user_id').in('team_id', c).order('id').range(f, to)); } catch { return null; }
     for (const m of members ?? []) players.add(m.user_id as string);
   }
   return { organisers, players };

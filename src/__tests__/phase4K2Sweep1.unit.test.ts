@@ -111,8 +111,8 @@ describe('K2-2d · updateTournament validates max_teams and format (SC-102)', ()
     ? { data: { created_by: ME, status: 'upcoming', name: 'P4', start_date: '2026-10-05', end_date: '2026-10-07' } }
     : { count: 0 });
   it.each([
-    [{ max_teams: 1 }, 'max_teams must be between'],
-    [{ max_teams: 'lots' }, 'max_teams must be between'],
+    [{ max_teams: 1 }, 'max_teams must be a whole number, at least 2'], // Oct 2026: no upper cap
+    [{ max_teams: 'lots' }, 'max_teams must be a whole number, at least 2'],
     [{ format: 'battle_royale' }, 'Invalid format'],
   ])('K2-2d (99ffb16): edit %j → 400', async (body, words) => {
     mockNext = current;

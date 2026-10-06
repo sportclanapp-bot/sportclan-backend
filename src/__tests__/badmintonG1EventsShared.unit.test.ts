@@ -11,7 +11,7 @@ jest.mock('../utils/supabase', () => {
     const q: string[] = [`from:${t}`];
     mockLog.push(q);
     const chain: any = {};
-    for (const m of ['select', 'in', 'eq', 'is', 'limit', 'maybeSingle', 'order']) {
+    for (const m of ['select', 'in', 'eq', 'is', 'limit', 'maybeSingle', 'order', 'range']) {
       chain[m] = jest.fn((...a: unknown[]) => { q.push(`${m}:${JSON.stringify(a)}`); return chain; });
     }
     chain.then = (ok: (v: unknown) => unknown) => Promise.resolve(ok({ data: null, error: null, ...mockNext(q) }));

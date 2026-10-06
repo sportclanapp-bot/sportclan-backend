@@ -208,7 +208,6 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
   return out.filter((p, i) => i === 0 || JSON.stringify(p.order) !== JSON.stringify(out[0]!.order));
 }
 
-export const TIEBREAK_MAX = 6;
 
 /** Why a tie-break list can't be stored (null = fine). Points is implied first, so it's dropped, not refused. */
 export function tiebreakRefusal(sport: string | null | undefined, list: unknown): Refusal | null {
@@ -225,7 +224,7 @@ export function tiebreakRefusal(sport: string | null | undefined, list: unknown)
     if (seen.has(t)) return bad(`${tiebreakLabel(sport, t)} is in the list twice.`);
     seen.add(t);
   }
-  if (seen.size > TIEBREAK_MAX) return bad(`Up to ${TIEBREAK_MAX} tie-breaks.`);
+  // Oct 2026: no cap on the list — each tie-break once (above).
   return null;
 }
 

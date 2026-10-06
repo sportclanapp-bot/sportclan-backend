@@ -148,7 +148,7 @@ describe('POST /tournaments/:id/entry-check', () => {
     mockOrganiser = false;
     expect((await run(entryCheck, { body: { team_ids: [OK], as: 'organiser' } })).statusCode).toBe(403);
     expect((await run(entryCheck, { body: { team_ids: ['nope'] } })).statusCode).toBe(400);
-    expect((await run(entryCheck, { body: { team_ids: Array.from({ length: 31 }, () => OK) } })).statusCode).toBe(400);
+    expect((await run(entryCheck, { body: { team_ids: [] } })).statusCode).toBe(400); // Oct 2026: no top on how many
   });
 
   test('a player already on an entered team → ROSTER_OVERLAP naming that team; a missing team → not found', async () => {

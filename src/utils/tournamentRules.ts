@@ -109,7 +109,6 @@ export function tournamentDetailsRefusal(
 /** BUILD 1.16: the most an entry fee or prize can be (₹1 crore) — well inside the int column. */
 export const MONEY_MAX = 10_000_000;
 
-export const DAY_WINDOWS_MAX = 60;
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 const minutesOf = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
 const isRealYmd = (d: string) => {
@@ -127,7 +126,7 @@ export function dayWindowsRefusal(windows: unknown, start?: unknown, end?: unkno
   if (windows === undefined || windows === null) return null;
   const bad = (error: string): Refusal => ({ error, code: 'INVALID_DAY_WINDOWS' });
   if (!Array.isArray(windows)) return bad('day_windows must be a list of days.');
-  if (windows.length > DAY_WINDOWS_MAX) return bad(`Set at most ${DAY_WINDOWS_MAX} days' hours.`);
+  // Oct 2026: no cap on the days — each must be inside the tournament's dates (below).
   const from = present(start) && isDateLike(start) ? String(start).slice(0, 10) : null;
   const to = present(end) && isDateLike(end) ? String(end).slice(0, 10) : null;
   const seen = new Set<string>();

@@ -10,6 +10,7 @@
  * Sport-neutral: courts are the tournament's grounds (ground_names). For a
  * tournament made of events, the board covers every event on the shared courts.
  */
+import { selectAllIn } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { isUuid } from '../utils/uuid';
@@ -69,13 +70,13 @@ export function boardOf(courts: string[], matches: M[], labelOf: Map<string, str
 async function loadFamily(id: string) {
   const root = await rootTournamentId(id);
   const ids = await familyIds(root);
-  const { data: ts } = await supabase.from('tournaments').select('id, name, event_label, ground_count, ground_names, is_parent').in('id', ids);
+  const ts = await selectAllIn(ids, (c, f, to) => supabase.from('tournaments').select('id, name, event_label, ground_count, ground_names, is_parent').in('id', c).order('id').range(f, to));
   const rows = (ts ?? []) as Array<{ id: string; name: string; event_label: string | null; ground_count: number | null; ground_names: string[] | null; is_parent: boolean | null }>;
   const rootRow = rows.find((r) => r.id === root) ?? rows[0];
-  const { data: ms } = await supabase.from('matches').select(M_COLS).in('tournament_id', ids);
+  const ms = await selectAllIn(ids, (c, f, to) => supabase.from('matches').select(M_COLS).in('tournament_id', c).order('id').range(f, to));
   const matches = (ms ?? []) as M[];
   const teamIds = [...new Set(matches.filter((m) => m.status === 'scheduled' || m.status === 'live').flatMap((m) => [m.team_a_id, m.team_b_id]).filter(Boolean) as string[])];
-  const { data: mem } = teamIds.length ? await supabase.from('team_members').select('team_id, user_id').in('team_id', teamIds) : { data: [] };
+  const mem = await selectAllIn(teamIds, (c, f, to) => supabase.from('team_members').select('team_id, user_id').in('team_id', c).order('id').range(f, to));
   const playersOf = new Map<string, string[]>();
   for (const r of (mem ?? []) as Array<{ team_id: string; user_id: string }>) playersOf.set(r.team_id, [...(playersOf.get(r.team_id) ?? []), r.user_id]);
   return { root, ids, rootRow, labelOf: new Map(rows.map((r) => [r.id, r.event_label])), matches, playersOf };

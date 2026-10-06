@@ -71,6 +71,7 @@ import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamen
 import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, tableInputs } from '../utils/tournamentSettings';
 import { drawOrder } from '../utils/drawOrder';
 import { sharedScheduleFor } from '../utils/sharedCourts';
+import { fillEntryLineups, doublesRulesSport } from '../utils/entryLineups';
 import { eventLimitRefusal, eventLimitsRefusal, storedEventLimits } from '../utils/eventLimits';
 import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSeparation';
 import { swissFirstRound, swissNextRound, type SwissRound } from '../utils/swiss';
@@ -2647,6 +2648,13 @@ async function getGroupsConfig(tournamentId: string): Promise<GroupsConfig> {
 // rounds are created as TBD. Rounds are inserted final→first so a child's
 // next_match_id references an already-created parent. Returns the ids of round-1
 // matches that are byes (one real team) so the caller can auto-resolve them.
+/** A fixture's rules at the draw: its stage's; a doubles event's are 2 a side (badminton gap 7). */
+export function fixtureRulesFor(sport: string | null | undefined, tournamentRules: unknown, stage: Stage, entryKind: string | null | undefined) {
+  const rules = stageRules(sport, tournamentRules, stage);
+  if (entryKind === 'doubles' && doublesRulesSport(sport) && !(rules as { rubbers?: unknown }).rubbers) return { ...rules, players: 2 } as typeof rules;
+  return rules;
+}
+
 /** Badminton gap 4: a knockout round's stage — the final, the quarter- and semi-finals ("from the quarter-finals"), or an earlier round. */
 export function knockoutStage(round: number, roundsCount: number): Stage {
   if (round === roundsCount) return 'final';
@@ -3026,6 +3034,13 @@ async function swissAfterResult(tournamentId: string): Promise<void> {
 }
 
 export async function advanceTournamentWinner(matchId: string): Promise<void> {
+  await advanceTournamentWinnerInner(matchId);
+  // Badminton gap 7: whoever moved on is in the next fixture's line-up.
+  const { data: tm } = await supabase.from('matches').select('tournament_id').eq('id', matchId).maybeSingle();
+  if ((tm as { tournament_id?: string } | null)?.tournament_id) await fillEntryLineups((tm as { tournament_id: string }).tournament_id);
+}
+
+async function advanceTournamentWinnerInner(matchId: string): Promise<void> {
   const { data: m } = await supabase
     .from('matches')
     .select('id, tournament_id, winner_team_id, next_match_id, next_slot, group_label, round, match_no, team_a_id, team_b_id, team_a_name, team_b_name, third_place')
@@ -3506,7 +3521,7 @@ export async function generateFixtures(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, status, sport_id, format, city_id, venue, start_date, end_date, created_by, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names, match_rules, settings, is_parent, parent_id')
+      .select('id, status, sport_id, format, city_id, venue, start_date, end_date, created_by, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names, match_rules, settings, is_parent, parent_id, entry_kind')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -3517,6 +3532,8 @@ export async function generateFixtures(req: Request, res: Response) {
     if ((tournament as { is_parent?: boolean }).is_parent) {
       return res.status(409).json({ error: 'Make the draw for each event.', code: 'DRAW_PER_EVENT' });
     }
+    // Badminton gap 7: a singles / doubles event's fixtures take their players as line-ups.
+    syncAfterSuccess(res, () => fillEntryLineups(String(id)));
     // …and its tournament's status follows (the draw can make an event live).
     if ((tournament as { parent_id?: string | null }).parent_id) syncAfterSuccess(res, () => refreshParentOf(String(id)));
     // B08-F4: a draw on a cancelled (or finished) tournament wrote a fresh status
@@ -3653,7 +3670,7 @@ export async function generateFixtures(req: Request, res: Response) {
     // older apps. (BUILD 1.3's T20 / 20 is cricket's standard.)
     const tournamentRules = (tournament as { match_rules?: unknown }).match_rules ?? null;
     const stageDefaults = (stage: Stage): Record<string, unknown> => {
-      const rules = stageRules(sportSlug, tournamentRules, stage);
+      const rules = fixtureRulesFor(sportSlug, tournamentRules, stage, (tournament as { entry_kind?: string }).entry_kind);
       const legacy = legacyFromRules(sportSlug, rules);
       return { format: legacy.format, ...(sportSlug === 'cricket' ? { overs: legacy.overs } : {}), rules };
     };

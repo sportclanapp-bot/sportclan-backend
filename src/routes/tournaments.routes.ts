@@ -1,3 +1,4 @@
+import { redraw } from '../controllers/redraw.controller';
 import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
@@ -58,6 +59,7 @@ router.patch('/:id', authenticateToken, updateTournament);
 router.post('/:id/events', authenticateToken, addEvents); // badminton gap 1
 router.patch('/:id/fixtures', authenticateToken, updateFixtures);
 router.post('/:id/generate-fixtures', authenticateToken, generateFixtures);
+router.post('/:id/redraw', authenticateToken, redraw); // badminton 7.13
 router.get('/:id/analytics', authenticateToken, getTournamentAnalytics);
 router.get('/:id/standings', authenticateToken, getTournamentStandings);
 router.get('/:id/top-performers', authenticateToken, getTournamentTopPerformers);

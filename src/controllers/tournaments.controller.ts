@@ -676,35 +676,104 @@ export async function entryCheck(req: Request, res: Response) {
     const { data: tournament } = await supabase.from('tournaments').select(ENTRY_TOURNAMENT_COLS).eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     if (asOrganiser && !(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only the organiser can check teams to add.' });
-    const [{ data: roles }, { data: entered }] = await Promise.all([
+    // 7 Oct 2026: every query is made once for all the teams (about eight, most
+    // in parallel), and each team is then judged in memory by the entry's own
+    // rules in the entry's order. One team at a time took ~0.45 s per team on
+    // live (4.7 s for nine), and join by code waited for it.
+    const t = tournament as EntryTournament & { settings?: unknown; start_date?: string | null };
+    const capCounts: Array<'pending' | 'approved'> = asOrganiser ? ['approved'] : ['pending', 'approved'];
+    const category = settingsOf(t as { settings?: unknown }).category;
+    const [{ data: roles }, { data: entered }, { data: teamRows }, { count: taken }, { data: rosterRows }, { data: liveEntries }] = await Promise.all([
       supabase.from('team_members').select('team_id, role').eq('user_id', userId).in('team_id', ids),
       supabase.from('tournament_entries').select('team_id, status').eq('tournament_id', id).in('team_id', ids),
+      supabase.from('teams').select('id, sport_id, deleted_at').in('id', ids),
+      t.max_teams
+        ? supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id).in('status', capCounts)
+        : Promise.resolve({ count: 0 }),
+      supabase.from('team_members').select('team_id, user_id').in('team_id', ids),
+      supabase.from('tournament_entries').select('team_id').eq('tournament_id', id).in('status', ['pending', 'approved']),
     ]);
     const runs = new Set(((roles ?? []) as Array<{ team_id: string; role: string }>).filter((r) => r.role === 'captain' || r.role === 'vice_captain').map((r) => r.team_id));
     const live = new Map(((entered ?? []) as Array<{ team_id: string; status: string }>).map((e) => [e.team_id, e.status]));
-    const check = async (teamId: string) => {
-      if (!asOrganiser && !runs.has(teamId)) return { team_id: teamId, ok: false, code: 'NOT_CAPTAIN', reason: 'Only the team’s captain or a co-captain can enter it.' };
-      if (await isTeamDisbanded(teamId)) return { team_id: teamId, ok: false, code: 'TEAM_DISBANDED', reason: 'This team was disbanded.' };
+    const teamById = new Map(((teamRows ?? []) as Array<{ id: string; sport_id: string | null; deleted_at: string | null }>).map((r) => [r.id, r]));
+    const rosterOf = new Map<string, string[]>();
+    for (const r of (rosterRows ?? []) as Array<{ team_id: string; user_id: string | null }>) {
+      if (!r.user_id) continue;
+      const list = rosterOf.get(r.team_id) ?? [];
+      if (!list.includes(r.user_id)) list.push(r.user_id);
+      rosterOf.set(r.team_id, list);
+    }
+    const enteredTeamIds = [...new Set(((liveEntries ?? []) as Array<{ team_id: string | null }>).map((e) => e.team_id).filter((x): x is string => !!x))];
+    const allPlayers = [...new Set([...rosterOf.values()].flat())];
+    const ratingsNeeded = !!category && !!t.sport_id && (category.maxRating != null || category.minRating != null);
+    const [{ data: enteredMembers }, { data: users }, { data: profs }, { data: sport }] = await Promise.all([
+      enteredTeamIds.length && allPlayers.length
+        ? supabase.from('team_members').select('team_id, user_id').in('team_id', enteredTeamIds).in('user_id', allPlayers)
+        : Promise.resolve({ data: [] }),
+      category && allPlayers.length
+        ? supabase.from('users').select('id, name, username, gender, dob').in('id', allPlayers)
+        : Promise.resolve({ data: [] }),
+      ratingsNeeded && allPlayers.length
+        ? supabase.from('user_sport_profiles').select('user_id, rating').eq('sport_id', t.sport_id as string).in('user_id', allPlayers)
+        : Promise.resolve({ data: [] }),
+      t.sport_id && ids.some((tid) => { const r = teamById.get(tid); return !!r?.sport_id && r.sport_id !== t.sport_id; })
+        ? supabase.from('sports').select('name').eq('id', t.sport_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
+    const userById = new Map(((users ?? []) as Array<{ id: string; name?: string | null; username?: string | null; gender?: string | null; dob?: string | null }>).map((u) => [u.id, u]));
+    const ratingOf = new Map<string, number>();
+    for (const p of (profs ?? []) as Array<{ user_id: string; rating: number | null }>) if (p.rating != null) ratingOf.set(p.user_id, Number(p.rating));
+    const teamsOfPlayer = new Map<string, string[]>();
+    for (const m of (enteredMembers ?? []) as Array<{ team_id: string; user_id: string }>) {
+      teamsOfPlayer.set(m.user_id, [...(teamsOfPlayer.get(m.user_id) ?? []), m.team_id]);
+    }
+    const sportName = typeof (sport as { name?: unknown } | null)?.name === 'string' ? (sport as { name: string }).name.toLowerCase() : null;
+    const on = t.start_date && Number.isFinite(Date.parse(t.start_date)) ? new Date(t.start_date) : new Date();
+    const clashIdOf = new Map<string, string>();
+    const no = (teamId: string, code: string, reason: string) => ({ team_id: teamId, ok: false, code, reason });
+    const verdicts = ids.map((teamId) => {
+      if (!asOrganiser && !runs.has(teamId)) return no(teamId, 'NOT_CAPTAIN', 'Only the team’s captain or a co-captain can enter it.');
+      const team = teamById.get(teamId);
+      if (team?.deleted_at) return no(teamId, 'TEAM_DISBANDED', 'This team was disbanded.');
       const st = live.get(teamId);
       if (st === 'pending' || st === 'approved') {
-        const reason = st === 'approved' ? 'Already in this tournament.'
-          : asOrganiser ? 'Already entered — approve it under Entries.' : 'Already entered — waiting for the organiser.';
-        return { team_id: teamId, ok: false, code: 'ALREADY_ENTERED', reason };
+        return no(teamId, 'ALREADY_ENTERED', st === 'approved' ? 'Already in this tournament.'
+          : asOrganiser ? 'Already entered — approve it under Entries.' : 'Already entered — waiting for the organiser.');
       }
-      const refusal = await entryRefusal(tournament as EntryTournament, teamId, asOrganiser
-        ? { capCounts: ['approved'], deadline: false, overlap: true }
-        : { capCounts: ['pending', 'approved'], deadline: true, overlap: true });
-      return refusal
-        ? { team_id: teamId, ok: false, code: (refusal.body as { code?: string }).code ?? 'REFUSED', reason: String((refusal.body as { error?: string }).error ?? 'This team can’t enter.') }
-        : { team_id: teamId, ok: true, code: null, reason: null };
-    };
-    // Six teams at a time: one after another took ~6 s for nine teams on the
-    // device (each is a few queries); all thirty at once is too many queries.
-    const teams: Array<Awaited<ReturnType<typeof check>>> = new Array(ids.length);
-    let next = 0;
-    await Promise.all(Array.from({ length: Math.min(6, ids.length) }, async () => {
-      while (next < ids.length) { const i = next++; teams[i] = await check(ids[i]!); }
-    }));
+      // entryRefusal's checks, in its order.
+      if (t.status === 'completed' || t.status === 'cancelled') {
+        return no(teamId, 'TOURNAMENT_FINISHED', t.status === 'completed' ? 'This tournament is finished.' : 'This tournament was cancelled.');
+      }
+      if (!asOrganiser && t.registration_deadline && new Date(t.registration_deadline) < new Date()) return no(teamId, 'REGISTRATION_CLOSED', 'Registration closed');
+      if (t.fixtures_generated) return no(teamId, 'REGISTRATION_CLOSED', 'Registration is closed — the bracket has already been generated.');
+      if (!team) return no(teamId, 'TEAM_NOT_FOUND', 'Team not found');
+      if (t.sport_id && team.sport_id && team.sport_id !== t.sport_id) {
+        return no(teamId, 'WRONG_SPORT', sportName ? `This is a ${sportName} tournament — enter a ${sportName} team.` : 'This tournament is for another sport — enter a team of its sport.');
+      }
+      if (t.max_teams && (taken ?? 0) >= t.max_teams) return no(teamId, 'TOURNAMENT_FULL', 'Tournament is full');
+      const roster = rosterOf.get(teamId) ?? [];
+      if (category && roster.length) {
+        const players = roster.filter((u) => userById.has(u)).map((u) => {
+          const x = userById.get(u)!;
+          return { name: x.name || x.username || 'A player', gender: x.gender ?? null, dob: x.dob ?? null, rating: ratingOf.get(u) ?? null };
+        });
+        const why = categoryProblem(category, players, on);
+        if (why) return no(teamId, 'CATEGORY', why);
+      }
+      const clash = roster.flatMap((u) => teamsOfPlayer.get(u) ?? []).find((other) => other !== teamId);
+      if (clash) { clashIdOf.set(teamId, clash); return no(teamId, 'ROSTER_OVERLAP', '…'); }
+      return { team_id: teamId, ok: true, code: null, reason: null };
+    });
+    const clashIds = [...new Set(clashIdOf.values())];
+    if (clashIds.length) {
+      const { data: names } = await supabase.from('teams').select('id, name').in('id', clashIds);
+      const nameOf = new Map(((names ?? []) as Array<{ id: string; name: string | null }>).map((r) => [r.id, r.name]));
+      for (const v of verdicts) {
+        const c = clashIdOf.get(v.team_id);
+        if (c) v.reason = `A player on this team is already registered with ${nameOf.get(c) ?? 'another team'} in this tournament.`;
+      }
+    }
+    const teams = verdicts;
     return res.json({ teams });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

@@ -45,7 +45,8 @@ import { directAddTeam, entryCheck, tournamentByCode } from '../controllers/tour
 
 const T = '22222222-2222-4222-8222-222222222222';
 const id = (n: number) => `33333333-3333-4333-8333-33333333333${n}`;
-const [OK, BADMINTON, OLD, PENDING, NOT_MINE, REJECTED, GONE] = [1, 2, 3, 4, 5, 6, 7].map(id) as [string, string, string, string, string, string, string];
+const [OK, BADMINTON, OLD, PENDING, NOT_MINE, REJECTED, GONE, CLASH, NOT_FOUND] = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(id) as [string, string, string, string, string, string, string, string, string];
+const LIONS = '44444444-4444-4444-8444-444444444444';
 const has = (q: Q, s: string) => q.some((c) => c.startsWith(s));
 const arg = (q: Q, m: string) => { const c = q.find((x) => x.startsWith(`${m}:`)); return c ? JSON.parse(c.slice(m.length + 1)) : null; };
 const run = async (fn: any, req: object) => {
@@ -57,24 +58,39 @@ const run = async (fn: any, req: object) => {
 };
 
 let tournament: Record<string, unknown>;
+let enteredRoster: Record<string, string[]> = {};
 beforeEach(() => {
   mockLog = [];
   mockOrganiser = true;
   mockDisbanded.clear();
   tournament = { id: T, name: 'P3 U-19 Cup', status: 'upcoming', format: 'knockout', sport_id: 'ck', max_teams: 8, registration_deadline: null, fixtures_generated: false, created_by: 'org', entry_fee: 500, start_date: '2026-10-20', settings: { v: 1, category: { underAge: 19 } } };
   const sportOf: Record<string, string> = { [BADMINTON]: 'bd' };
-  const roster: Record<string, string[]> = { [OLD]: ['uOld'] };
+  const roster: Record<string, string[]> = { [OLD]: ['uOld'], [CLASH]: ['uRavi'] };
+  // teams already in (pending/approved): PENDING, and Lions, which has Ravi
+  enteredRoster = { [PENDING]: ['u-' + PENDING], [LIONS]: ['uRavi'] };
   mockNext = (q) => {
+    const ins = (field: string) => { const c = q.filter((x) => x.startsWith('in:')).map((x) => JSON.parse(x.slice(3))).find((a) => a[0] === field); return c ? (c[1] as string[]) : null; };
     if (q[0] === 'from:tournaments') return { data: tournament };
     if (q[0] === 'from:sports') return { data: { name: 'Cricket' } };
-    if (q[0] === 'from:teams') { const tid = arg(q, 'eq')[1]; return { data: { id: tid, sport_id: sportOf[tid] ?? 'ck' } }; }
-    if (q[0] === 'from:team_members' && arg(q, 'eq')?.[0] === 'user_id') {
-      return { data: [OK, BADMINTON, OLD, PENDING, REJECTED, GONE].map((t) => ({ team_id: t, role: t === OK ? 'vice_captain' : 'captain' })) };
+    if (q[0] === 'from:teams' && ins('id')) {
+      if (arg(q, 'select')?.[0] === 'id, name') return { data: ins('id')!.map((tid) => ({ id: tid, name: 'Lions' })) };
+      return { data: ins('id')!.filter((tid) => tid !== NOT_FOUND).map((tid) => ({ id: tid, sport_id: sportOf[tid] ?? 'ck', deleted_at: mockDisbanded.has(tid) ? '2026-10-01' : null })) };
     }
+    if (q[0] === 'from:teams') { const tid = arg(q, 'eq')[1]; return { data: { id: tid, sport_id: sportOf[tid] ?? 'ck', deleted_at: null } }; }
+    if (q[0] === 'from:team_members' && arg(q, 'eq')?.[0] === 'user_id') {
+      return { data: [OK, BADMINTON, OLD, PENDING, REJECTED, GONE, CLASH].map((t) => ({ team_id: t, role: t === OK ? 'vice_captain' : 'captain' })) };
+    }
+    if (q[0] === 'from:team_members' && ins('user_id')) {
+      // members of the entered teams, among the players asked about
+      const users = ins('user_id')!;
+      return { data: Object.entries(enteredRoster).flatMap(([tid, us]) => us.filter((u) => users.includes(u)).map((u) => ({ team_id: tid, user_id: u }))) };
+    }
+    if (q[0] === 'from:team_members' && ins('team_id')) return { data: ins('team_id')!.flatMap((tid) => (roster[tid] ?? ['u-' + tid]).map((u) => ({ team_id: tid, user_id: u }))) };
     if (q[0] === 'from:team_members') { const tid = arg(q, 'eq')?.[1]; return { data: (roster[tid] ?? ['u-' + tid]).map((u) => ({ user_id: u })) }; }
     if (q[0] === 'from:users') return { data: (arg(q, 'in')[1] as string[]).map((u) => ({ id: u, name: u === 'uOld' ? 'Arjun' : 'Kid', dob: u === 'uOld' ? '2000-01-01' : '2010-01-01', gender: 'male' })) };
     if (q[0] === 'from:tournament_entries' && arg(q, 'select')?.[0] === 'team_id, status') return { data: [{ team_id: PENDING, status: 'pending' }, { team_id: REJECTED, status: 'rejected' }] };
-    if (q[0] === 'from:tournament_entries' && has(q, 'neq:')) return { data: [] };
+    if (q[0] === 'from:tournament_entries' && has(q, 'neq:')) return { data: [] }; // directAddTeam's own overlap check
+    if (q[0] === 'from:tournament_entries' && arg(q, 'select')?.[0] === 'team_id') return { data: Object.keys(enteredRoster).map((tid) => ({ team_id: tid })) };
     if (q[0] === 'from:tournament_entries') return { data: null, count: 0 };
     return { data: [] };
   };
@@ -134,16 +150,23 @@ describe('POST /tournaments/:id/entry-check', () => {
     expect((await run(entryCheck, { body: { team_ids: Array.from({ length: 31 }, () => OK) } })).statusCode).toBe(400);
   });
 
-  test('checked six at a time, answered in the order asked', async () => {
-    let inFlight = 0; let most = 0;
-    const { isTeamDisbanded } = jest.requireMock('../utils/teamVisibility');
-    (isTeamDisbanded as jest.Mock).mockImplementation(async () => { inFlight++; most = Math.max(most, inFlight); await new Promise((r) => setTimeout(r, 5)); inFlight--; return false; });
-    const order = [OLD, OK, PENDING, REJECTED, BADMINTON, GONE, OK, OLD, BADMINTON];
-    const r = await run(entryCheck, { body: { team_ids: order } });
-    expect(r.body.teams.map((t: { team_id: string }) => t.team_id)).toEqual(order);
-    expect(most).toBeGreaterThan(1);
-    expect(most).toBeLessThanOrEqual(6);
-    (isTeamDisbanded as jest.Mock).mockImplementation(async (id: string) => mockDisbanded.has(id));
+  test('a player already on an entered team → ROSTER_OVERLAP naming that team; a missing team → not found', async () => {
+    const v = await verdicts([CLASH, NOT_FOUND], 'organiser');
+    expect(v[CLASH]).toMatchObject({ ok: false, code: 'ROSTER_OVERLAP', reason: 'A player on this team is already registered with Lions in this tournament.' });
+    expect(v[NOT_FOUND]).toMatchObject({ ok: false, code: 'TEAM_NOT_FOUND' });
+  });
+
+  test('the same few queries for 3 teams or 9, answered in the order asked (7 Oct: 4.7 s for nine on live)', async () => {
+    const count = async (team_ids: string[]) => {
+      mockLog = [];
+      const r = await run(entryCheck, { body: { team_ids, as: 'organiser' } });
+      expect(r.body.teams.map((x: { team_id: string }) => x.team_id)).toEqual(team_ids);
+      return mockLog.length;
+    };
+    const three = await count([OK, OLD, BADMINTON]);
+    const nine = await count([OLD, OK, PENDING, REJECTED, BADMINTON, GONE, CLASH, NOT_MINE, NOT_FOUND]);
+    expect(nine - three).toBeLessThanOrEqual(1); // the clash adds one query, for its team's name
+    expect(nine).toBeLessThanOrEqual(12);
   });
 
   test('it only reads — nothing is entered', async () => {

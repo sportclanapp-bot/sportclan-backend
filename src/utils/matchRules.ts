@@ -720,14 +720,18 @@ export function walkoverGoalsOf(sport: string | null | undefined, rules: MatchRu
 // the organiser left alone is the sport's standard. Copied onto every fixture
 // at the draw.
 
-export type Stage = 'group' | 'knockout' | 'final';
-export const STAGE_KEYS = ['default', 'group', 'knockout', 'final'] as const;
+// Badminton gap 4: 'qf' = from the quarter-finals (the quarter- and semi-finals),
+// so early rounds can be one game and the later ones best of 3.
+export type Stage = 'group' | 'knockout' | 'qf' | 'final';
+export const STAGE_KEYS = ['default', 'group', 'knockout', 'qf', 'final'] as const;
 export type TournamentRules = Partial<Record<(typeof STAGE_KEYS)[number], Partial<MatchRules>>>;
 
 /** The rules a fixture in `stage` plays by. */
 export function stageRules(sport: string | null | undefined, rules: unknown, stage: Stage): MatchRules {
   const t = (rules && typeof rules === 'object' && !Array.isArray(rules) ? rules : {}) as Record<string, unknown>;
-  const chain = stage === 'final' ? ['final', 'knockout', 'default'] : stage === 'knockout' ? ['knockout', 'default'] : ['group', 'default'];
+  const chain = stage === 'final' ? ['final', 'qf', 'knockout', 'default']
+    : stage === 'qf' ? ['qf', 'knockout', 'default']
+      : stage === 'knockout' ? ['knockout', 'default'] : ['group', 'default'];
   const hit = chain.map((k) => t[k]).find((r) => r && typeof r === 'object' && !Array.isArray(r));
   // BUILD 3.45: no rules for the stage → what an app without rules plays (the
   // legacy reading), not the standard: badminton's standard is 15 now, and an
@@ -739,9 +743,9 @@ export function stageRules(sport: string | null | undefined, rules: unknown, sta
 export function tournamentRulesRefusal(sport: string | null | undefined, rules: unknown): Refusal | null {
   if (rules === null || rules === undefined) return null;
   if (typeof rules !== 'object' || Array.isArray(rules)) return refuse('Tournament match rules must be an object.');
-  const labels: Record<string, string> = { default: 'Every match', group: 'Group / league matches', knockout: 'Knockout matches', final: 'The final' };
+  const labels: Record<string, string> = { default: 'Every match', group: 'Group / league matches', knockout: 'Knockout matches', qf: 'From the quarter-finals', final: 'The final' };
   for (const [k, v] of Object.entries(rules as Record<string, unknown>)) {
-    if (!(STAGE_KEYS as readonly string[]).includes(k)) return refuse(`${k} isn’t a tournament stage (default, group, knockout or final).`, k);
+    if (!(STAGE_KEYS as readonly string[]).includes(k)) return refuse(`${k} isn’t a tournament stage (default, group, knockout, qf or final).`, k);
     const bad = rulesRefusal(sport, v);
     if (bad) return { ...bad, error: `${labels[k]}: ${bad.error}` };
   }

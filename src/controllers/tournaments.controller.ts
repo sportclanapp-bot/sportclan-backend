@@ -2642,6 +2642,12 @@ async function getGroupsConfig(tournamentId: string): Promise<GroupsConfig> {
 // rounds are created as TBD. Rounds are inserted final→first so a child's
 // next_match_id references an already-created parent. Returns the ids of round-1
 // matches that are byes (one real team) so the caller can auto-resolve them.
+/** Badminton gap 4: a knockout round's stage — the final, the quarter- and semi-finals ("from the quarter-finals"), or an earlier round. */
+export function knockoutStage(round: number, roundsCount: number): Stage {
+  if (round === roundsCount) return 'final';
+  return roundsCount - round <= 2 ? 'qf' : 'knockout';
+}
+
 async function insertSingleElim(
   base: BracketBase,
   round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>,
@@ -2693,7 +2699,7 @@ async function insertSingleElim(
         // the ladder while runs/MVP (ungated) still accrued (the split bug).
         // Forward-only: existing fixtures are untouched (never rewrite settled ELO).
         is_ranked: true,
-        ...(base.stageDefaults ? base.stageDefaults(r === roundsCount ? 'final' : 'knockout') : (base.fixtureDefaults ?? {})),
+        ...(base.stageDefaults ? base.stageDefaults(knockoutStage(r, roundsCount)) : (base.fixtureDefaults ?? {})),
       });
     }
     const { data, error } = await supabase.from('matches').insert(rows).select('id, match_no');
@@ -2723,7 +2729,7 @@ async function insertSingleElim(
         next_slot: null,
         third_place: true,
         is_ranked: true,
-        ...(base.stageDefaults ? base.stageDefaults('knockout') : (base.fixtureDefaults ?? {})),
+        ...(base.stageDefaults ? base.stageDefaults('qf') : (base.fixtureDefaults ?? {})), // gap 4: played with the semi-finals
       });
       if (tpErr) throw new Error(tpErr.message);
     }

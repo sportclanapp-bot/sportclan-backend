@@ -8,6 +8,8 @@
  */
 type Row = Record<string, any>;
 type Filter = (r: Row) => boolean;
+/** A column, or an embedded table's ("match.sport_id"), as PostgREST filters them. */
+const at = (r: Row, c: string): any => (c.includes('.') ? c.split('.').reduce((o: any, k) => o?.[k], r) : r[c]);
 
 let seq = 0;
 export const fakeId = () => `00000000-0000-4000-8000-${String(++seq).padStart(12, '0')}`;
@@ -38,16 +40,16 @@ export function fakeDb(seed: Record<string, Row[]> = {}) {
       update(set: Row) { op = 'update'; payload = set; log.push({ table: name, op: 'update', arg: set }); return b; },
       upsert(rows: Row | Row[]) { op = 'insert'; payload = rows; return b; },
       delete() { op = 'delete'; log.push({ table: name, op: 'delete' }); return b; },
-      eq(c: string, v: unknown) { filters.push((r) => r[c] === v); return b; },
-      neq(c: string, v: unknown) { filters.push((r) => r[c] !== v); return b; },
-      in(c: string, vs: unknown[]) { filters.push((r) => vs.includes(r[c])); return b; },
-      is(c: string, v: null) { filters.push((r) => (r[c] ?? null) === v); return b; },
-      not(c: string, o: string, v: unknown) { filters.push((r) => (o === 'is' ? (r[c] ?? null) !== v : r[c] !== v)); return b; },
-      gt(c: string, v: any) { filters.push((r) => r[c] > v); return b; },
-      gte(c: string, v: any) { filters.push((r) => r[c] >= v); return b; },
-      lt(c: string, v: any) { filters.push((r) => r[c] < v); return b; },
-      lte(c: string, v: any) { filters.push((r) => r[c] <= v); return b; },
-      ilike(c: string, p: string) { const re = new RegExp(`^${p.replace(/%/g, '.*')}$`, 'i'); filters.push((r) => re.test(String(r[c] ?? ''))); return b; },
+      eq(c: string, v: unknown) { filters.push((r) => at(r, c) === v); return b; },
+      neq(c: string, v: unknown) { filters.push((r) => at(r, c) !== v); return b; },
+      in(c: string, vs: unknown[]) { filters.push((r) => vs.includes(at(r, c))); return b; },
+      is(c: string, v: null) { filters.push((r) => (at(r, c) ?? null) === v); return b; },
+      not(c: string, o: string, v: unknown) { filters.push((r) => (o === 'is' ? (at(r, c) ?? null) !== v : at(r, c) !== v)); return b; },
+      gt(c: string, v: any) { filters.push((r) => at(r, c) > v); return b; },
+      gte(c: string, v: any) { filters.push((r) => at(r, c) >= v); return b; },
+      lt(c: string, v: any) { filters.push((r) => at(r, c) < v); return b; },
+      lte(c: string, v: any) { filters.push((r) => at(r, c) <= v); return b; },
+      ilike(c: string, p: string) { const re = new RegExp(`^${p.replace(/%/g, '.*')}$`, 'i'); filters.push((r) => re.test(String(at(r, c) ?? ''))); return b; },
       or() { return b; },
       order(c: string, o?: { ascending?: boolean }) { order.push([c, o?.ascending !== false]); return b; },
       limit(n: number) { lim = n; return b; },

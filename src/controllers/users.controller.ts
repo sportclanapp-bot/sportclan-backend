@@ -2,6 +2,7 @@ import { orIlikeContains } from '../utils/likeSearch';
 import { selectAll } from '../utils/selectAll';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
+import { racketStats, type RacketMatch } from '../utils/racketStats';
 import { isAdminUser } from '../middleware/admin.middleware';
 import { officiatedCount } from '../utils/officiated';
 import { supabase } from '../utils/supabase';
@@ -1691,7 +1692,25 @@ export async function getSportProfile(req: Request, res: Response) {
         total_points: aggregatePointPlayers(ev)[id]?.points ?? 0,
         fouls: ev.filter((e) => e.event_type === 'foul' && e.payload?.player_id === id).length,
       };
-    } else if (['tennis', 'badminton', 'tabletennis', 'pickleball'].includes(slug) && matchIds.length > 0) {
+    } else if (['badminton', 'tabletennis', 'pickleball'].includes(slug) && matchIds.length > 0) {
+      // Badminton 7.15: from the scores — games, rally points, singles and doubles apart.
+      // (The serve columns are never written for these sports; tennis keeps them.)
+      const side = new Map<string, 'A' | 'B'>();
+      const sideSize = new Map<string, number>();
+      const ms: RacketMatch[] = [];
+      for (let i = 0; i < matchIds.length && i < 1000; i += 100) {
+        const ids = matchIds.slice(i, i + 100);
+        const [{ data: ps }, { data: rows }] = await Promise.all([
+          supabase.from('match_participants').select('match_id, user_id, team_side').in('match_id', ids),
+          supabase.from('matches').select('id, team_a_id, team_b_id, winner_team_id, score_summary').in('id', ids),
+        ]);
+        const all = (ps ?? []) as Array<{ match_id: string; user_id: string; team_side: 'A' | 'B' | null }>;
+        for (const r of all) if (r.user_id === id && r.team_side) side.set(r.match_id, r.team_side);
+        for (const r of all) if (r.team_side && side.get(r.match_id) === r.team_side) sideSize.set(r.match_id, (sideSize.get(r.match_id) ?? 0) + 1);
+        ms.push(...((rows ?? []) as RacketMatch[]));
+      }
+      sportStats = racketStats(ms, side, sideSize);
+    } else if (slug === 'tennis' && matchIds.length > 0) {
       // Serve stats from match_participants + point stats from events
       const { data: myParts } = await supabase
         .from('match_participants')

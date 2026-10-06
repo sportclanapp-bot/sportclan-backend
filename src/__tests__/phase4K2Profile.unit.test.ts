@@ -210,6 +210,9 @@ describe('K2-75 · Table Tennis’ slug is normalised for its per-sport stats (S
       return { data: [], count: 0 };
     };
     const r = await call(getSportProfile, { params: { id: ME, sportId: 'table-tennis' } });
-    expect(r.body.profile.sportStats).toMatchObject({ total_aces: 3, total_double_faults: 1, first_serve_pct: 80 });
+    // Badminton 7.15: table tennis's block is now its score-based one (games, points,
+    // singles / doubles) — the serve columns were never written for it. Still reached
+    // through the normalised slug, which is what this test guards.
+    expect(r.body.profile.sportStats).toMatchObject({ games_won: 0, points_won: 0, singles_won: 0, doubles_won: 0 });
   });
 });

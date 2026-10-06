@@ -100,3 +100,10 @@ test('more rounds than the field can play → 400 SWISS_ROUNDS', async () => {
   const r = await run(generateFixtures, {});
   expect([r.statusCode, r.body.code]).toEqual([400, 'SWISS_ROUNDS']);
 });
+// Oct 2026 (pre-release pass): a count of one reads in the singular.
+test('two players → "at most 1 Swiss round", not "1 Swiss rounds"', async () => {
+  setup(2, 2);
+  const r = await run(generateFixtures, {});
+  expect(r.body.code).toBe('SWISS_ROUNDS');
+  expect(r.body.error).toContain('2 players can play at most 1 Swiss round without');
+});

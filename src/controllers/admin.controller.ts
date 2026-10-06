@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { plural } from '../utils/plural';
 import { supabase } from '../utils/supabase';
 import { revokeSessionsNow } from '../utils/sessionRevocation';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
@@ -421,7 +422,7 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
     // exact recipient count so the caller sees the blast size before sending.
     if (confirm !== true) {
       return res.status(400).json({
-        error: `This will notify ${rows.length} users. Pass confirm:true to send.`,
+        error: `This will notify ${plural(rows.length, 'user', 'users')}. Pass confirm:true to send.`,
         recipients: rows.length,
         push_recipients: pushTo.size,
         needsConfirm: true,
@@ -435,7 +436,7 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
     // restarts mid-fan-out some recipients are missed. A real job queue
     // (BullMQ/Redis or a Supabase edge cron) is the proper long-term solution.
     res.json({ ok: true, recipients: rows.length, queued: true });
-    await logAdminAction(req.userId!, 'broadcast', 'broadcast', req.userId!, `"${title}" to ${rows.length} users`);
+    await logAdminAction(req.userId!, 'broadcast', 'broadcast', req.userId!, `"${title}" to ${plural(rows.length, 'user', 'users')}`);
 
     void (async () => {
       let pushed = 0;
@@ -453,7 +454,7 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
         const pushIds = chunk.map((r) => r.user_id).filter((id) => pushTo.has(id));
         if (pushIds.length > 0) pushed += await pushBroadcastChunk(pushIds, title, body);
       }
-      console.log(`[broadcast] delivered "${title}" to ${rows.length} users, push accepted for ${pushed} devices`);
+      console.log(`[broadcast] delivered "${title}" to ${plural(rows.length, 'user', 'users')}, push accepted for ${plural(pushed, 'device', 'devices')}`);
     })();
     return;
   } catch (err: any) {

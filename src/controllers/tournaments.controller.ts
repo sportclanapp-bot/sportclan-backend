@@ -1,4 +1,5 @@
 import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
+import { plural } from '../utils/plural';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { syncTournamentChatMembers, syncAfterSuccess, canOpenTournamentChat } from '../utils/tournamentChat';
 import { isTeamManager } from '../utils/teamAuth';
@@ -1659,7 +1660,7 @@ export async function updateTournament(req: Request, res: Response) {
         .eq('status', 'approved');
       if ((approvedCount ?? 0) > Number(body.max_teams)) {
         return res.status(400).json({
-          error: `${approvedCount} teams are already approved — max teams can’t be lower than that.`,
+          error: `${plural(approvedCount ?? 0, 'team is', 'teams are')} already approved — max teams can’t be lower than that.`,
           code: 'MAX_BELOW_APPROVED',
         });
       }
@@ -3887,7 +3888,7 @@ export async function generateFixtures(req: Request, res: Response) {
       const rounds = settingsOf(tournament as { settings?: unknown }).swiss?.rounds ?? 0;
       if (rounds < 2 || rounds > teams.length - 1) {
         await releaseFixtureClaim(id);
-        return res.status(400).json({ error: `${teams.length} players can play at most ${teams.length - 1} Swiss rounds without meeting twice; this one has ${rounds}.`, code: 'SWISS_ROUNDS' });
+        return res.status(400).json({ error: `${teams.length} players can play at most ${plural(teams.length - 1, 'Swiss round', 'Swiss rounds')} without meeting twice; this one has ${rounds}.`, code: 'SWISS_ROUNDS' });
       }
       const r1 = swissFirstRound(teams.map((t) => t.id));
       const nameOfId = new Map(teams.map((t) => [t.id, t.name]));

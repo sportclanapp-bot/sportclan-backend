@@ -18,6 +18,8 @@
  * (BUILD 1.13) A group the organiser put a team in is kept.
  */
 
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
 export type GroupsConfig = {
   numGroups?: number | null;
   groupSize?: number | null;
@@ -71,7 +73,7 @@ export function planGroups(entries: GroupEntry[], cfg: GroupsConfig = {}): Group
   if (teams < 2) return { ok: false, refusal: 'Need at least 2 approved teams to draw the groups.' };
   const named = [...new Set(entries.map((e) => normLabel(e.label)).filter((l): l is string => l !== null))].sort();
   if (cfg.numGroups != null && named.length > cfg.numGroups) {
-    return { ok: false, refusal: `Teams are placed in ${named.length} groups (${named.join(', ')}), but the tournament has ${cfg.numGroups}.` };
+    return { ok: false, refusal: `Teams are placed in ${plural(named.length, 'group', 'groups')} (${named.join(', ')}), but the tournament has ${cfg.numGroups}.` };
   }
   const count = Math.max(groupCount(teams, cfg), named.length);
   const labels = [...named];
@@ -96,7 +98,7 @@ export function planGroups(entries: GroupEntry[], cfg: GroupsConfig = {}): Group
   const over = cap != null ? groups.find((g) => g.ids.length > cap) : undefined;
   if (over) {
     if (named.length === 0) {
-      return { ok: false, refusal: `${teams} teams in ${groups.length} groups makes groups of ${over.ids.length}, more than the group size of ${cap}.` };
+      return { ok: false, refusal: `${plural(teams, 'team', 'teams')} in ${plural(groups.length, 'group', 'groups')} makes groups of ${over.ids.length}, more than the group size of ${cap}.` };
     }
     return { ok: false, refusal: `Group ${over.label} has ${over.ids.length} teams, more than the group size of ${cap}.` };
   }
@@ -106,8 +108,8 @@ export function planGroups(entries: GroupEntry[], cfg: GroupsConfig = {}): Group
     return {
       ok: false,
       refusal: cfg.numGroups != null
-        ? `Each group needs at least 2 teams, so ${groups.length} groups need at least ${groups.length * 2} teams (${teams} approved).`
-        : `${teams} teams can't make groups of at most ${cfg.groupSize ?? DEFAULT_GROUP_SIZE} with at least 2 in each.`,
+        ? `Each group needs at least 2 teams, so ${plural(groups.length, 'group', 'groups')} need${groups.length === 1 ? 's' : ''} at least ${groups.length * 2} teams (${teams} approved).`
+        : `${plural(teams, 'team', 'teams')} can't make groups of at most ${cfg.groupSize ?? DEFAULT_GROUP_SIZE} with at least 2 in each.`,
     };
   }
   return { ok: true, groups };

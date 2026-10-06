@@ -74,6 +74,7 @@ import { sharedScheduleFor } from '../utils/sharedCourts';
 import { fillEntryLineups, doublesRulesSport } from '../utils/entryLineups';
 import { eventLimitRefusal, eventLimitsRefusal, storedEventLimits } from '../utils/eventLimits';
 import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSeparation';
+import { scheduleRefusal } from '../utils/scheduleFields';
 import { swissFirstRound, swissNextRound, type SwissRound } from '../utils/swiss';
 import {
   SHARED_KEYS, EVENT_KEYS, eventsListRefusal, eventName, entryKindRefusal, eventLabelRefusal, refreshParentStatus, refreshParentOf,
@@ -1434,7 +1435,7 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules, sport_metadata, num_groups, group_size, qualifiers_per_group, max_teams, registration_deadline, parent_id, is_parent, event_label, entry_kind')
+      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules, sport_metadata, num_groups, group_size, qualifiers_per_group, max_teams, registration_deadline, parent_id, is_parent, event_label, entry_kind, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -1577,6 +1578,12 @@ export async function updateTournament(req: Request, res: Response) {
       if (req.body && key in req.body) update[key] = req.body[key];
     }
     if (typeof update.name === 'string') update.name = update.name.trim();
+    // Badminton 7.12: the schedule settings, when edited, are checked.
+    {
+      const sb = scheduleRefusal(update, tournament as Record<string, unknown>);
+      if (sb) return res.status(400).json(sb);
+      if (Array.isArray(update.ground_names)) update.ground_names = update.ground_names.length ? (update.ground_names as string[]).map((x) => x.trim()) : null;
+    }
     // Badminton gaps 1–2: what a tournament made of events, and an event, may change.
     const fam = tournament as { parent_id?: string | null; is_parent?: boolean | null; event_label?: string | null; entry_kind?: string | null };
     let parentRow: Record<string, unknown> | null = null;

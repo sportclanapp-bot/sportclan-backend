@@ -1,4 +1,5 @@
 -- 123 · no cap on events per tournament (Oct 2026, Dipak: no app-imposed caps on quantities)
+-- APPLIED by Dipak on 7 Oct 2026 (APPLY-no-caps-batch-123.sql: A, B, C all as expected).
 -- 120 bounded tournaments.event_order to 0–99 (and it is a smallint), so a
 -- tournament could hold at most 100 ordered events. The bound goes; the column
 -- becomes integer. An event's order is still never negative.

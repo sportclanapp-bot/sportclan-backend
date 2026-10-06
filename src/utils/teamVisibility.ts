@@ -17,9 +17,25 @@ export const TEAM_DISBANDED = { error: 'This team was disbanded', code: 'TEAM_DI
 
 export type TeamDisbandReason = 'captain_disband' | 'last_member_left';
 
-/** Only teams that are not disbanded. Applied to every list, search and picker. */
+/**
+ * Only teams that are not disbanded. Applied to every list, search and picker.
+ * Badminton gap 2: nor a singles / doubles entry's hidden team (kind 'entry').
+ */
 export function liveTeams<Q>(q: Q): Q {
-  return (q as unknown as { is: (c: string, v: null) => Q }).is('deleted_at', null);
+  const live = (q as unknown as { is: (c: string, v: null) => Q }).is('deleted_at', null);
+  return (live as unknown as { eq: (c: string, v: string) => Q }).eq('kind', 'club');
+}
+
+/** Badminton gap 2: the roster of a singles / doubles entry changes through the tournament, not the team routes. */
+export const ENTRY_TEAM = { error: 'This is a tournament entry, not a team. Change it from the tournament.', code: 'ENTRY_TEAM' } as const;
+
+export async function refuseEntryTeam(req: Request, res: Response, next: NextFunction) {
+  const id = req.params.id;
+  if (id) {
+    const { data } = await supabase.from('teams').select('kind').eq('id', id).maybeSingle();
+    if ((data as { kind?: string } | null)?.kind === 'entry') return res.status(409).json(ENTRY_TEAM);
+  }
+  return next();
 }
 
 /** Is this team disbanded? null when it doesn't exist. */

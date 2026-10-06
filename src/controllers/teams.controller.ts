@@ -866,10 +866,11 @@ export async function joinTeamByCode(req: Request, res: Response) {
     if (typeof join_code !== 'string' || !join_code.trim()) return res.status(400).json({ error: 'join_code is required' });
     const { data: team } = await supabase
       .from('teams')
-      .select('id, name, short_name, sport_id, join_policy, deleted_at')
+      .select('id, name, short_name, sport_id, join_policy, deleted_at, kind')
       .eq('join_code', join_code.trim().toUpperCase())
       .maybeSingle();
-    if (!team) return res.status(404).json({ error: 'Invalid team code' });
+    // Badminton gap 2: a singles / doubles entry's hidden team can't be joined.
+    if (!team || (team as { kind?: string }).kind === 'entry') return res.status(404).json({ error: 'Invalid team code' });
     // Hard-delete list #6: a disbanded team's invite code joins nobody.
     if ((team as { deleted_at?: string | null }).deleted_at) return res.status(410).json(TEAM_DISBANDED);
 

@@ -74,7 +74,7 @@ import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSepar
 import { swissFirstRound, swissNextRound, type SwissRound } from '../utils/swiss';
 import {
   SHARED_KEYS, EVENT_KEYS, eventsListRefusal, eventName, entryKindRefusal, eventLabelRefusal, refreshParentStatus, refreshParentOf,
-  clientHas, eventsOf, ENTER_AN_EVENT, familyIds, sameSharedValue, rootTournamentId,
+  clientHas, eventsOf, ENTER_AN_EVENT, ENTER_AS_PLAYERS, familyIds, sameSharedValue, rootTournamentId,
 } from '../utils/tournamentEvents';
 
 function generateEntryCode(): string {
@@ -777,8 +777,14 @@ async function entryRefusal(
   if (t.fixtures_generated) {
     return { status: 409, body: { error: 'Registration is closed — the bracket has already been generated.', code: 'REGISTRATION_CLOSED' } };
   }
-  const { data: team } = await supabase.from('teams').select('id, sport_id').eq('id', teamId).maybeSingle();
+  const { data: team } = await supabase.from('teams').select('id, sport_id, kind').eq('id', teamId).maybeSingle();
   if (!team) return { status: 404, body: { error: 'Team not found', code: 'TEAM_NOT_FOUND' } };
+  // Badminton gap 2: a singles or doubles event is entered by players (their
+  // entry teams, made by the server), never by a club team.
+  const playerEvent = t.entry_kind === 'singles' || t.entry_kind === 'doubles';
+  if (playerEvent !== ((team as { kind?: string }).kind === 'entry')) {
+    return { status: 409, body: playerEvent ? ENTER_AS_PLAYERS : { error: 'This tournament is entered by teams.', code: 'ENTER_AS_TEAM' } };
+  }
   if (t.sport_id && team.sport_id && team.sport_id !== t.sport_id) {
     const { data: sport } = await supabase.from('sports').select('name').eq('id', t.sport_id).maybeSingle();
     const s = typeof sport?.name === 'string' ? sport.name.toLowerCase() : null;
@@ -858,13 +864,14 @@ type EntryOptionsTournament = EntryTournament & { name: string; format: string; 
  * so a captain of 127 teams was offered only the first page's.
  */
 async function myEntryOptions(tour: EntryOptionsTournament, userId: string) {
-  type Team = { id: string; name: string; sport_id: string | null; deleted_at: string | null };
+  type Team = { id: string; name: string; sport_id: string | null; deleted_at: string | null; kind?: string | null };
   const memberships = await selectAll<{ team_id: string; role: string; team: Team | Team[] | null }>((from, to) => supabase
-    .from('team_members').select('team_id, role, team:teams!team_id(id, name, sport_id, deleted_at)')
+    .from('team_members').select('team_id, role, team:teams!team_id(id, name, sport_id, deleted_at, kind)')
     .eq('user_id', userId).order('team_id', { ascending: true }).range(from, to));
   const live = memberships
     .map((m) => ({ role: m.role, team: Array.isArray(m.team) ? m.team[0] : m.team }))
-    .filter((m): m is { role: string; team: Team } => !!m.team && !m.team.deleted_at);
+    // Badminton gap 2: a singles / doubles entry's hidden team is no team to enter with.
+    .filter((m): m is { role: string; team: Team } => !!m.team && !m.team.deleted_at && m.team.kind !== 'entry');
   const runs = live.filter((m) => m.role === 'captain' || m.role === 'vice_captain');
   const ofSportAll = runs.filter((m) => !tour.sport_id || m.team.sport_id === tour.sport_id);
   // Every team, not the first 100 (Oct 2026 sweep): checked 100 at a time so
@@ -879,6 +886,8 @@ async function myEntryOptions(tour: EntryOptionsTournament, userId: string) {
     tournament: {
       id: tour.id, name: tour.name, sport_id: tour.sport_id, status: tour.status, format: tour.format,
       entry_fee: tour.entry_fee, start_date: tour.start_date, category: settingsOf(tour as { settings?: unknown }).category ?? null,
+      // Badminton gaps 1–2: who enters, and the event's place.
+      entry_kind: tour.entry_kind ?? 'team', parent_id: tour.parent_id ?? null,
     },
     teams: ofSport.map((m) => {
       const v = verdictOf.get(m.team.id);
@@ -995,6 +1004,7 @@ async function entryVerdicts(tournament: EntryTournament, ids: string[], asOrgan
   const no = (teamId: string, code: string, reason: string) => ({ team_id: teamId, ok: false, code, reason });
   const verdicts = ids.map((teamId) => {
     if (t.is_parent) return no(teamId, ENTER_AN_EVENT.code, ENTER_AN_EVENT.error);
+    if (t.entry_kind === 'singles' || t.entry_kind === 'doubles') return no(teamId, ENTER_AS_PLAYERS.code, ENTER_AS_PLAYERS.error);
     if (!asOrganiser && !runs.has(teamId)) return no(teamId, 'NOT_CAPTAIN', 'Only the team’s captain or a co-captain can enter it.');
     const team = teamById.get(teamId);
     if (team?.deleted_at) return no(teamId, 'TEAM_DISBANDED', 'This team was disbanded.');

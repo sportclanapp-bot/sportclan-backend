@@ -49,7 +49,7 @@ describe('it goes out wherever team data does', () => {
     expect(code('controllers/tournaments.controller.ts')).toMatch(/team:team_id \(id, name, short_name, logo_url, sport_id\)/);
     expect(code('controllers/tournaments.controller.ts')).not.toMatch(/team:teams!team_id\(id, name\)/);
     expect(code('controllers/tournamentHub.controller.ts')).toMatch(/team:teams\(id, name, short_name, logo_url\)/);
-    expect(code('controllers/teams.controller.ts')).toMatch(/select\('id, name, short_name, sport_id, join_policy, deleted_at'\)/);
+    expect(code('controllers/teams.controller.ts')).toMatch(/select\('id, name, short_name, sport_id, join_policy, deleted_at(, kind)?'\)/);
   });
   test('match rows get team_a_short_name / team_b_short_name', () => {
     expect(code('controllers/matches.controller.ts')).toMatch(/import \{ attachTeamNames \} from '\.\.\/utils\/teamNames';/);

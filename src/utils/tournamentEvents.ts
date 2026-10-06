@@ -236,3 +236,9 @@ export async function rootTournamentId(tournamentId: string): Promise<string> {
     return tournamentId;
   }
 }
+
+/** A team trying to enter a singles or doubles event (an older app). */
+export const ENTER_AS_PLAYERS: Refusal = {
+  error: 'This event is entered by players, not teams. Update SportClan to enter it.',
+  code: 'ENTER_AS_PLAYERS',
+};

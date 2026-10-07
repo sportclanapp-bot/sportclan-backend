@@ -27,6 +27,8 @@ export interface SideOutOpts {
   /** Games in the match (best of). */
   maxGames: number;
   doubles: boolean;
+  /** Stage 10 · TT5: every game is played; the match goes to more games won. */
+  allGames?: boolean;
 }
 
 export interface SideOutState {
@@ -78,7 +80,7 @@ function addPoint(s: SideOutState, side: PbSide, opts: SideOutOpts): SideOutStat
   const games = [...s.games, cur];
   const won = { ...s.won, [w]: s.won[w] + 1 };
   const need = Math.floor(opts.maxGames / 2) + 1;
-  if (won[w] >= need) return { ...s, cur: { A: 0, B: 0 }, games, won, winner: w };
+  if (opts.allGames ? won.A + won.B >= opts.maxGames : won[w] >= need) return { ...s, cur: { A: 0, B: 0 }, games, won, winner: won.A > won.B ? 'A' : 'B' };
   const game = s.game + 1;
   return { cur: { A: 0, B: 0 }, games, won, game, server: firstServer(game), serverNum: opts.doubles ? 2 : 1, winner: null };
 }

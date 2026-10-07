@@ -20,7 +20,7 @@ import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber } from '../utils/cricketRules';
-import { DOUBLES_PLAYERS, carromOptsOf, doublesLineupProblem, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
+import { DOUBLES_PLAYERS, carromOptsOf, doublesLineupProblem, gamesWinner, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
 import { splitTie, tieNeed, unitsOf, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
@@ -788,6 +788,9 @@ export function bestOfState(
     || (summary?.A?.sets?.length ?? 0) > 0 || (summary?.B?.sets?.length ?? 0) > 0
     || Number(summary?.A?.points ?? 0) + Number(summary?.B?.points ?? 0) > 0
     || Number(summary?.A?.games ?? 0) + Number(summary?.B?.games ?? 0) > 0;
+  // Stage 10 · TT5: every game played — decided once all are played.
+  const r = rulesOf(slug, m) as MatchRules;
+  if (r.allGames) return { needed: r.bestOf ?? needed, decided: gamesWinner(a, b, r.bestOf ?? 3, true) != null, scored, leader: a > b ? 'A' : b > a ? 'B' : null };
   return { needed, decided: Math.max(a, b) >= needed, scored, leader: a > b ? 'A' : b > a ? 'B' : null };
 }
 
@@ -812,7 +815,7 @@ function setWon(
  * any stray point after the decider was scored into it.
  */
 export function rollupSets(
-  cfg: { target: number; cap?: number; maxSets: number; finalTarget?: number; winBy2: boolean },
+  cfg: { target: number; cap?: number; maxSets: number; finalTarget?: number; winBy2: boolean; allGames?: boolean },
   events: { event_type: string; payload: any }[],
   sideOf: (p: any) => 'A' | 'B',
 ): { setsA: number; setsB: number; setScoresA: number[]; setScoresB: number[]; curA: number; curB: number; decided: 'A' | 'B' | null } {
@@ -833,8 +836,8 @@ export function rollupSets(
       setScoresA.push(curA); setScoresB.push(curB);
       if (w === 'A') setsA += 1; else setsB += 1;
       curA = 0; curB = 0; period += 1;
-      if (setsA >= need) decided = 'A';
-      else if (setsB >= need) decided = 'B';
+      void need;
+      decided = gamesWinner(setsA, setsB, cfg.maxSets, cfg.allGames); // Stage 10 · TT5: or every game played
     }
   }
   return { setsA, setsB, setScoresA, setScoresB, curA, curB, decided };
@@ -866,7 +869,7 @@ export function rollupTieSpec(
     }
     const cfg = setConfigOf(rr);
     if (slug === 'pickleball' && rr.scoring === 'sideout') {
-      const sx = sideOutReplay(evs, { target: cfg.target, winBy2: cfg.winBy2, maxGames: cfg.maxSets, doubles: rr.players === DOUBLES_PLAYERS });
+      const sx = sideOutReplay(evs, { target: cfg.target, winBy2: cfg.winBy2, maxGames: cfg.maxSets, doubles: rr.players === DOUBLES_PLAYERS, ...(cfg.allGames ? { allGames: true } : {}) });
       return { winner: sx.winner, sets: { A: sx.games.map((g) => g.A), B: sx.games.map((g) => g.B) }, games: sx.won, points: sx.cur };
     }
     const x = rollupSets(cfg, evs, sideOf);
@@ -896,7 +899,7 @@ export function rollupTieSpec(
  * `setScores` are every game played, in order, across the rubbers.
  */
 export function rollupTie(
-  cfg: { target: number; cap?: number; maxSets: number; finalTarget?: number; winBy2: boolean },
+  cfg: { target: number; cap?: number; maxSets: number; finalTarget?: number; winBy2: boolean; allGames?: boolean },
   rubbers: number,
   events: { event_type: string; payload: any }[],
   sideOf: (p: any) => 'A' | 'B',
@@ -918,7 +921,8 @@ export function rollupTie(
     setScoresA.push(curA); setScoresB.push(curB);
     if (w === 'A') gamesA += 1; else gamesB += 1;
     curA = 0; curB = 0; period += 1;
-    const rw = gamesA >= needGames ? 'A' : gamesB >= needGames ? 'B' : null;
+    void needGames;
+    const rw = gamesWinner(gamesA, gamesB, cfg.maxSets, cfg.allGames); // Stage 10 · TT5
     if (!rw) continue;
     results.push({ A: gamesA, B: gamesB, winner: rw });
     if (rw === 'A') rubbersA += 1; else rubbersB += 1;
@@ -1410,7 +1414,7 @@ export async function recomputeSummary(
     if (slug === 'pickleball' && rules.scoring === 'sideout') {
       // BUILD 3.58: side-out scoring — only the server scores, so the serve is
       // replayed (the shared pickleballCore, as the app scores it).
-      const s = sideOutReplay(events, { target: cfg.target, winBy2: cfg.winBy2, maxGames: cfg.maxSets, doubles: rules.players === DOUBLES_PLAYERS });
+      const s = sideOutReplay(events, { target: cfg.target, winBy2: cfg.winBy2, maxGames: cfg.maxSets, doubles: rules.players === DOUBLES_PLAYERS, ...(cfg.allGames ? { allGames: true } : {}) });
       A.score = s.won.A; B.score = s.won.B;
       A.sets = s.games.map((g) => g.A); B.sets = s.games.map((g) => g.B);
       A.points = s.cur.A; B.points = s.cur.B;

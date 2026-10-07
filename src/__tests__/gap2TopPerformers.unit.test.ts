@@ -78,10 +78,11 @@ test('a cricket tournament: topWins as before, performers in the app’s shape, 
   expect(JSON.stringify(r.body)).not.toContain('Gone');
   expect(r.body.leaders.runs[0].value).toBe(50);
 });
-test('another sport: topWins, and no player boards', async () => {
+test('another sport: topWins, no cricket leaders — and (Stage 8 · F6) its own boards', async () => {
   mockSlug = 'football';
   const r = await call();
-  expect(r.body).toEqual({ topWins: [{ teamId: 'tA', teamName: 'Sunrisers', wins: 2 }], performers: [], leaders: null });
+  expect(r.body).toMatchObject({ topWins: [{ teamId: 'tA', teamName: 'Sunrisers', wins: 2 }], performers: [], leaders: null });
+  expect(r.body.boards.map((b: { title: string }) => b.title)).toEqual(['Top scorers', 'Assists', 'Cards', 'Clean sheets']);
 });
 test('an unknown tournament is 404', async () => {
   db.tournaments = [];

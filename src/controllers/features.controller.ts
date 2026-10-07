@@ -1,4 +1,5 @@
 import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
+import { sportBoards, type SportLeaderMatch, type Board } from '../utils/sportLeaders';
 import { hideTestFor, excludeTest, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -18,7 +19,7 @@ import { deletedIdSet } from '../utils/activeUser';
 import { targetUserHidden } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
 import { getSport, normSportSlug } from '../utils/sportCache';
-import { LEADER_STATS, leaderUserIds, tournamentLeaders, type LeaderMatch, type StatsRow } from '../utils/tournamentLeaders';
+import { LEADER_STATS, leaderUserIds, tournamentLeaders, type LeaderMatch, type StatsRow, type LeaderStat } from '../utils/tournamentLeaders';
 
 // ────────────────────────────────────────────────────────────────────────────
 // TOURNAMENT STANDINGS — points table with 3/1/0 scoring + NRR for cricket
@@ -211,6 +212,15 @@ async function leaderAccounts(ids: string[]): Promise<Record<string, { name: str
     .map((u) => [u.id, { name: u.name, deleted: !!u.deleted_at }]));
 }
 
+/** Stage 8 · F6: cricket's boards in the generic shape. */
+const CRICKET_BOARDS: Array<[LeaderStat, string, string, string]> = [
+  ['runs', 'Most runs', 'run', 'runs'], ['wickets', 'Most wickets', 'wicket', 'wickets'], ['best_bowling', 'Best bowling', 'wicket', 'wickets'],
+  ['sixes', 'Most sixes', 'six', 'sixes'], ['catches', 'Most catches', 'catch', 'catches'], ['player_of_tournament', 'Player of the tournament', 'pt', 'pts'],
+];
+export function cricketBoards(leaders: Record<LeaderStat, Array<{ user_id: string | null; name: string; team_id: string | null; team_name: string | null; value: number; detail: string }>>): Board[] {
+  return CRICKET_BOARDS.map(([stat, title, one, many]) => ({ stat, title, one, many, kind: 'player' as const, rows: (leaders[stat] ?? []).map((r) => ({ user_id: r.user_id, team_id: r.team_id, name: r.name, team_name: r.team_name, value: r.value, detail: r.detail })) }));
+}
+
 export async function getTournamentTopPerformers(req: Request, res: Response) {
   try {
     const { id } = req.params;
@@ -227,14 +237,15 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
     // Cricket gap 2: and each one's per-player rollup (only that part of the summary).
     const matches = await allRows(() => supabase
       .from('matches')
-      .select(cricket ? 'id, team_a_id, team_b_id, winner_team_id, status, players:score_summary->players' : 'id, team_a_id, team_b_id, winner_team_id')
+      // Stage 8 · F6: every sport's boards read the score too (and its rollup).
+      .select(cricket ? 'id, team_a_id, team_b_id, winner_team_id, status, players:score_summary->players' : 'id, team_a_id, team_b_id, winner_team_id, status, result_type, score_summary')
       .eq('tournament_id', id)
       // BUILD 1.4: a walkover (abandoned with a winner) is a win here too.
       .in('status', ['completed', 'abandoned'])
       // SC-428: missed by the SC-424 sweep — a voided fixture was still counting
       // towards a team's tournament win tally.
       .is('voided_at', null)); // Oct 2026: every row
-    const played = (matches ?? []) as unknown as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; players?: LeaderMatch['players'] }>;
+    const played = (matches ?? []) as unknown as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; players?: LeaderMatch['players']; result_type?: string | null; score_summary?: SportLeaderMatch['score_summary'] }>;
 
     // Count wins per team
     const winCount = new Map<string, number>();
@@ -260,7 +271,13 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
     // Cricket gap 2 (5 Oct 2026): the leaderboards. `topWins` stays for older
     // apps; `performers` is the flat list the app's type always described (the
     // endpoint never sent it); `leaders` is the same rows by stat.
-    if (!cricket) return res.json({ topWins, performers: [], leaders: null });
+    if (!cricket) {
+      // Stage 8 · F6: each sport's own boards (older apps read topWins only).
+      const sm = played.map((m) => ({ id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, winner_team_id: m.winner_team_id, result_type: m.result_type ?? null, score_summary: m.score_summary ?? null }));
+      const ids = [...new Set(sm.flatMap((m) => Object.keys(m.score_summary?.players ?? {})).filter((x) => !x.startsWith('guest:')))];
+      const boards = sportBoards(slug, sm, Object.fromEntries(teamMap) as Record<string, string>, await leaderAccounts(ids));
+      return res.json({ topWins, performers: [], leaders: null, boards });
+    }
     const older = played.filter((m) => !m.players || Object.keys(m.players).length === 0).map((m) => m.id);
     let statsRows: StatsRow[] = [];
     if (older.length) {
@@ -279,7 +296,8 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
       await leaderAccounts(leaderUserIds(leaderMatches, statsRows)),
     );
     const performers = LEADER_STATS.flatMap((s) => leaders[s]);
-    return res.json({ topWins, performers, leaders });
+    // Stage 8 · F6: the same boards in the generic shape every sport uses.
+    return res.json({ topWins, performers, leaders, boards: cricketBoards(leaders) });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

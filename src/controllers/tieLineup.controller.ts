@@ -18,6 +18,10 @@
  * "one singles at most" rule is only for the free-choice matches. The fixture's
  * first-named team takes A, B, C; the other X, Y, Z. The Corbillon and the
  * Swaythling are position orders (their line-ups couldn't be saved before).
+ *
+ * Stage 10 · TT1b: who names A, B, C is the toss (ITTF: the winner chooses) or
+ * the organiser's pick, recorded before either order (matches.tie_toss); with
+ * none, the first-named side names A, B, C as before. PUT /matches/:id/tie-toss.
  */
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -26,7 +30,7 @@ import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { isTeamManager } from '../utils/teamAuth';
 import { getSport } from '../utils/sportCache';
 import { rubberPlayers, tieSpecOf, type MatchRules } from '../utils/matchRules';
-import { expandPositions, positionsOf, positionsProblem, type TieSpec } from '../utils/tieCore';
+import { expandPositions, letterSideOf, positionsOf, positionsProblem, tieTossOf, tieTossProblem, tieTossText, type TieSpec, type TieToss } from '../utils/tieCore';
 import { ageOn } from '../utils/tournamentSettings';
 import { notifyUsers } from '../utils/notify';
 
@@ -43,6 +47,7 @@ export function tieLineupProblem(order: string[], lineup: unknown, members: Set<
 }
 
 /** Stage 9 · T3 · the same for any tie: each match by its key, named by its label. */
+/** `side` is the letters this side names ('A' = A, B, C; 'B' = X, Y, Z — see letterSideOf). */
 export function tieSpecLineupProblem(spec: TieSpec, lineup: unknown, members: Set<string>, side: Side = 'A'): string | null {
   if (!lineup || typeof lineup !== 'object' || Array.isArray(lineup)) return 'Name who plays each rubber.';
   const l = lineup as Record<string, unknown>;
@@ -71,14 +76,16 @@ export function tieSpecLineupProblem(spec: TieSpec, lineup: unknown, members: Se
 
 async function load(id: string) {
   const { data: m } = await supabase.from('matches')
-    .select('id, sport_id, tournament_id, status, rules, team_a_id, team_b_id, team_a_name, team_b_name, umpire_id')
+    .select('id, sport_id, tournament_id, status, rules, team_a_id, team_b_id, team_a_name, team_b_name, umpire_id, created_by, tie_toss')
     .eq('id', id).maybeSingle();
   if (!m) return null;
-  const row = m as { id: string; sport_id: string; tournament_id: string | null; status: string; rules: Partial<MatchRules> | null; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null; umpire_id: string | null };
+  const row = m as { id: string; sport_id: string; tournament_id: string | null; status: string; rules: Partial<MatchRules> | null; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null; umpire_id: string | null; created_by: string | null; tie_toss: unknown };
   const slug = (await getSport(row.sport_id))?.slug ?? null;
   const spec = tieSpecOf(slug, row.rules);
-  return { m: row, spec, order: spec ? spec.rubbers.map((r) => r.key) : null };
+  return { m: row, spec, order: spec ? spec.rubbers.map((r) => r.key) : null, toss: tieTossOf(row.tie_toss) };
 }
+
+const hasPositions = (spec: TieSpec) => spec.rubbers.some((r) => r.a && r.b);
 
 async function lineupsOf(matchId: string): Promise<Record<Side, Lineup | null>> {
   const { data } = await supabase.from('match_participants').select('user_id, team_side, role').eq('match_id', matchId);
@@ -104,9 +111,10 @@ export async function getTieLineup(req: Request, res: Response) {
     if (!isUuid(id)) return res.status(404).json({ error: 'Match not found' });
     const got = await load(id);
     if (!got) return res.status(404).json({ error: 'Match not found' });
-    const { m, order, spec } = got;
+    const { m, order, spec, toss } = got;
     if (!order || !spec) return res.status(400).json({ error: 'This match isn’t a team tie with an order.', code: 'NOT_A_TIE' });
     const official = m.umpire_id === userId || (!!m.tournament_id && (await isTournamentOrganiser(m.tournament_id, userId)));
+    const tossBy = await canRecordToss(m, userId);
     const can: Record<Side, boolean> = {
       A: official || (await isTeamManager(m.team_a_id, userId)),
       B: official || (await isTeamManager(m.team_b_id, userId)),
@@ -136,7 +144,15 @@ export async function getTieLineup(req: Request, res: Response) {
       rubbers: spec.rubbers,
       repeat_players: spec.repeatPlayers === true,
       // Stage 10 · TT1: the positions each side names (A, B, C… / X, Y, Z…), empty without.
-      positions: { A: positionsOf(spec, 'A'), B: positionsOf(spec, 'B') },
+      // TT1b: by the toss — the side that names X, Y, Z gets the X positions.
+      positions: { A: positionsOf(spec, letterSideOf('A', toss)), B: positionsOf(spec, letterSideOf('B', toss)) },
+      letters: { A: letterSideOf('A', toss), B: letterSideOf('B', toss) },
+      toss: hasPositions(spec) ? {
+        recorded: toss,
+        text: tieTossText(spec, toss, { A: m.team_a_name ?? 'Team A', B: m.team_b_name ?? 'Team B' }),
+        // Before either order, and before the tie starts.
+        can_record: tossBy && m.status === 'scheduled' && !ups.A && !ups.B,
+      } : null,
       locked: m.status !== 'scheduled',
       sides: {
         A: { name: m.team_a_name, submitted: inA, can_set: can.A && m.status === 'scheduled', lineup: seeA ? named(ups.A) : null, members: members.A },
@@ -159,8 +175,9 @@ export async function setTieLineup(req: Request, res: Response) {
     if (side !== 'A' && side !== 'B') return res.status(400).json({ error: 'Say which side this order is for.', code: 'BAD_SIDE' });
     const got = await load(id);
     if (!got) return res.status(404).json({ error: 'Match not found' });
-    const { m, order, spec } = got;
+    const { m, order, spec, toss } = got;
     if (!order || !spec) return res.status(400).json({ error: 'This match isn’t a team tie with an order.', code: 'NOT_A_TIE' });
+    const letters = letterSideOf(side, toss); // TT1b: A, B, C or X, Y, Z, by the toss
     const teamId = side === 'A' ? m.team_a_id : m.team_b_id;
     if (!teamId) return res.status(409).json({ error: 'This side isn’t known yet.', code: 'SIDES_UNKNOWN' });
     const official = m.umpire_id === userId || (!!m.tournament_id && (await isTournamentOrganiser(m.tournament_id, userId)));
@@ -171,9 +188,9 @@ export async function setTieLineup(req: Request, res: Response) {
     // Stage 10 · TT1: positions named once fill their matches; the free choices come as before.
     const posIn = req.body?.positions;
     const lineup: Lineup = posIn && typeof posIn === 'object' && !Array.isArray(posIn)
-      ? expandPositions(spec, side, Object.fromEntries(Object.entries(posIn as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>, (req.body?.lineup ?? {}) as Lineup)
+      ? expandPositions(spec, letters, Object.fromEntries(Object.entries(posIn as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>, (req.body?.lineup ?? {}) as Lineup)
       : req.body?.lineup as Lineup;
-    const bad = tieSpecLineupProblem(spec, lineup, members, side);
+    const bad = tieSpecLineupProblem(spec, lineup, members, letters);
     if (bad) return res.status(400).json({ error: bad, code: 'BAD_LINEUP' });
     // Stage 9 · T3: a match for pairs "90+" — the pair's combined age today.
     const aged = spec.rubbers.filter((r) => r.pairAgeMin != null);
@@ -209,6 +226,42 @@ export async function setTieLineup(req: Request, res: Response) {
       } catch { /* best-effort */ }
     }
     return res.json({ ok: true, both_in: otherWasIn });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/** The umpire, the organiser, or (a friendly) whoever made the match. */
+async function canRecordToss(m: { umpire_id: string | null; tournament_id: string | null; created_by: string | null }, userId: string): Promise<boolean> {
+  if (m.umpire_id === userId) return true;
+  if (m.tournament_id) return isTournamentOrganiser(m.tournament_id, userId);
+  return m.created_by === userId;
+}
+
+// PUT /matches/:id/tie-toss  { how: 'toss', winner: 'A'|'B', abc: 'A'|'B' } | { how: 'pick', abc: 'A'|'B' }
+// Stage 10 · TT1b: who names A, B, C — before either side gives its order.
+export async function setTieToss(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const id = String(req.params.id);
+    if (!isUuid(id)) return res.status(404).json({ error: 'Match not found' });
+    const got = await load(id);
+    if (!got) return res.status(404).json({ error: 'Match not found' });
+    const { m, spec } = got;
+    if (!spec) return res.status(400).json({ error: 'This match isn’t a team tie with an order.', code: 'NOT_A_TIE' });
+    if (!hasPositions(spec)) return res.status(400).json({ error: 'This tie’s matches don’t go by positions (A, B, C v X, Y, Z), so there’s nothing to toss for.', code: 'NO_POSITIONS' });
+    if (!(await canRecordToss(m, userId))) return res.status(403).json({ error: 'Only the umpire or the organiser records the toss.' });
+    if (m.status !== 'scheduled') return res.status(409).json({ error: 'The tie has started, so who names A, B, C is fixed.', code: 'LINEUP_LOCKED' });
+    const bad = tieTossProblem(req.body);
+    if (bad) return res.status(400).json({ error: bad, code: 'BAD_TOSS' });
+    const ups = await lineupsOf(id);
+    if (ups.A || ups.B) return res.status(409).json({ error: 'A side has already given its order. The toss comes before the orders.', code: 'LINEUP_GIVEN' });
+    const b = req.body as { how: 'toss' | 'pick'; abc: Side; winner?: Side };
+    const toss: TieToss & { by: string } = { abc: b.abc, how: b.how, ...(b.how === 'toss' ? { winner: b.winner } : {}), at: new Date().toISOString(), by: userId };
+    const { error } = await supabase.from('matches').update({ tie_toss: toss }).eq('id', id).eq('status', 'scheduled');
+    if (error) return res.status(500).json({ error: 'The toss wasn’t saved. Try again.' });
+    return res.json({ ok: true, toss, text: tieTossText(spec, toss, { A: m.team_a_name ?? 'Team A', B: m.team_b_name ?? 'Team B' }) });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

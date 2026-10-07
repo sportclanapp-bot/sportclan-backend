@@ -137,6 +137,61 @@ export function positionsProblem(spec: TieSpec, side: TieSide, lineup: Record<st
   return null;
 }
 
+/**
+ * Stage 10 · TT1b · who names A, B, C: as in ITTF team events, a toss (the
+ * winner chooses) or the organiser's pick, recorded before the line-ups.
+ * Stored on matches.tie_toss; none = the fixture's first-named side (as before).
+ * `abc` is the fixture side ('A' first-named, 'B' second) that names A, B, C.
+ */
+export type TieToss = { abc: TieSide; how: 'toss' | 'pick'; winner?: TieSide | null; at?: string | null };
+
+/** A stored toss, or null when there's none (or it isn't one). */
+export function tieTossOf(x: unknown): TieToss | null {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return null;
+  const t = x as Record<string, unknown>;
+  if (t.abc !== 'A' && t.abc !== 'B') return null;
+  if (t.how !== 'toss' && t.how !== 'pick') return null;
+  const winner = t.winner === 'A' || t.winner === 'B' ? t.winner : null;
+  if (t.how === 'toss' && !winner) return null;
+  return { abc: t.abc, how: t.how, ...(t.how === 'toss' ? { winner } : {}), at: typeof t.at === 'string' ? t.at : null };
+}
+
+/** What's wrong with a toss sent to be recorded, or null. */
+export function tieTossProblem(x: unknown): string | null {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return 'Say who names A, B, C.';
+  const t = x as Record<string, unknown>;
+  if (t.how !== 'toss' && t.how !== 'pick') return 'A toss, or the organiser’s pick.';
+  if (t.abc !== 'A' && t.abc !== 'B') return 'Say which side names A, B, C.';
+  if (t.how === 'toss' && t.winner !== 'A' && t.winner !== 'B') return 'Say who won the toss.';
+  return null;
+}
+
+/** The fixture side that names A, B, C (the first-named one without a toss). */
+export const abcSideOf = (toss: TieToss | null | undefined): TieSide => toss?.abc ?? 'A';
+
+/** The letters a fixture side names: 'A' (A, B, C…) or 'B' (X, Y, Z…). */
+export const letterSideOf = (fixtureSide: TieSide, toss: TieToss | null | undefined): TieSide => (fixtureSide === abcSideOf(toss) ? 'A' : 'B');
+
+/** "A, B, C" / "X, Y, Z" — the letters of one set of positions. */
+export const lettersOf = (spec: TieSpec, letters: TieSide): string => positionsOf(spec, letters).map((n) => positionLetter(letters, n)).join(', ');
+
+/**
+ * "S10 PYC won the toss and chose A, B · S10 Deccan is X, Y" — or the pick,
+ * or (no toss) the first-named side.
+ */
+export function tieTossText(spec: TieSpec, toss: TieToss | null | undefined, names: Record<TieSide, string>): string {
+  const abc = abcSideOf(toss);
+  const xyz: TieSide = abc === 'A' ? 'B' : 'A';
+  const abcL = lettersOf(spec, 'A'); const xyzL = lettersOf(spec, 'B');
+  if (toss?.how === 'toss' && toss.winner) {
+    const w = toss.winner; const other: TieSide = w === 'A' ? 'B' : 'A';
+    const chose = w === abc ? abcL : xyzL;
+    return `${names[w]} won the toss and chose ${chose} · ${names[other]} is ${w === abc ? xyzL : abcL}`;
+  }
+  if (toss?.how === 'pick') return `${names[abc]} is ${abcL} · ${names[xyz]} is ${xyzL}`;
+  return `No toss recorded, so ${names.A} (named first) is ${abcL} · ${names.B} is ${xyzL}`;
+}
+
 /** Rubbers a side needs in a 'first' tie. */
 export function tieNeed(spec: TieSpec): number {
   return spec.firstTo ?? Math.floor(spec.rubbers.length / 2) + 1;

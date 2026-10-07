@@ -56,7 +56,8 @@ import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
 import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
 import { applyChessTcDeltas, recordChessTc } from '../utils/chessTcRatings';
-import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules, conductWords } from '../utils/matchRules';
+import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules, conductWords, tieSpecOf } from '../utils/matchRules';
+import { tieTossOf, tieTossText } from '../utils/tieCore';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, superOverPlayedText, tieFallbackText, boundariesOf, type SuperOverState, type TieFallback, typedScoreRefusal, typedScoreWinner, typedOversToBalls, type UnfinishedEnd } from '../utils/cricketRules';
 import { withWalkoverScore } from '../utils/walkoverScore';
@@ -1550,7 +1551,7 @@ export async function getCommentary(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, sport_id, team_a_name, team_b_name, format, overs, rules')
+      .select('id, sport_id, team_a_name, team_b_name, format, overs, rules, tie_toss')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1708,6 +1709,14 @@ export async function getCommentary(req: Request, res: Response) {
         is_wicket: isWicket,
         is_boundary: isBoundary,
       });
+    }
+
+    // Stage 10 · TT1b: a team tie's toss (who names A, B, C) opens its timeline.
+    const toss = tieTossOf((match as { tie_toss?: unknown }).tie_toss);
+    const tossSpec = toss ? tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null) : null;
+    if (toss && tossSpec) {
+      const line = `${toss.how === 'toss' ? '🪙 Toss' : '🪙 Positions'}: ${tieTossText(tossSpec, toss, { A: teamA, B: teamB })}`;
+      enriched.unshift({ id: `tie-toss-${match.id}`, over_ball: null, event_type: 'note', commentary: line, text: line, payload: { kind: 'tie_toss' }, timestamp: toss.at ?? null, is_wicket: false, is_boundary: false });
     }
 
     // Return newest-first.

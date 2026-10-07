@@ -4,7 +4,7 @@ import { getBannedForMatch } from '../controllers/squads.controller';
 import { decideMatch } from '../controllers/matchDecision.controller';
 import { getMatchAssistants, setMatchAssistants, setOfficialReport } from '../controllers/matchOfficials.controller';
 import { callToCourt, uncallMatch } from '../controllers/courtBoard.controller';
-import { getTieLineup, setTieLineup } from '../controllers/tieLineup.controller';
+import { getTieLineup, setTieLineup, setTieToss } from '../controllers/tieLineup.controller';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
   createMatch,
@@ -96,6 +96,7 @@ router.get('/:id/chat', authenticateToken, getMatchChat);
 router.post('/:id/participants', authenticateToken, addParticipants);
 router.get('/:id/tie-lineup', authenticateToken, getTieLineup); // badminton 7.16
 router.put('/:id/tie-lineup', authenticateToken, setTieLineup);
+router.put('/:id/tie-toss', authenticateToken, setTieToss); // Stage 10 · TT1b
 // Stage 10 · TT3: a paper-scored match typed in.
 router.post('/:id/typed-score', authenticateToken, typedScore);
 router.post('/:id/umpire/self-assign', authenticateToken, selfAssignUmpire);

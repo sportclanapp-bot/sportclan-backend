@@ -1,4 +1,5 @@
 import { redraw } from '../controllers/redraw.controller';
+import { setLots } from '../controllers/lots.controller';
 import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
@@ -88,6 +89,8 @@ router.get('/:id/placings', authenticateToken, getPlacings);
 // Stage 8 · F7: computed and organiser's awards.
 router.get('/:id/awards', authenticateToken, getAwards);
 router.put('/:id/awards', authenticateToken, setAwards);
+// Stage 8 · F8: a draw of lots for teams level on every tie-break.
+router.put('/:id/lots', authenticateToken, setLots);
 router.get('/:id/entries', authenticateToken, getEntriesPage); // Oct 2026: entries a page at a time
 // Badminton gap 6: after a retirement, the entry here and its players' entries in the other events.
 router.get('/:id/teams/:teamId/related-entries', authenticateToken, relatedEntries);

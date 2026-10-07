@@ -17,6 +17,7 @@ import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { fairPlayPoints, type CardEvent } from '../utils/fairPlay';
 import { settingsOf, settingsRefusal, storedSettings, type PickedAward } from '../utils/tournamentSettings';
 import { selectAllIn } from '../utils/selectAll';
+import { rankExtrasFor } from '../utils/rankExtras';
 
 export type Placing = { place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string; players: Array<{ id: string; name: string }> };
 type M = { id: string; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null; winner_team_id: string | null; status: string; round: number | null; group_label: string | null; third_place?: boolean | null; voided_at: string | null; score_summary?: unknown; overs?: number | null };
@@ -66,7 +67,7 @@ async function placingsFor(t: { id: string; format: string; status: string; spor
     const tin = tableInputs(t.settings, rows.filter((r) => r.status === 'approved').map((r) => r.team_id),
       matches.filter((m) => !m.voided_at && (m.status === 'completed' || m.status === 'abandoned')), rows.filter((r) => r.status === 'withdrawn').map((r) => r.team_id));
     const slug = (await getSport(String(t.sport_id)))?.slug ?? null;
-    const order = rankTeams(tin.teamIds, tin.matches as never[], ((t.tiebreaker_rules ?? []) as never[]), pointsFor(slug, t.settings));
+    const order = rankTeams(tin.teamIds, tin.matches as never[], ((t.tiebreaker_rules ?? []) as never[]), pointsFor(slug, t.settings), (await rankExtrasFor(t, tin.matches as Array<{ id: string }>))('')); // Stage 8 · F8
     base = order.slice(0, 4).map((id, i) => ({ place: (i + 1) as 1 | 2 | 3 | 4, title: TITLES[(i + 1) as 1 | 2 | 3 | 4], team_id: id, name: nameOf.get(id) ?? 'Team' }));
   }
   if (base.length === 0) return [];

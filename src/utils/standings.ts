@@ -300,9 +300,16 @@ export function computeStats(
   return table;
 }
 
-type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff';
+type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play';
 
-const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 'sonneborn_berger'>, (s: TeamStat) => number> = {
+/**
+ * Stage 8 · F8 · what the ladder needs beyond the matches: each team's fair-play
+ * points (0 clean, less is worse — utils/fairPlay), and the order a draw of lots
+ * put teams in when nothing else separates them (the organiser records it).
+ */
+export type RankExtra = { fairPlay?: Map<string, number>; lots?: string[] };
+
+const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 'sonneborn_berger' | 'fair_play'>, (s: TeamStat) => number> = {
   points: (s) => s.points,
   wins: (s) => s.won,
   score_diff: (s) => s.diff,
@@ -363,6 +370,7 @@ function mapRule(token: string): Criterion | null {
   if (t === 'sonneborn_berger' || t === 'sb' || t === 'sonneborn-berger') return 'sonneborn_berger';
   if (t === 'points_diff' || t === 'point_difference' || t === 'rally_points_diff' || t === 'points_difference') return 'points_diff'; // badminton gap 10
   if (t === 'games_diff' || t === 'games_difference' || t === 'game_difference') return 'games_diff'; // badminton 7.16
+  if (t === 'fair_play' || t === 'fairplay' || t === 'fair_play_points' || t === 'discipline') return 'fair_play'; // Stage 8 · F8
   return null; // 'team_id' and unknowns handled by the terminator
 }
 
@@ -386,8 +394,22 @@ export function buildOrder(tiebreakerRules?: any[]): Criterion[] {
  * final deterministic terminator so a group can never strand on a tie.
  */
 export function rankTeams(
-  teamIds: string[], matches: GMatch[], tiebreakerRules?: any[], pts: PointsModel = DEFAULT_POINTS,
+  teamIds: string[], matches: GMatch[], tiebreakerRules?: any[], pts: PointsModel = DEFAULT_POINTS, extra: RankExtra = {},
 ): string[] {
+  return rankTeamsDetailed(teamIds, matches, tiebreakerRules, pts, extra).order;
+}
+
+/**
+ * Stage 8 · F8 · the ladder, and the teams still level after every tie-break
+ * that no draw of lots has ordered yet (each cluster, best first). Those are
+ * placed by a draw of lots the organiser records (`extra.lots`); until then by
+ * team id, and the table says they're level.
+ */
+export function rankTeamsDetailed(
+  teamIds: string[], matches: GMatch[], tiebreakerRules?: any[], pts: PointsModel = DEFAULT_POINTS, extra: RankExtra = {},
+): { order: string[]; level: string[][] } {
+  const levelClusters: string[][] = [];
+  const lotIndex = new Map((extra.lots ?? []).map((id, i) => [id, i]));
   const order = buildOrder(tiebreakerRules);
   const globalStats = computeStats(teamIds, matches, undefined, pts);
   let opps: ReturnType<typeof opponentLog> | null = null;
@@ -399,6 +421,8 @@ export function rankTeams(
     }
     // BUILD 4.2 · Buchholz: the sum of the opponents' points. Sonneborn-Berger:
     // the points of the opponents beaten, plus half those drawn with.
+    // Stage 8 · F8: fair-play points (higher is better: 0 is a clean record).
+    if (crit === 'fair_play') return new Map(ids.map((id) => [id, extra.fairPlay?.get(id) ?? 0]));
     if (crit === 'buchholz' || crit === 'sonneborn_berger') {
       opps = opps ?? opponentLog(teamIds, matches);
       const ptsOf = (id: string) => globalStats.get(id)?.points ?? 0;
@@ -413,7 +437,9 @@ export function rankTeams(
   function rec(ids: string[], level: number): string[] {
     if (ids.length <= 1) return ids;
     if (level >= order.length) {
-      return ids.slice().sort((x, y) => (x < y ? -1 : x > y ? 1 : 0)); // team_id terminator
+      // Stage 8 · F8: a draw of lots the organiser recorded, then the team id.
+      if (!ids.every((id) => lotIndex.has(id))) levelClusters.push(ids.slice().sort((x, y) => (x < y ? -1 : x > y ? 1 : 0)));
+      return ids.slice().sort((x, y) => (lotIndex.get(x) ?? Infinity) - (lotIndex.get(y) ?? Infinity) || (x < y ? -1 : x > y ? 1 : 0)); // team_id terminator
     }
     const keys = keyMapFor(order[level]!, ids); // guarded by the length check above
     const sorted = ids.slice().sort((x, y) => keys.get(y)! - keys.get(x)!);
@@ -432,7 +458,12 @@ export function rankTeams(
     return out;
   }
 
-  return rec(teamIds, 0);
+  const ordered = rec(teamIds, 0);
+  // Report the level clusters in table order.
+  const pos = new Map(ordered.map((id, i) => [id, i]));
+  levelClusters.sort((a, b) => (pos.get(a[0]!) ?? 0) - (pos.get(b[0]!) ?? 0));
+  for (const cl of levelClusters) cl.sort((a, b) => (pos.get(a) ?? 0) - (pos.get(b) ?? 0));
+  return { order: ordered, level: levelClusters };
 }
 
 // ── BUILD 4.5 · best next-placed teams across groups ─────────────────────────
@@ -462,16 +493,49 @@ export function openKnockoutPlaces(groupSizes: number[], qualifiersPerGroup: num
  */
 export function bestPlacedAcrossGroups(
   rankedGroups: string[][], place: number, count: number, stats: Map<string, TeamStat>,
+  /** Stage 8: the tournament's tie-break order (as rankTeams), and fair play / lots. */
+  tiebreakerRules?: any[], extra: RankExtra = {},
 ): string[] {
   if (count <= 0) return [];
   const per = (id: string, f: (s: TeamStat) => number) => {
     const s = stats.get(id);
     return s && s.played > 0 ? f(s) / s.played : 0;
   };
+  // Stage 8: the same order as the tables, per game played (groups can differ in
+  // size); head-to-head, run rate and the chess scores can't compare teams that
+  // never met, so they're left out. Then fair play, a draw of lots, the team id.
+  const order = tiebreakerRules ? buildOrder(tiebreakerRules) : (['points', 'score_diff', 'score_scored'] as Criterion[]);
+  const lotIndex = new Map((extra.lots ?? []).map((id, i) => [id, i]));
+  const value = (id: string, c: Criterion): number | null => {
+    if (c === 'fair_play') return extra.fairPlay?.get(id) ?? 0;
+    if (c === 'head_to_head' || c === 'buchholz' || c === 'sonneborn_berger' || c === 'score_rate') return null;
+    if (c === 'score_ratio') return GLOBAL_CRITERION.score_ratio(stats.get(id) ?? ({} as TeamStat));
+    return per(id, GLOBAL_CRITERION[c]);
+  };
   const pool = rankedGroups.map((g) => g[place]).filter((id): id is string => !!id);
-  return pool.sort((x, y) =>
-    per(y, (s) => s.points) - per(x, (s) => s.points)
-    || per(y, (s) => s.diff) - per(x, (s) => s.diff)
-    || per(y, (s) => s.scored) - per(x, (s) => s.scored)
-    || (x < y ? -1 : x > y ? 1 : 0)).slice(0, count);
+  return pool.sort((x, y) => {
+    for (const c of order) {
+      const vx = value(x, c); const vy = value(y, c);
+      if (vx == null || vy == null) continue;
+      if (vy !== vx) return vy - vx;
+    }
+    return (lotIndex.get(x) ?? Infinity) - (lotIndex.get(y) ?? Infinity) || (x < y ? -1 : x > y ? 1 : 0);
+  }).slice(0, count);
+}
+
+/**
+ * Stage 8 · how many best next-placed teams go through: the organiser's number
+ * (no more than the groups that have a team in that place), else — with "best
+ * next-placed" on — as many as fill the knockout's byes (BUILD 4.5), else none.
+ */
+export function bestNextCount(s: { bestThirds?: boolean; bestNext?: number }, groupSizes: number[], qualifiersPerGroup: number): number {
+  const eligible = groupSizes.filter((n) => n > qualifiersPerGroup).length;
+  if (s.bestNext != null) return Math.max(0, Math.min(s.bestNext, eligible));
+  if (s.bestThirds) return openKnockoutPlaces(groupSizes, qualifiersPerGroup);
+  return 0;
+}
+
+/** Stage 8 · the knockout's size for groups → knockout: every direct qualifier plus the best next-placed. */
+export function groupsKnockoutSize(groups: number, qualifiersPerGroup: number, bestNext: number | null | undefined): number {
+  return pow2(groups * qualifiersPerGroup + Math.max(0, Math.min(bestNext ?? 0, groups)));
 }

@@ -120,7 +120,7 @@ export function storedPoints(p: Record<string, any>): PointsTemplate {
 
 export type TiebreakToken =
   | 'head_to_head' | 'wins' | 'nrr' | 'score_diff' | 'score_scored' | 'score_ratio'
-  | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff';
+  | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play';
 
 const ALIASES: Record<string, TiebreakToken> = {
   head_to_head: 'head_to_head', h2h: 'head_to_head', head2head: 'head_to_head', headtohead: 'head_to_head',
@@ -135,6 +135,8 @@ const ALIASES: Record<string, TiebreakToken> = {
   points_diff: 'points_diff', point_difference: 'points_diff', points_difference: 'points_diff', rally_points_diff: 'points_diff',
   // Badminton 7.16: games won minus lost over every rubber of a team tie.
   games_diff: 'games_diff', games_difference: 'games_diff', game_difference: 'games_diff',
+  // Stage 8 · F8: FIFA fair-play points from the cards (football, hockey).
+  fair_play: 'fair_play', fairplay: 'fair_play', fair_play_points: 'fair_play', discipline: 'fair_play',
 };
 
 /** A stored or typed name as its canonical token, or null for one the table doesn't know. */
@@ -145,9 +147,9 @@ export function tiebreakToken(x: unknown): TiebreakToken | null {
 /** The tie-breaks this sport can use (run rate is cricket's; Buchholz and Sonneborn-Berger chess's). */
 export function tiebreaksFor(sport: string | null | undefined): TiebreakToken[] {
   const key = sportKeyOf(sport);
-  const all: TiebreakToken[] = ['head_to_head', 'wins', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'buchholz', 'sonneborn_berger'];
+  const all: TiebreakToken[] = ['head_to_head', 'wins', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'fair_play', 'buchholz', 'sonneborn_berger'];
   const rally = key === 'badminton' || key === 'tabletennis' || key === 'volleyball' || key === 'pickleball';
-  return all.filter((t) => (t === 'nrr' ? key === 'cricket' : t === 'buchholz' || t === 'sonneborn_berger' ? key === 'chess' : t === 'points_diff' ? rally : t === 'games_diff' ? key === 'badminton' || key === 'tabletennis' : true));
+  return all.filter((t) => (t === 'nrr' ? key === 'cricket' : t === 'buchholz' || t === 'sonneborn_berger' ? key === 'chess' : t === 'points_diff' ? rally : t === 'games_diff' ? key === 'badminton' || key === 'tabletennis' : t === 'fair_play' ? key === 'football' || key === 'hockey' : true));
 }
 
 /** How a tie-break reads for this sport ("Goal difference", "Set ratio"). */
@@ -170,6 +172,7 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
     case 'sonneborn_berger': return 'Sonneborn-Berger';
     case 'points_diff': return 'Points difference';
     case 'games_diff': return 'Games difference';
+    case 'fair_play': return 'Fair play (cards)';
   }
 }
 
@@ -188,6 +191,8 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
     case 'cricket': out.push({ key: 'cricket', label: 'Run rate, then wins', order: ['nrr', 'wins', 'head_to_head'] }); break;
     case 'football':
       out.push({ key: 'local', label: 'Goal difference first', order: ['score_diff', 'score_scored', 'head_to_head'] });
+      // Stage 8 · F8: FIFA World Cup 2026 — head-to-head, then goal difference and goals, then fair play.
+      out.push({ key: 'fifa', label: 'FIFA (head-to-head, goals, fair play)', order: ['head_to_head', 'score_diff', 'score_scored', 'fair_play'] });
       break;
     case 'hockey': out.push({ key: 'fih', label: 'FIH (wins first)', order: ['wins', 'score_diff', 'score_scored', 'head_to_head'] }); break;
     case 'volleyball': out.push({ key: 'fivb', label: 'FIVB (wins, set ratio)', order: ['wins', 'score_ratio', 'head_to_head'] }); break;

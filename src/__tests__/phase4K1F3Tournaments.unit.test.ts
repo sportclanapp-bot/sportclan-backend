@@ -163,7 +163,8 @@ describe('SC-89 · qualification and the table rank with the same ladder', () =>
   const body = (src: string, head: string) => { const i = src.indexOf(head); return src.slice(i, src.indexOf('\n}\n', i)); };
   test('K1-72b (9803959): maybeSeedKnockout and getTournamentStandings both call rankTeams', () => {
     expect(body(code('controllers/tournaments.controller.ts'), 'async function maybeSeedKnockout')).toMatch(/rankTeams\(/);
-    expect(body(code('controllers/features.controller.ts'), 'export async function getTournamentStandings')).toMatch(/rankTeams\(/);
+    // Stage 8 · F8: the same ladder, which also reports teams level on every tie-break.
+    expect(body(code('controllers/features.controller.ts'), 'export async function getTournamentStandings')).toMatch(/rankTeams(Detailed)?\(/);
   });
 });
 

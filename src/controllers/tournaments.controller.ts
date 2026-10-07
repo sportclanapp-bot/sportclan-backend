@@ -1,4 +1,5 @@
 import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
+import { rankExtrasFor } from '../utils/rankExtras';
 import { sportTerms } from '../utils/sportTerms';
 import { sportSlugOf } from '../utils/sportSlug';
 import { plural } from '../utils/plural';
@@ -55,7 +56,7 @@ import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { allRows, selectAll, selectAllIn, IN_CHUNK } from '../utils/selectAll';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, isCount, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
-import { rankTeams, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, type PointsModel } from '../utils/standings';
+import { rankTeams, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, bestNextCount, groupsKnockoutSize, type PointsModel } from '../utils/standings';
 import { crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { withWalkoverScore } from '../utils/walkoverScore';
@@ -2983,8 +2984,10 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
       .eq('tournament_id', tournamentId).is('voided_at', null));
     // Badminton gap 6: a withdrawn player's results deleted (BWF GCR), when the tournament says so.
     const tin = tableInputs((t as any)?.settings, teamIds, (matches ?? []) as any[], await withdrawnTeamIds(tournamentId));
+    // Stage 8 · F8: fair play and a draw of lots decide a dead heat at the top too.
+    const extraFor = await rankExtrasFor((t ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>);
     const leader = rankTeams(
-      tin.teamIds, tin.matches, ((t as any)?.tiebreaker_rules ?? []) as any[], await tournamentPoints(t as any),
+      tin.teamIds, tin.matches, ((t as any)?.tiebreaker_rules ?? []) as any[], await tournamentPoints(t as any), extraFor(''),
     )[0];
     if (!leader) return null;
     const e = (entries ?? []).find((x) => x.team_id === leader);
@@ -3082,7 +3085,7 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
   const pts = await tournamentPoints(trow as any);
 
   const tin = tableInputs((trow as any)?.settings, teamIds as string[], (matches ?? []) as any[], await withdrawnTeamIds(tournamentId)); // gap 6
-  const ordered = rankTeams(tin.teamIds, tin.matches, tiebreakerRules, pts);
+  const ordered = rankTeams(tin.teamIds, tin.matches, tiebreakerRules, pts, (await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>))('')); // Stage 8 · F8
   const championId = ordered[0];
   if (!championId) return;
 
@@ -3465,8 +3468,10 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
 
   // ranks[r] = every team that finished position r (0-based) in its group.
   const ranks: Array<Array<{ id: string; name: string }>> = [];
+  // Stage 8 · F8: fair play (when the order uses it) and each group's draw of lots.
+  const extraFor = await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tableMatches as Array<{ id: string; team_a_id?: string | null; team_b_id?: string | null }>);
   for (const label of labels) {
-    const orderedIds = rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts);
+    const orderedIds = rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label));
     for (let r = 0; r < qualsPerGroup; r++) {
       const id = orderedIds[r];
       if (id) (ranks[r] ??= []).push({ id, name: nameOf[id] ?? 'Team' });
@@ -3483,10 +3488,13 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   }
   // BUILD 4.5: the best next-placed teams across the groups fill the byes —
   // the lowest seeds, so they meet the group winners.
-  if (settingsOf(trow as { settings?: unknown }).bestThirds) {
+  // Stage 8: or the number the organiser chose (bestNext), ranked by the same tie-break order.
+  const st8 = settingsOf(trow as { settings?: unknown });
+  if (st8.bestThirds || st8.bestNext != null) {
     const open = ko1.length * 2 - seeds.length;
-    const ranked = labels.map((label) => rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts));
-    for (const id of bestPlacedAcrossGroups(ranked, qualsPerGroup, open, globalStats)) seeds.push({ id, name: nameOf[id] ?? 'Team' });
+    const count = Math.min(open, bestNextCount(st8, labels.map((l) => groupTeams[l].length), qualsPerGroup));
+    const ranked = labels.map((label) => rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label)));
+    for (const id of bestPlacedAcrossGroups(ranked, qualsPerGroup, count, globalStats, tiebreakerRules, extraFor(''))) seeds.push({ id, name: nameOf[id] ?? 'Team' });
   }
   if (seeds.length < 2) return;
   // FORMATS (28 Sep): cross-pair, so group mates don't meet straight away.
@@ -4010,7 +4018,8 @@ export async function generateFixtures(req: Request, res: Response) {
           }
         }
       }
-      const koSize = nextPow2(numGroups * qualsPerGroup);
+      // Stage 8: room for the best next-placed teams the organiser chose too.
+      const koSize = groupsKnockoutSize(numGroups, qualsPerGroup, settingsOf(tournament as { settings?: unknown }).bestNext);
       const koRound1 = Array.from({ length: koSize / 2 }, () => ({ a: null as TeamSlot | null, b: null as TeamSlot | null }));
       // Schedule the group stage (round 0) AND the KO bracket (rounds 1..R)
       // together so the group stage entirely precedes the knockout in time.

@@ -1,4 +1,5 @@
 import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
+import { rankExtrasFor } from '../utils/rankExtras';
 import { sportBoards, type SportLeaderMatch, type Board } from '../utils/sportLeaders';
 import { hideTestFor, excludeTest, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
@@ -8,7 +9,7 @@ import { rootTournamentId } from '../utils/tournamentEvents';
 import { sanitizeError } from '../utils/response';
 import { activeSportIds } from '../utils/sports';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers, matchAudienceIds } from '../utils/notify';
-import { rankTeams, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces } from '../utils/standings';
+import { rankTeams, rankTeamsDetailed, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, bestNextCount } from '../utils/standings';
 import { settingsOf } from '../utils/tournamentSettings';
 import { istDay, istDayStartIso } from '../utils/appTime';
 import { formatTimeIst } from '../utils/scheduleFixtures';
@@ -131,6 +132,9 @@ export async function getTournamentStandings(req: Request, res: Response) {
     }
     const orderIndex = new Map<string, number>();
     let running = 0;
+    // Stage 8 · F8: fair play (when the order uses it) and the organiser's draws of lots.
+    const extraFor = await rankExtrasFor(tournament as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string; team_a_id?: string | null; team_b_id?: string | null }>);
+    const level: Array<{ group: string | null; team_ids: string[] }> = [];
     for (const g of Array.from(byGroup.keys()).sort()) {
       const groupRows = byGroup.get(g)!;
       // SC-377: a withdrawn team is out of the competition — it keeps its played
@@ -146,7 +150,11 @@ export async function getTournamentStandings(req: Request, res: Response) {
       // points. That is exactly the display-vs-ranking split SC-89 exists to
       // prevent, and it reordered a live 3-point team below a 0-point one.
       const withdrawnIds = new Set(groupRows.filter((r) => r.withdrawn).map((r) => r.teamId));
-      const ranked = rankTeams(groupRows.map((r) => r.teamId), tin.matches as any[], tiebreakerRules, pts);
+      const lotsKey = g === 'default' ? '' : g;
+      const detail = rankTeamsDetailed(groupRows.map((r) => r.teamId), tin.matches as any[], tiebreakerRules, pts, extraFor(lotsKey));
+      const ranked = detail.order;
+      // Teams level on every tie-break, until the organiser records a draw of lots.
+      for (const cl of detail.level) if (cl.some((id) => !withdrawnIds.has(id))) level.push({ group: g === 'default' ? null : g, team_ids: cl.filter((id) => !withdrawnIds.has(id)) });
       for (const id of ranked.filter((i) => !withdrawnIds.has(i))) orderIndex.set(id, running++);
       for (const id of ranked.filter((i) => withdrawnIds.has(i))) orderIndex.set(id, running++);
     }
@@ -167,7 +175,9 @@ export async function getTournamentStandings(req: Request, res: Response) {
       }
       // BUILD 4.5: with best third places on, the best next-placed teams that
       // will fill the knockout's byes are in a qualifying place too.
-      if (settingsOf(tournament as { settings?: unknown }).bestThirds) {
+      // Stage 8: or the number of them the organiser chose (bestNext), ranked by the same tie-break order.
+      const st8 = settingsOf(tournament as { settings?: unknown });
+      if (st8.bestThirds || st8.bestNext != null) {
         const byGroupLive = new Map<string, string[]>();
         for (const row of standings) {
           if (row.withdrawn) continue;
@@ -175,8 +185,8 @@ export async function getTournamentStandings(req: Request, res: Response) {
           (byGroupLive.get(g) ?? byGroupLive.set(g, []).get(g)!).push(row.teamId);
         }
         const groups = Array.from(byGroupLive.keys()).sort().map((g) => byGroupLive.get(g)!);
-        const open = openKnockoutPlaces(groups.map((g) => g.length), qpg);
-        const best = new Set(bestPlacedAcrossGroups(groups, qpg, open, stats));
+        const count = bestNextCount(st8, groups.map((gr) => gr.length), qpg);
+        const best = new Set(bestPlacedAcrossGroups(groups, qpg, count, stats, tiebreakerRules, extraFor('')));
         for (const row of standings) if (best.has(row.teamId)) (row as any).qualified = true;
       }
     }
@@ -193,7 +203,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
 
     // SC-268: sport slug → the FE picks the secondary standings column
     // (NRR cricket · GD football/hockey · PD basketball · none for rally/carrom).
-    return res.json({ standings: aliased, isCricket, sportSlug: sport?.slug ?? null });
+    return res.json({ standings: aliased, isCricket, sportSlug: sport?.slug ?? null, level });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

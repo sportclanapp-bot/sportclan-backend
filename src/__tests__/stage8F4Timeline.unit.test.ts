@@ -20,6 +20,8 @@ test('the new lines', () => {
   expect(sportCommentary('note', { kind: 'added_time', minutes: 4 }, ctx('football'))).toBe('⏱ +4 min added time');
   expect(sportCommentary('note', { kind: 'shootout_kick', team_side: 'A', scored: true, player_name: 'Ravi' }, ctx('football'))).toBe('✅ Scored — penalty by Ravi (Lions)');
   expect(sportCommentary('note', { kind: 'shootout_kick', team_side: 'B', scored: false }, ctx('hockey'))).toBe('❌ Missed — shoot-out by Tigers');
+  // on the match clock still: a kick has no minute (found on the device: "6' ✅ Scored…")
+  expect(sportCommentary('note', { kind: 'shootout_kick', team_side: 'A', scored: true, player_name: 'Ravi' }, ctx('football', { clockSeconds: 352, periodMinutes: 25 }))).toBe('✅ Scored — penalty by Ravi (Lions)');
 });
 
 test('with the clock running, the minute leads', () => {

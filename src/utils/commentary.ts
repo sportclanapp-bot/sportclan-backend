@@ -46,7 +46,9 @@ export function sportCommentary(eventType: string, p: Record<string, any>, ctx: 
   const line = sportLine(eventType, p, ctx);
   // BUILD 3.22: a football / hockey event scored on the match clock says its minute.
   const goalSport = ctx.sport === 'football' || ctx.sport === 'hockey';
-  if (line && goalSport && typeof ctx.clockSeconds === 'number' && ctx.periodMinutes) {
+  // A shoot-out kick isn't played on the match clock: no minute.
+  const shootoutKick = eventType === 'note' && p.kind === 'shootout_kick';
+  if (line && goalSport && !shootoutKick && typeof ctx.clockSeconds === 'number' && ctx.periodMinutes) {
     // ctx.period counts periods ENDED (right for "End of Q3"); a goal is in the next one.
     const periodNow = eventType === 'period_change' ? ctx.period : ctx.period + 1;
     return `${matchMinute(ctx.clockSeconds, ctx.periodMinutes, periodNow)} ${line}`;

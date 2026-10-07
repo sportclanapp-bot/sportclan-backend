@@ -24,7 +24,7 @@ export interface SportLeaderMatch {
   team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null;
   result_type?: string | null;
   score_summary?: {
-    A?: { value?: unknown; sets?: unknown }; B?: { value?: unknown; sets?: unknown };
+    A?: { score?: unknown; value?: unknown; sets?: unknown }; B?: { score?: unknown; value?: unknown; sets?: unknown };
     players?: Record<string, Record<string, unknown>> | null; rubbers?: unknown; walkover?: unknown;
   } | null;
 }
@@ -95,8 +95,10 @@ function teamTallies(matches: SportLeaderMatch[]): TTally[] {
         me.pf += mine[i]!; me.pa += theirs[i]!;
         if (mine[i]! > theirs[i]!) me.games += 1; else if (theirs[i]! > mine[i]!) me.gamesLost += 1;
       }
-      const conceded = m.score_summary?.[other]?.value;
-      if (typeof conceded === 'number' && conceded === 0 && m.score_summary?.[side]?.value != null) me.cleanSheets += 1;
+      // A goal sport's score is A.score / B.score (the live rollup); `value` as a fallback.
+      const goalsOf = (x: 'A' | 'B') => { const v = m.score_summary?.[x]?.score ?? m.score_summary?.[x]?.value; return typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null; };
+      const conceded = goalsOf(other);
+      if (conceded === 0 && goalsOf(side) != null) me.cleanSheets += 1;
     }
   }
   return [...out.values()];

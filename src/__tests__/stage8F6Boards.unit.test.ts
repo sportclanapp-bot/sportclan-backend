@@ -7,7 +7,7 @@ import { cricketBoards } from '../controllers/features.controller';
 const TEAMS = { tA: 'Lions', tB: 'Tigers', tC: 'Eagles' };
 const fb = (id: string, a: string, b: string, ga: number, gb: number, players: Record<string, Record<string, unknown>>, extra: object = {}) => ({
   id, team_a_id: a, team_b_id: b, winner_team_id: ga > gb ? a : gb > ga ? b : null,
-  score_summary: { A: { value: ga }, B: { value: gb }, players }, ...extra,
+  score_summary: { A: { score: ga }, B: { score: gb }, players }, ...extra,
 });
 
 test('football: top scorers, assists, cards (a red counts 3), clean sheets by team; guests by name within a team; deleted accounts off', () => {

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { decideMatch } from '../controllers/matchDecision.controller';
 import { getMatchAssistants, setMatchAssistants, setOfficialReport } from '../controllers/matchOfficials.controller';
 import { callToCourt, uncallMatch } from '../controllers/courtBoard.controller';
 import { getTieLineup, setTieLineup } from '../controllers/tieLineup.controller';
@@ -69,6 +70,8 @@ router.patch('/:id', authenticateToken, updateMatch);
 router.delete('/:id', authenticateToken, cancelMatch);
 router.post('/:id/cancel', authenticateToken, cancelMatch); // alias for frontend compatibility
 router.post('/:id/abandon', authenticateToken, abandonMatch);
+// Stage 8 · F12: an abandoned match's result stands, is replayed, or is awarded.
+router.post('/:id/decide', authenticateToken, decideMatch);
 // SC-424: void keeps the match and its events and stops it counting anywhere.
 router.post('/:id/void', authenticateToken, voidMatch);
 router.post('/:id/unvoid', authenticateToken, unvoidMatch);

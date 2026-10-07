@@ -1,4 +1,5 @@
 import { redraw } from '../controllers/redraw.controller';
+import { getSquad, setSquad, checkSquadPlayer, setSquadLock, getDiscipline } from '../controllers/squads.controller';
 import { setLots } from '../controllers/lots.controller';
 import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
@@ -91,6 +92,12 @@ router.get('/:id/awards', authenticateToken, getAwards);
 router.put('/:id/awards', authenticateToken, setAwards);
 // Stage 8 · F8: a draw of lots for teams level on every tie-break.
 router.put('/:id/lots', authenticateToken, setLots);
+// Stage 8 · F3 / F16 / F5: squads, ID checks, bans.
+router.get('/:id/squads/:teamId', authenticateToken, getSquad);
+router.put('/:id/squads/:teamId', authenticateToken, setSquad);
+router.patch('/:id/squads/:teamId/check', authenticateToken, checkSquadPlayer);
+router.put('/:id/squad-lock', authenticateToken, setSquadLock);
+router.get('/:id/discipline', authenticateToken, getDiscipline);
 router.get('/:id/entries', authenticateToken, getEntriesPage); // Oct 2026: entries a page at a time
 // Badminton gap 6: after a retirement, the entry here and its players' entries in the other events.
 router.get('/:id/teams/:teamId/related-entries', authenticateToken, relatedEntries);

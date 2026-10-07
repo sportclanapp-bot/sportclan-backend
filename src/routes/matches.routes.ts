@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { getBannedForMatch } from '../controllers/squads.controller';
 import { decideMatch } from '../controllers/matchDecision.controller';
 import { getMatchAssistants, setMatchAssistants, setOfficialReport } from '../controllers/matchOfficials.controller';
 import { callToCourt, uncallMatch } from '../controllers/courtBoard.controller';
@@ -72,6 +73,8 @@ router.post('/:id/cancel', authenticateToken, cancelMatch); // alias for fronten
 router.post('/:id/abandon', authenticateToken, abandonMatch);
 // Stage 8 · F12: an abandoned match's result stands, is replayed, or is awarded.
 router.post('/:id/decide', authenticateToken, decideMatch);
+// Stage 8 · F5: who is banned from this fixture.
+router.get('/:id/banned', authenticateToken, getBannedForMatch);
 // SC-424: void keeps the match and its events and stops it counting anywhere.
 router.post('/:id/void', authenticateToken, voidMatch);
 router.post('/:id/unvoid', authenticateToken, unvoidMatch);

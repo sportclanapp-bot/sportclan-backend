@@ -281,7 +281,12 @@ export type TournamentSettings = {
   bestNext?: number;
   /** Stage 8 · F5: bans from cards (team sports with cards). */
   discipline?: DisciplineRules;
+  /** Stage 8 · F3: squads — an optional most players a squad (no app top), and when squads lock for captains. */
+  squad?: SquadRules;
 };
+
+/** Stage 8 · F3: 'draw' (the default) locks squads when the fixtures are made; 'deadline' at the entries deadline; 'manual' when the organiser says (lockedAt); 'never'. The organiser can always change a squad. */
+export type SquadRules = { size?: number | null; lock?: 'draw' | 'deadline' | 'manual' | 'never'; lockedAt?: string | null };
 
 /** Stage 8 · F7: one award the organiser gives — to a person (account or name) and/or a team. */
 export type PickedAward = { title: string; user_id?: string | null; name?: string | null; team_id?: string | null };
@@ -498,7 +503,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -628,6 +633,9 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('discipline' in s) {
     if (s.discipline) out.discipline = s.discipline; else delete out.discipline;
   }
+  if ('squad' in s) {
+    if (s.squad) out.squad = s.squad; else delete out.squad;
+  }
   return out;
 }
 
@@ -657,6 +665,13 @@ function stage8Refusal(format: string | null | undefined, o: Record<string, any>
   if (o.bestNext != null) {
     if (!whole(o.bestNext) || o.bestNext < 0) return refuse('The best next-placed teams going through is a whole number.');
     if (format !== 'groups_knockout') return refuse('Best next-placed teams are for groups → knockout.');
+  }
+  if (o.squad != null) {
+    const q = o.squad;
+    if (typeof q !== 'object' || Array.isArray(q)) return refuse('Squads are a size and when they lock.');
+    if (q.size != null && (!whole(q.size) || q.size < 1)) return refuse('A squad size must be 1 or more, or none.');
+    if (q.lock != null && !['draw', 'deadline', 'manual', 'never'].includes(q.lock)) return refuse('Squads lock at the draw, at the entries deadline, when you say, or never.');
+    if (q.lockedAt != null && (typeof q.lockedAt !== 'string' || !Number.isFinite(Date.parse(q.lockedAt)))) return refuse('When the squads locked is a date.');
   }
   if (o.discipline != null) {
     const d = o.discipline;

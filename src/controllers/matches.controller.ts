@@ -1,4 +1,5 @@
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
+import { teamSheetProblem } from './squads.controller';
 import { sportTerms } from '../utils/sportTerms';
 import { sportSlugOf } from '../utils/sportSlug';
 import { plural } from '../utils/plural';
@@ -2239,6 +2240,12 @@ export async function addParticipants(req: Request, res: Response) {
           { A: (match.team_a_name as string | null) ?? 'Team A', B: (match.team_b_name as string | null) ?? 'Team B' }, 'lineup');
         if (problem) return res.status(409).json({ error: problem, code: 'DOUBLES_TWO_A_SIDE' });
       }
+    }
+    // Stage 8 · F3: a team with a saved squad plays from it, and starters fit the players a side.
+    if (match.tournament_id) {
+      const { data: cur } = await supabase.from('match_participants').select('user_id, team_side, role').eq('match_id', id);
+      const problem = await teamSheetProblem(match as never, participants as never, (cur ?? []) as never, lineupSlug, rulesOf(lineupSlug, match).players);
+      if (problem) return res.status(409).json(problem);
     }
     const byUser = new Map<string, any>();
     for (const p of participants as any[]) {

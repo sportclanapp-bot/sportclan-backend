@@ -300,7 +300,17 @@ export function computeStats(
   return table;
 }
 
-type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play' | 'points_won' | 'points_pct' | 'played';
+type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play' | 'points_won' | 'points_pct' | 'played'
+  // Stage 10 · TT4: counted only in the matches between the tied teams.
+  | 'h2h_score_diff' | 'h2h_score_scored' | 'h2h_score_ratio' | 'h2h_points_diff' | 'h2h_points_ratio';
+const BETWEEN: Record<'h2h_score_diff' | 'h2h_score_scored' | 'h2h_score_ratio' | 'h2h_points_diff' | 'h2h_points_ratio', (s: TeamStat) => number> = {
+  h2h_score_diff: (s) => s.diff,
+  h2h_score_scored: (s) => s.scored,
+  h2h_score_ratio: (s) => (s.conceded > 0 ? s.scored / s.conceded : s.scored > 0 ? 1e9 : 0),
+  h2h_points_diff: (s) => s.rallyDiff,
+  h2h_points_ratio: (s) => (s.rallyAgainst > 0 ? s.rallyFor / s.rallyAgainst : s.rallyFor > 0 ? 1e9 : 0),
+};
+const isBetween = (c: Criterion): c is keyof typeof BETWEEN => c in BETWEEN;
 
 /**
  * Stage 8 · F8 · what the ladder needs beyond the matches: each team's fair-play
@@ -309,7 +319,7 @@ type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_he
  */
 export type RankExtra = { fairPlay?: Map<string, number>; lots?: string[] };
 
-const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 'sonneborn_berger' | 'fair_play'>, (s: TeamStat) => number> = {
+const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 'sonneborn_berger' | 'fair_play' | keyof typeof BETWEEN>, (s: TeamStat) => number> = {
   points: (s) => s.points,
   wins: (s) => s.won,
   score_diff: (s) => s.diff,
@@ -381,6 +391,12 @@ function mapRule(token: string): Criterion | null {
   if (t === 'points_won' || t === 'games_won' || t === 'total_games' || t === 'rally_points_won') return 'points_won';
   if (t === 'points_pct' || t === 'games_pct' || t === 'game_percentage' || t === 'points_percentage') return 'points_pct';
   if (t === 'played' || t === 'matches_played') return 'played';
+  // Stage 10 · TT4.
+  if (t === 'h2h_score_diff' || t === 'h2h_goal_difference') return 'h2h_score_diff';
+  if (t === 'h2h_score_scored' || t === 'h2h_goals_for') return 'h2h_score_scored';
+  if (t === 'h2h_score_ratio' || t === 'h2h_game_ratio' || t === 'h2h_set_ratio') return 'h2h_score_ratio';
+  if (t === 'h2h_points_diff') return 'h2h_points_diff';
+  if (t === 'h2h_points_ratio') return 'h2h_points_ratio';
   return null; // 'team_id' and unknowns handled by the terminator
 }
 
@@ -429,6 +445,12 @@ export function rankTeamsDetailed(
     if (crit === 'head_to_head') {
       const h2h = computeStats(ids, matches, new Set(ids), pts);
       return new Map(ids.map((id) => [id, h2h.get(id)?.points ?? 0]));
+    }
+    // Stage 10 · TT4: the same mini-table, read for games / goals / points.
+    if (isBetween(crit)) {
+      const h2h = computeStats(ids, matches, new Set(ids), pts);
+      const fn = BETWEEN[crit];
+      return new Map(ids.map((id) => [id, h2h.get(id) ? fn(h2h.get(id)!) : 0]));
     }
     // BUILD 4.2 · Buchholz: the sum of the opponents' points. Sonneborn-Berger:
     // the points of the opponents beaten, plus half those drawn with.
@@ -522,7 +544,7 @@ export function bestPlacedAcrossGroups(
   const lotIndex = new Map((extra.lots ?? []).map((id, i) => [id, i]));
   const value = (id: string, c: Criterion): number | null => {
     if (c === 'fair_play') return extra.fairPlay?.get(id) ?? 0;
-    if (c === 'head_to_head' || c === 'buchholz' || c === 'sonneborn_berger' || c === 'score_rate') return null;
+    if (c === 'head_to_head' || c === 'buchholz' || c === 'sonneborn_berger' || c === 'score_rate' || isBetween(c)) return null; // TT4: teams from different groups never met
     if (c === 'score_ratio') return GLOBAL_CRITERION.score_ratio(stats.get(id) ?? ({} as TeamStat));
     // Stage 9 · T4: a share is already per game; matches played can't compare groups of different sizes.
     if (c === 'points_pct') return GLOBAL_CRITERION.points_pct(stats.get(id) ?? ({ rallyFor: 0, rallyAgainst: 0 } as TeamStat));

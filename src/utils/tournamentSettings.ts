@@ -120,7 +120,10 @@ export function storedPoints(p: Record<string, any>): PointsTemplate {
 
 export type TiebreakToken =
   | 'head_to_head' | 'wins' | 'nrr' | 'score_diff' | 'score_scored' | 'score_ratio'
-  | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play';
+  | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play'
+  // Stage 9 · T4: the next level down won, and its share (tennis: games; the rally
+  // sports: points), and — the ATP Finals' second step — matches played.
+  | 'points_won' | 'points_pct' | 'played';
 
 const ALIASES: Record<string, TiebreakToken> = {
   head_to_head: 'head_to_head', h2h: 'head_to_head', head2head: 'head_to_head', headtohead: 'head_to_head',
@@ -137,6 +140,10 @@ const ALIASES: Record<string, TiebreakToken> = {
   games_diff: 'games_diff', games_difference: 'games_diff', game_difference: 'games_diff',
   // Stage 8 · F8: FIFA fair-play points from the cards (football, hockey).
   fair_play: 'fair_play', fairplay: 'fair_play', fair_play_points: 'fair_play', discipline: 'fair_play',
+  // Stage 9 · T4.
+  points_won: 'points_won', games_won: 'points_won', total_games: 'points_won', rally_points_won: 'points_won',
+  points_pct: 'points_pct', games_pct: 'points_pct', game_percentage: 'points_pct', points_percentage: 'points_pct',
+  played: 'played', matches_played: 'played',
 };
 
 /** A stored or typed name as its canonical token, or null for one the table doesn't know. */
@@ -147,9 +154,14 @@ export function tiebreakToken(x: unknown): TiebreakToken | null {
 /** The tie-breaks this sport can use (run rate is cricket's; Buchholz and Sonneborn-Berger chess's). */
 export function tiebreaksFor(sport: string | null | undefined): TiebreakToken[] {
   const key = sportKeyOf(sport);
-  const all: TiebreakToken[] = ['head_to_head', 'wins', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'fair_play', 'buchholz', 'sonneborn_berger'];
+  const all: TiebreakToken[] = ['head_to_head', 'wins', 'played', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'points_won', 'points_pct', 'fair_play', 'buchholz', 'sonneborn_berger'];
   const rally = key === 'badminton' || key === 'tabletennis' || key === 'volleyball' || key === 'pickleball';
-  return all.filter((t) => (t === 'nrr' ? key === 'cricket' : t === 'buchholz' || t === 'sonneborn_berger' ? key === 'chess' : t === 'points_diff' ? rally : t === 'games_diff' ? key === 'badminton' || key === 'tabletennis' : t === 'fair_play' ? key === 'football' || key === 'hockey' : true));
+  // Stage 9 · T4: every sport scored in sets of games or points — tennis's games, the rally sports' points.
+  const inSets = rally || key === 'tennis';
+  return all.filter((t) => (t === 'nrr' ? key === 'cricket' : t === 'buchholz' || t === 'sonneborn_berger' ? key === 'chess'
+    : t === 'points_diff' || t === 'points_won' || t === 'points_pct' ? inSets
+      : t === 'played' ? key === 'tennis'
+        : t === 'games_diff' ? key === 'badminton' || key === 'tabletennis' : t === 'fair_play' ? key === 'football' || key === 'hockey' : true));
 }
 
 /** How a tie-break reads for this sport ("Goal difference", "Set ratio"). */
@@ -167,10 +179,14 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
     case 'nrr': return 'Net run rate';
     case 'score_diff': return `${unit} difference`;
     case 'score_scored': return unit === 'Score' ? 'Score' : `${unit}s ${unit === 'Set' || unit === 'Game' ? 'won' : 'scored'}`;
-    case 'score_ratio': return `${unit} ratio`;
+    case 'score_ratio': return key === 'tennis' && !tie ? 'Sets won %' : `${unit} ratio`; // Stage 9 · T4: the ATP's words
     case 'buchholz': return 'Buchholz';
     case 'sonneborn_berger': return 'Sonneborn-Berger';
-    case 'points_diff': return 'Points difference';
+    // Stage 9 · T4: tennis's next level down is games; the rally sports', points.
+    case 'points_diff': return key === 'tennis' ? 'Game difference' : 'Points difference';
+    case 'points_won': return key === 'tennis' ? 'Games won' : 'Points won';
+    case 'points_pct': return key === 'tennis' ? 'Games won %' : 'Points won %';
+    case 'played': return 'Matches played (more first)';
     case 'games_diff': return 'Games difference';
     case 'fair_play': return 'Fair play (cards)';
   }
@@ -202,6 +218,12 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
       out.push({ key: 'bwf', label: 'BWF (head-to-head, games, points)', order: ['head_to_head', 'score_diff', 'points_diff'] });
       // 7.16: a team event — ties won (the points), head-to-head, rubbers, games, points.
       if (tie) out.push({ key: 'bwf_team', label: 'BWF team (rubbers, games, points)', order: ['head_to_head', 'score_diff', 'games_diff', 'points_diff'] });
+      break;
+    // Stage 9 · T4: ATP Finals — wins, then matches played, head-to-head, sets %, games %;
+    // and the Maharashtra inter-club way — total games won.
+    case 'tennis':
+      out.push({ key: 'atp', label: 'ATP Finals (played, head-to-head, sets %, games %)', order: ['wins', 'played', 'head_to_head', 'score_ratio', 'points_pct'] });
+      out.push({ key: 'games', label: 'Total games won', order: ['points_won', 'head_to_head'] });
       break;
     case 'chess':
       out.push({ key: 'fide_rr', label: 'Sonneborn-Berger', order: ['sonneborn_berger', 'head_to_head', 'wins'] });

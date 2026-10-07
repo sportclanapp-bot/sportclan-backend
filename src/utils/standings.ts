@@ -300,7 +300,7 @@ export function computeStats(
   return table;
 }
 
-type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play';
+type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play' | 'points_won' | 'points_pct' | 'played';
 
 /**
  * Stage 8 · F8 · what the ladder needs beyond the matches: each team's fair-play
@@ -327,6 +327,12 @@ const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 
   points_diff: (s) => s.rallyDiff,
   // Badminton 7.16: games difference over every rubber of a team tie.
   games_diff: (s) => s.gamesDiff,
+  // Stage 9 · T4: tennis's games (the rally sports' points) won, and their
+  // share of all played (the ATP's "games %"); and matches played (the ATP
+  // Finals rank 2-1 above 2-0 — a withdrawal plays fewer).
+  points_won: (s) => s.rallyFor,
+  points_pct: (s) => (s.rallyFor + s.rallyAgainst > 0 ? s.rallyFor / (s.rallyFor + s.rallyAgainst) : 0),
+  played: (s) => s.played,
 };
 
 /**
@@ -371,6 +377,10 @@ function mapRule(token: string): Criterion | null {
   if (t === 'points_diff' || t === 'point_difference' || t === 'rally_points_diff' || t === 'points_difference') return 'points_diff'; // badminton gap 10
   if (t === 'games_diff' || t === 'games_difference' || t === 'game_difference') return 'games_diff'; // badminton 7.16
   if (t === 'fair_play' || t === 'fairplay' || t === 'fair_play_points' || t === 'discipline') return 'fair_play'; // Stage 8 · F8
+  // Stage 9 · T4.
+  if (t === 'points_won' || t === 'games_won' || t === 'total_games' || t === 'rally_points_won') return 'points_won';
+  if (t === 'points_pct' || t === 'games_pct' || t === 'game_percentage' || t === 'points_percentage') return 'points_pct';
+  if (t === 'played' || t === 'matches_played') return 'played';
   return null; // 'team_id' and unknowns handled by the terminator
 }
 
@@ -514,6 +524,9 @@ export function bestPlacedAcrossGroups(
     if (c === 'fair_play') return extra.fairPlay?.get(id) ?? 0;
     if (c === 'head_to_head' || c === 'buchholz' || c === 'sonneborn_berger' || c === 'score_rate') return null;
     if (c === 'score_ratio') return GLOBAL_CRITERION.score_ratio(stats.get(id) ?? ({} as TeamStat));
+    // Stage 9 · T4: a share is already per game; matches played can't compare groups of different sizes.
+    if (c === 'points_pct') return GLOBAL_CRITERION.points_pct(stats.get(id) ?? ({ rallyFor: 0, rallyAgainst: 0 } as TeamStat));
+    if (c === 'played') return null;
     return per(id, GLOBAL_CRITERION[c]);
   };
   const pool = rankedGroups.map((g) => g[place]).filter((id): id is string => !!id);

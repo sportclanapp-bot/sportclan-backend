@@ -10,6 +10,8 @@
  * Sport-neutral: courts are the tournament's grounds (ground_names). For a
  * tournament made of events, the board covers every event on the shared courts.
  */
+import { sportSlugOf } from '../utils/sportSlug';
+import { areaLabel } from '../utils/sportTerms';
 import { selectAllIn } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -29,9 +31,9 @@ const LATE_MIN = 5;
 const LATE_MAX = 240;
 
 /** Courts, in order: the tournament's grounds (named or numbered), then any other label a fixture carries. */
-export function courtsOf(t: { ground_count?: number | null; ground_names?: string[] | null }, labels: Array<string | null>): string[] {
+export function courtsOf(t: { ground_count?: number | null; ground_names?: string[] | null }, labels: Array<string | null>, sport?: string | null): string[] {
   const n = Math.max(1, Number(t.ground_count ?? 0) || 0, (t.ground_names ?? []).length);
-  const named = Array.from({ length: n }, (_, i) => (t.ground_names && t.ground_names[i]) || `Ground ${i + 1}`);
+  const named = Array.from({ length: n }, (_, i) => (t.ground_names && t.ground_names[i]) || (sport ? areaLabel(sport, i) : `Ground ${i + 1}`));
   for (const l of labels) if (l && !named.includes(l)) named.push(l);
   return named;
 }
@@ -70,16 +72,17 @@ export function boardOf(courts: string[], matches: M[], labelOf: Map<string, str
 async function loadFamily(id: string) {
   const root = await rootTournamentId(id);
   const ids = await familyIds(root);
-  const ts = await selectAllIn(ids, (c, f, to) => supabase.from('tournaments').select('id, name, event_label, ground_count, ground_names, is_parent').in('id', c).order('id').range(f, to));
-  const rows = (ts ?? []) as Array<{ id: string; name: string; event_label: string | null; ground_count: number | null; ground_names: string[] | null; is_parent: boolean | null }>;
+  const ts = await selectAllIn(ids, (c, f, to) => supabase.from('tournaments').select('id, name, event_label, ground_count, ground_names, is_parent, sport_id').in('id', c).order('id').range(f, to));
+  const rows = (ts ?? []) as Array<{ id: string; name: string; event_label: string | null; ground_count: number | null; ground_names: string[] | null; is_parent: boolean | null; sport_id?: string | null }>;
   const rootRow = rows.find((r) => r.id === root) ?? rows[0];
+  const sport = await sportSlugOf(rootRow?.sport_id);
   const ms = await selectAllIn(ids, (c, f, to) => supabase.from('matches').select(M_COLS).in('tournament_id', c).order('id').range(f, to));
   const matches = (ms ?? []) as M[];
   const teamIds = [...new Set(matches.filter((m) => m.status === 'scheduled' || m.status === 'live').flatMap((m) => [m.team_a_id, m.team_b_id]).filter(Boolean) as string[])];
   const mem = await selectAllIn(teamIds, (c, f, to) => supabase.from('team_members').select('team_id, user_id').in('team_id', c).order('id').range(f, to));
   const playersOf = new Map<string, string[]>();
   for (const r of (mem ?? []) as Array<{ team_id: string; user_id: string }>) playersOf.set(r.team_id, [...(playersOf.get(r.team_id) ?? []), r.user_id]);
-  return { root, ids, rootRow, labelOf: new Map(rows.map((r) => [r.id, r.event_label])), matches, playersOf };
+  return { root, ids, rootRow, sport, labelOf: new Map(rows.map((r) => [r.id, r.event_label])), matches, playersOf };
 }
 
 // GET /tournaments/:id/court-board — anyone who can see the tournament.
@@ -91,7 +94,7 @@ export async function getCourtBoard(req: Request, res: Response) {
     if (!isUuid(id)) return res.status(404).json({ error: 'Tournament not found' });
     const f = await loadFamily(id);
     if (!f.rootRow) return res.status(404).json({ error: 'Tournament not found' });
-    const courts = courtsOf(f.rootRow, f.matches.map((m) => m.ground_label));
+    const courts = courtsOf(f.rootRow, f.matches.map((m) => m.ground_label), f.sport);
     return res.json({ ...boardOf(courts, f.matches, f.labelOf, f.playersOf), can_run: await isTournamentOrganiser(f.root, userId) });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
@@ -175,7 +178,7 @@ export async function nextToCourt(req: Request, res: Response) {
     if (!(await isTournamentOrganiser(f.root, userId))) return res.status(403).json({ error: 'Only the organiser can send matches to courts.' });
     const court = typeof req.body?.court === 'string' ? req.body.court.trim().slice(0, 40) : '';
     if (!court) return res.status(400).json({ error: 'Pick a court.', code: 'NO_COURT' });
-    const board = boardOf(courtsOf(f.rootRow, f.matches.map((m) => m.ground_label)), f.matches, f.labelOf, f.playersOf);
+    const board = boardOf(courtsOf(f.rootRow, f.matches.map((m) => m.ground_label), f.sport), f.matches, f.labelOf, f.playersOf);
     const here = board.courts.find((c) => c.label === court);
     if (here && !here.free) return res.status(409).json({ error: `${court} isn’t free.`, code: 'COURT_BUSY' });
     // Players, not just teams: a player in two events can't be on two courts.

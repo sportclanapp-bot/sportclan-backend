@@ -20,6 +20,8 @@ export interface SchedulingConfig {
   bufferMin: number;
   groundCount: number;
   groundNames: string[] | null;
+  /** Stage 8 · F14: the sport's word for an unnamed area ("Pitch 2"); absent = "Ground" (as before). */
+  areaWord?: string;
   bounded: boolean; // true = real config (capacity can fail); false = fallback (never fails)
   // Per-day window overrides (tournament_days), keyed 'YYYY-MM-DD'. Any day
   // without an entry uses the default window above. (Sat 8–8, Sun 8–2.)
@@ -74,8 +76,8 @@ export function daysInclusive(startYmd: string, endYmd: string): number {
   return Math.max(1, Math.floor((b - a) / 86400000) + 1);
 }
 
-const groundLabelFor = (i: number, names: string[] | null): string =>
-  (names && names[i]) ? names[i] : `Ground ${i + 1}`;
+const groundLabelFor = (i: number, names: string[] | null, word = 'Ground'): string =>
+  (names && names[i]) ? names[i] : `${word} ${i + 1}`;
 
 /** IST wall-clock (startDate + dayIndex, at wallMin) → UTC ISO. */
 function slotUtcIso(startYmd: string, dayIndex: number, wallMin: number): string {
@@ -140,7 +142,7 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
   const shared = (cfg.busyGrounds?.length ?? 0) > 0 || (cfg.playerBusy?.size ?? 0) > 0;
   if (cfg.busyGrounds?.length) {
     for (const bz of cfg.busyGrounds) {
-      const g = Array.from({ length: G }, (_, i) => groundLabelFor(i, cfg.groundNames)).indexOf(bz.ground);
+      const g = Array.from({ length: G }, (_, i) => groundLabelFor(i, cfg.groundNames, cfg.areaWord)).indexOf(bz.ground);
       if (g === -1) continue;
       for (let o = 0; o < totalTimeSlots; o++) {
         const at = timeSlotMeta[o]!.dayIndex * 1440 + timeSlotMeta[o]!.wallMin;
@@ -220,7 +222,7 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
       const meta = timeSlotMeta[order]!;
       assignments.set(keyOf(f.round, f.match_no), {
         scheduled_at: slotUtcIso(cfg.startDateYmd, meta.dayIndex, meta.wallMin),
-        ground_label: groundLabelFor(groundIdx, cfg.groundNames),
+        ground_label: groundLabelFor(groundIdx, cfg.groundNames, cfg.areaWord),
       });
       curRoundMaxOrder = Math.max(curRoundMaxOrder, order);
       curRoundEnd = Math.max(curRoundEnd, absStart(order) + D);

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { getMatchAssistants, setMatchAssistants, setOfficialReport } from '../controllers/matchOfficials.controller';
 import { callToCourt, uncallMatch } from '../controllers/courtBoard.controller';
 import { getTieLineup, setTieLineup } from '../controllers/tieLineup.controller';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
@@ -91,6 +92,10 @@ router.put('/:id/tie-lineup', authenticateToken, setTieLineup);
 router.post('/:id/umpire/self-assign', authenticateToken, selfAssignUmpire);
 // Cricket gap 3: the organiser names a fixture's umpire and scorer.
 router.patch('/:id/officials', authenticateToken, setMatchOfficials);
+// Stage 8 · F11: assistant officials and the official's report.
+router.get('/:id/assistants', authenticateToken, getMatchAssistants);
+router.put('/:id/assistants', authenticateToken, setMatchAssistants);
+router.put('/:id/report', authenticateToken, setOfficialReport);
 // Badminton gap 5: call a fixture to its court (both sides and the umpire are told), or undo it.
 router.post('/:id/call', authenticateToken, callToCourt);
 router.post('/:id/uncall', authenticateToken, uncallMatch);

@@ -1,4 +1,6 @@
 import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
+import { sportTerms } from '../utils/sportTerms';
+import { sportSlugOf } from '../utils/sportSlug';
 import { plural } from '../utils/plural';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { syncTournamentChatMembers, syncAfterSuccess, canOpenTournamentChat } from '../utils/tournamentChat';
@@ -3535,7 +3537,10 @@ export function buildTournamentScheduleConfig(
   t: any,
   startDateYmd: string,
   dayWindows?: Map<string, { startMin: number; endMin: number }>,
+  sportSlug?: string | null,
 ): SchedulingConfig {
+  // Stage 8 · F14: an unnamed area is "Pitch 2" / "Court 2" / "Board 2" by sport (cricket: "Ground 2", as before).
+  const areaWord = sportSlug ? sportTerms(sportSlug).area : undefined;
   const hasWindow = !!(t.daily_start_time && t.daily_end_time && t.match_duration_minutes);
   if (!hasWindow) {
     // Oct 2026 (Dipak): no day hours — still across every court / ground the
@@ -3551,6 +3556,7 @@ export function buildTournamentScheduleConfig(
       groundNames: Array.isArray(t.ground_names) ? (t.ground_names as string[]) : null,
       bounded: false,
       restMin: settingsOf(t).restMinutes ?? 0, // BUILD 4.9
+      ...(areaWord ? { areaWord } : {}),
     };
   }
   return {
@@ -3565,6 +3571,7 @@ export function buildTournamentScheduleConfig(
     bounded: true,
     dayWindows: dayWindows && dayWindows.size > 0 ? dayWindows : undefined,
     restMin: settingsOf(t).restMinutes ?? 0, // BUILD 4.9
+    ...(areaWord ? { areaWord } : {}),
   };
 }
 
@@ -3807,7 +3814,7 @@ export async function generateFixtures(req: Request, res: Response) {
     const startDateYmd = (tournament.start_date ?? new Date().toISOString().slice(0, 10)) as string;
     const fallbackStartIso = new Date(`${startDateYmd}T00:00:00.000Z`).toISOString();
     const dayWindows = await loadDayWindows(id);
-    const schedCfg = buildTournamentScheduleConfig(tournament, startDateYmd, dayWindows);
+    const schedCfg = buildTournamentScheduleConfig(tournament, startDateYmd, dayWindows, await sportSlugOf(tournament.sport_id));
     // Badminton gap 3: an event shares its tournament's courts and players with
     // the other events — the slots they hold are taken, and a player's matches
     // across events are kept apart with the rest between them.

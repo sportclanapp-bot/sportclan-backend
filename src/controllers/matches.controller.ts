@@ -1,4 +1,6 @@
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
+import { sportTerms } from '../utils/sportTerms';
+import { sportSlugOf } from '../utils/sportSlug';
 import { plural } from '../utils/plural';
 import { selectAll } from '../utils/selectAll';
 import { joinChat } from '../utils/chatMembership';
@@ -2367,23 +2369,26 @@ export async function setMatchOfficials(req: Request, res: Response) {
     for (const k of fields) {
       const v = body[k];
       if (v !== null && (typeof v !== 'string' || !isUuid(v))) {
-        return res.status(400).json({ error: `${k === 'umpire_id' ? 'The umpire' : 'The scorer'} must be a person on SportClan, or none.`, code: 'BAD_OFFICIAL', field: k });
+        return res.status(400).json({ error: `${k === 'umpire_id' ? 'The official' : 'The scorer'} must be a person on SportClan, or none.`, code: 'BAD_OFFICIAL', field: k });
       }
     }
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, umpire_id, scorer_id, status, tournament_id, is_ranked, team_a_id, team_b_id, team_a_name, team_b_name, scheduled_at, ground_label')
+      .select('id, sport_id, created_by, umpire_id, scorer_id, status, tournament_id, is_ranked, team_a_id, team_b_id, team_a_name, team_b_name, scheduled_at, ground_label')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
+    // Stage 8 · F11: the sport's word for its official ("referee", "umpire", "arbiter").
+    const off = sportTerms(await sportSlugOf((match as { sport_id?: string | null }).sport_id)).official;
+    const offLc = off.toLowerCase();
     const allowed = match.tournament_id
       ? await isTournamentOrganiser(match.tournament_id, userId)
       : match.created_by === userId;
     if (!allowed) {
-      return res.status(403).json({ error: match.tournament_id ? 'Only the tournament organiser can name a fixture’s umpire and scorer.' : 'Only the match’s creator can name its umpire and scorer.' });
+      return res.status(403).json({ error: match.tournament_id ? `Only the tournament organiser can name a fixture’s ${offLc} and scorer.` : `Only the match’s creator can name its ${offLc} and scorer.` });
     }
     if (match.status !== 'scheduled' && match.status !== 'live') {
-      return res.status(409).json({ error: 'This match is over, so its umpire and scorer can’t change.', code: 'MATCH_FINISHED' });
+      return res.status(409).json({ error: `This match is over, so its ${offLc} and scorer can’t change.`, code: 'MATCH_FINISHED' });
     }
     const named = fields.map((k) => body[k]).filter((v): v is string => typeof v === 'string');
     if (named.length) {
@@ -2392,7 +2397,7 @@ export async function setMatchOfficials(req: Request, res: Response) {
         const v = body[k];
         if (typeof v !== 'string') continue;
         const u = (people ?? []).find((p: { id: string }) => p.id === v) as { deleted_at?: string | null } | undefined;
-        if (!u || u.deleted_at) return res.status(404).json({ error: `${k === 'umpire_id' ? 'That umpire' : 'That scorer'} isn’t on SportClan.`, code: 'OFFICIAL_NOT_FOUND', field: k });
+        if (!u || u.deleted_at) return res.status(404).json({ error: `${k === 'umpire_id' ? `That ${offLc}` : 'That scorer'} isn’t on SportClan.`, code: 'OFFICIAL_NOT_FOUND', field: k });
       }
       if (match.is_ranked) {
         const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', id);
@@ -2401,7 +2406,7 @@ export async function setMatchOfficials(req: Request, res: Response) {
           const v = body[k];
           if (typeof v === 'string' && await viewerCanPlay(match, v, ids)) {
             return res.status(409).json({
-              error: k === 'umpire_id' ? 'They play in this ranked match, so they can’t be its umpire.' : 'They play in this ranked match, so they can’t be its scorer.',
+              error: k === 'umpire_id' ? `They play in this ranked match, so they can’t be its ${offLc}.` : 'They play in this ranked match, so they can’t be its scorer.',
               code: k === 'umpire_id' ? 'UMPIRE_IS_PLAYER' : 'SCORER_IS_PLAYER', field: k,
             });
           }
@@ -2423,8 +2428,8 @@ export async function setMatchOfficials(req: Request, res: Response) {
         await notifyUser({
           userId: v,
           type: 'match_official_assigned',
-          title: k === 'umpire_id' ? 'You’re the umpire' : 'You’re the scorer',
-          body: `You’ve been named ${k === 'umpire_id' ? 'umpire' : 'scorer'} for ${label}. You can score it in the app.`,
+          title: k === 'umpire_id' ? `You’re the ${offLc}` : 'You’re the scorer',
+          body: `You’ve been named ${k === 'umpire_id' ? offLc : 'scorer'} for ${label}. You can score it in the app.`,
           data: { matchId: id, screen: 'MatchDetail' },
         });
       } catch {

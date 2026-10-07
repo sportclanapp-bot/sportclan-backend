@@ -27,7 +27,7 @@ import { sanitizeError } from '../utils/response';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { notifyUnlessBlocked } from '../utils/notify';
 import { isBlockedBetween, blockedUserIds } from '../utils/blocks';
-import { settingsOf, categoryProblem } from '../utils/tournamentSettings';
+import { settingsOf, categoryProblem, amateurDeclarationRefusal } from '../utils/tournamentSettings';
 import { syncTournamentChatMembers, syncAfterSuccess } from '../utils/tournamentChat';
 import { ENTER_AN_EVENT } from '../utils/tournamentEvents';
 import { LIMITS } from '../utils/validation';
@@ -150,7 +150,8 @@ function joinCode(): string {
  * insert takes the team with it. Then the players' other open invites for this
  * event are closed (they're in).
  */
-async function makeEntry(t: T, userIds: string[], status: 'pending' | 'approved', createdBy: string): Promise<{ entry?: Record<string, unknown>; error?: string }> {
+/** Stage 9 · T12: `declared` — the players declared they're amateurs (an "amateurs only" event). */
+async function makeEntry(t: T, userIds: string[], status: 'pending' | 'approved', createdBy: string, declared = false): Promise<{ entry?: Record<string, unknown>; error?: string }> {
   const ppl = await people(userIds);
   const { data: team, error: teamErr } = await supabase.from('teams').insert({
     sport_id: t.sport_id, name: entryTeamName(userIds.map((id) => nameOf(ppl.get(id)))), created_by: createdBy,
@@ -162,7 +163,7 @@ async function makeEntry(t: T, userIds: string[], status: 'pending' | 'approved'
   );
   if (memErr) { await supabase.from('teams').delete().eq('id', team.id); return { error: sanitizeError(memErr) }; }
   const { data: entry, error } = await supabase.from('tournament_entries')
-    .insert({ tournament_id: t.id, team_id: team.id, status }).select('*').single();
+    .insert({ tournament_id: t.id, team_id: team.id, status, ...(declared ? { amateur_declared_at: new Date().toISOString() } : {}) }).select('*').single();
   if (error || !entry) {
     await supabase.from('teams').delete().eq('id', team.id);
     const dup = (error as { code?: string } | null)?.code === '23505';
@@ -200,8 +201,11 @@ export async function enterSelf(req: Request, res: Response) {
     if (t.entry_kind === 'doubles') return res.status(409).json({ error: 'This is a doubles event — invite a partner to enter.', code: 'NEEDS_PARTNER' });
     const bad = await playersRefusal(t, [userId], { asOrganiser: false });
     if (bad) return res.status(bad.status).json(bad.body);
+    // Stage 9 · T12: an "amateurs only" event asks for the declaration.
+    const notDeclared = amateurDeclarationRefusal(settingsOf(t).category, (req.body ?? {}).declared_amateur);
+    if (notDeclared) return res.status(400).json(notDeclared);
     const landed = settingsOf(t).entry === 'open' ? 'approved' : 'pending';
-    const made = await makeEntry(t, [userId], landed, userId);
+    const made = await makeEntry(t, [userId], landed, userId, settingsOf(t).category?.amateurOnly === true);
     if (!made.entry) return res.status(500).json({ error: made.error });
     void tellOrganiser(t, userId, String((made.entry.team as { name: string }).name), landed, String(made.entry.id));
     return res.json({ entry: made.entry });
@@ -253,7 +257,10 @@ export async function createPairInvite(req: Request, res: Response) {
     if (!t) return res.status(404).json({ error: 'Tournament not found' });
     if (t.is_parent) return res.status(409).json(ENTER_AN_EVENT);
     if (t.entry_kind !== 'doubles') return res.status(409).json({ error: 'Partners are for doubles events.', code: 'NOT_DOUBLES' });
-    const body = (req.body ?? {}) as { invitee_id?: unknown; open?: unknown; note?: unknown; entry_id?: unknown };
+    const body = (req.body ?? {}) as { invitee_id?: unknown; open?: unknown; note?: unknown; entry_id?: unknown; declared_amateur?: unknown };
+    // Stage 9 · T12: an "amateurs only" event — the one asking declares (the partner does on accepting).
+    const notDeclared = amateurDeclarationRefusal(settingsOf(t).category, body.declared_amateur);
+    if (notDeclared) return res.status(400).json(notDeclared);
     const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : null;
     if (note && note.length > 120) return res.status(400).json({ error: 'A note is up to 120 characters.', code: 'BAD_NOTE' });
     const open = body.open === true;
@@ -337,7 +344,9 @@ export async function answerPairInvite(req: Request, res: Response) {
       return res.json({ invite: { ...inv, status: 'declined' } });
     }
 
-    // accept
+    // accept — Stage 9 · T12: in an "amateurs only" event the partner declares too.
+    const notDeclared = amateurDeclarationRefusal(settingsOf(t).category, (req.body ?? {}).declared_amateur);
+    if (notDeclared) return res.status(400).json(notDeclared);
     syncAfterSuccess(res, () => syncTournamentChatMembers(t.id));
     const ppl = await people([inv.inviter_id, userId]);
     if (inv.entry_id) {
@@ -369,7 +378,7 @@ export async function answerPairInvite(req: Request, res: Response) {
     if (bad) return res.status(bad.status).json(bad.body);
     const landed = settingsOf(t).entry === 'open' ? 'approved' : 'pending';
     // The inviter captains the pair (they asked); the one accepting is co-captain.
-    const made = await makeEntry(t, [inv.inviter_id, userId], landed, inv.inviter_id);
+    const made = await makeEntry(t, [inv.inviter_id, userId], landed, inv.inviter_id, settingsOf(t).category?.amateurOnly === true);
     if (!made.entry) return res.status(500).json({ error: made.error });
     await supabase.from('tournament_pair_invites').update({ status: 'accepted', responded_at: now }).eq('id', inv.id);
     void notifyUnlessBlocked(userId, {

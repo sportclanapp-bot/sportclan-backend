@@ -357,7 +357,21 @@ export type Category = {
    * on or after 1 Jan of year − 14"). Absent = the age on the start date (as before).
    */
   ageBasis?: 'year' | null;
+  /**
+   * Stage 9 · T12 · a doubles pair's ages add up to at least this (club doubles
+   * "90+", "100+", "110+"), counted the same way as the ages above. Any doubles
+   * or pair sport; checked when the pair forms.
+   */
+  pairAgeMin?: number | null;
+  /**
+   * Stage 9 · T12 · amateurs only: whoever enters declares nobody in the entry is
+   * a coach, an ex-professional or a marker (the organiser can still refuse an entry).
+   */
+  amateurOnly?: boolean | null;
 };
+
+/** Stage 9 · T12: a pair's combined age, 40 to 200. */
+export const PAIR_AGE_MIN: [number, number] = [40, 200];
 
 const isInt = (x: unknown, lo: number, hi: number) => typeof x === 'number' && Number.isInteger(x) && x >= lo && x <= hi;
 
@@ -365,7 +379,7 @@ export function categoryRefusal(c: unknown): Refusal | null {
   if (c === undefined || c === null) return null;
   if (typeof c !== 'object' || Array.isArray(c)) return refuse('A category must be an object.');
   const o = c as Record<string, unknown>;
-  const unknown = Object.keys(o).find((k) => !['gender', 'underAge', 'minAge', 'maxRating', 'minRating', 'ageBasis'].includes(k));
+  const unknown = Object.keys(o).find((k) => !['gender', 'underAge', 'minAge', 'maxRating', 'minRating', 'ageBasis', 'pairAgeMin', 'amateurOnly'].includes(k));
   if (unknown) return refuse(`“${unknown}” isn’t part of a category.`);
   if (o.ageBasis != null && o.ageBasis !== 'year') return refuse('Ages are on the start date, or by birth year.');
   if (o.gender != null && !['men', 'women', 'mixed'].includes(o.gender as string)) return refuse('A category is men’s, women’s, mixed or open.');
@@ -375,6 +389,8 @@ export function categoryRefusal(c: unknown): Refusal | null {
   if (o.maxRating != null && !isInt(o.maxRating, 100, 3000)) return refuse('A rating limit is 100 to 3000.');
   if (o.minRating != null && !isInt(o.minRating, 100, 3000)) return refuse('A rating limit is 100 to 3000.');
   if (o.maxRating != null && o.minRating != null && (o.minRating as number) > (o.maxRating as number)) return refuse('The lowest rating can’t be above the highest.');
+  if (o.pairAgeMin != null && !isInt(o.pairAgeMin, PAIR_AGE_MIN[0], PAIR_AGE_MIN[1])) return refuse(`A pair’s combined age is ${PAIR_AGE_MIN[0]} to ${PAIR_AGE_MIN[1]}.`); // Stage 9 · T12
+  if (o.amateurOnly != null && typeof o.amateurOnly !== 'boolean') return refuse('Amateurs only is on or off.');
   return null;
 }
 
@@ -382,9 +398,10 @@ export function categoryRefusal(c: unknown): Refusal | null {
 export function storedCategory(c: Record<string, any> | null | undefined): Category | null {
   if (!c) return null;
   const out: Category = {};
-  for (const k of ['gender', 'underAge', 'minAge', 'maxRating', 'minRating'] as const) if (c[k] != null) (out as Record<string, unknown>)[k] = c[k];
-  // 7.11: by birth year — only meaningful with an age limit.
-  if (c.ageBasis === 'year' && (out.underAge != null || out.minAge != null)) out.ageBasis = 'year';
+  for (const k of ['gender', 'underAge', 'minAge', 'maxRating', 'minRating', 'pairAgeMin'] as const) if (c[k] != null) (out as Record<string, unknown>)[k] = c[k];
+  if (c.amateurOnly === true) out.amateurOnly = true; // Stage 9 · T12
+  // 7.11: by birth year — only meaningful with an age limit (Stage 9 · T12: or a pair's combined age).
+  if (c.ageBasis === 'year' && (out.underAge != null || out.minAge != null || out.pairAgeMin != null)) out.ageBasis = 'year';
   return Object.keys(out).length ? out : null;
 }
 
@@ -398,6 +415,9 @@ export function categoryLabel(c: Category | null | undefined): string | null {
   if (c.minRating != null && c.maxRating != null) parts.push(`Rated ${c.minRating}–${c.maxRating}`);
   else if (c.maxRating != null) parts.push(`Rated up to ${c.maxRating}`);
   else if (c.minRating != null) parts.push(`Rated ${c.minRating} and up`);
+  // Stage 9 · T12.
+  if (c.pairAgeMin != null) parts.push(`Pairs ${c.pairAgeMin}+ combined${c.ageBasis === 'year' && c.underAge == null && c.minAge == null ? ' (by birth year)' : ''}`);
+  if (c.amateurOnly) parts.push('Amateurs only');
   return parts.length ? parts.join(' · ') : null;
 }
 
@@ -456,7 +476,25 @@ export function categoryProblem(c: Category | null | undefined, players: Categor
     const g = new Set(players.map((p) => p.gender));
     if (!g.has('male') || !g.has('female')) return 'A mixed event needs at least one man and one woman on the team.';
   }
+  // Stage 9 · T12: a pair's combined age (two players; a bigger team is checked per rubber).
+  if (c.pairAgeMin != null && players.length === 2) {
+    const byYear = c.ageBasis === 'year';
+    const ages = players.map((p) => (p.dob ? (byYear ? ageInYear(p.dob, on) : ageOn(p.dob, on)) : null));
+    const missing = players.find((_, i) => ages[i] == null);
+    if (missing) return `${poss(missing.name)} profile doesn’t list their date of birth, and this event is for pairs ${c.pairAgeMin}+ combined. Add it to the profile first.`;
+    const sum = (ages[0] as number) + (ages[1] as number);
+    if (sum < c.pairAgeMin) return `This event is for pairs ${c.pairAgeMin}+ combined${byYear ? ' (by birth year)' : ''}, and ${players[0]!.name} and ${players[1]!.name} add up to ${sum}.`;
+  }
   return null;
+}
+
+/**
+ * Stage 9 · T12 · an "amateurs only" event: why this entry can't be made
+ * without the declaration (null when it's made, or not asked for).
+ */
+export function amateurDeclarationRefusal(c: Category | null | undefined, declared: unknown): Refusal | null {
+  if (!c?.amateurOnly || declared === true) return null;
+  return { error: 'This event is for amateurs: confirm nobody in your entry is a coach, an ex-professional or a marker.', code: 'DECLARATION' };
 }
 
 export const CLUB_MAX = 60;

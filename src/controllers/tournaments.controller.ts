@@ -74,7 +74,7 @@ import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
-import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, swissRoundsProblem, tableInputs } from '../utils/tournamentSettings';
+import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, swissRoundsProblem, tableInputs, amateurDeclarationRefusal } from '../utils/tournamentSettings';
 import { drawOrder } from '../utils/drawOrder';
 import { sharedScheduleFor } from '../utils/sharedCourts';
 import { fillEntryLineups, doublesRulesSport } from '../utils/entryLineups';
@@ -625,7 +625,8 @@ async function attachEventSummaries(rows: Array<Record<string, unknown>>): Promi
 }
 
 /** The entry columns the app reads (the fee only for an organiser). */
-const entryCols = (organiser: boolean) => `id, team_id, status, seed, group_label, club, entered_at,${organiser ? ' fee_paid_at, fee_note,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`;
+// Stage 9 · T12: the organiser sees when an "amateurs only" entry was declared (migration 129).
+const entryCols = (organiser: boolean) => `id, team_id, status, seed, group_label, club, entered_at,${organiser ? ' fee_paid_at, fee_note, amateur_declared_at,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`;
 
 export type EntrySummary = {
   approved: number; pending: number; withdrawn: number; rejected: number; total: number;
@@ -1299,7 +1300,7 @@ export async function directAddTeam(req: Request, res: Response) {
  * code once it has named its tournament (B08-F2 — one routine, so the code can
  * never again skip a rule the entry form applies).
  */
-async function enterTeam(tournamentId: string, teamId: unknown, userId: string): Promise<{ status: number; body: Record<string, unknown> }> {
+async function enterTeam(tournamentId: string, teamId: unknown, userId: string, declaredAmateur: unknown = false): Promise<{ status: number; body: Record<string, unknown> }> {
   if (!teamId) return { status: 400, body: { error: 'team_id is required' } };
   if (!isUuid(teamId)) return { status: 400, body: { error: 'team_id must be a valid team.' } };
   // Hard-delete list #6: a disbanded team can't enter a tournament.
@@ -1327,6 +1328,10 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string):
   // re-validated too.
   const refusal = await entryRefusal(tournament as EntryTournament, teamId, { capCounts: ['pending', 'approved'], deadline: true, overlap: true });
   if (refusal) return refusal;
+  // Stage 9 · T12: an "amateurs only" event asks the captain to declare it.
+  const amateurOnly = settingsOf(tournament as { settings?: unknown }).category?.amateurOnly === true;
+  const notDeclared = amateurDeclarationRefusal(settingsOf(tournament as { settings?: unknown }).category, declaredAmateur);
+  if (notDeclared) return { status: 400, body: notDeclared as unknown as Record<string, unknown> };
 
   // BUILD 4.11: an open tournament takes a captain's entry straight in (up to
   // max teams); otherwise it waits for the organiser, as before.
@@ -1359,7 +1364,7 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string):
   const nowIso = new Date().toISOString();
   const { data: reopened } = await supabase
     .from('tournament_entries')
-    .update({ status: landing, entered_at: nowIso })
+    .update({ status: landing, entered_at: nowIso, ...(amateurOnly ? { amateur_declared_at: nowIso } : {}) })
     .eq('tournament_id', tournamentId)
     .eq('team_id', teamId)
     .in('status', ['rejected', 'withdrawn'])
@@ -1385,7 +1390,7 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string):
 
   const { data, error } = await supabase
     .from('tournament_entries')
-    .insert({ tournament_id: tournamentId, team_id: teamId, status: landing })
+    .insert({ tournament_id: tournamentId, team_id: teamId, status: landing, ...(amateurOnly ? { amateur_declared_at: nowIso } : {}) })
     .select('*')
     .single();
   if (error) {
@@ -1410,7 +1415,7 @@ export async function createEntry(req: Request, res: Response) {
   try {
     // B02 (V022, D7): the chat follows the entries and organisers.
     syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
-    const out = await enterTeam(String(req.params.id), (req.body || {}).team_id, userId);
+    const out = await enterTeam(String(req.params.id), (req.body || {}).team_id, userId, (req.body || {}).declared_amateur);
     return res.status(out.status).json(out.body);
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

@@ -84,6 +84,7 @@ import { eventLimitRefusal, eventLimitsRefusal, storedEventLimits } from '../uti
 import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSeparation';
 import { scheduleRefusal } from '../utils/scheduleFields';
 import { swissFirstRound, swissNextRound, type SwissRound } from '../utils/swiss';
+import { seededGroupFixtures } from '../utils/groupOrder';
 import { BOX_DEFAULT, boxesOf, boxLabel, challengeProblem, ladderAfter, nextBoxOrder } from '../utils/ladderBox';
 import {
   SHARED_KEYS, EVENT_KEYS, eventsListRefusal, eventName, entryKindRefusal, eventLabelRefusal, refreshParentStatus, refreshParentOf,
@@ -4115,30 +4116,29 @@ export async function generateFixtures(req: Request, res: Response) {
         for (const t of groups[g]) {
           await supabase.from('tournament_entries').update({ group_label: label }).eq('tournament_id', id).eq('team_id', t.id);
         }
-        const grp = groups[g];
-        for (let i = 0; i < grp.length; i++) {
-          for (let j = i + 1; j < grp.length; j++) {
-            matchRows.push({
-              sport_id: tournament.sport_id,
-              tournament_id: id,
-              team_a_id: grp[i].id,
-              team_b_id: grp[j].id,
-              team_a_name: grp[i].name,
-              team_b_name: grp[j].name,
-              venue: tournament.venue ?? null,
-              city_id: tournament.city_id ?? null,
-              status: 'scheduled',
-              score_summary: {},
-              created_by: userId,
-              round: 0,
-              match_no: mno,
-              group_label: label,
-              is_ranked: true, // SC-251: group-stage matches are ranked too.
-              ...fixtureDefaults,
-            });
-            mno++;
-          }
-        }
+      }
+      // Stage 10 · TT7: each group in seeded order (the top seeds meet last), the
+      // groups' rounds interleaved so a player rests while the others play.
+      for (const fx of seededGroupFixtures(groups)) {
+        matchRows.push({
+          sport_id: tournament.sport_id,
+          tournament_id: id,
+          team_a_id: fx.a.id,
+          team_b_id: fx.b.id,
+          team_a_name: fx.a.name,
+          team_b_name: fx.b.name,
+          venue: tournament.venue ?? null,
+          city_id: tournament.city_id ?? null,
+          status: 'scheduled',
+          score_summary: {},
+          created_by: userId,
+          round: 0,
+          match_no: mno,
+          group_label: plan.groups[fx.group]!.label,
+          is_ranked: true, // SC-251: group-stage matches are ranked too.
+          ...fixtureDefaults,
+        });
+        mno++;
       }
       // Stage 8: room for the best next-placed teams the organiser chose too.
       const koSize = groupsKnockoutSize(numGroups, qualsPerGroup, settingsOf(tournament as { settings?: unknown }).bestNext);
@@ -4364,19 +4364,17 @@ async function boxRoundRows(
   const boxes = boxesOf(order, size);
   let place = 0; let mno = 0;
   for (let b = 0; b < boxes.length; b++) {
-    const box = boxes[b]!;
-    for (const e of box) await supabase.from('tournament_entries').update({ group_label: String(b + 1), seed: ++place }).eq('id', e.entryId);
-    for (let i = 0; i < box.length; i++) {
-      for (let j = i + 1; j < box.length; j++) {
-        rows.push({
-          sport_id: base.sport_id, tournament_id: base.tournament_id,
-          team_a_id: box[i]!.teamId, team_b_id: box[j]!.teamId,
-          team_a_name: nameOf.get(box[i]!.teamId) ?? 'Player', team_b_name: nameOf.get(box[j]!.teamId) ?? 'Player',
-          venue: base.venue, city_id: base.city_id, status: 'scheduled', score_summary: {}, created_by: base.created_by,
-          round, match_no: mno++, group_label: String(b + 1), is_ranked: true, ...base.fixtureDefaults,
-        });
-      }
-    }
+    for (const e of boxes[b]!) await supabase.from('tournament_entries').update({ group_label: String(b + 1), seed: ++place }).eq('id', e.entryId);
+  }
+  // Stage 10 · TT7: each box in seeded order (its top players meet last), boxes interleaved.
+  for (const fx of seededGroupFixtures(boxes)) {
+    rows.push({
+      sport_id: base.sport_id, tournament_id: base.tournament_id,
+      team_a_id: fx.a.teamId, team_b_id: fx.b.teamId,
+      team_a_name: nameOf.get(fx.a.teamId) ?? 'Player', team_b_name: nameOf.get(fx.b.teamId) ?? 'Player',
+      venue: base.venue, city_id: base.city_id, status: 'scheduled', score_summary: {}, created_by: base.created_by,
+      round, match_no: mno++, group_label: String(fx.group + 1), is_ranked: true, ...base.fixtureDefaults,
+    });
   }
   return rows;
 }

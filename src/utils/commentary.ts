@@ -47,7 +47,7 @@ export function sportCommentary(eventType: string, p: Record<string, any>, ctx: 
   // BUILD 3.22: a football / hockey event scored on the match clock says its minute.
   const goalSport = ctx.sport === 'football' || ctx.sport === 'hockey';
   // A shoot-out kick isn't played on the match clock: no minute.
-  const shootoutKick = eventType === 'note' && p.kind === 'shootout_kick';
+  const shootoutKick = eventType === 'note' && (p.kind === 'shootout_kick' || p.kind === 'shootout_start' || p.kind === 'shootout_cancel');
   if (line && goalSport && !shootoutKick && typeof ctx.clockSeconds === 'number' && ctx.periodMinutes) {
     // ctx.period counts periods ENDED (right for "End of Q3"); a goal is in the next one.
     const periodNow = eventType === 'period_change' ? ctx.period : ctx.period + 1;
@@ -86,6 +86,9 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (goalSport && eventType === 'note' && p.kind === 'clock_pause') return '⏸ Clock stopped';
   if (goalSport && eventType === 'note' && p.kind === 'clock_resume') return '▶ Clock restarted';
   if (goalSport && eventType === 'note' && p.kind === 'added_time' && typeof p.minutes === 'number') return `⏱ +${p.minutes} min added time`;
+  // Stage 8 · F9: the shoot-out starts (the clock stops), or the scorer backs out to the match.
+  if (goalSport && eventType === 'note' && p.kind === 'shootout_start') return ctx.sport === 'hockey' ? '🥅 Shoot-out' : '🥅 Penalty shoot-out';
+  if (goalSport && eventType === 'note' && p.kind === 'shootout_cancel') return `↩ Back to the match — no ${ctx.sport === 'hockey' ? 'shoot-out' : 'penalties'} yet`;
   // Stage 8 · F9: the shoot-out, kick by kick.
   if (goalSport && eventType === 'note' && p.kind === 'shootout_kick') {
     return `${p.scored ? '✅ Scored' : '❌ Missed'} — ${ctx.sport === 'hockey' ? 'shoot-out' : 'penalty'} by ${player ? `${player} (${team})` : team}`;

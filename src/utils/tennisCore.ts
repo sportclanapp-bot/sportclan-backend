@@ -70,12 +70,16 @@ export interface TennisOpts {
    * the next point wins).
    */
   scoring?: TennisGameScoring;
+  /** Stage 9 · T2: the tiebreak at this games-all, below games-all (Fast4: 3) — null/undefined = at games-all. */
+  tiebreakAt?: number | null;
+  /** Stage 9 · T2: the final set's tiebreak points (Grand Slams: 10 at 6-6) — null/undefined = as every set. */
+  finalSetTiebreakTo?: number | null;
 }
 export type TennisGameScoring = 'ad' | 'noad' | 'semiad';
 type Opts = Required<TennisOpts>;
 function optsOf(o: number | TennisOpts | undefined): Opts {
   const x: TennisOpts = typeof o === 'number' ? { setsToWin: o } : o ?? { setsToWin: TENNIS_SETS_TO_WIN };
-  return { setsToWin: x.setsToWin, gamesPerSet: x.gamesPerSet ?? GAMES_PER_SET, tiebreak: x.tiebreak ?? true, tiebreakTo: x.tiebreakTo ?? TIEBREAK_TO, matchTiebreak: x.matchTiebreak ?? false, scoring: x.scoring ?? 'ad' };
+  return { setsToWin: x.setsToWin, gamesPerSet: x.gamesPerSet ?? GAMES_PER_SET, tiebreak: x.tiebreak ?? true, tiebreakTo: x.tiebreakTo ?? TIEBREAK_TO, matchTiebreak: x.matchTiebreak ?? false, scoring: x.scoring ?? 'ad', tiebreakAt: x.tiebreakAt ?? null, finalSetTiebreakTo: x.finalSetTiebreakTo ?? null };
 }
 
 const other = (s: TennisSide): TennisSide => (s === 'A' ? 'B' : 'A');
@@ -115,12 +119,14 @@ const MATCH_TIEBREAK_TO = 10;
 /** One point to `side`. Pure: returns a new score. */
 export function tennisPoint(s: TennisScore, side: TennisSide, options: number | TennisOpts = TENNIS_SETS_TO_WIN): TennisScore {
   if (s.winner) return s;
-  const { setsToWin, gamesPerSet, tiebreak: tiebreaks, tiebreakTo, matchTiebreak, scoring } = optsOf(options);
+  const { setsToWin, gamesPerSet, tiebreak: tiebreaks, tiebreakTo, matchTiebreak, scoring, tiebreakAt, finalSetTiebreakTo } = optsOf(options);
   const o = other(side);
   const points = { ...s.points, [side]: s.points[side] + 1 };
+  // Stage 9 · T2: the deciding set (sets level one short of winning) may have its own tiebreak points.
+  const finalSet = s.setsWon.A === setsToWin - 1 && s.setsWon.B === setsToWin - 1;
 
   if (s.tiebreak) {
-    const to = s.matchTiebreak ? MATCH_TIEBREAK_TO : tiebreakTo;
+    const to = s.matchTiebreak ? MATCH_TIEBREAK_TO : finalSet && finalSetTiebreakTo ? finalSetTiebreakTo : tiebreakTo;
     if (points[side] >= to && points[side] - points[o] >= 2) {
       // The tiebreak winner takes the set 7-6 (a match tiebreak: 1-0).
       const games = { ...s.games, [side]: s.games[side] + 1 };
@@ -134,7 +140,9 @@ export function tennisPoint(s: TennisScore, side: TennisSide, options: number | 
     if (games[side] >= gamesPerSet && games[side] - games[o] >= 2) {
       return winSet({ ...s, games }, side, setsToWin, undefined, matchTiebreak);
     }
-    const tiebreak = tiebreaks && games.A === gamesPerSet && games.B === gamesPerSet;
+    // Stage 9 · T2: at games-all — or earlier (Fast4: first to 4, tiebreak at 3-3).
+    const at = tiebreakAt ?? gamesPerSet;
+    const tiebreak = tiebreaks && games.A === at && games.B === at;
     return { ...s, points: { A: 0, B: 0 }, games, tiebreak };
   }
   return { ...s, points };

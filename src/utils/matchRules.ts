@@ -111,6 +111,16 @@ export interface MatchRules {
   adScoring?: 'ad' | 'noad' | 'semiad';
   /** BUILD 3.66: tennis — a timed match (10–180 min), scored at the buzzer; null = untimed. */
   timeLimitMinutes?: number | null;
+  /**
+   * Stage 9 · T2: tennis — the games-all score at which a set's tiebreak is
+   * played, when earlier than games-all (Fast4: first to 4, tiebreak at 3-3);
+   * null = at games-all.
+   */
+  tiebreakAt?: number | null;
+  /** Stage 9 · T2: tennis — the final set's tiebreak points when they differ (Grand Slams: 10 at 6-6); null = as every set. */
+  finalSetTiebreakTo?: number | null;
+  /** Stage 9 · T2: tennis — no lets on serve (Fast4): a let serve is played. Said in the rules; the pad records no lets. */
+  noLet?: boolean;
   /** BUILD 3.72: carrom — the queen's worth, 0–5 (3 official, 5 in the home game). */
   queenPoints?: number;
   /** BUILD 3.73: carrom — the queen counts only below target − queen (true, official), or always. */
@@ -145,7 +155,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null }, // BUILD 3.54 rubbers
   pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally' }, // BUILD 3.58: side-out; players 2 = doubles
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2 },
-  tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null }, // BUILD 3.59–3.66 (players 2 = doubles)
+  tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null, tiebreakAt: null, finalSetTiebreakTo: null, noLet: false }, // BUILD 3.59–3.66; Stage 9 · T2 (players 2 = doubles)
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50 }, // BUILD 3.72–3.77
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null },
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
@@ -210,8 +220,8 @@ export function carromOptsOf(rules: MatchRules): { gamesToWin: number; target: n
 export const CARROM_PRESETS = [{ target: 25, queenPoints: 3, name: 'Official' }, { target: 29, queenPoints: 5, name: 'Home' }] as const;
 
 /** BUILD 3.59+ · the tennis core's options from a match's rules (tennisCore.TennisOpts). */
-export function tennisOptsOf(rules: MatchRules): { setsToWin: number; gamesPerSet: number; tiebreak: boolean; tiebreakTo: number; matchTiebreak: boolean; scoring: 'ad' | 'noad' | 'semiad' } {
-  return { setsToWin: winsToWin(rules), gamesPerSet: rules.gamesPerSet ?? 6, tiebreak: rules.tiebreak !== false, tiebreakTo: rules.tiebreakTo ?? 7, matchTiebreak: rules.matchTiebreak === true, scoring: rules.adScoring ?? 'ad' };
+export function tennisOptsOf(rules: MatchRules): { setsToWin: number; gamesPerSet: number; tiebreak: boolean; tiebreakTo: number; matchTiebreak: boolean; scoring: 'ad' | 'noad' | 'semiad'; tiebreakAt: number | null; finalSetTiebreakTo: number | null } {
+  return { setsToWin: winsToWin(rules), gamesPerSet: rules.gamesPerSet ?? 6, tiebreak: rules.tiebreak !== false, tiebreakTo: rules.tiebreakTo ?? 7, matchTiebreak: rules.matchTiebreak === true, scoring: rules.adScoring ?? 'ad', tiebreakAt: rules.tiebreakAt ?? null, finalSetTiebreakTo: rules.finalSetTiebreakTo ?? null };
 }
 
 /** Games / sets / boards needed to win a best-of-n match — BUILD 3.49: rubbers, for a team tie. */
@@ -358,7 +368,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', noLbw: 'No LBW', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game', gameMinutes: 'Minutes a game', carromMode: 'Carrom game', queenValue: 'Queen (point carrom)',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', tiebreakAt: 'Tiebreak at', finalSetTiebreakTo: 'Final-set tiebreak', noLet: 'Lets', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game', gameMinutes: 'Minutes a game', carromMode: 'Carrom game', queenValue: 'Queen (point carrom)',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -442,6 +452,16 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'tennis' && r.players !== null && r.players !== DOUBLES_PLAYERS) return refuse('Tennis players a side is 2 (doubles), or not set for singles.', 'players'); // BUILD 3.65
   if (key === 'tennis' && r.adScoring !== 'ad' && r.adScoring !== 'noad' && r.adScoring !== 'semiad') return refuse('Games are ad, no-ad or semi-ad.', 'adScoring'); // BUILD 3.63
   if (key === 'tennis' && r.matchTiebreak === true && r.bestOf === 1) return refuse('A match tiebreak replaces a final set — there is none in a one-set match.', 'matchTiebreak');
+  // Stage 9 · T2: Fast4's early tiebreak, the Grand Slams' final-set tiebreak, no lets.
+  if (key === 'tennis' && r.tiebreakAt !== null && (!isWhole(r.tiebreakAt) || r.tiebreakAt < 1 || r.tiebreakAt > (r.gamesPerSet as number))) {
+    return refuse(`A tiebreak comes at 1-all to ${String(r.gamesPerSet)}-all.`, 'tiebreakAt');
+  }
+  if (key === 'tennis' && r.tiebreakAt !== null && r.tiebreak === false) return refuse('Set when the tiebreak comes only with tiebreaks on.', 'tiebreakAt');
+  if (key === 'tennis' && r.finalSetTiebreakTo !== null && r.finalSetTiebreakTo !== 7 && r.finalSetTiebreakTo !== 10) return refuse('A final-set tiebreak is to 7 or 10 points.', 'finalSetTiebreakTo');
+  if (key === 'tennis' && r.finalSetTiebreakTo !== null && (r.matchTiebreak === true || r.tiebreak === false)) {
+    return refuse(r.matchTiebreak === true ? 'With a match tiebreak there’s no final set to give its own tiebreak.' : 'A final-set tiebreak needs tiebreaks on.', 'finalSetTiebreakTo');
+  }
+  if (key === 'tennis' && typeof r.noLet !== 'boolean') return refuse('Lets are on or off.', 'noLet');
   // BUILD 3.58: pickleball scores every rally, or side-out (doubles: players 2).
   if (key === 'pickleball' && r.scoring !== 'rally' && r.scoring !== 'sideout') return refuse('Scoring is rally or side-out.', 'scoring');
   if (key === 'pickleball' && r.players !== null && r.players !== DOUBLES_PLAYERS) {
@@ -564,7 +584,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'noLbw', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -660,6 +680,37 @@ export const FOOTBALL_PRESETS = [
   { value: '11', label: '11 a side', rules: { players: 11, periods: 2, periodMinutes: 45, halfTimeMinutes: 15, rollingSubs: false, offside: true, extraTimeMinutes: 15, maxSubs: 5, subWindows: 3 } },
 ] as const;
 
+/**
+ * Stage 9 · T2 · tennis in one tap. Each fills the tennis rules; every value
+ * stays editable.
+ * - Best of 3 / best of 5: tiebreak sets (best of 5: the Grand Slams' 10-point
+ *   tiebreak at 6-6 in the final set).
+ * - 2 sets + match tiebreak: a 10-point tiebreak instead of the third set.
+ * - Junior doubles: the same, no-ad (ITF juniors, ATP doubles).
+ * - Pro set to 8 / 9: one set; Pune ranking rounds play 9.
+ * - Short sets: first to 4, tiebreak at 4-4.
+ * - Fast4 (LTA): first to 4, tiebreak at 3-3, no-ad, match tiebreak at one
+ *   set all, no lets.
+ */
+export const TENNIS_PRESETS = [
+  { value: 'bo3', label: 'Best of 3', rules: { bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, tiebreakAt: null, matchTiebreak: false, finalSetTiebreakTo: null, adScoring: 'ad', noLet: false } },
+  { value: 'bo5', label: 'Best of 5', rules: { bestOf: 5, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, tiebreakAt: null, matchTiebreak: false, finalSetTiebreakTo: 10, adScoring: 'ad', noLet: false } },
+  { value: 'mtb', label: '2 sets + match tiebreak', rules: { bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, tiebreakAt: null, matchTiebreak: true, finalSetTiebreakTo: null, adScoring: 'ad', noLet: false } },
+  { value: 'jdoubles', label: 'Junior doubles', rules: { bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, tiebreakAt: null, matchTiebreak: true, finalSetTiebreakTo: null, adScoring: 'noad', noLet: false } },
+  { value: 'pro8', label: 'Pro set to 8', rules: { bestOf: 1, gamesPerSet: 8, tiebreak: true, tiebreakTo: 7, tiebreakAt: null, matchTiebreak: false, finalSetTiebreakTo: null, adScoring: 'ad', noLet: false } },
+  { value: 'pro9', label: 'Pro set to 9', rules: { bestOf: 1, gamesPerSet: 9, tiebreak: true, tiebreakTo: 7, tiebreakAt: null, matchTiebreak: false, finalSetTiebreakTo: null, adScoring: 'ad', noLet: false } },
+  { value: 'short4', label: 'Short sets to 4', rules: { bestOf: 3, gamesPerSet: 4, tiebreak: true, tiebreakTo: 7, tiebreakAt: null, matchTiebreak: false, finalSetTiebreakTo: null, adScoring: 'ad', noLet: false } },
+  { value: 'fast4', label: 'Fast4', rules: { bestOf: 3, gamesPerSet: 4, tiebreak: true, tiebreakTo: 7, tiebreakAt: 3, matchTiebreak: true, finalSetTiebreakTo: null, adScoring: 'noad', noLet: true } },
+] as const;
+
+/** Stage 9 · T2: the tennis preset these rules match, or null. */
+export function tennisPresetOf(rules: Partial<MatchRules> | null | undefined): string | null {
+  if (!rules) return null;
+  const r = rules as Record<string, unknown>;
+  const std = SPORT_RULES.tennis as unknown as Record<string, unknown>;
+  return TENNIS_PRESETS.find((p) => Object.entries(p.rules).every(([k, v]) => (r[k] ?? std[k] ?? null) === v))?.value ?? null;
+}
+
 /** The preset a football rules object matches, if any (by players a side and its other values). */
 export function footballPresetOf(r: Partial<MatchRules> | null | undefined): string | null {
   if (!r) return null;
@@ -736,12 +787,16 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   // BUILD 3.59+: tennis — said when it isn't sets to 6.
   if (key === 'tennis') {
     if (rules.players === DOUBLES_PLAYERS) parts.push('doubles'); // BUILD 3.65
-    if (rules.gamesPerSet != null && rules.gamesPerSet !== 6) parts.push(rules.bestOf === 1 && rules.gamesPerSet === 8 ? 'pro set to 8' : `sets to ${rules.gamesPerSet}`);
+    if (rules.gamesPerSet != null && rules.gamesPerSet !== 6) parts.push(rules.bestOf === 1 && (rules.gamesPerSet === 8 || rules.gamesPerSet === 9) ? `pro set to ${rules.gamesPerSet}` : `sets to ${rules.gamesPerSet}`); // Stage 9 · T2: 9 too
     if (rules.tiebreak === false) parts.push('advantage sets'); // BUILD 3.60
     else if (rules.tiebreakTo === 10) parts.push('10-point tiebreaks'); // BUILD 3.61
     if (rules.matchTiebreak) parts.push('match tiebreak for the final set'); // BUILD 3.62
     if (rules.timeLimitMinutes) parts.push(`timed · ${rules.timeLimitMinutes} min`); // BUILD 3.66
     if (rules.adScoring === 'noad' || rules.adScoring === 'semiad') parts.push(rules.adScoring === 'noad' ? 'no-ad' : 'semi-ad'); // BUILD 3.63
+    // Stage 9 · T2.
+    if (rules.tiebreakAt != null && rules.tiebreakAt !== (rules.gamesPerSet ?? 6) && rules.tiebreak !== false) parts.push(`tiebreak at ${rules.tiebreakAt}-${rules.tiebreakAt}`);
+    if (rules.finalSetTiebreakTo != null) parts.push(`final-set tiebreak to ${rules.finalSetTiebreakTo}`);
+    if (rules.noLet === true) parts.push('no lets');
     return parts.length ? parts.join(' · ') : null;
   }
   if (key !== 'football' && key !== 'hockey' && key !== 'basketball') return null;

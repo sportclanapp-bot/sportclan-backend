@@ -2,7 +2,7 @@ import { orIlikeContains } from '../utils/likeSearch';
 import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
-import { racketStats, type RacketMatch } from '../utils/racketStats';
+import { racketStats, tennisServeStats, type RacketMatch } from '../utils/racketStats';
 import { isAdminUser } from '../middleware/admin.middleware';
 import { officiatedCount } from '../utils/officiated';
 import { supabase } from '../utils/supabase';
@@ -23,7 +23,7 @@ import { notifyUsers, notifyUser } from '../utils/notify';
 import { stepTimer } from '../utils/stepTimer';
 import { getSport } from '../utils/sportCache';
 import { isDismissal } from '../utils/cricketRules';
-import { aggregateGoalPlayers, aggregatePointPlayers, aggregateRallyPlayers } from './scoring.controller';
+import { aggregateGoalPlayers, aggregatePointPlayers } from './scoring.controller';
 
 // SELF-only fields — the full row for /users/me + own-profile writes. Contains
 // contact + wallet + account internals; NEVER serialize this to another viewer.
@@ -1715,31 +1715,25 @@ export async function getSportProfile(req: Request, res: Response) {
       for (const r of all) if (r.team_side && side.get(r.match_id) === r.team_side) sideSize.set(r.match_id, (sideSize.get(r.match_id) ?? 0) + 1);
       sportStats = racketStats(ms, side, sideSize);
     } else if (slug === 'tennis' && matchIds.length > 0) {
-      // Serve stats from match_participants + point stats from events
-      // Oct 2026: every match (it read the first 100).
-      const myParts = await selectAllIn(matchIds, (c, f, to) => supabase
-        .from('match_participants')
-        .select('aces, double_faults, first_serve_in, first_serve_total, break_points_won, break_points_faced')
-        .eq('user_id', id)
-        .in('match_id', c).order('id').range(f, to));
-      const totalAces = (myParts ?? []).reduce((s, p) => s + (p.aces ?? 0), 0);
-      const totalDF = (myParts ?? []).reduce((s, p) => s + (p.double_faults ?? 0), 0);
-      const fsIn = (myParts ?? []).reduce((s, p) => s + (p.first_serve_in ?? 0), 0);
-      const fsTotal = (myParts ?? []).reduce((s, p) => s + (p.first_serve_total ?? 0), 0);
-      const bpWon = (myParts ?? []).reduce((s, p) => s + (p.break_points_won ?? 0), 0);
-      const bpFaced = (myParts ?? []).reduce((s, p) => s + (p.break_points_faced ?? 0), 0);
-
-      // Point events
-      // F-53: points credited to this player, not every point this player entered as scorer.
-      const events = await selectAllIn(matchIds, (c, f, to) => supabase.from('match_events').select('event_type, payload').in('match_id', c).eq('payload->>player_id', id).order('id').range(f, to));
-      const pointsWon = aggregateRallyPlayers((events ?? []) as { event_type: string; payload: any }[])[id]?.points ?? 0;
-
+      // Stage 9 · T11: from the scores, like the other racket sports — singles
+      // and doubles records, sets and games won–lost — plus aces and double
+      // faults from each match's serve stats (singles the player's own, doubles
+      // the pair's). The old serve columns were never written (they read 0);
+      // first-serve % and break points aren't recorded, so they're not sent.
+      const side = new Map<string, 'A' | 'B'>();
+      const sideSize = new Map<string, number>();
+      const [all, ms] = await Promise.all([
+        selectAllIn<{ match_id: string; user_id: string; team_side: 'A' | 'B' | null }>(matchIds, (c, f, to) => supabase.from('match_participants').select('match_id, user_id, team_side').in('match_id', c).order('id').range(f, to)),
+        selectAllIn<RacketMatch & { score_summary?: any }>(matchIds, (c, f, to) => supabase.from('matches').select('id, team_a_id, team_b_id, winner_team_id, score_summary').in('id', c).order('id').range(f, to)),
+      ]);
+      for (const r of all) if (r.user_id === id && r.team_side) side.set(r.match_id, r.team_side);
+      for (const r of all) if (r.team_side && side.get(r.match_id) === r.team_side) sideSize.set(r.match_id, (sideSize.get(r.match_id) ?? 0) + 1);
+      const rk = racketStats(ms, side, sideSize);
+      const sv = tennisServeStats(ms, side, sideSize);
       sportStats = {
-        total_aces: totalAces,
-        total_double_faults: totalDF,
-        first_serve_pct: fsTotal > 0 ? Math.round((fsIn / fsTotal) * 100) : 0,
-        break_points_pct: bpFaced > 0 ? Math.round((bpWon / bpFaced) * 100) : 0,
-        points_won: pointsWon,
+        ...rk,
+        sets_won: rk.games_won, sets_lost: rk.games_lost, tennis_games_won: rk.points_won, tennis_games_lost: rk.points_lost,
+        total_aces: sv.aces, total_double_faults: sv.double_faults, doubles_aces: sv.doubles_aces, doubles_double_faults: sv.doubles_double_faults,
       };
     }
     } catch {

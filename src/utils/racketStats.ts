@@ -2,7 +2,7 @@
  * Badminton 7.15 (Oct 2026) · a racket player's career, from the scores:
  * games won and lost, rally points won and lost, and the singles and doubles
  * records apart (BWF-style profile). Badminton, table tennis and pickleball —
- * tennis keeps its serve stats. A walkover or retirement counts in the record,
+ * and tennis (Stage 9 · T11), where a "game" here is a set and a "point" a game. A walkover or retirement counts in the record,
  * but only the games actually played count as games and points; a team tie
  * counts in neither (the player played only some of its rubbers).
  */
@@ -42,3 +42,27 @@ export function racketStats(matches: RacketMatch[], side: Map<string, 'A' | 'B'>
   }
   return out;
 }
+
+/**
+ * Stage 9 · T11 · a tennis player's aces and double faults, from each match's
+ * serve stats (score_summary.serve, per side). In singles the side is the
+ * player; in doubles they're the pair's (the pad credits the serving side), so
+ * they're kept apart. (The old match_participants serve columns were never
+ * written — the profile read 0.)
+ */
+export type TennisServeStats = { aces: number; double_faults: number; doubles_aces: number; doubles_double_faults: number };
+export function tennisServeStats(
+  matches: Array<{ id: string; score_summary?: { serve?: Partial<Record<'A' | 'B', { aces?: unknown; double_faults?: unknown }>> } | null }>,
+  side: Map<string, 'A' | 'B'>, sideSize: Map<string, number>,
+): TennisServeStats {
+  const out: TennisServeStats = { aces: 0, double_faults: 0, doubles_aces: 0, doubles_double_faults: 0 };
+  for (const m of matches) {
+    const me = side.get(m.id);
+    const s = me ? m.score_summary?.serve?.[me] : null;
+    if (!s) continue;
+    const a = Number(s.aces) || 0; const d = Number(s.double_faults) || 0;
+    if ((sideSize.get(m.id) ?? 1) === 2) { out.doubles_aces += a; out.doubles_double_faults += d; } else { out.aces += a; out.double_faults += d; }
+  }
+  return out;
+}
+

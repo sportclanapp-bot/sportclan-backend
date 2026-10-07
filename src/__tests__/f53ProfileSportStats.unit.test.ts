@@ -33,7 +33,8 @@ test('basketball points and rally points are the credited player\'s', () => {
 test('the profile reads the rollups, not created_by', () => {
   expect(stats).toContain('const line = aggregateGoalPlayers(ev)[id];');
   expect(stats).toContain('total_points: aggregatePointPlayers(ev)[id]?.points ?? 0,');
-  expect(src).toContain('const pointsWon = aggregateRallyPlayers(');
+  // Stage 9 · T11: tennis now reads its record from the scores (racketStats), not point events.
+  expect(src).toContain('const sv = tennisServeStats(ms, side, sideSize);');
   expect(stats).not.toContain('created_by === id');
   expect(stats).toContain("...(slug === 'hockey' ? { green_cards: cards('green') } : {}),");
 });

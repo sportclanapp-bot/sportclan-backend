@@ -56,11 +56,14 @@ test('the profile endpoint: badminton gets the score-based stats', async () => {
   expect(r.body?.profile?.sportStats).toEqual({ games_won: 2, games_lost: 3, points_won: 82, points_lost: 97, singles_won: 1, singles_lost: 1, doubles_won: 0, doubles_lost: 0 });
 });
 
-test('tennis keeps its serve stats', async () => {
+// Stage 9 · T11: tennis's serve stats come from each match's serve stats (the
+// participant columns were never written, so the profile read 0).
+test('tennis: serve stats from the match, with sets and games', async () => {
   db = fakeDb({
     user_sport_profiles: [{ user_id: ME, sport_id: TN, rating: 1200, matches_played: 1, wins: 1, losses: 0, draws: 0 }],
     users: [{ id: ME, name: 'Ravi', deleted_at: null }],
-    match_participants: [{ match_id: id(20), user_id: ME, team_side: 'A', aces: 4, double_faults: 1, match: { id: id(20), voided_at: null, sport_id: TN, status: 'completed' } }],
+    match_participants: [{ match_id: id(20), user_id: ME, team_side: 'A', match: { id: id(20), voided_at: null, sport_id: TN, status: 'completed' } }],
+    matches: [{ id: id(20), team_a_id: 't1', team_b_id: 't2', winner_team_id: 't1', score_summary: { A: { sets: [6, 7] }, B: { sets: [3, 6] }, serve: { A: { aces: 4, double_faults: 1 }, B: { aces: 0, double_faults: 2 } } } }],
   });
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { getSportProfile } = require('../controllers/users.controller');
@@ -68,5 +71,5 @@ test('tennis keeps its serve stats', async () => {
   r.status = jest.fn((c: number) => { r.statusCode = c; return r; });
   r.json = jest.fn((b: unknown) => { r.body = b; return r; });
   await getSportProfile({ userId: ME, params: { id: ME, sportId: TN }, query: {}, headers: {} } as any, r);
-  expect(r.body.profile.sportStats).toMatchObject({ total_aces: 4, total_double_faults: 1 });
+  expect(r.body.profile.sportStats).toMatchObject({ total_aces: 4, total_double_faults: 1, sets_won: 2, sets_lost: 0, tennis_games_won: 13, tennis_games_lost: 9, singles_won: 1 });
 });

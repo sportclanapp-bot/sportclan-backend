@@ -40,7 +40,7 @@ test('badminton: matches won, games won, points difference (team ties and walkov
 
 test('the other sports’ boards; cricket in the same shape', () => {
   expect(sportBoards('volleyball', [], TEAMS).map((x) => x.title)).toEqual(['Most wins', 'Sets won', 'Points difference']);
-  expect(sportBoards('tennis', [], TEAMS).map((x) => x.title)).toEqual(['Most wins', 'Sets won']);
+  expect(sportBoards('tennis', [], TEAMS).map((x) => x.title)).toEqual(['Most wins', 'Sets won', 'Games won', 'Tiebreaks won', 'Aces']); // Stage 9 · T11
   expect(sportBoards('basketball', [], TEAMS).map((x) => x.title)).toEqual(['Top scorers', 'Assists']);
   expect(sportBoards('chess', [], TEAMS).map((x) => x.title)).toEqual(['Most wins']);
   expect(sportBoards('cricket', [], TEAMS)).toEqual([]);

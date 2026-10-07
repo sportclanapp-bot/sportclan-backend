@@ -110,7 +110,7 @@ export async function getPlacings(req: Request, res: Response) {
 // GET /tournaments/:id/awards → { computed: [...], picked: [...], can_edit }
 //   computed: from the leaderboards (F6) — football's Golden Boot and most
 //   assists, hockey's / basketball's top scorer, cricket's player of the
-//   tournament, most runs and most wickets — and, in the card sports, the
+//   tournament, most runs and most wickets, tennis's most aces — and, in the card sports, the
 //   fair-play team (best FIFA fair-play points; only when someone was booked).
 //   Joint winners share an award.
 // PUT /tournaments/:id/awards { awards: [{ title, user_id? | name?, team_id? }] }
@@ -123,6 +123,9 @@ const AWARD_BOARDS: Record<string, Array<[string, string, string, string]>> = {
   football: [['golden_boot', 'Golden Boot', 'goals', 'goal|goals'], ['most_assists', 'Most assists', 'assists', 'assist|assists']],
   hockey: [['top_scorer', 'Top scorer', 'goals', 'goal|goals']],
   basketball: [['top_scorer', 'Top scorer', 'points', 'point|points']],
+  // Stage 9 · T11: tennis's computed award — most aces (from the serve stats). Wins and
+  // sets aren't awards: in a knockout they only repeat the champion.
+  tennis: [['most_aces', 'Most aces', 'aces', 'ace|aces']],
   cricket: [['player_of_tournament', 'Player of the tournament', 'player_of_tournament', 'pt|pts'], ['most_runs', 'Most runs', 'runs', 'run|runs'], ['most_wickets', 'Most wickets', 'wickets', 'wicket|wickets']],
 };
 const CARD_SPORTS = new Set(['football', 'hockey']);

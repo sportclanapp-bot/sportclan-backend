@@ -26,6 +26,9 @@ export interface SportLeaderMatch {
   score_summary?: {
     A?: { score?: unknown; value?: unknown; sets?: unknown }; B?: { score?: unknown; value?: unknown; sets?: unknown };
     players?: Record<string, Record<string, unknown>> | null; rubbers?: unknown; walkover?: unknown;
+    /** Stage 9 · T11: tennis — each set's tiebreak, and the serve stats per side. */
+    set_tiebreaks?: Array<{ A: number; B: number } | null> | null;
+    serve?: Partial<Record<'A' | 'B', { aces?: unknown; double_faults?: unknown }>> | null;
   } | null;
 }
 
@@ -73,11 +76,11 @@ function topPlayers(
   return { stat, title, one, many, kind: 'player', rows };
 }
 
-type TTally = { team_id: string; played: number; won: number; lost: number; drawn: number; games: number; gamesLost: number; pf: number; pa: number; cleanSheets: number };
+type TTally = { team_id: string; played: number; won: number; lost: number; drawn: number; games: number; gamesLost: number; pf: number; pa: number; cleanSheets: number; tbWon: number; tbLost: number; aces: number };
 
 function teamTallies(matches: SportLeaderMatch[]): TTally[] {
   const out = new Map<string, TTally>();
-  const t = (id: string) => { let x = out.get(id); if (!x) { x = { team_id: id, played: 0, won: 0, lost: 0, drawn: 0, games: 0, gamesLost: 0, pf: 0, pa: 0, cleanSheets: 0 }; out.set(id, x); } return x; };
+  const t = (id: string) => { let x = out.get(id); if (!x) { x = { team_id: id, played: 0, won: 0, lost: 0, drawn: 0, games: 0, gamesLost: 0, pf: 0, pa: 0, cleanSheets: 0, tbWon: 0, tbLost: 0, aces: 0 }; out.set(id, x); } return x; };
   for (const m of matches) {
     const ids: Array<[string | null, 'A' | 'B']> = [[m.team_a_id, 'A'], [m.team_b_id, 'B']];
     const tie = m.score_summary?.rubbers != null;
@@ -96,6 +99,12 @@ function teamTallies(matches: SportLeaderMatch[]): TTally[] {
         me.pf += mine[i]!; me.pa += theirs[i]!;
         if (mine[i]! > theirs[i]!) me.games += 1; else if (theirs[i]! > mine[i]!) me.gamesLost += 1;
       }
+      // Stage 9 · T11: tennis's tiebreaks won/lost (a match tiebreak counts) and aces.
+      for (const tb of m.score_summary?.set_tiebreaks ?? []) {
+        if (!tb) continue;
+        if (tb[side] > tb[other]) me.tbWon += 1; else if (tb[other] > tb[side]) me.tbLost += 1;
+      }
+      me.aces += n(Number(m.score_summary?.serve?.[side]?.aces ?? 0));
       // A goal sport's score is A.score / B.score (the live rollup); `value` as a fallback.
       const goalsOf = (x: 'A' | 'B') => { const v = m.score_summary?.[x]?.score ?? m.score_summary?.[x]?.value; return typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null; };
       const conceded = goalsOf(other);
@@ -156,7 +165,16 @@ export function sportBoards(
       topTeams(teams, 'points_diff', 'Points difference', 'point', 'points', teamNames, (t) => t.pf - t.pa, (t) => `${t.pf}–${t.pa}`, true),
     ];
   }
-  if (k === 'tennis') return [wins, topTeams(teams, 'sets', 'Sets won', 'set', 'sets', teamNames, (t) => t.games, (t) => `${t.games}–${t.gamesLost}`, false, (a, b) => a.gamesLost - b.gamesLost)];
+  if (k === 'tennis') {
+    // Stage 9 · T11: games won (each set's games), tiebreaks won and aces besides wins and sets.
+    return [
+      wins,
+      topTeams(teams, 'sets', 'Sets won', 'set', 'sets', teamNames, (t) => t.games, (t) => `${t.games}–${t.gamesLost}`, false, (a, b) => a.gamesLost - b.gamesLost),
+      topTeams(teams, 'games', 'Games won', 'game', 'games', teamNames, (t) => t.pf, (t) => `${t.pf}–${t.pa}`, false, (a, b) => a.pa - b.pa),
+      topTeams(teams, 'tiebreaks', 'Tiebreaks won', 'tiebreak', 'tiebreaks', teamNames, (t) => t.tbWon, (t) => `${t.tbWon}–${t.tbLost}`, false, (a, b) => a.tbLost - b.tbLost),
+      topTeams(teams, 'aces', 'Aces', 'ace', 'aces', teamNames, (t) => t.aces, (t) => pl(t.played, 'match', 'matches')),
+    ];
+  }
   if (k === 'chess' || k === 'carrom') return [wins];
   return [];
 }

@@ -76,6 +76,13 @@ export interface MatchRules {
   offside?: boolean;
   /** BUILD 3.24: a yellow card's sin bin in minutes (display only); null = none. */
   sinBinMinutes?: number | null;
+  /** Stage 8 · F1/F4: football substitutions a team may make (null = no limit), in how many windows (null = any). */
+  maxSubs?: number | null;
+  subWindows?: number | null;
+  /** Stage 8 · F10: extra time ends at the next goal ("golden goal" / "next goal wins"). */
+  goldenGoal?: boolean;
+  /** Stage 8 · F15: the fewest players a side may have on the pitch (null = the Laws: 7 for 11-a-side, else not checked). */
+  minOnPitch?: number | null;
   /** BUILD 3.27: hockey's shoot-out takers each before sudden death (1–5). */
   shootoutTakers?: number;
   /** BUILD 3.29: hockey's yellow-card suspension, 5–10 minutes (a green is always 2). */
@@ -140,7 +147,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2 },
   tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null }, // BUILD 3.59–3.66 (players 2 = doubles)
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50 }, // BUILD 3.72–3.77
-  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true },
+  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null },
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
   basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false },
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true },
@@ -505,6 +512,13 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'football' && r.sinBinMinutes !== null && (!isWhole(r.sinBinMinutes) || r.sinBinMinutes < 2 || r.sinBinMinutes > 15)) {
     return refuse('A sin bin must be off, or 2 to 15 minutes.', 'sinBinMinutes');
   }
+  // Stage 8 · F1/F4: an organiser's substitutions limit and windows (optional; no app top), golden goal (F10), the fewest on the pitch (F15).
+  if (key === 'football' && r.maxSubs != null && (!isWhole(r.maxSubs) || r.maxSubs < 0)) return refuse('Substitutions must be a whole number, or no limit.', 'maxSubs');
+  if (key === 'football' && r.subWindows != null && (!isWhole(r.subWindows) || r.subWindows < 1)) return refuse('Substitution windows must be 1 or more, or any.', 'subWindows');
+  if (key === 'football' && r.goldenGoal != null && typeof r.goldenGoal !== 'boolean') return refuse('Golden goal is on or off.', 'goldenGoal');
+  if (key === 'football' && r.minOnPitch != null && (!isWhole(r.minOnPitch) || r.minOnPitch < 1 || (isWhole(r.players) && r.minOnPitch > r.players))) {
+    return refuse('The fewest players on the pitch must be from 1 to the players a side.', 'minOnPitch');
+  }
   // BUILD 3.21: a walkover goes down as 3–0 or 5–0.
   if (key === 'football' && r.walkoverGoals !== 3 && r.walkoverGoals !== 5) return refuse('A walkover is 3–0 or 5–0.', 'walkoverGoals');
   // BUILD 3.20: whether a league / group match may end level.
@@ -550,7 +564,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'noLbw', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -618,6 +632,39 @@ export function cardSuspensions(sport: string | null | undefined, rules: MatchRu
   if (key === 'football') return rules.sinBinMinutes ? { yellow: rules.sinBinMinutes } : {};
   if (key === 'hockey') return { green: HOCKEY_GREEN_MINUTES, yellow: rules.yellowCardMinutes ?? 5 };
   return {};
+}
+
+/**
+ * Stage 8 · F15 · the fewest players a football side may have on the pitch:
+ * the organiser's number, else the Laws' 7 for 11-a-side (Law 3); null when
+ * neither applies (small-sided with no number set — not checked).
+ */
+export function minOnPitchFor(rules: Partial<MatchRules> | null | undefined): number | null {
+  if (!rules) return null;
+  if (rules.minOnPitch != null) return rules.minOnPitch;
+  return rules.players === 11 ? 7 : null;
+}
+
+/**
+ * Stage 8 · F2 · football by the size of the game: one tap sets players a side,
+ * halves, half-time, subs, offside and extra time. Every value stays editable.
+ * Small-sided (5–8): rolling subs, no offside, no extra time. 9-a-side (AIFF
+ * U-15): offside. 11-a-side: the Laws — 2 × 45, 5 subs in 3 windows, 7 minimum.
+ */
+export const FOOTBALL_PRESETS = [
+  { value: '5', label: '5 a side', rules: { players: 5, periods: 2, periodMinutes: 20, halfTimeMinutes: 5, rollingSubs: true, offside: false, extraTimeMinutes: 0, maxSubs: null, subWindows: null } },
+  { value: '6', label: '6 a side', rules: { players: 6, periods: 2, periodMinutes: 20, halfTimeMinutes: 5, rollingSubs: true, offside: false, extraTimeMinutes: 0, maxSubs: null, subWindows: null } },
+  { value: '7', label: '7 a side', rules: { players: 7, periods: 2, periodMinutes: 25, halfTimeMinutes: 5, rollingSubs: true, offside: false, extraTimeMinutes: 0, maxSubs: null, subWindows: null } },
+  { value: '8', label: '8 a side', rules: { players: 8, periods: 2, periodMinutes: 25, halfTimeMinutes: 5, rollingSubs: true, offside: false, extraTimeMinutes: 0, maxSubs: null, subWindows: null } },
+  { value: '9', label: '9 a side', rules: { players: 9, periods: 2, periodMinutes: 30, halfTimeMinutes: 10, rollingSubs: false, offside: true, extraTimeMinutes: 10, maxSubs: null, subWindows: null } },
+  { value: '11', label: '11 a side', rules: { players: 11, periods: 2, periodMinutes: 45, halfTimeMinutes: 15, rollingSubs: false, offside: true, extraTimeMinutes: 15, maxSubs: 5, subWindows: 3 } },
+] as const;
+
+/** The preset a football rules object matches, if any (by players a side and its other values). */
+export function footballPresetOf(r: Partial<MatchRules> | null | undefined): string | null {
+  if (!r) return null;
+  const hit = FOOTBALL_PRESETS.find((p) => Object.entries(p.rules).every(([k, v]) => (r as Record<string, unknown>)[k] === v));
+  return hit?.value ?? null;
 }
 
 /** BUILD 3.41: beach volleyball — 2 a side, sets to 21, a deciding set to 15, best of 3. */

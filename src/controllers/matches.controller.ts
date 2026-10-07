@@ -2741,6 +2741,8 @@ export async function completeMatch(req: Request, res: Response) {
     // with the score as it stood. Played, so rated, like a retirement.
     const defaulted = req.body?.defaulted === true;
     const defaultedTeamId = typeof req.body?.defaulted_team_id === 'string' ? req.body.defaulted_team_id as string : null;
+    // A match between names (a friendly, no team rows) is defaulted by side (device pass, 7 Oct).
+    const defaultedSideIn: 'A' | 'B' | null = req.body?.defaulted_side === 'A' || req.body?.defaulted_side === 'B' ? req.body.defaulted_side : null;
     const walkover = walkoverIn === true || retired || defaulted;
     // Badminton (Oct 2026, Dipak): a retirement was played — it moves ratings (a loss
     // for the side that retired). Only a true walkover is unrated.
@@ -2927,12 +2929,14 @@ export async function completeMatch(req: Request, res: Response) {
     // tournaments.controller). That withdraw path uses status='abandoned'; this
     // organiser-driven single-match walkover instead stays status='completed' — a
     // decided result that advances the bracket. A walkover must name a winner.
-    if (walkover && !winner_team_id) {
+    const teamless = !match.team_a_id && !match.team_b_id;
+    const sideDefault = defaulted && teamless && !!defaultedSideIn && (winner_side === 'A' || winner_side === 'B') && winner_side !== defaultedSideIn;
+    if (walkover && !winner_team_id && !sideDefault) {
       return res.status(400).json({ error: retired ? 'A retirement needs the side that goes through.' : 'A walkover needs a winning team.' });
     }
     if (defaulted) {
       const sides = [match.team_a_id, match.team_b_id];
-      if (!defaultedTeamId || !sides.includes(defaultedTeamId) || !sides.includes(winner_team_id) || defaultedTeamId === winner_team_id) {
+      if (!sideDefault && (!defaultedTeamId || !sides.includes(defaultedTeamId) || !sides.includes(winner_team_id) || defaultedTeamId === winner_team_id)) {
         return res.status(400).json({ error: 'Name the side defaulted; the other side wins.', code: 'BAD_DEFAULT' });
       }
       if (match.status !== 'live') {
@@ -3581,8 +3585,9 @@ export async function completeMatch(req: Request, res: Response) {
       // is set here.
       if (defaulted && derivedSide) {
         // Stage 9 · T9: the score at the default stays; the result says who was defaulted.
-        const dName = defaultedTeamId === match.team_a_id ? aName : bName;
-        ss.defaulted = { team_id: defaultedTeamId, side: defaultedTeamId === match.team_a_id ? 'A' : 'B', ...(walkover_reason ? { reason: String(walkover_reason).slice(0, 200) } : {}) };
+        const dSide: 'A' | 'B' = sideDefault ? defaultedSideIn! : defaultedTeamId === match.team_a_id ? 'A' : 'B';
+        const dName = dSide === 'A' ? aName : bName;
+        ss.defaulted = { team_id: sideDefault ? null : defaultedTeamId, side: dSide, ...(walkover_reason ? { reason: String(walkover_reason).slice(0, 200) } : {}) };
         ss.result = `${derivedSide === 'A' ? aName : bName} won (${dName} defaulted)`;
         resultForNotice = ss.result;
       } else if (retired && derivedSide) {

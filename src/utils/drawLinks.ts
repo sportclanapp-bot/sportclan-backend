@@ -21,6 +21,9 @@ type T = { id: string; name: string | null; event_label?: string | null; parent_
 type M = { id: string; tournament_id: string; round: number | null; next_match_id: string | null; winner_team_id: string | null; team_a_id: string | null; team_b_id: string | null; third_place?: boolean | null };
 
 const COLS = 'id, name, event_label, parent_id, status, settings, fixtures_generated';
+
+/** T8: a consolation draw fills itself from the main draw — players don't enter it (the organiser can add). */
+export const CONSOLATION_ONLY = { error: 'This draw is for those who lose their first match in the main draw — they come here from it.', code: 'CONSOLATION_ONLY' };
 const nameOf = (t: T) => t.event_label || t.name || 'the draw';
 
 /** The other events of the same tournament (the family, but not `t`). */

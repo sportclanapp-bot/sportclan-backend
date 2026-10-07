@@ -129,6 +129,16 @@ describe('a default', () => {
     const typed = writes().map((q) => q.find((c) => c.startsWith('update:'))).filter(Boolean).map((u) => JSON.parse(u!.slice(7))[0]).find((u) => u.result_type);
     expect(typed.result_type).toBe('default');
   });
+  test('a friendly between names (no teams) is defaulted by side (device pass)', async () => {
+    mockSport = { slug: 'tennis', allows_draw: false };
+    mockMayDefault = true;
+    setup({ status: 'live', team_a_id: null, team_b_id: null, tournament_id: null, team_a_name: 'Ravi', team_b_name: 'Kiran', score_summary: SCORE, rules: { v: 1, bestOf: 3 }, format: null, overs: null });
+    const r = await call({ defaulted: true, defaulted_side: 'A', winner_side: 'B', walkover_reason: 'Coaching' });
+    expect(r.statusCode).toBe(200);
+    expect(storedSummary()).toMatchObject({ defaulted: { team_id: null, side: 'A', reason: 'Coaching' }, result: 'Kiran won (Ravi defaulted)' });
+    mockLog = [];
+    expect((await call({ defaulted: true, defaulted_side: 'A', winner_side: 'A' })).statusCode).toBe(400); // the defaulted side can't win
+  });
   test('only the referee, umpire or organiser; a named side; while live', async () => {
     mockSport = { slug: 'tennis', allows_draw: false };
     setup({ status: 'live' });

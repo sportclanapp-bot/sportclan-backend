@@ -75,7 +75,7 @@ import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/not
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
 import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, ladderCreateRefusal, swissRoundsProblem, tableInputs, amateurDeclarationRefusal, waitlistOn } from '../utils/tournamentSettings';
-import { consolationWaiting, drawLinkProblem, enterInto, luckyLosers, onKnockoutDecided, qualifyingPending } from '../utils/drawLinks';
+import { CONSOLATION_ONLY, consolationWaiting, drawLinkProblem, enterInto, luckyLosers, onKnockoutDecided, qualifyingPending } from '../utils/drawLinks';
 import { promoteWaitlist } from '../utils/waitlist';
 import { drawOrder } from '../utils/drawOrder';
 import { sharedScheduleFor } from '../utils/sharedCourts';
@@ -903,6 +903,8 @@ async function entryRefusal(
 ): Promise<EntryRefusal | null> {
   // Badminton gap 1: a tournament made of events is entered through an event.
   if (t.is_parent) return { status: 409, body: ENTER_AN_EVENT };
+  // Stage 9 · T8: a consolation draw fills itself from the main draw (a captain can't enter it; the organiser can add).
+  if (opts.deadline && settingsOf(t as { settings?: unknown }).consolation) return { status: 409, body: CONSOLATION_ONLY };
   if (t.status === 'completed' || t.status === 'cancelled') {
     return {
       status: 409,
@@ -2415,6 +2417,7 @@ export async function getBracket(req: Request, res: Response) {
           ground_label: (m as any).ground_label ?? null,
           venue: (m as any).venue ?? null,
           ...((m as any).third_place ? { third_place: true } : {}), // BUILD 4.12
+          ...(fmtLc === 'box' && m.group_label ? { group_label: m.group_label } : {}), // Stage 9 · T16: the match's box
         };
       }),
     }));

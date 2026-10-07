@@ -1,3 +1,4 @@
+import { CONSOLATION_ONLY } from '../utils/drawLinks';
 /**
  * Badminton gap 2 (Oct 2026) · singles and pair entries.
  *
@@ -87,6 +88,7 @@ async function playersRefusal(
   t: T, userIds: string[], opts: { asOrganiser: boolean; except?: string | null; capCounts?: Array<'pending' | 'approved'>; partial?: boolean; allowFull?: boolean },
 ): Promise<Refusal | null> {
   if (t.is_parent) return { status: 409, body: ENTER_AN_EVENT };
+  if (!opts.asOrganiser && settingsOf(t).consolation) return { status: 409, body: CONSOLATION_ONLY }; // Stage 9 · T8
   if (t.entry_kind !== 'singles' && t.entry_kind !== 'doubles') return no(409, 'ENTER_AS_TEAM', 'This tournament is entered by teams.');
   // `partial`: one player of a pair still looking for the other — everything but the count.
   if (!opts.partial && (new Set(userIds).size !== needed(t.entry_kind) || userIds.length !== needed(t.entry_kind))) {

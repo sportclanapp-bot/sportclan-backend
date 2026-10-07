@@ -45,3 +45,11 @@ test('rollups: assists counted; a second yellow is a yellow and a red', () => {
   expect(lines.p2).toMatchObject({ assists: 1, goals: 0 });
   expect(lines.p3).toBeUndefined(); // a sub isn't a stat
 });
+
+// Stage 9 · T10: the warm-up and a medical time-out on the timeline (any sport); a receiver swap isn't said.
+test('warm-up, medical time-out; receiver swap silent', () => {
+  expect(sportCommentary('note', { kind: 'warmup' }, ctx('tennis'))).toBe('⏱ Warm-up');
+  expect(sportCommentary('note', { kind: 'medical_timeout', team_side: 'B' }, ctx('pickleball'))).toBe('🩺 Medical time-out — Tigers');
+  expect(sportCommentary('note', { kind: 'receiver_swap', team_side: 'A' }, ctx('tennis'))).toBeNull();
+});
+

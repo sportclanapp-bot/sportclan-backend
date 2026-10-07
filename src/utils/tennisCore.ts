@@ -197,6 +197,41 @@ export function tennisReplayEvents(
   return { score: s, buzzer };
 }
 
+/**
+ * Stage 9 · T10 · what the players are due at this point of the match (ITF
+ * Rules 10, 29): change ends after the 1st, 3rd, 5th… game of a set, at the
+ * end of a set when its games were odd, and every 6 points of a tiebreak; a
+ * 90-second changeover (none after a set's first game or inside a tiebreak), a
+ * 120-second set break; new balls (the 7/9 rule — after 7 games counting the
+ * warm-up as 2, then every 9) when the match changes balls. Shown until the
+ * next point.
+ */
+export function tennisDue(s: TennisScore, ballChange = false): { notice?: string; breakSeconds?: number } {
+  if (s.winner) return {};
+  const parts: string[] = [];
+  let breakSeconds: number | undefined;
+  const n = s.points.A + s.points.B;
+  if (s.tiebreak) {
+    if (n > 0 && n % 6 === 0) parts.push('Change ends');
+  } else if (n === 0) {
+    const inSet = s.games.A + s.games.B;
+    const last = s.sets[s.sets.length - 1];
+    if (inSet === 0 && last) {
+      // A set just ended: a set break, changing ends if its games were odd.
+      parts.push((last.A + last.B) % 2 === 1 ? 'Set break · change ends' : 'Set break');
+      breakSeconds = 120;
+    } else if (inSet % 2 === 1) {
+      if (inSet === 1) parts.push('Change ends · no break');
+      else { parts.push('Change ends'); breakSeconds = 90; }
+    }
+    const g = tennisGamesPlayed(s);
+    if (ballChange && g > 0 && (g === 5 || (g > 5 && (g - 5) % 9 === 0))) parts.push('new balls');
+  }
+  if (!parts.length) return {};
+  const notice = parts.join(' · ') + (breakSeconds ? ` · ${breakSeconds} seconds` : '');
+  return { notice: notice.charAt(0).toUpperCase() + notice.slice(1), ...(breakSeconds ? { breakSeconds } : {}) };
+}
+
 /** Games completed so far in the whole match (for the serve rotation). */
 export function tennisGamesPlayed(s: TennisScore): number {
   return s.sets.reduce((n, x) => n + x.A + x.B, 0) + s.games.A + s.games.B;

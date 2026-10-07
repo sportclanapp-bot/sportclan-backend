@@ -119,6 +119,9 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (eventType === 'score' && p.kind === 'rally') return `Rally to ${team}`;
   // BUILD 3.53: table tennis's expedite rule comes in.
   if (eventType === 'note' && p.kind === 'expedite') return '⏱ Expedite rule — serve alternates; the receiver wins on the 13th return';
+  // Stage 9 · T10: the warm-up and a medical time-out (the receiver swap is a scorer's correction — not said).
+  if (eventType === 'note' && p.kind === 'warmup') return '⏱ Warm-up';
+  if (eventType === 'note' && p.kind === 'medical_timeout') return `🩺 Medical time-out — ${team}`;
   // BUILD 3.42: a volleyball timeout names the side (it read "Timeout called by team").
   if (eventType === 'timeout') return `⏸ Timeout — ${team}`;
   // BUILD 3.35: a basketball foul names who (it read "Foul by Team A").

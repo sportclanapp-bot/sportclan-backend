@@ -245,7 +245,7 @@ export const CARROM_PRESETS = [{ target: 25, queenPoints: 3, name: 'Official' },
  * the organiser's own number always wins.
  */
 export const SPORT_SLOT_MINUTES: Readonly<Record<string, number>> = {
-  cricket: 180, football: 90, hockey: 70, tennis: 90, basketball: 60, volleyball: 45, badminton: 30, pickleball: 30, carrom: 30, tabletennis: 20, chess: 60,
+  cricket: 180, football: 90, hockey: 70, tennis: 90, basketball: 60, volleyball: 75, badminton: 30, pickleball: 30, carrom: 30, tabletennis: 20, chess: 60, // volleyball: best of 5 to 25 runs ~75 min (was 45, the old sport default — device pass)
 };
 const up5 = (m: number) => Math.max(5, Math.ceil(m / 5) * 5);
 /** Expected sets / games played in a best-of-n: all the winner needs, and 40% of the rest. */
@@ -311,11 +311,25 @@ export type LadderStep = 'warning' | 'point' | 'point2' | 'game' | 'default';
 /** The organiser's other choices, per sport (the standard is "Standard"). */
 export const LADDER_CHOICES: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
   tennis: [['warning,point,default', 'Warning, point, default'], ['warning,default', 'Warning, then default']],
-  badminton: [['warning,default', 'Warning, then default']],
-  tabletennis: [['warning,point,default', 'Warning, point, default'], ['warning,default', 'Warning, then default']],
-  pickleball: [['warning,default', 'Warning, then default']],
-  volleyball: [['warning,default', 'Warning, then default']],
+  badminton: [['warning,default', 'Warning, then disqualification']],
+  tabletennis: [['warning,point,default', 'Warning, point, disqualification'], ['warning,default', 'Warning, then disqualification']],
+  pickleball: [['warning,default', 'Warning, then forfeit']],
+  volleyball: [['warning,default', 'Warning, then disqualification']],
 };
+
+/**
+ * What each sport calls it (the ladder's last step is 'default' in the data):
+ * tennis a code violation and a default ("def."); badminton, table tennis and
+ * volleyball misconduct and a disqualification ("DQ"); pickleball misconduct
+ * and a forfeit. Device pass, 7 Oct: volleyball read "code violation … default".
+ */
+export type ConductWords = { title: string; out: string; outPast: string; short: string };
+export function conductWords(sport: string | null | undefined): ConductWords {
+  const key = lengthKey(sport);
+  if (key === 'tennis') return { title: 'code violation', out: 'default', outPast: 'defaulted', short: 'def.' };
+  if (key === 'pickleball') return { title: 'misconduct', out: 'forfeit', outPast: 'forfeited', short: 'forfeit' };
+  return { title: 'misconduct', out: 'disqualification', outPast: 'disqualified', short: 'DQ' };
+}
 export function ladderProblem(key: string, ladder: unknown): string | null {
   if (typeof ladder !== 'string' || !ladder.trim() || ladder.length > 120) return 'Code violations are a list of steps.';
   const steps = ladder.split(',').map((x) => x.trim());

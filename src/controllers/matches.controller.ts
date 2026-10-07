@@ -56,7 +56,7 @@ import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
 import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
 import { applyChessTcDeltas, recordChessTc } from '../utils/chessTcRatings';
-import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules } from '../utils/matchRules';
+import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules, conductWords } from '../utils/matchRules';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, superOverPlayedText, tieFallbackText, boundariesOf, type SuperOverState, type TieFallback, typedScoreRefusal, typedScoreWinner, typedOversToBalls, type UnfinishedEnd } from '../utils/cricketRules';
 import { withWalkoverScore } from '../utils/walkoverScore';
@@ -3588,7 +3588,7 @@ export async function completeMatch(req: Request, res: Response) {
         const dSide: 'A' | 'B' = sideDefault ? defaultedSideIn! : defaultedTeamId === match.team_a_id ? 'A' : 'B';
         const dName = dSide === 'A' ? aName : bName;
         ss.defaulted = { team_id: sideDefault ? null : defaultedTeamId, side: dSide, ...(walkover_reason ? { reason: String(walkover_reason).slice(0, 200) } : {}) };
-        ss.result = `${derivedSide === 'A' ? aName : bName} won (${dName} defaulted)`;
+        ss.result = `${derivedSide === 'A' ? aName : bName} won (${dName} ${conductWords(slug).outPast})`; // tennis defaulted; DQ / forfeit elsewhere
         resultForNotice = ss.result;
       } else if (retired && derivedSide) {
         // Badminton gap 6: the score at retirement stays; the result says who retired.

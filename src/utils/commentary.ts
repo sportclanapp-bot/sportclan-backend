@@ -1,3 +1,4 @@
+import { conductWords } from './matchRules';
 /**
  * Timeline lines for football, hockey and basketball events (2026-09-26, after
  * MATCH_CREATE_TEST_5). The timeline printed these raw — `card {"kind":"red",
@@ -122,9 +123,11 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   // Stage 9 · T10: the warm-up and a medical time-out (the receiver swap is a scorer's correction — not said).
   // Stage 9 · T9: a code violation and its penalty (the points it gives are their own events).
   if (eventType === 'note' && p.kind === 'violation') {
-    const OFFENCE: Record<string, string> = { time: 'time', conduct: 'unsportsmanlike conduct', abuse: 'racket or ball abuse', coaching: 'coaching', language: 'language', other: 'conduct' };
-    const PENALTY: Record<string, string> = { warning: 'warning', point: 'point penalty', point2: 'two-point penalty', game: 'game penalty', default: 'default' };
-    return `⚠️ Code violation — ${player ? `${player} (${team})` : team} · ${OFFENCE[String(p.offence)] ?? 'conduct'} · ${PENALTY[String(p.penalty)] ?? 'warning'}`;
+    const vb = ctx.sport === 'volleyball';
+    const OFFENCE: Record<string, string> = { time: vb ? 'delay' : 'time', conduct: 'unsportsmanlike conduct', abuse: vb ? 'ball or equipment abuse' : 'racket or ball abuse', coaching: 'coaching', language: 'language', other: 'conduct' };
+    const cw = conductWords(ctx.sport);
+    const PENALTY: Record<string, string> = { warning: 'warning', point: 'point penalty', point2: 'two-point penalty', game: 'game penalty', default: cw.out };
+    return `⚠️ ${cw.title.charAt(0).toUpperCase()}${cw.title.slice(1)} — ${player ? `${player} (${team})` : team} · ${OFFENCE[String(p.offence)] ?? 'conduct'} · ${PENALTY[String(p.penalty)] ?? 'warning'}`;
   }
   if (eventType === 'note' && p.kind === 'warmup') return '⏱ Warm-up';
   if (eventType === 'note' && p.kind === 'medical_timeout') return `🩺 Medical time-out — ${team}`;

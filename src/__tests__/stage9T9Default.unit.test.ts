@@ -113,7 +113,7 @@ const storedSummary = () => {
   return null;
 };
 // eslint-disable-next-line import/first
-import { rulesRefusal, standardRules, conductLadder } from '../utils/matchRules';
+import { rulesRefusal, standardRules, conductLadder, conductWords } from '../utils/matchRules';
 // eslint-disable-next-line import/first
 import { sportCommentary } from '../utils/commentary';
 
@@ -165,4 +165,10 @@ test('the ladder as a rule: each sport’s standard, the organiser’s own, refu
 test('the timeline says the violation and its penalty', () => {
   const ctx = { sport: 'tennis', teamA: 'Lions', teamB: 'Tigers', period: 0, move: 0, clockSeconds: null, regulation: 2, periodMinutes: null } as never;
   expect(sportCommentary('note', { kind: 'violation', team_side: 'A', offence: 'abuse', penalty: 'point', player_name: 'Ravi' }, ctx)).toBe('⚠️ Code violation — Ravi (Lions) · racket or ball abuse · point penalty');
+});
+
+test('volleyball says misconduct and a disqualification, and its own offences (device pass)', () => {
+  const ctx = { sport: 'volleyball', teamA: 'Spikers', teamB: 'Blockers', period: 1, move: 0, clockSeconds: null, regulation: 5, periodMinutes: null } as never;
+  expect(sportCommentary('note', { kind: 'violation', team_side: 'B', offence: 'abuse', penalty: 'default' }, ctx)).toBe('⚠️ Misconduct — Blockers · ball or equipment abuse · disqualification');
+  expect(conductWords('pickleball').outPast).toBe('forfeited');
 });

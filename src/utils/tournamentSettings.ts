@@ -324,6 +324,12 @@ export type TournamentSettings = {
   lots?: Record<string, string[]>;
   /** Stage 8: groups → knockout — how many best next-placed teams go through besides the top `qualifiers_per_group` (null: as many as fill the byes). */
   bestNext?: number;
+  /**
+   * Stage 10 · TT2 · groups → knockout: the top seeds go straight into the
+   * knockout and skip the groups (TTFI / MSTTA: 8 seeds, 16 above 60 entries).
+   * Blank or 0: everyone plays the groups. No top.
+   */
+  directSeeds?: number;
   /** Stage 8 · F5: bans from cards (team sports with cards). */
   discipline?: DisciplineRules;
   /** Stage 8 · F3: squads — an optional most players a squad (no app top), and when squads lock for captains. */
@@ -599,7 +605,7 @@ export const SEEDING_MODES: readonly SeedingMode[] = ['registration', 'random', 
  * Settings the draw is made from. They're fixed once it's made (the fixtures
  * already reflect them); the points and tie-breaks are fixed once a result is in.
  */
-export const DRAW_KEYS = ['bestThirds', 'seeding', 'restMinutes', 'thirdPlace', 'separateClubs', 'category', 'swiss'] as const;
+export const DRAW_KEYS = ['bestThirds', 'seeding', 'restMinutes', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'directSeeds'] as const;
 
 /** Which draw setting an edit changes, if any (to refuse it once the draw is made). */
 export function changedDrawKey(current: TournamentSettings, incoming: Record<string, unknown>, keys: readonly string[] = DRAW_KEYS): string | null {
@@ -620,7 +626,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist', 'qualifying', 'consolation', 'ladder', 'box']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist', 'qualifying', 'consolation', 'ladder', 'box', 'directSeeds']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -753,6 +759,9 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('lots' in s) {
     if (s.lots && Object.keys(s.lots).length) out.lots = s.lots; else delete out.lots;
   }
+  if ('directSeeds' in s) { // Stage 10 · TT2
+    if (s.directSeeds) out.directSeeds = Number(s.directSeeds); else delete out.directSeeds;
+  }
   if ('bestNext' in s) {
     if (s.bestNext != null) out.bestNext = Number(s.bestNext); else delete out.bestNext;
   }
@@ -816,6 +825,11 @@ function stage8Refusal(format: string | null | undefined, o: Record<string, any>
   if (lBad) return refuse(lBad);
   if (o.ladder != null && format && format !== 'ladder') return refuse('Ladder settings are for a ladder.');
   if (o.box != null && format && format !== 'box') return refuse('Box settings are for a box league.');
+  // Stage 10 · TT2: seeds straight into the knockout — a whole number, groups → knockout only.
+  if (o.directSeeds != null) {
+    if (!whole(o.directSeeds) || o.directSeeds < 0) return refuse('The seeds going straight to the knockout is a whole number.');
+    if (o.directSeeds > 0 && format && format !== 'groups_knockout') return refuse('Seeds go straight to the knockout in groups → knockout.');
+  }
   if (o.bestNext != null) {
     if (!whole(o.bestNext) || o.bestNext < 0) return refuse('The best next-placed teams going through is a whole number.');
     if (format !== 'groups_knockout') return refuse('Best next-placed teams are for groups → knockout.');

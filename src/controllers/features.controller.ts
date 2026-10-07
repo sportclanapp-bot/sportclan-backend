@@ -32,7 +32,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, sport_id, format, tiebreaker_rules, qualifiers_per_group, settings')
+      .select('id, sport_id, format, tiebreaker_rules, qualifiers_per_group, settings, fixtures_generated')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -102,6 +102,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     for (const e of entries ?? []) {
       if (!teamIds.includes(e.team_id)) continue; // gap 6: deleted with its results
       if (boxRound != null && !e.group_label) continue; // T16: a newcomer waits for the next round's boxes
+      if (tournament.format === 'groups_knockout' && (tournament as { fixtures_generated?: boolean }).fixtures_generated && !e.group_label) continue; // TT2: a seed straight into the knockout plays no group
       const t = e.team as any;
       const s = stats.get(e.team_id)!;
       // A withdrawn team that never played is a phantom row — it has no record

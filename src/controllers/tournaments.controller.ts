@@ -57,7 +57,7 @@ import { validateSportForCreate } from '../utils/sports';
 import { allRows, selectAll, selectAllIn, IN_CHUNK } from '../utils/selectAll';
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, isCount, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { rankTeams, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, bestNextCount, groupsKnockoutSize, type PointsModel } from '../utils/standings';
-import { crossGroupFirstRound } from '../utils/koFirstRound';
+import { placeGroupTiersApart, crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { withWalkoverScore } from '../utils/walkoverScore';
 import { DEFAULT_OVERS } from '../utils/cricketRules';
@@ -3571,11 +3571,24 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   // team_id so byes fall on the strongest qualifiers.
   const tierCmp = (a: { id: string }, b: { id: string }) =>
     ptsOf(b.id) - ptsOf(a.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-  const seeds: TeamSlot[] = [];
-  for (let r = 0; r < ranks.length; r++) {
-    const tier = (ranks[r] ?? []).slice().sort(tierCmp);
-    for (const t of tier) seeds.push({ id: t.id, name: t.name });
-  }
+  // Stage 10 · TT2: the seeds who skipped the groups come first (in seed order),
+  // then each tier — placed so a group's qualifiers land in opposite halves.
+  const directSeeds = settingsOf(trow as { settings?: unknown }).directSeeds ?? 0;
+  const direct = directSeeds > 0 ? (await allRows<{ team_id: string; seed: number | null; entered_at: string | null; team: { name?: string } | null }>(() => supabase
+    .from('tournament_entries').select('team_id, seed, entered_at, team:teams!team_id(name)')
+    .eq('tournament_id', tournamentId).eq('status', 'approved').is('group_label', null)
+    .order('seed', { ascending: true, nullsFirst: false }).order('entered_at', { ascending: true }).order('team_id', { ascending: true })))
+    : [];
+  for (const d of direct) nameOf[d.team_id] = d.team?.name ?? 'Team';
+  const groupOfId = new Map<string, string>();
+  for (const label of labels) for (const tid of groupTeams[label]) groupOfId.set(tid, label);
+  const orderedIds = placeGroupTiersApart(
+    direct.map((d) => d.team_id),
+    ranks.map((tier) => (tier ?? []).slice().sort(tierCmp).map((t) => t.id)),
+    (tid) => groupOfId.get(tid),
+    ko1.length * 2,
+  );
+  const seeds: TeamSlot[] = orderedIds.map((tid) => ({ id: tid, name: nameOf[tid] ?? 'Team' }));
   // BUILD 4.5: the best next-placed teams across the groups fill the byes —
   // the lowest seeds, so they meet the group winners.
   // Stage 8: or the number the organiser chose (bestNext), ranked by the same tie-break order.
@@ -3862,7 +3875,7 @@ export async function generateFixtures(req: Request, res: Response) {
     }
     // BUILD 1.10: a group of one has no matches and the knockout never seeds.
     if (String(tournament.format ?? '').toLowerCase() === 'groups_knockout') {
-      const why = groupsDrawRefusal(groupEntries, await getGroupsConfig(id));
+      const why = groupsDrawRefusal(groupEntries.slice(Math.min(settingsOf(tournament as { settings?: unknown }).directSeeds ?? 0, Math.max(0, groupEntries.length - 2))), await getGroupsConfig(id)); // TT2: the seeds straight through play no group
       if (why) return res.status(400).json({ error: why, code: 'GROUPS_TOO_SMALL' });
     }
 
@@ -4097,9 +4110,13 @@ export async function generateFixtures(req: Request, res: Response) {
       // SC-58: group count + qualifiers-per-group are organizer-configurable
       // (migration 038); fall back to the historical 4-per-group / top-2.
       const gcfg = await getGroupsConfig(id);
+      // Stage 10 · TT2: the top seeds go straight into the knockout (a group
+      // the organiser put them in doesn't apply); the rest play the groups.
+      const directN = Math.min(settingsOf(tournament as { settings?: unknown }).directSeeds ?? 0, Math.max(0, groupEntries.length - 2));
+      const directIds = new Set(groupEntries.slice(0, directN).map((e) => e.id));
       // BUILD 1.13: groupsPlan keeps a group the organiser set and fills the
       // rest smallest-first (the old round-robin deal when nothing is set).
-      const plan = planGroups(groupEntries, gcfg);
+      const plan = planGroups(groupEntries.filter((e) => !directIds.has(e.id)), gcfg);
       if (!plan.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: plan.refusal, code: 'GROUPS_TOO_SMALL' }); }
       const numGroups = plan.groups.length;
       const qualsPerGroup = gcfg.qualifiersPerGroup;
@@ -4141,7 +4158,9 @@ export async function generateFixtures(req: Request, res: Response) {
         mno++;
       }
       // Stage 8: room for the best next-placed teams the organiser chose too.
-      const koSize = groupsKnockoutSize(numGroups, qualsPerGroup, settingsOf(tournament as { settings?: unknown }).bestNext);
+      const koSize = groupsKnockoutSize(numGroups, qualsPerGroup, settingsOf(tournament as { settings?: unknown }).bestNext, directN);
+      // The seeds straight through: no group; in seed order.
+      for (const tid of directIds) await supabase.from('tournament_entries').update({ group_label: null }).eq('tournament_id', id).eq('team_id', tid);
       const koRound1 = Array.from({ length: koSize / 2 }, () => ({ a: null as TeamSlot | null, b: null as TeamSlot | null }));
       // Schedule the group stage (round 0) AND the KO bracket (rounds 1..R)
       // together so the group stage entirely precedes the knockout in time.

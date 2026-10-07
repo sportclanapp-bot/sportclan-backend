@@ -575,6 +575,7 @@ export function bestNextCount(s: { bestThirds?: boolean; bestNext?: number }, gr
 }
 
 /** Stage 8 · the knockout's size for groups → knockout: every direct qualifier plus the best next-placed. */
-export function groupsKnockoutSize(groups: number, qualifiersPerGroup: number, bestNext: number | null | undefined): number {
-  return pow2(groups * qualifiersPerGroup + Math.max(0, Math.min(bestNext ?? 0, groups)));
+export function groupsKnockoutSize(groups: number, qualifiersPerGroup: number, bestNext: number | null | undefined, directSeeds = 0): number {
+  // Stage 10 · TT2: and the seeds who go straight into the knockout.
+  return pow2(groups * qualifiersPerGroup + Math.max(0, Math.min(bestNext ?? 0, groups)) + Math.max(0, directSeeds));
 }

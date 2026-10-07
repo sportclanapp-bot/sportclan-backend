@@ -37,3 +37,56 @@ export function crossGroupFirstRound<T extends { a: Slot; b: Slot }>(
   }
   return out;
 }
+
+/** The standard bracket's slot order for seeds 1…size (1 v size, 1 and 2 in opposite halves). */
+function slotOrder(size: number): number[] {
+  let order = [1, 2];
+  while (order.length < size) {
+    const sum = order.length * 2 + 1;
+    const next: number[] = [];
+    for (const s of order) { next.push(s); next.push(sum - s); }
+    order = next;
+  }
+  return order.slice(0, Math.max(size, 1));
+}
+
+/**
+ * Stage 10 · TT2 · the seeds in order, the group stage's qualifiers placed so a
+ * group's runner-up (and its third, …) lands in the other half — then quarter —
+ * of the draw from its group-mates (ITTF / BWF: group winner and runner-up in
+ * opposite halves). `fixed` go first (seeds straight into the knockout, then
+ * anyone already placed); each tier (the winners, the runners-up, …) keeps its
+ * seed numbers, only who takes which number within the tier changes. Best
+ * effort when the groups can't all be kept apart. Any size.
+ */
+export function placeGroupTiersApart(fixed: string[], tiers: string[][], groupOf: (id: string) => string | undefined, size: number): string[] {
+  const order = slotOrder(size);
+  const posOfSeed = new Map(order.map((s, i) => [s, i])); // seed number → bracket position
+  const regionOf = (seed: number, parts: number) => Math.floor((posOfSeed.get(seed) ?? 0) / (size / parts));
+  const placed: Array<{ id: string; seed: number }> = fixed.map((id, i) => ({ id, seed: i + 1 }));
+  const out = [...fixed];
+  for (const tier of tiers) {
+    const left = [...tier];
+    for (let k = 0; k < tier.length; k++) {
+      const seed = out.length + 1;
+      // The candidate that shares the fewest regions (half, then quarter) with its group-mates already placed.
+      const cost = (id: string) => {
+        const g = groupOf(id);
+        if (g === undefined) return 0;
+        const mates = placed.filter((p) => groupOf(p.id) === g);
+        let c = 0;
+        for (const p of mates) {
+          if (regionOf(p.seed, 2) === regionOf(seed, 2)) c += 100;
+          if (size >= 8 && regionOf(p.seed, 4) === regionOf(seed, 4)) c += 1;
+        }
+        return c;
+      };
+      let best = 0;
+      for (let i = 1; i < left.length; i++) if (cost(left[i]!) < cost(left[best]!)) best = i;
+      const id = left.splice(best, 1)[0]!;
+      out.push(id);
+      placed.push({ id, seed });
+    }
+  }
+  return out;
+}

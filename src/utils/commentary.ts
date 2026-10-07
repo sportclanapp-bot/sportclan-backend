@@ -129,6 +129,8 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     const PENALTY: Record<string, string> = { warning: 'warning', point: 'point penalty', point2: 'two-point penalty', game: 'game penalty', default: cw.out };
     return `⚠️ ${cw.title.charAt(0).toUpperCase()}${cw.title.slice(1)} — ${player ? `${player} (${team})` : team} · ${OFFENCE[String(p.offence)] ?? 'conduct'} · ${PENALTY[String(p.penalty)] ?? 'warning'}`;
   }
+  // Stage 10 · TT3: a paper-scored match typed in.
+  if (eventType === 'note' && p.kind === 'typed_score') return `📝 Result entered from the score sheet: ${String(p.text ?? '')}`;
   if (eventType === 'note' && p.kind === 'warmup') return '⏱ Warm-up';
   if (eventType === 'note' && p.kind === 'medical_timeout') return `🩺 Medical time-out — ${team}`;
   // BUILD 3.42: a volleyball timeout names the side (it read "Timeout called by team").

@@ -20,6 +20,7 @@ import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber } from '../utils/cricketRules';
+import { typedMatchPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { DOUBLES_PLAYERS, carromOptsOf, doublesLineupProblem, gamesWinner, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
 import { splitTie, tieNeed, unitsOf, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { sideOutReplay } from '../utils/pickleballCore';
@@ -1686,6 +1687,59 @@ export async function undoEvent(req: Request, res: Response) {
     }
     return res.json({ deleted: true });
   } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+
+/**
+ * Stage 10 · TT3 · POST /matches/:id/typed-score { sets } or { rubbers } — a
+ * match scored on paper, typed in by the organiser, umpire, creator or scorer.
+ * The games / sets become the points the pad would have sent (marked typed;
+ * utils/typedScore checks them by the match's own rules), after one note for
+ * the timeline; the summary is worked out as for a live match. The app then
+ * completes the match as usual. Only for a match with no points on the pad.
+ */
+export async function typedScore(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const id = String(req.params.id);
+    const { data: m } = await supabase.from('matches')
+      .select('id, sport_id, status, voided_at, rules, format, overs, created_by, umpire_id, scorer_id, tournament_id, team_a_id, team_b_id')
+      .eq('id', id).maybeSingle();
+    if (!m) return res.status(404).json({ error: 'Match not found' });
+    if (!(await canOfficiateMatch(m as never, userId))) return res.status(403).json({ error: 'Only the organiser, the umpire or a scorer can enter the result.' });
+    if ((m as { voided_at?: string | null }).voided_at || m.status === 'completed' || m.status === 'abandoned' || m.status === 'cancelled') {
+      return res.status(409).json({ error: 'This match is already finished.', code: 'MATCH_FINISHED' });
+    }
+    const slug = normSportSlug((await getSport(m.sport_id as string))?.slug);
+    if (!typedScoreSport(slug)) return res.status(400).json({ error: 'Typed scores are for the sports scored in games or sets.', code: 'NOT_TYPED_SPORT' });
+    const { count } = await supabase.from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id).eq('event_type', 'score');
+    if (count) return res.status(409).json({ error: 'This match has points on the pad — finish it there, or undo them first.', code: 'SCORED_ON_PAD' });
+    const rules = rulesOf(slug, m as never) as MatchRules;
+    const spec = tieSpecOf(slug, rules);
+    const body = (req.body ?? {}) as { sets?: unknown; rubbers?: unknown };
+    const got = spec ? typedTiePoints(slug, rules, spec, body.rubbers) : typedMatchPoints(slug, rules, body.sets);
+    if (got.problem) return res.status(400).json({ error: got.problem, code: 'BAD_TYPED_SCORE' });
+    const text = spec
+      ? (body.rubbers as TypedSet[][]).map((sets, i) => `${spec.rubbers[i]?.label ?? `Match ${i + 1}`} ${typedScoreText(sets)}`).join(' · ')
+      : typedScoreText(body.sets as TypedSet[]);
+    // In order: the note, then each point a millisecond apart (the log reads by time).
+    const base = Date.now();
+    const rows = [
+      { match_id: id, event_type: 'note', payload: { kind: 'typed_score', text }, created_by: userId, created_at: new Date(base).toISOString() },
+      ...got.points.map((p, i) => ({ match_id: id, event_type: 'score', payload: { team_side: p.side, typed: true, ...(p.kind ? { kind: p.kind } : {}) }, created_by: userId, created_at: new Date(base + 1 + i).toISOString() })),
+    ];
+    for (let i = 0; i < rows.length; i += 500) {
+      const { error } = await supabase.from('match_events').insert(rows.slice(i, i + 500));
+      if (error) return res.status(500).json({ error: 'The result wasn’t saved. Try again.' });
+    }
+    await promoteToLive(id, m);
+    const summary = await recomputeSummary(id, { persist: true });
+    const winner = got.winner === 'A' || got.winner === 'B' ? got.winner : null;
+    return res.json({ ok: true, winner_side: winner, winner_team_id: winner ? (winner === 'A' ? m.team_a_id : m.team_b_id) : null, draw: got.winner === 'draw', text, summary });
+  } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }

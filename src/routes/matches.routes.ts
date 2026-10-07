@@ -1,3 +1,4 @@
+import { typedScore } from '../controllers/scoring.controller';
 import { Router } from 'express';
 import { getBannedForMatch } from '../controllers/squads.controller';
 import { decideMatch } from '../controllers/matchDecision.controller';
@@ -95,6 +96,8 @@ router.get('/:id/chat', authenticateToken, getMatchChat);
 router.post('/:id/participants', authenticateToken, addParticipants);
 router.get('/:id/tie-lineup', authenticateToken, getTieLineup); // badminton 7.16
 router.put('/:id/tie-lineup', authenticateToken, setTieLineup);
+// Stage 10 · TT3: a paper-scored match typed in.
+router.post('/:id/typed-score', authenticateToken, typedScore);
 router.post('/:id/umpire/self-assign', authenticateToken, selfAssignUmpire);
 // Cricket gap 3: the organiser names a fixture's umpire and scorer.
 router.patch('/:id/officials', authenticateToken, setMatchOfficials);

@@ -1580,6 +1580,8 @@ export async function getCommentary(req: Request, res: Response) {
     const enriched: Array<any> = [];
     for (const ev of events ?? []) {
       const p: any = ev.payload ?? {};
+      // Stage 10 · TT3: a result typed from the score sheet says so once, not point by point.
+      if (ev.event_type === 'score' && p.typed === true) continue;
 
       // For cricket, compute the over.ball label from a running legal-ball
       // count. Wides and no-balls don't advance the legal count.

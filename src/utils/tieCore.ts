@@ -23,8 +23,16 @@
  */
 
 export type TieSide = 'A' | 'B';
-/** One match of the tie: its key ("R1", or BWF's "S1"), what it's called, singles or doubles, and an optional combined age for a pair. */
-export type TieRubber = { key: string; label: string; players: 1 | 2; pairAgeMin?: number | null };
+/**
+ * One match of the tie: its key ("R1", or BWF's "S1"), what it's called,
+ * singles or doubles, and an optional combined age for a pair.
+ *
+ * Stage 10 · TT1: `a` / `b` — positions instead of a free choice: the first
+ * side's players A, B, C… (1, 2, 3…) and the second side's X, Y, Z… Each
+ * captain names their positions once and every match follows (A v X, B v Y,
+ * A v Y…). A match without positions is the captain's free choice.
+ */
+export type TieRubber = { key: string; label: string; players: 1 | 2; pairAgeMin?: number | null; a?: number[] | null; b?: number[] | null };
 export type TieWin = 'first' | 'all' | 'games';
 export type TieSpec = {
   rubbers: TieRubber[];
@@ -55,11 +63,77 @@ export function tieSpecProblem(spec: unknown): string | null {
     if (typeof x.label !== 'string' || !x.label.trim() || x.label.trim().length > TIE_LABEL_MAX) return `A match’s name is 1 to ${TIE_LABEL_MAX} characters.`;
     if (x.players !== 1 && x.players !== 2) return `${x.label.trim()} is singles or doubles.`;
     if (x.pairAgeMin != null && (!isWhole(x.pairAgeMin) || x.pairAgeMin < 40 || x.pairAgeMin > 200 || x.players !== 2)) return `${x.label.trim()}: a pair’s combined age is 40 to 200, for doubles.`;
+    // Stage 10 · TT1: positions — both sides or neither, one a player, different within the match.
+    const hasA = x.a != null; const hasB = x.b != null;
+    if (hasA !== hasB) return `${x.label.trim()}: give positions for both sides, or neither.`;
+    if (hasA) {
+      for (const pos of [x.a, x.b]) {
+        if (!Array.isArray(pos) || pos.length !== x.players || pos.some((n) => !isWhole(n) || n < 1) || new Set(pos).size !== pos.length) return `${x.label.trim()}: ${x.players === 1 ? 'one position' : 'two different positions'} a side.`;
+      }
+    }
   }
   if (s.win !== 'first' && s.win !== 'all' && s.win !== 'games') return 'A tie is won by the first to a number of matches, by most matches, or by most games.';
   const n = (s.rubbers as unknown[]).length;
   if (s.firstTo != null && (s.win !== 'first' || !isWhole(s.firstTo) || s.firstTo < 1 || s.firstTo > n)) return `First to 1 to ${n} matches.`;
   if (s.repeatPlayers != null && typeof s.repeatPlayers !== 'boolean') return 'Playing more than one match is on or off.';
+  return null;
+}
+
+/** Stage 10 · TT1 · a position's letter: the first side A, B, C…; the second X, Y, Z, then U, V, W… (then numbered). */
+export function positionLetter(side: TieSide, n: number): string {
+  if (side === 'A') return n >= 1 && n <= 26 ? String.fromCharCode(64 + n) : `A${n}`;
+  const away = 'XYZUVWRST';
+  return n >= 1 && n <= away.length ? away[n - 1]! : `X${n}`;
+}
+
+/** The positions a side names (1…n), in order; empty when the tie has none. */
+export function positionsOf(spec: TieSpec, side: TieSide): number[] {
+  const set = new Set<number>();
+  for (const r of spec.rubbers) for (const n of (side === 'A' ? r.a : r.b) ?? []) set.add(n);
+  return [...set].sort((p, q) => p - q);
+}
+
+/** "A v X", "B & C v Y & Z" — a match's positions, or null for a free choice. */
+export function positionsLabel(r: TieRubber): string | null {
+  if (!r.a || !r.b) return null;
+  return `${r.a.map((n) => positionLetter('A', n)).join(' & ')} v ${r.b.map((n) => positionLetter('B', n)).join(' & ')}`;
+}
+
+/**
+ * Fill a side's matches from its positions (`positions[n]` = the player at n)
+ * and its free choices (`free[key]`). Missing players are left out, so the
+ * line-up check says what's missing.
+ */
+export function expandPositions(spec: TieSpec, side: TieSide, positions: Record<string, string>, free: Record<string, string[]> = {}): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const r of spec.rubbers) {
+    const pos = side === 'A' ? r.a : r.b;
+    out[r.key] = pos ? pos.map((n) => positions[String(n)]).filter((u): u is string => !!u) : (free[r.key] ?? []);
+  }
+  return out;
+}
+
+/** Why a side's line-up breaks its positions (the same position, the same player; different positions, different players), or null. */
+export function positionsProblem(spec: TieSpec, side: TieSide, lineup: Record<string, string[]>): string | null {
+  const who = new Map<number, string>();
+  for (const r of spec.rubbers) {
+    const pos = side === 'A' ? r.a : r.b;
+    if (!pos) continue;
+    const ids = lineup[r.key] ?? [];
+    for (let i = 0; i < pos.length; i++) {
+      const u = ids[i];
+      if (!u) continue;
+      const had = who.get(pos[i]!);
+      if (had && had !== u) return `${positionLetter(side, pos[i]!)} is one player in every match.`;
+      who.set(pos[i]!, u);
+    }
+  }
+  const seen = new Map<string, number>();
+  for (const [n, u] of who) {
+    const other = seen.get(u);
+    if (other != null) return `${positionLetter(side, other)} and ${positionLetter(side, n)} are two different players.`;
+    seen.set(u, n);
+  }
   return null;
 }
 

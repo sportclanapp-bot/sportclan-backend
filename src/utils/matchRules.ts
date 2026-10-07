@@ -404,7 +404,18 @@ export function tieSpecOf(sport: string | null | undefined, rules: Partial<Match
   if (rules.tie && !tieSpecProblem(rules.tie)) return rules.tie;
   const order = tieOrder(sport, rules.rubbers ?? null);
   if (!order) return null;
-  return { rubbers: order.map((name) => ({ key: name, label: name, players: rubberPlayers(name) })), win: 'first' };
+  return { rubbers: order.map((name) => ({ key: name, label: name, players: rubberPlayers(name), ...positionsOfName(name) })), win: 'first' };
+}
+
+/**
+ * Stage 10 · TT1: a standard order's "A v X" is positions — A is one player in
+ * every match (the Corbillon and Swaythling had a line-up nobody could save:
+ * A plays two singles). "Doubles" stays the captains' free choice.
+ */
+function positionsOfName(name: string): { a?: number[]; b?: number[] } {
+  const m = /^([A-I]) v ([XYZ])$/.exec(name);
+  if (!m) return {};
+  return { a: ['ABCDEFGHI'.indexOf(m[1]!) + 1], b: ['XYZ'.indexOf(m[2]!) + 1] };
 }
 
 /**

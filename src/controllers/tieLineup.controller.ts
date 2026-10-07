@@ -11,6 +11,13 @@
  * match's key, name and singles/doubles from the tie; "a player plays one
  * singles and one doubles at most" unless the tie lets players repeat; a
  * match for pairs "90+" checks the pair's combined age.
+ *
+ * Stage 10 · TT1: positions — a tie whose matches name A, B, C (and X, Y, Z):
+ * a captain names each position once ({ positions: { "1": id, … } }) and the
+ * matches follow; the same position is the same player everywhere, so the
+ * "one singles at most" rule is only for the free-choice matches. The fixture's
+ * first-named team takes A, B, C; the other X, Y, Z. The Corbillon and the
+ * Swaythling are position orders (their line-ups couldn't be saved before).
  */
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -19,7 +26,7 @@ import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { isTeamManager } from '../utils/teamAuth';
 import { getSport } from '../utils/sportCache';
 import { rubberPlayers, tieSpecOf, type MatchRules } from '../utils/matchRules';
-import type { TieSpec } from '../utils/tieCore';
+import { expandPositions, positionsOf, positionsProblem, type TieSpec } from '../utils/tieCore';
 import { ageOn } from '../utils/tournamentSettings';
 import { notifyUsers } from '../utils/notify';
 
@@ -36,7 +43,7 @@ export function tieLineupProblem(order: string[], lineup: unknown, members: Set<
 }
 
 /** Stage 9 · T3 · the same for any tie: each match by its key, named by its label. */
-export function tieSpecLineupProblem(spec: TieSpec, lineup: unknown, members: Set<string>): string | null {
+export function tieSpecLineupProblem(spec: TieSpec, lineup: unknown, members: Set<string>, side: Side = 'A'): string | null {
   if (!lineup || typeof lineup !== 'object' || Array.isArray(lineup)) return 'Name who plays each rubber.';
   const l = lineup as Record<string, unknown>;
   const keys = spec.rubbers.map((r) => r.key);
@@ -51,13 +58,15 @@ export function tieSpecLineupProblem(spec: TieSpec, lineup: unknown, members: Se
     for (const u of ids as string[]) {
       if (!members.has(u)) return `Everyone in the order has to be in the team (${r.label}).`;
       const c = count.get(u) ?? { s: 0, d: 0 };
+      // Stage 10 · TT1: a match by positions repeats players by design.
+      if (r.a && r.b) continue;
       if (need === 1) c.s++; else c.d++;
       count.set(u, c);
       if (!spec.repeatPlayers && c.s > 1) return 'A player plays one singles at most.';
       if (!spec.repeatPlayers && c.d > 1) return 'A player plays one doubles at most.';
     }
   }
-  return null;
+  return positionsProblem(spec, side, l as Record<string, string[]>);
 }
 
 async function load(id: string) {
@@ -126,6 +135,8 @@ export async function getTieLineup(req: Request, res: Response) {
       // Stage 9 · T3: each match's name, singles/doubles and any combined age.
       rubbers: spec.rubbers,
       repeat_players: spec.repeatPlayers === true,
+      // Stage 10 · TT1: the positions each side names (A, B, C… / X, Y, Z…), empty without.
+      positions: { A: positionsOf(spec, 'A'), B: positionsOf(spec, 'B') },
       locked: m.status !== 'scheduled',
       sides: {
         A: { name: m.team_a_name, submitted: inA, can_set: can.A && m.status === 'scheduled', lineup: seeA ? named(ups.A) : null, members: members.A },
@@ -157,8 +168,12 @@ export async function setTieLineup(req: Request, res: Response) {
     if (m.status !== 'scheduled') return res.status(409).json({ error: 'The tie has started, so the order is fixed.', code: 'LINEUP_LOCKED' });
     const { data: mem } = await supabase.from('team_members').select('user_id').eq('team_id', teamId);
     const members = new Set(((mem ?? []) as Array<{ user_id: string }>).map((r) => r.user_id));
-    const lineup = req.body?.lineup as Lineup;
-    const bad = tieSpecLineupProblem(spec, lineup, members);
+    // Stage 10 · TT1: positions named once fill their matches; the free choices come as before.
+    const posIn = req.body?.positions;
+    const lineup: Lineup = posIn && typeof posIn === 'object' && !Array.isArray(posIn)
+      ? expandPositions(spec, side, Object.fromEntries(Object.entries(posIn as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>, (req.body?.lineup ?? {}) as Lineup)
+      : req.body?.lineup as Lineup;
+    const bad = tieSpecLineupProblem(spec, lineup, members, side);
     if (bad) return res.status(400).json({ error: bad, code: 'BAD_LINEUP' });
     // Stage 9 · T3: a match for pairs "90+" — the pair's combined age today.
     const aged = spec.rubbers.filter((r) => r.pairAgeMin != null);

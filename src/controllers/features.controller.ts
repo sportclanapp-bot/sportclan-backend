@@ -221,83 +221,67 @@ export function cricketBoards(leaders: Record<LeaderStat, Array<{ user_id: strin
   return CRICKET_BOARDS.map(([stat, title, one, many]) => ({ stat, title, one, many, kind: 'player' as const, rows: (leaders[stat] ?? []).map((r) => ({ user_id: r.user_id, team_id: r.team_id, name: r.name, team_name: r.team_name, value: r.value, detail: r.detail })) }));
 }
 
+/**
+ * Stage 8 · F6 / F7: a tournament's leaderboards (and the matches they came
+ * from) — for the Leaders tab and the computed awards. Null: no such tournament.
+ */
+export async function loadLeaders(id: string): Promise<null | {
+  slug: string; topWins: Array<{ teamId: string; teamName: string; wins: number }>; performers: unknown[];
+  leaders: ReturnType<typeof tournamentLeaders> | null; boards: Board[];
+  played: Array<{ id: string; team_a_id: string | null; team_b_id: string | null }>; teamMap: Map<string, string>;
+}> {
+  const { data: tournament } = await supabase.from('tournaments').select('sport_id').eq('id', id).maybeSingle();
+  if (!tournament) return null;
+  const slug = normSportSlug((await getSport(String(tournament.sport_id)))?.slug);
+  const cricket = slug === 'cricket';
+  const matches = await allRows(() => supabase
+    .from('matches')
+    // Stage 8 · F6: every sport's boards read the score too (and its rollup).
+    .select(cricket ? 'id, team_a_id, team_b_id, winner_team_id, status, players:score_summary->players' : 'id, team_a_id, team_b_id, winner_team_id, status, result_type, score_summary')
+    .eq('tournament_id', id)
+    // BUILD 1.4: a walkover (abandoned with a winner) is a win here too.
+    .in('status', ['completed', 'abandoned'])
+    // SC-428: a voided fixture doesn't count.
+    .is('voided_at', null));
+  const played = (matches ?? []) as unknown as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; players?: LeaderMatch['players']; result_type?: string | null; score_summary?: SportLeaderMatch['score_summary'] }>;
+  const winCount = new Map<string, number>();
+  for (const m of played) if (m.winner_team_id) winCount.set(m.winner_team_id, (winCount.get(m.winner_team_id) ?? 0) + 1);
+  const teamIds = Array.from(new Set([...winCount.keys(), ...played.flatMap((m) => [m.team_a_id, m.team_b_id]).filter((x): x is string => !!x)]));
+  const teams = await selectAllIn(teamIds, (c, f, to) => supabase.from('teams').select('id, name').in('id', c).order('id').range(f, to));
+  const teamMap = new Map<string, string>((teams ?? []).map((t: any) => [t.id, t.name]));
+  const topWins = Array.from(winCount.entries())
+    .map(([teamId, wins]) => ({ teamId, teamName: teamMap.get(teamId) ?? 'Unknown', wins }))
+    .sort((a, b) => b.wins - a.wins)
+    .slice(0, 3);
+  if (!cricket) {
+    const sm = played.map((m) => ({ id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, winner_team_id: m.winner_team_id, result_type: m.result_type ?? null, score_summary: m.score_summary ?? null }));
+    const ids = [...new Set(sm.flatMap((m) => Object.keys(m.score_summary?.players ?? {})).filter((x) => !x.startsWith('guest:')))];
+    const boards = sportBoards(slug, sm, Object.fromEntries(teamMap) as Record<string, string>, await leaderAccounts(ids));
+    return { slug, topWins, performers: [], leaders: null, boards, played, teamMap };
+  }
+  const older = played.filter((m) => !m.players || Object.keys(m.players).length === 0).map((m) => m.id);
+  let statsRows: StatsRow[] = [];
+  if (older.length) {
+    // Oct 2026: every row (22 a match — an unpaged read stopped at about 45 matches).
+    const rows = await selectAllIn(older, (c, f, to) => supabase
+      .from('innings_stats')
+      .select('match_id, user_id, team_id, runs, balls_faced, sixes, is_out, bowling_overs, bowling_runs, bowling_wickets, catches, runouts, stumpings, user:user_id (name)')
+      .in('match_id', c).order('id').range(f, to));
+    statsRows = ((rows ?? []) as any[]).map((r) => ({ ...r, name: (Array.isArray(r.user) ? r.user[0]?.name : r.user?.name) ?? null }));
+  }
+  const leaderMatches = played.map((m) => ({ id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, players: m.players ?? null }));
+  const leaders = tournamentLeaders(leaderMatches, statsRows, Object.fromEntries(teamMap) as Record<string, string>, await leaderAccounts(leaderUserIds(leaderMatches, statsRows)));
+  const performers = LEADER_STATS.flatMap((st) => leaders[st]);
+  return { slug, topWins, performers, leaders, boards: cricketBoards(leaders), played, teamMap };
+}
+
 export async function getTournamentTopPerformers(req: Request, res: Response) {
   try {
-    const { id } = req.params;
-    const { data: tournament } = await supabase
-      .from('tournaments')
-      .select('sport_id')
-      .eq('id', id)
-      .maybeSingle();
-    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
-    const slug = normSportSlug((await getSport(String(tournament.sport_id)))?.slug);
-    const cricket = slug === 'cricket';
-
-    // Get all completed matches
-    // Cricket gap 2: and each one's per-player rollup (only that part of the summary).
-    const matches = await allRows(() => supabase
-      .from('matches')
-      // Stage 8 · F6: every sport's boards read the score too (and its rollup).
-      .select(cricket ? 'id, team_a_id, team_b_id, winner_team_id, status, players:score_summary->players' : 'id, team_a_id, team_b_id, winner_team_id, status, result_type, score_summary')
-      .eq('tournament_id', id)
-      // BUILD 1.4: a walkover (abandoned with a winner) is a win here too.
-      .in('status', ['completed', 'abandoned'])
-      // SC-428: missed by the SC-424 sweep — a voided fixture was still counting
-      // towards a team's tournament win tally.
-      .is('voided_at', null)); // Oct 2026: every row
-    const played = (matches ?? []) as unknown as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; players?: LeaderMatch['players']; result_type?: string | null; score_summary?: SportLeaderMatch['score_summary'] }>;
-
-    // Count wins per team
-    const winCount = new Map<string, number>();
-    for (const m of played) {
-      if (m.winner_team_id) {
-        winCount.set(m.winner_team_id, (winCount.get(m.winner_team_id) ?? 0) + 1);
-      }
-    }
-
-    // Get team names (every team that played, for the leaderboards too)
-    const teamIds = Array.from(new Set([...winCount.keys(), ...played.flatMap((m) => [m.team_a_id, m.team_b_id]).filter((x): x is string => !!x)]));
-    const teams = await selectAllIn(teamIds, (c, f, to) => supabase
-      .from('teams')
-      .select('id, name')
-      .in('id', c).order('id').range(f, to));
-    const teamMap = new Map((teams ?? []).map((t: any) => [t.id, t.name]));
-
-    const topWins = Array.from(winCount.entries())
-      .map(([teamId, wins]) => ({ teamId, teamName: teamMap.get(teamId) ?? 'Unknown', wins }))
-      .sort((a, b) => b.wins - a.wins)
-      .slice(0, 3);
-
-    // Cricket gap 2 (5 Oct 2026): the leaderboards. `topWins` stays for older
-    // apps; `performers` is the flat list the app's type always described (the
-    // endpoint never sent it); `leaders` is the same rows by stat.
-    if (!cricket) {
-      // Stage 8 · F6: each sport's own boards (older apps read topWins only).
-      const sm = played.map((m) => ({ id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, winner_team_id: m.winner_team_id, result_type: m.result_type ?? null, score_summary: m.score_summary ?? null }));
-      const ids = [...new Set(sm.flatMap((m) => Object.keys(m.score_summary?.players ?? {})).filter((x) => !x.startsWith('guest:')))];
-      const boards = sportBoards(slug, sm, Object.fromEntries(teamMap) as Record<string, string>, await leaderAccounts(ids));
-      return res.json({ topWins, performers: [], leaders: null, boards });
-    }
-    const older = played.filter((m) => !m.players || Object.keys(m.players).length === 0).map((m) => m.id);
-    let statsRows: StatsRow[] = [];
-    if (older.length) {
-      // Oct 2026: every row (22 a match — an unpaged read stopped at about 45 matches).
-      const rows = await selectAllIn(older, (c, f, to) => supabase
-        .from('innings_stats')
-        .select('match_id, user_id, team_id, runs, balls_faced, sixes, is_out, bowling_overs, bowling_runs, bowling_wickets, catches, runouts, stumpings, user:user_id (name)')
-        .in('match_id', c).order('id').range(f, to));
-      statsRows = ((rows ?? []) as any[]).map((r) => ({ ...r, name: (Array.isArray(r.user) ? r.user[0]?.name : r.user?.name) ?? null }));
-    }
-    const leaderMatches = played.map((m) => ({ id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, players: m.players ?? null }));
-    const leaders = tournamentLeaders(
-      leaderMatches,
-      statsRows,
-      Object.fromEntries(teamMap) as Record<string, string>,
-      await leaderAccounts(leaderUserIds(leaderMatches, statsRows)),
-    );
-    const performers = LEADER_STATS.flatMap((s) => leaders[s]);
-    // Stage 8 · F6: the same boards in the generic shape every sport uses.
-    return res.json({ topWins, performers, leaders, boards: cricketBoards(leaders) });
+    const r = await loadLeaders(String(req.params.id));
+    if (!r) return res.status(404).json({ error: 'Tournament not found' });
+    // `topWins` stays for older apps; `leaders` is cricket's by stat (null for
+    // other sports); Stage 8 · F6: `boards` is every sport's, generic.
+    return res.json({ topWins: r.topWins, performers: r.performers, leaders: r.leaders, boards: r.boards });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -268,7 +268,21 @@ export type TournamentSettings = {
    * 'keep' = the results they played stand for their opponents (as before).
    */
   withdrawnResults?: 'delete' | 'keep';
+  /** Stage 8 · F7: awards the organiser gives (any number): best player, best keeper… */
+  awards?: PickedAward[];
+  /** Stage 8 · F8: teams still level after every tie-break, in the order a draw of lots put them (by group label, '' for one table). */
+  lots?: Record<string, string[]>;
+  /** Stage 8: groups → knockout — how many best next-placed teams go through besides the top `qualifiers_per_group` (null: as many as fill the byes). */
+  bestNext?: number;
+  /** Stage 8 · F5: bans from cards (team sports with cards). */
+  discipline?: DisciplineRules;
 };
+
+/** Stage 8 · F7: one award the organiser gives — to a person (account or name) and/or a team. */
+export type PickedAward = { title: string; user_id?: string | null; name?: string | null; team_id?: string | null };
+/** Stage 8 · F5: N yellows across the tournament = a ban of M matches; a red = R matches; yellows wiped after the group stage if set. */
+export type DisciplineRules = { yellowsForBan?: number | null; banMatches?: number; redBanMatches?: number; resetAfterGroups?: boolean };
+export const AWARD_TITLE_MAX = 60;
 
 export const GRACE_MINUTES: [number, number] = [5, 60];
 export const MIN_PLAYERS: [number, number] = [2, 15];
@@ -479,7 +493,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -503,6 +517,9 @@ export function settingsRefusal(sport: string | null | undefined, format: string
   if (o.graceMinutes != null && o.graceMinutes !== 0 && !whole(o.graceMinutes, GRACE_MINUTES)) return refuse(`The grace time must be ${GRACE_MINUTES[0]} to ${GRACE_MINUTES[1]} minutes.`);
   if (o.tieFallback != null && o.tieFallback !== 'seed' && o.tieFallback !== 'boundaries' && o.tieFallback !== 'toss') return refuse('A tied knockout goes to the higher seed, more boundaries or a toss.');
   if (o.withdrawnResults != null && o.withdrawnResults !== 'delete' && o.withdrawnResults !== 'keep') return refuse('A withdrawn player’s group results are deleted or kept.');
+  // Stage 8 · F7 / F8 / F5 and best runners-up: validated here, no app-imposed counts.
+  const stage8 = stage8Refusal(format, o);
+  if (stage8) return stage8;
   if (o.minPlayers != null && o.minPlayers !== 0 && !whole(o.minPlayers, MIN_PLAYERS)) return refuse(`The fewest players a team can play with must be ${MIN_PLAYERS[0]} to ${MIN_PLAYERS[1]}.`);
   if (o.swiss != null) {
     if (format !== 'swiss') return refuse('Swiss rounds are for a Swiss tournament.');
@@ -587,7 +604,64 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
     if (s[k]) out[k] = Number(s[k]);
     else delete out[k];
   }
+  // Stage 8: awards (F7), lots (F8), best next-placed (groups), discipline (F5). Null / empty clears.
+  if ('awards' in s) {
+    const list = Array.isArray(s.awards) ? (s.awards as PickedAward[]).map((a) => ({
+      title: String(a.title).trim(),
+      ...(a.user_id ? { user_id: a.user_id } : {}),
+      ...(a.name && String(a.name).trim() ? { name: String(a.name).trim() } : {}),
+      ...(a.team_id ? { team_id: a.team_id } : {}),
+    })) : [];
+    if (list.length) out.awards = list; else delete out.awards;
+  }
+  if ('lots' in s) {
+    if (s.lots && Object.keys(s.lots).length) out.lots = s.lots; else delete out.lots;
+  }
+  if ('bestNext' in s) {
+    if (s.bestNext != null) out.bestNext = Number(s.bestNext); else delete out.bestNext;
+  }
+  if ('discipline' in s) {
+    if (s.discipline) out.discipline = s.discipline; else delete out.discipline;
+  }
   return out;
+}
+
+const whole = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n);
+
+/** Stage 8 · the new settings' checks (shapes only; the organiser chooses the numbers). */
+function stage8Refusal(format: string | null | undefined, o: Record<string, any>): Refusal | null {
+  if (o.awards != null) {
+    if (!Array.isArray(o.awards)) return refuse('Awards are a list.');
+    for (const a of o.awards) {
+      if (!a || typeof a !== 'object') return refuse('Each award is a title and who it goes to.');
+      const title = typeof a.title === 'string' ? a.title.trim() : '';
+      if (!title || title.length > AWARD_TITLE_MAX) return refuse(`An award’s title is 1 to ${AWARD_TITLE_MAX} characters.`);
+      const name = typeof a.name === 'string' ? a.name.trim() : '';
+      if (name.length > AWARD_TITLE_MAX) return refuse(`A name is up to ${AWARD_TITLE_MAX} characters.`);
+      if (a.user_id != null && typeof a.user_id !== 'string') return refuse('An award goes to a person on SportClan, a name or a team.');
+      if (a.team_id != null && typeof a.team_id !== 'string') return refuse('An award goes to a person on SportClan, a name or a team.');
+      if (!a.user_id && !name && !a.team_id) return refuse(`Say who “${title}” goes to.`);
+    }
+  }
+  if (o.lots != null) {
+    if (typeof o.lots !== 'object' || Array.isArray(o.lots)) return refuse('A draw of lots is an order of teams.');
+    for (const v of Object.values(o.lots)) {
+      if (!Array.isArray(v) || v.some((x) => typeof x !== 'string') || new Set(v).size !== v.length) return refuse('A draw of lots lists each team once.');
+    }
+  }
+  if (o.bestNext != null) {
+    if (!whole(o.bestNext) || o.bestNext < 0) return refuse('The best next-placed teams going through is a whole number.');
+    if (format !== 'groups_knockout') return refuse('Best next-placed teams are for groups → knockout.');
+  }
+  if (o.discipline != null) {
+    const d = o.discipline;
+    if (typeof d !== 'object' || Array.isArray(d)) return refuse('Discipline is the yellows for a ban and the matches it lasts.');
+    if (d.yellowsForBan != null && (!whole(d.yellowsForBan) || d.yellowsForBan < 1)) return refuse('Yellows for a ban must be 1 or more, or none.');
+    if (d.banMatches != null && (!whole(d.banMatches) || d.banMatches < 1)) return refuse('A ban is 1 match or more.');
+    if (d.redBanMatches != null && (!whole(d.redBanMatches) || d.redBanMatches < 0)) return refuse('A red card’s ban is 0 matches or more.');
+    if (d.resetAfterGroups != null && typeof d.resetAfterGroups !== 'boolean') return refuse('Yellows are wiped after the groups, or not.');
+  }
+  return null;
 }
 
 /**

@@ -34,7 +34,7 @@ import {
   getTournamentOfficials,
 } from '../controllers/features.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
-import { getPlacings } from '../controllers/awards.controller';
+import { getPlacings, getAwards, setAwards } from '../controllers/awards.controller';
 import { getCourtBoard, nextToCourt, runningLate } from '../controllers/courtBoard.controller';
 import { enterSelf, addPlayersEntry, createPairInvite, answerPairInvite, getPairs, relatedEntries } from '../controllers/pairEntries.controller';
 import {
@@ -85,6 +85,9 @@ router.post('/:id/pair-invites/:inviteId/:action', authenticateToken, answerPair
 router.get('/:id/court-board', authenticateToken, getCourtBoard);
 // Badminton gap 8: winner, runner-up, semi-finalists (per event), with the players.
 router.get('/:id/placings', authenticateToken, getPlacings);
+// Stage 8 · F7: computed and organiser's awards.
+router.get('/:id/awards', authenticateToken, getAwards);
+router.put('/:id/awards', authenticateToken, setAwards);
 router.get('/:id/entries', authenticateToken, getEntriesPage); // Oct 2026: entries a page at a time
 // Badminton gap 6: after a retirement, the entry here and its players' entries in the other events.
 router.get('/:id/teams/:teamId/related-entries', authenticateToken, relatedEntries);

@@ -10,10 +10,11 @@ const fb = (id: string, a: string, b: string, ga: number, gb: number, players: R
   score_summary: { A: { score: ga }, B: { score: gb }, players }, ...extra,
 });
 
-test('football: top scorers, assists, cards (a red counts 3), clean sheets by team; guests by name within a team; deleted accounts off', () => {
+test('football: top scorers, assists, cards (a red counts 3), clean sheets by team (not from an awarded score); guests by name within a team; deleted accounts off', () => {
   const m = [
     fb('m1', 'tA', 'tB', 2, 0, { u1: { side: 'A', name: 'Ravi', goals: 2, assists: 0 }, u2: { side: 'A', name: 'Amit', goals: 0, assists: 2, yellow_cards: 1 }, 'guest:x': { side: 'B', name: 'Raju', goals: 0, red_cards: 1 } }),
     fb('m2', 'tA', 'tC', 1, 1, { u1: { side: 'A', name: 'Ravi', goals: 1, yellow_cards: 1 }, u9: { side: 'B', name: 'Gone', goals: 5 }, 'guest:y': { side: 'B', name: 'raju ', goals: 1 } }),
+    fb('m3', 'tB', 'tC', 3, 0, {}, { result_type: 'awarded' }), // awarded, not played: no clean sheet
   ];
   const b = sportBoards('football', m, TEAMS, { u9: { name: 'Gone', deleted: true } });
   expect(b.map((x) => x.title)).toEqual(['Top scorers', 'Assists', 'Cards', 'Clean sheets']);

@@ -27,6 +27,8 @@ test('level on everything: reported, placed by id — until a draw of lots order
   expect(d.order).toEqual(['A', 'B', 'C']);
   const lot = rankTeamsDetailed(['C', 'A', 'B'], level3, ['head_to_head'], undefined, { lots: ['C', 'A', 'B'] });
   expect([lot.order, lot.level]).toEqual([['C', 'A', 'B'], []]);
+  expect(lot.byLot).toEqual([['C', 'A', 'B']]); // the table says the draw placed them
+  expect(d.byLot).toEqual([]);
   // a lot that misses one of them still reports the tie
   expect(rankTeamsDetailed(['C', 'A', 'B'], level3, [], undefined, { lots: ['C', 'A'] }).level).toEqual([['C', 'A', 'B']]);
   // separated teams aren't level

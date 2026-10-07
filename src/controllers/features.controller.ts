@@ -135,6 +135,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     // Stage 8 · F8: fair play (when the order uses it) and the organiser's draws of lots.
     const extraFor = await rankExtrasFor(tournament as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string; team_a_id?: string | null; team_b_id?: string | null }>);
     const level: Array<{ group: string | null; team_ids: string[] }> = [];
+    const byLot: Array<{ group: string | null; team_ids: string[] }> = [];
     for (const g of Array.from(byGroup.keys()).sort()) {
       const groupRows = byGroup.get(g)!;
       // SC-377: a withdrawn team is out of the competition — it keeps its played
@@ -155,6 +156,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
       const ranked = detail.order;
       // Teams level on every tie-break, until the organiser records a draw of lots.
       for (const cl of detail.level) if (cl.some((id) => !withdrawnIds.has(id))) level.push({ group: g === 'default' ? null : g, team_ids: cl.filter((id) => !withdrawnIds.has(id)) });
+      for (const cl of detail.byLot) byLot.push({ group: g === 'default' ? null : g, team_ids: cl });
       for (const id of ranked.filter((i) => !withdrawnIds.has(i))) orderIndex.set(id, running++);
       for (const id of ranked.filter((i) => withdrawnIds.has(i))) orderIndex.set(id, running++);
     }
@@ -203,7 +205,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
 
     // SC-268: sport slug → the FE picks the secondary standings column
     // (NRR cricket · GD football/hockey · PD basketball · none for rally/carrom).
-    return res.json({ standings: aliased, isCricket, sportSlug: sport?.slug ?? null, level });
+    return res.json({ standings: aliased, isCricket, sportSlug: sport?.slug ?? null, level, by_lot: byLot });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -407,8 +407,9 @@ export function rankTeams(
  */
 export function rankTeamsDetailed(
   teamIds: string[], matches: GMatch[], tiebreakerRules?: any[], pts: PointsModel = DEFAULT_POINTS, extra: RankExtra = {},
-): { order: string[]; level: string[][] } {
+): { order: string[]; level: string[][]; byLot: string[][] } {
   const levelClusters: string[][] = [];
+  const lotClusters: string[][] = [];
   const lotIndex = new Map((extra.lots ?? []).map((id, i) => [id, i]));
   const order = buildOrder(tiebreakerRules);
   const globalStats = computeStats(teamIds, matches, undefined, pts);
@@ -439,7 +440,9 @@ export function rankTeamsDetailed(
     if (level >= order.length) {
       // Stage 8 · F8: a draw of lots the organiser recorded, then the team id.
       if (!ids.every((id) => lotIndex.has(id))) levelClusters.push(ids.slice().sort((x, y) => (x < y ? -1 : x > y ? 1 : 0)));
-      return ids.slice().sort((x, y) => (lotIndex.get(x) ?? Infinity) - (lotIndex.get(y) ?? Infinity) || (x < y ? -1 : x > y ? 1 : 0)); // team_id terminator
+      const placed = ids.slice().sort((x, y) => (lotIndex.get(x) ?? Infinity) - (lotIndex.get(y) ?? Infinity) || (x < y ? -1 : x > y ? 1 : 0));
+      if (ids.every((id) => lotIndex.has(id))) lotClusters.push(placed); // ordered by the draw, shown as such
+      return placed; // team_id terminator
     }
     const keys = keyMapFor(order[level]!, ids); // guarded by the length check above
     const sorted = ids.slice().sort((x, y) => keys.get(y)! - keys.get(x)!);
@@ -463,7 +466,8 @@ export function rankTeamsDetailed(
   const pos = new Map(ordered.map((id, i) => [id, i]));
   levelClusters.sort((a, b) => (pos.get(a[0]!) ?? 0) - (pos.get(b[0]!) ?? 0));
   for (const cl of levelClusters) cl.sort((a, b) => (pos.get(a) ?? 0) - (pos.get(b) ?? 0));
-  return { order: ordered, level: levelClusters };
+  lotClusters.sort((a, b) => (pos.get(a[0]!) ?? 0) - (pos.get(b[0]!) ?? 0));
+  return { order: ordered, level: levelClusters, byLot: lotClusters };
 }
 
 // ── BUILD 4.5 · best next-placed teams across groups ─────────────────────────

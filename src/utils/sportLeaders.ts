@@ -81,7 +81,8 @@ function teamTallies(matches: SportLeaderMatch[]): TTally[] {
   for (const m of matches) {
     const ids: Array<[string | null, 'A' | 'B']> = [[m.team_a_id, 'A'], [m.team_b_id, 'B']];
     const tie = m.score_summary?.rubbers != null;
-    const wo = m.result_type === 'walkover' || !!m.score_summary?.walkover;
+    // A walkover or an awarded score (Stage 8 · F12) wasn't played: it counts for the result, not for points, games or clean sheets.
+    const wo = m.result_type === 'walkover' || m.result_type === 'awarded' || !!m.score_summary?.walkover;
     for (const [id, side] of ids) {
       if (!id) continue;
       const me = t(id); const other = side === 'A' ? 'B' : 'A';

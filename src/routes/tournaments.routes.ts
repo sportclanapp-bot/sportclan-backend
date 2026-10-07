@@ -13,6 +13,8 @@ import {
   createEntry,
   directAddTeam,
   updateEntry,
+  getLuckyLosers,
+  addLuckyLoser,
   updateTournament,
   joinByCode,
   tournamentByCode,
@@ -78,6 +80,9 @@ router.post('/:id/reassign-organiser', authenticateToken, reassignTournamentOrga
 router.post('/:id/entries/direct', authenticateToken, directAddTeam);
 router.post('/:id/entries', authenticateToken, createEntry);
 router.patch('/:id/entries/:entryId', authenticateToken, updateEntry);
+// Stage 9 · T7: lucky losers from the qualifying draws.
+router.get('/:id/lucky-losers', authenticateToken, getLuckyLosers);
+router.post('/:id/lucky-losers', authenticateToken, addLuckyLoser);
 // Badminton gap 2: singles and pair entries.
 router.post('/:id/enter-self', authenticateToken, enterSelf);
 router.post('/:id/entries/players', authenticateToken, addPlayersEntry);

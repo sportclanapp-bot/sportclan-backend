@@ -311,6 +311,18 @@ export type TournamentSettings = {
    * moves the first one up.
    */
   waitlist?: boolean;
+  /**
+   * Stage 9 · T7 · this event is a qualifying draw for a main event of the same
+   * tournament: its draw stops after `rounds` rounds, and each last-round winner
+   * goes into the main draw as a qualifier ("Q"). Any knockout sport.
+   */
+  qualifying?: { into: string; rounds: number };
+  /**
+   * Stage 9 · T8 · this event is a consolation draw of a main event of the same
+   * tournament, filled with its first-round losers ('first_round') or each
+   * player's first-match losers ('first_match' — a bye's winner who loses next).
+   */
+  consolation?: { from: string; kind: 'first_round' | 'first_match' };
 };
 
 /** Stage 9 · T13: does a full event take entries onto its waitlist (on unless the organiser turned it off)? */
@@ -574,7 +586,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist', 'qualifying', 'consolation']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -707,6 +719,10 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('squad' in s) {
     if (s.squad) out.squad = s.squad; else delete out.squad;
   }
+  // Stage 9 · T7 / T8: a draw's link (null removes it).
+  for (const k of ['qualifying', 'consolation'] as const) {
+    if (k in s) { if (s[k]) (out as Record<string, unknown>)[k] = s[k]; else delete (out as Record<string, unknown>)[k]; }
+  }
   // Stage 9 · T13: kept only when turned off (on is the default).
   if ('waitlist' in s) {
     if (s.waitlist === false) out.waitlist = false; else delete out.waitlist;
@@ -738,6 +754,20 @@ function stage8Refusal(format: string | null | undefined, o: Record<string, any>
     }
   }
   if (o.waitlist != null && typeof o.waitlist !== 'boolean') return refuse('A waitlist is on or off.'); // Stage 9 · T13
+  // Stage 9 · T7 / T8: a qualifying or consolation draw of another event (the server checks it's a sibling).
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (o.qualifying != null) {
+    const q = o.qualifying;
+    if (typeof q !== 'object' || typeof q.into !== 'string' || !UUID.test(q.into)) return refuse('A qualifying draw needs its main draw.');
+    if (!whole(q.rounds) || q.rounds < 1) return refuse('A qualifying draw plays 1 round or more.');
+    if (format && format !== 'knockout') return refuse('A qualifying draw is a knockout.');
+  }
+  if (o.consolation != null) {
+    const c = o.consolation;
+    if (typeof c !== 'object' || typeof c.from !== 'string' || !UUID.test(c.from)) return refuse('A consolation draw needs its main draw.');
+    if (c.kind !== 'first_round' && c.kind !== 'first_match') return refuse('A consolation draw takes first-round losers or first-match losers.');
+  }
+  if (o.qualifying != null && o.consolation != null) return refuse('A draw is a qualifying draw or a consolation draw, not both.');
   if (o.bestNext != null) {
     if (!whole(o.bestNext) || o.bestNext < 0) return refuse('The best next-placed teams going through is a whole number.');
     if (format !== 'groups_knockout') return refuse('Best next-placed teams are for groups → knockout.');

@@ -206,7 +206,7 @@ describe('F8 · max_teams holds on direct add, approve and edit', () => {
   });
   test('approving a pending entry into a full league → 400 TOURNAMENT_FULL, no update', async () => {
     const base = world({ count: 2, t: { max_teams: 2 } });
-    mockNext = (q) => (q[0] === 'from:tournament_entries' && has(q, 'select:["id, tournament_id, team_id, status"]')
+    mockNext = (q) => (q[0] === 'from:tournament_entries' && has(q, 'select:["id, tournament_id, team_id, status, entry_tag"]')
       ? { data: { id: 'e1', tournament_id: T, team_id: TEAM, status: 'pending' } } : base(q));
     const r = await call(updateEntry, { params: { id: T, entryId: 'e1' }, body: { status: 'approved' } });
     expect([r.statusCode, r.body.code]).toEqual([400, 'TOURNAMENT_FULL']);
@@ -214,7 +214,7 @@ describe('F8 · max_teams holds on direct add, approve and edit', () => {
   });
   test('F9 · approving a team of another sport → 400 WRONG_SPORT', async () => {
     const base = world({ team: { sport_id: 'sport-badminton' } });
-    mockNext = (q) => (q[0] === 'from:tournament_entries' && has(q, 'select:["id, tournament_id, team_id, status"]')
+    mockNext = (q) => (q[0] === 'from:tournament_entries' && has(q, 'select:["id, tournament_id, team_id, status, entry_tag"]')
       ? { data: { id: 'e1', tournament_id: T, team_id: TEAM, status: 'pending' } } : base(q));
     expect((await call(updateEntry, { params: { id: T, entryId: 'e1' }, body: { status: 'approved' } })).body.code).toBe('WRONG_SPORT');
   });
@@ -372,7 +372,7 @@ describe('F5/F10 · the fixture editor', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'tournaments.controller.ts'), 'utf8');
     // Gap 10: organisers also get fee_paid_at, fee_note (the select is built per viewer).
     // Oct 2026: the columns live in entryCols (shared by the tournament and the entries page).
-    expect(src).toContain("const entryCols = (organiser: boolean) => `id, team_id, status, seed, group_label, club, entered_at,${organiser ? ' fee_paid_at, fee_note, amateur_declared_at,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`;");
+    expect(src).toContain("const entryCols = (organiser: boolean) => `id, team_id, status, seed, group_label, club, entered_at, entry_tag,${organiser ? ' fee_paid_at, fee_note, amateur_declared_at,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`;");
   });
 });
 

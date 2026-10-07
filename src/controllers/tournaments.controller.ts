@@ -75,6 +75,7 @@ import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/not
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
 import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, swissRoundsProblem, tableInputs, amateurDeclarationRefusal, waitlistOn } from '../utils/tournamentSettings';
+import { consolationWaiting, drawLinkProblem, enterInto, luckyLosers, onKnockoutDecided, qualifyingPending } from '../utils/drawLinks';
 import { promoteWaitlist } from '../utils/waitlist';
 import { drawOrder } from '../utils/drawOrder';
 import { sharedScheduleFor } from '../utils/sharedCourts';
@@ -627,7 +628,7 @@ async function attachEventSummaries(rows: Array<Record<string, unknown>>): Promi
 
 /** The entry columns the app reads (the fee only for an organiser). */
 // Stage 9 · T12: the organiser sees when an "amateurs only" entry was declared (migration 129).
-const entryCols = (organiser: boolean) => `id, team_id, status, seed, group_label, club, entered_at,${organiser ? ' fee_paid_at, fee_note, amateur_declared_at,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`;
+const entryCols = (organiser: boolean) => `id, team_id, status, seed, group_label, club, entered_at, entry_tag,${organiser ? ' fee_paid_at, fee_note, amateur_declared_at,' : ''} team:team_id (id, name, short_name, logo_url, sport_id)`;
 
 export type EntrySummary = {
   approved: number; pending: number; withdrawn: number; rejected: number; total: number;
@@ -1444,7 +1445,9 @@ export async function updateEntry(req: Request, res: Response) {
     // B02 (V022, D7): the chat follows the entries and organisers.
     syncAfterSuccess(res, () => syncTournamentChatMembers(String(req.params.id)));
     const { id, entryId } = req.params;
-    const { status, seed, group_label, club, fee_paid, fee_note } = req.body || {};
+    const { status, seed, group_label, club, fee_paid, fee_note, wild_card } = req.body || {};
+    // Stage 9 · T7: a wild card is the organiser's (yes / no).
+    if (wild_card !== undefined && typeof wild_card !== 'boolean') return res.status(400).json({ error: 'A wild card is yes or no.', code: 'BAD_WILD_CARD' });
     // Cricket gap 10 (5 Oct 2026): the organiser keeps track of who has paid the
     // entry fee (cash / UPI, outside the app) — a yes/no and a short note.
     if (fee_paid !== undefined && typeof fee_paid !== 'boolean') {
@@ -1470,7 +1473,7 @@ export async function updateEntry(req: Request, res: Response) {
     }
     const { data: entry } = await supabase
       .from('tournament_entries')
-      .select('id, tournament_id, team_id, status')
+      .select('id, tournament_id, team_id, status, entry_tag')
       .eq('id', entryId)
       .eq('tournament_id', id)
       .maybeSingle();
@@ -1520,6 +1523,13 @@ export async function updateEntry(req: Request, res: Response) {
       return res.status(409).json({ error: 'The draw is made, so seeds can’t change.', code: 'SEEDS_LOCKED' });
     }
     const update: Record<string, any> = {};
+    if (wild_card !== undefined) {
+      if (!isCreator) return res.status(403).json({ error: 'Only the organiser gives wild cards.' });
+      if ((tournament as { fixtures_generated?: boolean }).fixtures_generated) return res.status(409).json({ error: 'The draw is made, so wild cards can’t change.', code: 'DRAW_MADE' });
+      const tag = (entry as { entry_tag?: string | null }).entry_tag ?? null;
+      if (tag === 'Q' || tag === 'LL') return res.status(409).json({ error: tag === 'Q' ? 'This entry qualified.' : 'This entry is a lucky loser.', code: 'ENTRY_TAGGED' });
+      update.entry_tag = wild_card ? 'WC' : null;
+    }
     if (status !== undefined) update.status = status;
     if (seed !== undefined) update.seed = seed;
     if (club !== undefined) update.club = typeof club === 'string' && club.trim() ? club.trim() : null;
@@ -1869,6 +1879,17 @@ export async function updateTournament(req: Request, res: Response) {
       }
       const current = settingsOf(tournament as { settings?: unknown });
       const incoming = (update.settings ?? {}) as Record<string, unknown>;
+      // Stage 9 · T7 / T8: a qualifying or consolation draw of another event — fixed once this draw is made.
+      for (const k of ['qualifying', 'consolation'] as const) {
+        if (!(k in incoming)) continue;
+        if (JSON.stringify(incoming[k] ?? null) !== JSON.stringify(current[k] ?? null) && (tournament as { fixtures_generated?: boolean }).fixtures_generated) {
+          return res.status(409).json({ error: 'The draw is made, so what it feeds can’t change.', code: 'DRAW_LOCKED' });
+        }
+        if (incoming[k]) {
+          const why = await drawLinkProblem({ id: String(id), parent_id: (tournament as { parent_id?: string | null }).parent_id ?? null }, { [k]: incoming[k] });
+          if (why) return res.status(400).json({ error: why, code: 'INVALID_TOURNAMENT_SETTINGS' });
+        }
+      }
       if ('points' in incoming && JSON.stringify(incoming.points ?? null) !== JSON.stringify(current.points ?? null)
           && (await tournamentHasResult(id!))) {
         return res.status(409).json({ error: 'Results are already in, so the points can’t change.', code: 'POINTS_LOCKED' });
@@ -2301,7 +2322,7 @@ export async function getBracket(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, name, format')
+      .select('id, name, format, settings')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
@@ -2344,9 +2365,12 @@ export async function getBracket(req: Request, res: Response) {
     // final; they have a fixture list.
     const fmtLc = ((tournament as any).format ?? 'knockout').toLowerCase();
     const isBracketFormat = fmtLc !== 'round_robin' && fmtLc !== 'league' && fmtLc !== 'swiss';
+    // Stage 9 · T7: a qualifying draw's rounds are qualifying rounds.
+    const qualifying = !!settingsOf(tournament as { settings?: unknown }).qualifying;
     const roundName = (r: number, idx: number): string => {
       if (r === 0) return 'Group Stage';
       if (fmtLc === 'swiss') return `Round ${r}`; // BUILD 4.15
+      if (qualifying && isBracketFormat) return idx === count - 1 ? 'Final qualifying round' : `Qualifying round ${r}`;
       if (!isBracketFormat) return count > 1 ? `Matchday ${r}` : 'Fixtures';
       const fromEnd = count - 1 - idx; // 0 = last round = final
       if (fromEnd === 0) return 'Final';
@@ -2388,7 +2412,10 @@ export async function getBracket(req: Request, res: Response) {
       }),
     }));
 
-    return res.json({ tournament, rounds });
+    // Stage 9 · T7: wild cards, qualifiers and lucky losers, by team (the draw shows "WC", "Q", "LL").
+    const { data: tagged } = await supabase.from('tournament_entries').select('team_id, entry_tag').eq('tournament_id', id).not('entry_tag', 'is', null);
+    const tags = Object.fromEntries(((tagged ?? []) as Array<{ team_id: string; entry_tag: string }>).map((e) => [e.team_id, e.entry_tag]));
+    return res.json({ tournament: { id: tournament.id, name: tournament.name, format: tournament.format, qualifying: !!settingsOf(tournament as { settings?: unknown }).qualifying }, rounds, tags });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -2841,9 +2868,12 @@ async function insertSingleElim(
   round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>,
   slotFor: (round: number, matchNo: number) => { scheduled_at: string; ground_label: string } | undefined,
   thirdPlace = false,
+  maxRounds: number | null = null,
 ): Promise<{ byeMatchIds: string[] }> {
   const bracketSize = round1.length * 2;
-  const roundsCount = Math.max(1, Math.round(Math.log2(bracketSize)));
+  // Stage 9 · T7: a qualifying draw stops after its rounds; each last-round winner qualifies.
+  const roundsCount = Math.min(Math.max(1, Math.round(Math.log2(bracketSize))), maxRounds ?? Infinity);
+  if (maxRounds != null) thirdPlace = false;
   const withThird = hasThirdPlace(thirdPlace, roundsCount);
   const created: Record<string, string> = {}; // `${round}:${matchNo}` -> id
 
@@ -3260,6 +3290,12 @@ async function advanceTournamentWinnerInner(matchId: string): Promise<void> {
   // can set a winner via the fixture editor, which re-fires this.
   if (!winnerId) return;
 
+  // Stage 9 · T7 / T8: a qualifier goes through to the main draw; a first-round
+  // loser to the consolation draw. A qualifying draw's last round crowns nobody.
+  try {
+    if ((await onKnockoutDecided(m as never)).final) return;
+  } catch { /* best effort: the bracket still advances */ }
+
   if (!m.next_match_id) {
     // The final — or (BUILD 4.12) the third-place match, which has no next
     // match either. Whichever is decided last completes the tournament; only
@@ -3663,9 +3699,11 @@ async function upsertDayWindows(tournamentId: string, rows: any): Promise<void> 
 
 // Fixture shape of a single-elim bracket (round 1 carries the real round-1
 // matchups; later rounds are TBD). Mirrors insertSingleElim's round numbering.
-function bracketShape(round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>, thirdPlace = false): FixtureShape[] {
+function bracketShape(round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>, thirdPlace = false, maxRounds: number | null = null): FixtureShape[] {
   const bracketSize = round1.length * 2;
-  const roundsCount = Math.max(1, Math.round(Math.log2(bracketSize)));
+  // Stage 9 · T7: a qualifying draw stops after its rounds (no third place).
+  const roundsCount = Math.min(Math.max(1, Math.round(Math.log2(bracketSize))), maxRounds ?? Infinity);
+  if (maxRounds != null) thirdPlace = false;
   const shape: FixtureShape[] = [];
   for (let r = roundsCount; r >= 1; r--) {
     const matchesInRound = bracketSize / Math.pow(2, r);
@@ -3765,6 +3803,13 @@ export async function generateFixtures(req: Request, res: Response) {
     const seeding = settingsOf(tournament as { settings?: unknown }).seeding ?? null;
     // BUILD 4.12: the semi-final losers play for third place.
     const thirdPlace = !!settingsOf(tournament as { settings?: unknown }).thirdPlace;
+    // Stage 9 · T7: a qualifying draw's rounds; a main draw waits for its qualifying draws.
+    const qualRounds = settingsOf(tournament as { settings?: unknown }).qualifying?.rounds ?? null;
+    const pendingQ = await qualifyingPending(tournament as { id: string; parent_id: string | null });
+    if (pendingQ.length) return res.status(409).json({ error: `Finish the qualifying first (${pendingQ.join(', ')}): the qualifiers go into this draw.`, code: 'QUALIFYING_PENDING' });
+    // Stage 9 · T8: a consolation draw waits for its losers.
+    const consWait = await consolationWaiting(tournament as { id: string; parent_id: string | null; settings: unknown });
+    if (consWait) return res.status(409).json({ error: consWait, code: 'CONSOLATION_WAITING' });
     // BUILD 4.13: keep same-club entries apart (their club label).
     const separateClubs = !!settingsOf(tournament as { settings?: unknown }).separateClubs;
     const clubOfTeam = new Map((fetched ?? []).map((e: { team_id: string; club?: string | null }) => [e.team_id, e.club ?? null]));
@@ -3900,11 +3945,11 @@ export async function generateFixtures(req: Request, res: Response) {
       // index, so byes fell on whoever happened to sit at positions M..n.
       const seeded = seededRound1(teams, nextPow2(teams.length));
       const round1 = separateClubs ? separateClubsInRound1(seeded, clubOf) : seeded; // BUILD 4.13
-      const shape = bracketShape(round1, thirdPlace);
+      const shape = bracketShape(round1, thirdPlace, qualRounds);
       const sched = buildSchedule(shape, schedCfg);
       if (!sched.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' }); }
       const slotFor = (r: number, m: number): SlotAssign | undefined => sched.assignments.get(keyOf(r, m));
-      const { byeMatchIds } = await insertSingleElim(base, round1, slotFor, thirdPlace);
+      const { byeMatchIds } = await insertSingleElim(base, round1, slotFor, thirdPlace, qualRounds);
       for (const byeId of byeMatchIds) {
         const { data: bm } = await supabase
           .from('matches')
@@ -4098,4 +4143,43 @@ export async function generateFixtures(req: Request, res: Response) {
     }
     return res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+
+/**
+ * Stage 9 · T7 · GET /tournaments/:id/lucky-losers — the qualifying draws'
+ * final-round losers who aren't in this main draw (organisers only).
+ */
+export async function getLuckyLosers(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  const { data: t } = await supabase.from('tournaments').select('id, parent_id, fixtures_generated').eq('id', id).maybeSingle();
+  if (!t) return res.status(404).json({ error: 'Tournament not found' });
+  if (!(await isTournamentOrganiser(String(id), userId))) return res.status(403).json({ error: 'Only the organiser sees lucky losers.' });
+  return res.json({ lucky_losers: await luckyLosers(t as { id: string; parent_id: string | null }), draw_made: !!(t as { fixtures_generated?: boolean }).fixtures_generated });
+}
+
+/**
+ * Stage 9 · T7 · POST /tournaments/:id/lucky-losers { team_id } — put a lucky
+ * loser into a free place in the main draw (before the draw is made).
+ */
+export async function addLuckyLoser(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  const teamId = (req.body ?? {}).team_id;
+  if (typeof teamId !== 'string') return res.status(400).json({ error: 'Which lucky loser?', code: 'BAD_TEAM' });
+  const { data: t } = await supabase.from('tournaments').select('id, parent_id, fixtures_generated, max_teams, status').eq('id', id).maybeSingle();
+  if (!t) return res.status(404).json({ error: 'Tournament not found' });
+  if (!(await isTournamentOrganiser(String(id), userId))) return res.status(403).json({ error: 'Only the organiser puts in a lucky loser.' });
+  const tt = t as { id: string; parent_id: string | null; fixtures_generated?: boolean; max_teams?: number | null; status?: string };
+  if (tt.fixtures_generated) return res.status(409).json({ error: 'The draw is made: a withdrawal now is a walkover.', code: 'DRAW_MADE' });
+  if (!(await luckyLosers(tt)).some((l) => l.team_id === teamId)) return res.status(400).json({ error: 'That isn’t a lucky loser of this draw.', code: 'NOT_LUCKY_LOSER' });
+  if (tt.max_teams) {
+    const { count } = await supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', tt.id).eq('status', 'approved');
+    if ((count ?? 0) >= tt.max_teams) return res.status(409).json({ error: 'The draw is full: a lucky loser takes a withdrawn place.', code: 'TOURNAMENT_FULL' });
+  }
+  await enterInto(tt.id, teamId, 'LL');
+  return res.json({ ok: true });
 }

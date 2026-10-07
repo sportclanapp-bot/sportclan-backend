@@ -74,7 +74,7 @@ import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
-import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, swissRoundsProblem, tableInputs, amateurDeclarationRefusal, waitlistOn } from '../utils/tournamentSettings';
+import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, ladderCreateRefusal, swissRoundsProblem, tableInputs, amateurDeclarationRefusal, waitlistOn } from '../utils/tournamentSettings';
 import { consolationWaiting, drawLinkProblem, enterInto, luckyLosers, onKnockoutDecided, qualifyingPending } from '../utils/drawLinks';
 import { promoteWaitlist } from '../utils/waitlist';
 import { drawOrder } from '../utils/drawOrder';
@@ -84,6 +84,7 @@ import { eventLimitRefusal, eventLimitsRefusal, storedEventLimits } from '../uti
 import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSeparation';
 import { scheduleRefusal } from '../utils/scheduleFields';
 import { swissFirstRound, swissNextRound, type SwissRound } from '../utils/swiss';
+import { BOX_DEFAULT, boxesOf, boxLabel, challengeProblem, ladderAfter, nextBoxOrder } from '../utils/ladderBox';
 import {
   SHARED_KEYS, EVENT_KEYS, eventsListRefusal, eventName, entryKindRefusal, eventLabelRefusal, refreshParentStatus, refreshParentOf,
   clientHas, eventsOf, ENTER_AN_EVENT, ENTER_AS_PLAYERS, familyIds, sameSharedValue, rootTournamentId,
@@ -243,6 +244,9 @@ async function tournamentRowFrom(body: Record<string, any>, kind: 'single' | 'pa
   // BUILD Stage 4: the tournament-wide settings, checked by the shared validator.
   const setBad = parent ? null : settingsRefusal(createSportSlug, format, settings);
   if (setBad) return bad(setBad);
+  // Stage 9 · T16: ladders and box leagues are for the one-on-one and pair sports.
+  const lbBad = parent ? null : ladderCreateRefusal(createSportSlug, format);
+  if (lbBad) return bad(lbBad);
   // BUILD 4.15: a Swiss is chess, with its rounds.
   if (!parent && format === 'swiss') {
     const swBad = swissCreateRefusal(createSportSlug, settings);
@@ -857,7 +861,7 @@ type EntryTournament = {
   entry_kind?: string | null; // badminton gap 2
 };
 type EntryRefusal = { status: number; body: { error: string; code: string } };
-const ENTRY_TOURNAMENT_COLS = 'id, name, status, sport_id, max_teams, registration_deadline, fixtures_generated, created_by, settings, start_date, is_parent, parent_id, entry_kind';
+const ENTRY_TOURNAMENT_COLS = 'id, name, status, sport_id, max_teams, registration_deadline, fixtures_generated, created_by, settings, start_date, is_parent, parent_id, entry_kind, format';
 
 /**
  * Phase 3 · B08-F2/F4/F8/F9: the rules EVERY way into a tournament passes — a
@@ -912,7 +916,8 @@ async function entryRefusal(
     return { status: 400, body: { error: 'Registration closed', code: 'REGISTRATION_CLOSED' } };
   }
   // SC-99: no new entries once the bracket is generated (they would never play).
-  if (t.fixtures_generated) {
+  // Stage 9 · T16: a ladder or box league takes newcomers (the bottom rung / box).
+  if (t.fixtures_generated && (t as { format?: string | null }).format !== 'ladder' && (t as { format?: string | null }).format !== 'box') {
     return { status: 409, body: { error: 'Registration is closed — the bracket has already been generated.', code: 'REGISTRATION_CLOSED' } };
   }
   const { data: team } = await supabase.from('teams').select('id, sport_id, kind').eq('id', teamId).maybeSingle();
@@ -2364,12 +2369,14 @@ export async function getBracket(req: Request, res: Response) {
     // robin displayed as a single round called "Final". Those formats have no
     // final; they have a fixture list.
     const fmtLc = ((tournament as any).format ?? 'knockout').toLowerCase();
-    const isBracketFormat = fmtLc !== 'round_robin' && fmtLc !== 'league' && fmtLc !== 'swiss';
+    const isBracketFormat = fmtLc !== 'round_robin' && fmtLc !== 'league' && fmtLc !== 'swiss' && fmtLc !== 'ladder' && fmtLc !== 'box';
     // Stage 9 · T7: a qualifying draw's rounds are qualifying rounds.
     const qualifying = !!settingsOf(tournament as { settings?: unknown }).qualifying;
     const roundName = (r: number, idx: number): string => {
       if (r === 0) return 'Group Stage';
       if (fmtLc === 'swiss') return `Round ${r}`; // BUILD 4.15
+      if (fmtLc === 'ladder') return 'Challenges'; // Stage 9 · T16
+      if (fmtLc === 'box') return `Round ${r}`;
       if (qualifying && isBracketFormat) return idx === count - 1 ? 'Final qualifying round' : `Qualifying round ${r}`;
       if (!isBracketFormat) return count > 1 ? `Matchday ${r}` : 'Fixtures';
       const fromEnd = count - 1 - idx; // 0 = last round = final
@@ -3030,6 +3037,18 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
   const { data: t } = await supabase
     .from('tournaments').select('format, tiebreaker_rules, sport_id, settings').eq('id', tournamentId).maybeSingle();
   const fmt = (t as any)?.format;
+  // Stage 9 · T16: a ladder's top rung; a box league's top box winner (its latest round).
+  if (fmt === 'ladder') {
+    const top = (await ladderOrder(tournamentId))[0];
+    return top ? { id: top.team_id, name: top.name } : null;
+  }
+  if (fmt === 'box') {
+    const tables = await boxTables(tournamentId, t as { settings?: unknown; tiebreaker_rules?: unknown; sport_id?: string });
+    const top = tables[0]?.[0];
+    if (!top) return null;
+    const { data: tm } = await supabase.from('teams').select('name').eq('id', top).maybeSingle();
+    return { id: top, name: (tm as { name?: string } | null)?.name ?? null };
+  }
   if (fmt === 'round_robin' || fmt === 'league' || fmt === 'swiss') { // BUILD 4.15: a Swiss is won on the table
     const entries = await allRows(() => supabase
       .from('tournament_entries').select('team_id, team:teams!team_id(id, name, short_name)')
@@ -3276,6 +3295,9 @@ async function advanceTournamentWinnerInner(matchId: string): Promise<void> {
     await crownLeagueChampion(m.tournament_id);
     return;
   }
+  // Stage 9 · T16: a ladder challenge moves the winner up; a box match waits for the organiser's next round.
+  if (fmt === 'ladder') { await ladderAfterResult(m as LadderMatch); return; }
+  if (fmt === 'box') return;
   // BUILD 4.15: a Swiss pairs its next round, or crowns after the last.
   if (fmt === 'swiss') {
     await swissAfterResult(m.tournament_id);
@@ -3864,7 +3886,7 @@ export async function generateFixtures(req: Request, res: Response) {
         .from('matches')
         .select('id', { count: 'exact', head: true })
         .eq('tournament_id', id);
-      if (matchCount && matchCount > 0) {
+      if ((matchCount && matchCount > 0) || String(tournament.format) === 'ladder') { // T16: a ladder is set with no matches
         // Real bracket exists — genuinely already generated.
         return res.status(409).json({ error: 'Fixtures already generated for this tournament.' });
       }
@@ -3973,6 +3995,26 @@ export async function generateFixtures(req: Request, res: Response) {
     }
 
     const matchRows: any[] = [];
+
+    // Stage 9 · T16: a ladder's first order (positions 1…N, the draw's order); no matches until a challenge.
+    if (format === 'ladder') {
+      for (let i = 0; i < entries.length; i++) await supabase.from('tournament_entries').update({ seed: i + 1 }).eq('id', entries[i]!.id);
+      await supabase.from('tournaments').update({ status: statusAfterFixtures(tournament.start_date as string | null) }).eq('id', id);
+      return res.json({ success: true, matchesCreated: 0, format });
+    }
+    // Stage 9 · T16: a box league's first round — boxes of the size, a round robin in each.
+    if (format === 'box') {
+      const bx = settingsOf(tournament as { settings?: unknown }).box ?? BOX_DEFAULT;
+      const rows = await boxRoundRows(entries.map((e) => ({ entryId: String(e.id), teamId: String(e.team_id) })), bx.size, 1, new Map(teams.map((t) => [t.id, t.name])),
+        { sport_id: tournament.sport_id, tournament_id: id, venue: tournament.venue ?? null, city_id: tournament.city_id ?? null, created_by: userId, fixtureDefaults });
+      const sched = applyScheduleToRows(rows, schedCfg, fallbackStartIso);
+      if (!sched.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' }); }
+      if (rows.length) { const { error } = await supabase.from('matches').insert(rows).select('id'); if (error) throw new Error('fixture insert failed'); }
+      await supabase.from('tournaments')
+        .update({ status: statusAfterFixtures(tournament.start_date as string | null), settings: { ...settingsOf(tournament as { settings?: unknown }), box: { ...bx, round: 1 } } })
+        .eq('id', id);
+      return res.json({ success: true, matchesCreated: rows.length, format });
+    }
 
     if (format === 'swiss') {
       // BUILD 4.15: round 1 now (top half v bottom half); each later round is
@@ -4182,4 +4224,236 @@ export async function addLuckyLoser(req: Request, res: Response) {
   }
   await enterInto(tt.id, teamId, 'LL');
   return res.json({ ok: true });
+}
+
+
+// ── Stage 9 · T16 · ladders and box leagues ─────────────────────────────────
+
+type LadderRow = { entry_id: string; team_id: string; name: string | null; seed: number | null };
+type LadderMatch = { id: string; tournament_id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null };
+
+/** A ladder's order, top first: positions (seed), then newcomers by when they joined. */
+export async function ladderOrder(tournamentId: string): Promise<LadderRow[]> {
+  const rows = await allRows<{ id: string; team_id: string; seed: number | null; team: { name?: string } | null }>(() => supabase
+    .from('tournament_entries').select('id, team_id, seed, entered_at, team:teams!team_id(name)')
+    .eq('tournament_id', tournamentId).eq('status', 'approved')
+    .order('seed', { ascending: true, nullsFirst: false }).order('entered_at', { ascending: true }).order('team_id', { ascending: true }));
+  return rows.map((r) => ({ entry_id: r.id, team_id: r.team_id, name: r.team?.name ?? null, seed: r.seed }));
+}
+
+/** Write an order back as positions 1…N (only the rows that change). */
+async function writeLadder(rows: LadderRow[], order: string[]): Promise<void> {
+  const byTeam = new Map(rows.map((r) => [r.team_id, r]));
+  for (let i = 0; i < order.length; i++) {
+    const r = byTeam.get(order[i]!);
+    if (r && r.seed !== i + 1) await supabase.from('tournament_entries').update({ seed: i + 1 }).eq('id', r.entry_id);
+  }
+}
+
+/** Teams with a challenge to play (scheduled or live). */
+async function ladderBusy(tournamentId: string): Promise<Set<string>> {
+  const open = await allRows<{ team_a_id: string | null; team_b_id: string | null }>(() => supabase
+    .from('matches').select('team_a_id, team_b_id').eq('tournament_id', tournamentId).in('status', ['scheduled', 'live']).is('voided_at', null));
+  return new Set(open.flatMap((m) => [m.team_a_id, m.team_b_id]).filter((x): x is string => !!x));
+}
+
+/** After a ladder challenge (team A challenged team B): the winner's place. Applied once — a challenger already above isn't moved again. */
+async function ladderAfterResult(m: LadderMatch): Promise<void> {
+  if (!m.winner_team_id || !m.team_a_id || !m.team_b_id) return;
+  const { data: t } = await supabase.from('tournaments').select('settings').eq('id', m.tournament_id).maybeSingle();
+  const rows = await ladderOrder(m.tournament_id);
+  const order = rows.map((r) => r.team_id);
+  const next = ladderAfter(order, m.team_a_id, m.team_b_id, m.winner_team_id === m.team_a_id, settingsOf(t as { settings?: unknown }).ladder?.move ?? 'leapfrog');
+  await writeLadder(rows, next);
+}
+
+/** The teams the caller plays for in this tournament (their entries). */
+async function myEntryTeams(userId: string, teamIds: string[]): Promise<string[]> {
+  if (!teamIds.length) return [];
+  const { data } = await supabase.from('team_members').select('team_id').eq('user_id', userId).in('team_id', teamIds);
+  return Array.from(new Set(((data ?? []) as Array<{ team_id: string }>).map((r) => r.team_id)));
+}
+
+/** GET /tournaments/:id/ladder — the order, who has a challenge open, and who the caller can challenge. */
+export async function getLadder(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  const { data: t } = await supabase.from('tournaments').select('id, format, settings, fixtures_generated, status').eq('id', id).maybeSingle();
+  if (!t) return res.status(404).json({ error: 'Tournament not found' });
+  if ((t as { format?: string }).format !== 'ladder') return res.status(409).json({ error: 'This isn’t a ladder.', code: 'NOT_LADDER' });
+  const rows = await ladderOrder(String(id));
+  const order = rows.map((r) => r.team_id);
+  const busy = await ladderBusy(String(id));
+  const mine = await myEntryTeams(userId, order);
+  const l = settingsOf(t as { settings?: unknown }).ladder;
+  const open = (t as { fixtures_generated?: boolean }).fixtures_generated && (t as { status?: string }).status !== 'completed' && (t as { status?: string }).status !== 'cancelled';
+  return res.json({
+    set: !!(t as { fixtures_generated?: boolean }).fixtures_generated,
+    ladder: rows.map((r, i) => ({ position: i + 1, team_id: r.team_id, name: r.name, busy: busy.has(r.team_id), mine: mine.includes(r.team_id) })),
+    can_challenge: open ? Object.fromEntries(mine.map((me) => [me, order.filter((d) => challengeProblem(order, me, d, l, busy) === null)])) : {},
+    reach: l && 'reach' in l ? (l.reach ?? null) : 3,
+    move: l?.move ?? 'leapfrog',
+  });
+}
+
+/** POST /tournaments/:id/ladder/challenges { defender_team_id, challenger_team_id?, scheduled_at? } — a player (or the organiser for them) challenges up. */
+export async function createLadderChallenge(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  const body = (req.body ?? {}) as { defender_team_id?: unknown; challenger_team_id?: unknown; scheduled_at?: unknown };
+  if (typeof body.defender_team_id !== 'string') return res.status(400).json({ error: 'Who are you challenging?', code: 'BAD_TEAM' });
+  const { data: tRow } = await supabase.from('tournaments')
+    .select('id, name, format, settings, fixtures_generated, status, sport_id, venue, city_id, match_rules, entry_kind').eq('id', id).maybeSingle();
+  const t = tRow as Record<string, any> | null;
+  if (!t) return res.status(404).json({ error: 'Tournament not found' });
+  if (t.format !== 'ladder') return res.status(409).json({ error: 'This isn’t a ladder.', code: 'NOT_LADDER' });
+  if (!t.fixtures_generated) return res.status(409).json({ error: 'The ladder isn’t set yet.', code: 'LADDER_NOT_SET' });
+  if (t.status === 'completed' || t.status === 'cancelled') return res.status(409).json({ error: 'This ladder is finished.', code: 'TOURNAMENT_FINISHED' });
+  const rows = await ladderOrder(String(id));
+  const order = rows.map((r) => r.team_id);
+  const organiser = await isTournamentOrganiser(String(id), userId);
+  let challenger: string | null = null;
+  if (typeof body.challenger_team_id === 'string') {
+    const mine = await myEntryTeams(userId, [body.challenger_team_id]);
+    if (!organiser && !mine.length) return res.status(403).json({ error: 'You can only challenge for yourself.', code: 'NOT_YOURS' });
+    challenger = body.challenger_team_id;
+  } else {
+    challenger = (await myEntryTeams(userId, order))[0] ?? null;
+    if (!challenger) return res.status(403).json({ error: 'You aren’t on this ladder.', code: 'NOT_ON_LADDER' });
+  }
+  const busy = await ladderBusy(String(id));
+  const why = challengeProblem(order, challenger, body.defender_team_id, settingsOf(t).ladder, busy);
+  if (why) return res.status(409).json({ error: why, code: 'CHALLENGE' });
+  let when = new Date(Date.now() + 86400000);
+  if (typeof body.scheduled_at === 'string') {
+    const d = new Date(body.scheduled_at);
+    if (Number.isNaN(d.getTime())) return res.status(400).json({ error: 'When is the match?', code: 'BAD_TIME' });
+    when = d;
+  }
+  const sportSlug = normSportSlug((await getSport(t.sport_id as string))?.slug);
+  const rules = fixtureRulesFor(sportSlug, t.match_rules ?? null, 'group', t.entry_kind);
+  const legacy = legacyFromRules(sportSlug, rules);
+  const nameOf = new Map(rows.map((r) => [r.team_id, r.name ?? 'Player']));
+  const { count } = await supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id);
+  const { data: match, error } = await supabase.from('matches').insert({
+    sport_id: t.sport_id, tournament_id: id, team_a_id: challenger, team_b_id: body.defender_team_id,
+    team_a_name: nameOf.get(challenger), team_b_name: nameOf.get(body.defender_team_id),
+    venue: t.venue ?? null, city_id: t.city_id ?? null, status: 'scheduled', score_summary: {}, created_by: userId,
+    scheduled_at: when.toISOString(), round: 1, match_no: count ?? 0, is_ranked: true,
+    format: legacy.format, rules, ...(sportSlug === 'cricket' ? { overs: legacy.overs } : {}),
+  }).select('id').single();
+  if (error || !match) return res.status(500).json({ error: 'The challenge wasn’t made. Try again.' });
+  try { await fillEntryLineups(String(id)); } catch { /* best effort */ }
+  const { data: mem } = await supabase.from('team_members').select('user_id').eq('team_id', body.defender_team_id);
+  const ids = ((mem ?? []) as Array<{ user_id: string | null }>).map((r) => r.user_id).filter((x): x is string => !!x && x !== userId);
+  if (ids.length) void notifyUsers(ids, { type: 'ladder_challenge', title: `Ladder challenge · ${t.name ?? 'the ladder'}`, body: `${nameOf.get(challenger)} challenged you (you’re ${order.indexOf(body.defender_team_id) + 1}, they’re ${order.indexOf(challenger) + 1}).`, data: { matchId: (match as { id: string }).id, tournamentId: String(id) } }, { actorId: userId });
+  return res.json({ match_id: (match as { id: string }).id });
+}
+
+/** A box round's match rows: each box a round robin; entries take their box and place. */
+async function boxRoundRows(
+  order: Array<{ entryId: string; teamId: string }>, size: number, round: number, nameOf: Map<string, string>,
+  base: { sport_id: unknown; tournament_id: string; venue: unknown; city_id: unknown; created_by: string; fixtureDefaults: Record<string, unknown> },
+): Promise<any[]> {
+  const rows: any[] = [];
+  const boxes = boxesOf(order, size);
+  let place = 0; let mno = 0;
+  for (let b = 0; b < boxes.length; b++) {
+    const box = boxes[b]!;
+    for (const e of box) await supabase.from('tournament_entries').update({ group_label: String(b + 1), seed: ++place }).eq('id', e.entryId);
+    for (let i = 0; i < box.length; i++) {
+      for (let j = i + 1; j < box.length; j++) {
+        rows.push({
+          sport_id: base.sport_id, tournament_id: base.tournament_id,
+          team_a_id: box[i]!.teamId, team_b_id: box[j]!.teamId,
+          team_a_name: nameOf.get(box[i]!.teamId) ?? 'Player', team_b_name: nameOf.get(box[j]!.teamId) ?? 'Player',
+          venue: base.venue, city_id: base.city_id, status: 'scheduled', score_summary: {}, created_by: base.created_by,
+          round, match_no: mno++, group_label: String(b + 1), is_ranked: true, ...base.fixtureDefaults,
+        });
+      }
+    }
+  }
+  return rows;
+}
+
+/** Each box's table for the current round, box 1 first (team ids, top first). */
+async function boxTables(tournamentId: string, t: { settings?: unknown; tiebreaker_rules?: unknown; sport_id?: string }): Promise<string[][]> {
+  const round = settingsOf(t).box?.round ?? 1;
+  const entries = await allRows<{ team_id: string; group_label: string | null }>(() => supabase
+    .from('tournament_entries').select('team_id, group_label, seed').eq('tournament_id', tournamentId).eq('status', 'approved').not('group_label', 'is', null).order('seed', { ascending: true, nullsFirst: false }));
+  const matches = await allRows(() => supabase
+    .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, overs, group_label')
+    .eq('tournament_id', tournamentId).eq('round', round).in('status', ['completed', 'abandoned']).is('voided_at', null));
+  const pts = await tournamentPoints(t as any);
+  const extraFor = await rankExtrasFor(t as { settings?: unknown; tiebreaker_rules?: unknown }, matches as Array<{ id: string }>);
+  const labels = Array.from(new Set(entries.map((e) => e.group_label!))).sort((a, b) => Number(a) - Number(b));
+  return labels.map((g) => {
+    const ids = entries.filter((e) => e.group_label === g).map((e) => e.team_id);
+    return rankTeams(ids, (matches as any[]).filter((m) => m.group_label === g), ((t.tiebreaker_rules ?? []) as any[]), pts, extraFor(g)).filter((x) => ids.includes(x));
+  });
+}
+
+/**
+ * POST /tournaments/:id/box/next-round — the organiser closes a box round:
+ * the top of each box up, the bottom down, newcomers into the bottom box, and
+ * the next round's matches. Every match of the round is played or voided first.
+ */
+export async function nextBoxRound(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const { id } = req.params;
+  const { data: tRow } = await supabase.from('tournaments')
+    .select('id, name, format, settings, fixtures_generated, status, sport_id, venue, city_id, match_rules, entry_kind, tiebreaker_rules, start_date, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names').eq('id', id).maybeSingle();
+  const t = tRow as Record<string, any> | null;
+  if (!t) return res.status(404).json({ error: 'Tournament not found' });
+  if (!(await isTournamentOrganiser(String(id), userId))) return res.status(403).json({ error: 'Only the organiser starts the next round.' });
+  if (t.format !== 'box') return res.status(409).json({ error: 'This isn’t a box league.', code: 'NOT_BOX' });
+  if (!t.fixtures_generated) return res.status(409).json({ error: 'Make the boxes first.', code: 'BOX_NOT_SET' });
+  if (t.status === 'completed' || t.status === 'cancelled') return res.status(409).json({ error: 'This box league is finished.', code: 'TOURNAMENT_FINISHED' });
+  const bx = settingsOf(t).box ?? BOX_DEFAULT;
+  const round = bx.round ?? 1;
+  const { count: open } = await supabase.from('matches').select('id', { count: 'exact', head: true })
+    .eq('tournament_id', id).eq('round', round).in('status', ['scheduled', 'live']).is('voided_at', null);
+  if (open) return res.status(409).json({ error: `${plural(open, 'match', 'matches')} of round ${round} still to play — play or void ${open === 1 ? 'it' : 'them'} first.`, code: 'BOX_ROUND_OPEN' });
+  // One next round, even if two taps land together (a CAS on the round).
+  const { data: claimed } = await supabase.from('tournaments')
+    .update({ settings: { ...settingsOf(t), box: { ...bx, round: round + 1 } }, updated_at: new Date().toISOString() })
+    .eq('id', id).eq('settings->box->>round', String(round)).select('id');
+  if (!claimed || claimed.length === 0) return res.status(409).json({ error: 'The next round has already started.', code: 'BOX_ROUND_STARTED' });
+  const tables = await boxTables(String(id), t);
+  const joiners = await allRows<{ id: string; team_id: string }>(() => supabase.from('tournament_entries').select('id, team_id, entered_at')
+    .eq('tournament_id', id).eq('status', 'approved').is('group_label', null).order('entered_at', { ascending: true }));
+  const order = nextBoxOrder(tables, bx.up, bx.down, joiners.map((j) => j.team_id));
+  const entries = await allRows<{ id: string; team_id: string; group_label: string | null; team: { name?: string } | null }>(() => supabase
+    .from('tournament_entries').select('id, team_id, group_label, team:teams!team_id(name)').eq('tournament_id', id).eq('status', 'approved'));
+  const byTeam = new Map(entries.map((e) => [e.team_id, e]));
+  const before = new Map(entries.map((e) => [e.team_id, e.group_label]));
+  const sportSlug = normSportSlug((await getSport(t.sport_id as string))?.slug);
+  const rules = fixtureRulesFor(sportSlug, t.match_rules ?? null, 'group', t.entry_kind);
+  const legacy = legacyFromRules(sportSlug, rules);
+  const fixtureDefaults = { format: legacy.format, ...(sportSlug === 'cricket' ? { overs: legacy.overs } : {}), rules };
+  const rows = await boxRoundRows(order.filter((x) => byTeam.has(x)).map((x) => ({ entryId: byTeam.get(x)!.id, teamId: x })), bx.size, round + 1,
+    new Map(entries.map((e) => [e.team_id, e.team?.name ?? 'Player'])),
+    { sport_id: t.sport_id, tournament_id: String(id), venue: t.venue ?? null, city_id: t.city_id ?? null, created_by: userId, fixtureDefaults });
+  // The next round's days: from tomorrow (or the start date, if that's later).
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const startYmd = t.start_date && t.start_date > tomorrow ? t.start_date : tomorrow;
+  const schedCfg = buildTournamentScheduleConfig({ ...t, start_date: startYmd }, startYmd, await loadDayWindows(String(id)), sportSlug);
+  const sched = applyScheduleToRows(rows, schedCfg, new Date(`${startYmd}T00:00:00.000Z`).toISOString());
+  if (!sched.ok) for (const r of rows) r.scheduled_at = new Date(`${startYmd}T00:00:00.000Z`).toISOString();
+  if (rows.length) await supabase.from('matches').insert(rows);
+  try { await fillEntryLineups(String(id)); } catch { /* best effort */ }
+  // Tell whoever moved box.
+  const { data: now } = await supabase.from('tournament_entries').select('team_id, group_label').eq('tournament_id', id).eq('status', 'approved');
+  for (const e of (now ?? []) as Array<{ team_id: string; group_label: string | null }>) {
+    const was = before.get(e.team_id) ?? null;
+    if (!e.group_label || was === e.group_label) continue;
+    const up = was != null && Number(e.group_label) < Number(was);
+    const { data: mem } = await supabase.from('team_members').select('user_id').eq('team_id', e.team_id);
+    const ids = ((mem ?? []) as Array<{ user_id: string | null }>).map((r) => r.user_id).filter((x): x is string => !!x);
+    if (ids.length) void notifyUsers(ids, { type: 'box_moved', title: `${was == null ? 'In' : up ? 'Up' : 'Down'} to ${boxLabel(e.group_label)} · ${t.name ?? 'the box league'}`, body: `Round ${round + 1}: you play in ${boxLabel(e.group_label)}.`, data: { tournamentId: String(id) } });
+  }
+  return res.json({ round: round + 1, matchesCreated: rows.length, boxes: boxesOf(order, bx.size).length });
 }

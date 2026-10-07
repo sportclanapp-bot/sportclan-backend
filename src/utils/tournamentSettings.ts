@@ -9,9 +9,12 @@
  * Byte-identical in both repos:
  *   sportclan-v2/src/tournament/tournamentSettings.ts
  *   sportclan-backend/src/utils/tournamentSettings.ts
- * `tournamentSettingsParity` tests fail if they differ. No imports: it is a pure
- * description of the options, their sport presets and their limits.
+ * `tournamentSettingsParity` tests fail if they differ. A pure description of
+ * the options, their sport presets and their limits; its one import is the
+ * shared ladder / box rules (Stage 9 · T16), byte-identical beside it.
  */
+
+import { boxSettingsProblem, ladderSettingsProblem, LADDER_SPORTS, type BoxSettings, type LadderSettings } from './ladderBox';
 
 export type Refusal = { error: string; code: string };
 const refuse = (error: string, code = 'INVALID_TOURNAMENT_SETTINGS'): Refusal => ({ error, code });
@@ -323,6 +326,10 @@ export type TournamentSettings = {
    * player's first-match losers ('first_match' — a bye's winner who loses next).
    */
   consolation?: { from: string; kind: 'first_round' | 'first_match' };
+  /** Stage 9 · T16 · a ladder: how far up a challenge reaches (null: anyone), and how a win moves. */
+  ladder?: LadderSettings;
+  /** Stage 9 · T16 · a box league: box size, who goes up and down; `round` is the server's own count. */
+  box?: BoxSettings;
 };
 
 /** Stage 9 · T13: does a full event take entries onto its waitlist (on unless the organiser turned it off)? */
@@ -353,6 +360,13 @@ export function swissRoundsProblem(rounds: unknown, players?: number | null): st
 }
 
 /** Why a new Swiss can't be created (chess only, with its rounds), or null. */
+/** Stage 9 · T16: ladders and box leagues are for the one-on-one and pair sports. */
+export function ladderCreateRefusal(sport: string | null | undefined, format: string | null | undefined): Refusal | null {
+  if (format !== 'ladder' && format !== 'box') return null;
+  if (!(LADDER_SPORTS as readonly string[]).includes(sportKeyOf(sport))) return refuse(`${format === 'ladder' ? 'Ladders' : 'Box leagues'} are for badminton, tennis, table tennis, pickleball, chess and carrom.`);
+  return null;
+}
+
 export function swissCreateRefusal(sport: string | null | undefined, settings: unknown): Refusal | null {
   if (sportKeyOf(sport) !== 'chess') return refuse('Swiss is for chess.');
   const sw = settings && typeof settings === 'object' ? (settings as { swiss?: unknown }).swiss : null;
@@ -586,7 +600,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist', 'qualifying', 'consolation']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist', 'qualifying', 'consolation', 'ladder', 'box']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -651,6 +665,15 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('seeding' in s) {
     if (s.seeding) out.seeding = s.seeding;
     else delete out.seeding;
+  }
+  // Stage 9 · T16: a ladder's settings; a box league's (its round is the server's).
+  if ('ladder' in s) {
+    if (s.ladder) out.ladder = { ...('reach' in s.ladder ? { reach: s.ladder.reach ?? null } : {}), ...(s.ladder.move ? { move: s.ladder.move } : {}) };
+    else delete out.ladder;
+  }
+  if ('box' in s) {
+    if (s.box) out.box = { size: Number(s.box.size), up: Number(s.box.up), down: Number(s.box.down), ...(current?.box?.round != null ? { round: current.box.round } : {}) };
+    else delete out.box;
   }
   if ('swiss' in s) {
     // The app sets the rounds; `paired` is the server's own bookkeeping.
@@ -768,6 +791,11 @@ function stage8Refusal(format: string | null | undefined, o: Record<string, any>
     if (c.kind !== 'first_round' && c.kind !== 'first_match') return refuse('A consolation draw takes first-round losers or first-match losers.');
   }
   if (o.qualifying != null && o.consolation != null) return refuse('A draw is a qualifying draw or a consolation draw, not both.');
+  // Stage 9 · T16: a ladder's and a box league's own settings.
+  const lBad = ladderSettingsProblem(o.ladder) ?? boxSettingsProblem(o.box);
+  if (lBad) return refuse(lBad);
+  if (o.ladder != null && format && format !== 'ladder') return refuse('Ladder settings are for a ladder.');
+  if (o.box != null && format && format !== 'box') return refuse('Box settings are for a box league.');
   if (o.bestNext != null) {
     if (!whole(o.bestNext) || o.bestNext < 0) return refuse('The best next-placed teams going through is a whole number.');
     if (format !== 'groups_knockout') return refuse('Best next-placed teams are for groups → knockout.');

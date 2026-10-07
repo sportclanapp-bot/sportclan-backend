@@ -48,9 +48,11 @@ export async function getTournamentStandings(req: Request, res: Response) {
     //     withdrawal still awards nothing for matches that won't happen.
     const entries = await allRows(() => supabase
       .from('tournament_entries')
-      .select('team_id, group_label, status, team:teams!team_id(id, name, short_name)')
+      .select('team_id, group_label, status, seed, entered_at, team:teams!team_id(id, name, short_name)')
       .eq('tournament_id', id)
       .in('status', ['approved', 'withdrawn']));
+    // Stage 9 · T16: a box league's table is this round's boxes (an entry's box is its group).
+    const boxRound = tournament.format === 'box' ? (settingsOf(tournament as { settings?: unknown }).box?.round ?? 1) : null;
 
     // Get completed matches
     const allMatches = await allRows(() => supabase
@@ -68,6 +70,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const isKnockoutMatch = (m: any) => !m.group_label && Number(m.round) >= 1;
     const matches = tournament.format === 'groups_knockout'
       ? (allMatches ?? []).filter((m: any) => !isKnockoutMatch(m))
+      : boxRound != null ? (allMatches ?? []).filter((m: any) => Number(m.round) === boxRound)
       : allMatches;
 
     // Check if cricket for NRR
@@ -98,6 +101,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     }>();
     for (const e of entries ?? []) {
       if (!teamIds.includes(e.team_id)) continue; // gap 6: deleted with its results
+      if (boxRound != null && !e.group_label) continue; // T16: a newcomer waits for the next round's boxes
       const t = e.team as any;
       const s = stats.get(e.team_id)!;
       // A withdrawn team that never played is a phantom row — it has no record
@@ -143,7 +147,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
       .filter((m) => tournament.format !== 'groups_knockout' || !!m.group_label || !(Number(m.round) >= 1))
       .map((m) => m.group_label ?? 'default'));
     const byLot: Array<{ group: string | null; team_ids: string[] }> = [];
-    for (const g of Array.from(byGroup.keys()).sort()) {
+    for (const g of Array.from(byGroup.keys()).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) { // T16: Box 10 after Box 9
       const groupRows = byGroup.get(g)!;
       // SC-377: a withdrawn team is out of the competition — it keeps its played
       // record (so its opponents keep the points they earned) but it cannot hold
@@ -167,6 +171,14 @@ export async function getTournamentStandings(req: Request, res: Response) {
       for (const cl of detail.byLot) byLot.push({ group: g === 'default' ? null : g, team_ids: cl });
       for (const id of ranked.filter((i) => !withdrawnIds.has(i))) orderIndex.set(id, running++);
       for (const id of ranked.filter((i) => withdrawnIds.has(i))) orderIndex.set(id, running++);
+    }
+    // Stage 9 · T16: a ladder is in its positions (seed, then newcomers by when they joined).
+    if (tournament.format === 'ladder') {
+      const ladder = (entries ?? []).filter((e: any) => e.status === 'approved')
+        .sort((a: any, b: any) => (a.seed ?? Infinity) - (b.seed ?? Infinity) || String(a.entered_at ?? '').localeCompare(String(b.entered_at ?? '')) || String(a.team_id).localeCompare(String(b.team_id)));
+      orderIndex.clear();
+      ladder.forEach((e: any, i: number) => { orderIndex.set(e.team_id, i); const r = table.get(e.team_id); if (r) (r as any).position = i + 1; });
+      for (const r of rows) if (!orderIndex.has(r.teamId)) orderIndex.set(r.teamId, ladder.length + 1);
     }
     const standings = rows.sort(
       (a, b) => (orderIndex.get(a.teamId) ?? 0) - (orderIndex.get(b.teamId) ?? 0),

@@ -14,6 +14,9 @@ import {
   directAddTeam,
   updateEntry,
   getLuckyLosers,
+  getLadder,
+  createLadderChallenge,
+  nextBoxRound,
   addLuckyLoser,
   updateTournament,
   joinByCode,
@@ -82,6 +85,10 @@ router.post('/:id/entries', authenticateToken, createEntry);
 router.patch('/:id/entries/:entryId', authenticateToken, updateEntry);
 // Stage 9 · T7: lucky losers from the qualifying draws.
 router.get('/:id/lucky-losers', authenticateToken, getLuckyLosers);
+// Stage 9 · T16: ladders and box leagues.
+router.get('/:id/ladder', authenticateToken, getLadder);
+router.post('/:id/ladder/challenges', authenticateToken, createLadderChallenge);
+router.post('/:id/box/next-round', authenticateToken, nextBoxRound);
 router.post('/:id/lucky-losers', authenticateToken, addLuckyLoser);
 // Badminton gap 2: singles and pair entries.
 router.post('/:id/enter-self', authenticateToken, enterSelf);

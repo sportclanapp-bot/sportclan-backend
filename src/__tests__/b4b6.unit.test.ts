@@ -79,7 +79,7 @@ describe('the sweep that starts it on the day', () => {
   it('generation no longer hard-codes live', () => {
     const t = code('controllers/tournaments.controller.ts');
     expect(t).not.toContain("update({ status: 'live' }).eq('id', id)");
-    expect(t.match(/statusAfterFixtures\(tournament\.start_date/g)).toHaveLength(4); // BUILD 4.15 adds the Swiss draw
+    expect(t.match(/statusAfterFixtures\(tournament\.start_date/g)).toHaveLength(6); // BUILD 4.15 adds the Swiss draw; Stage 9 · T16 the ladder and the box league
   });
 });
 

@@ -38,7 +38,7 @@ type T = {
   registration_deadline: string | null; fixtures_generated: boolean | null; created_by: string | null;
   settings: unknown; start_date: string | null; is_parent: boolean | null; parent_id: string | null; entry_kind: string | null;
 };
-const T_COLS = 'id, name, status, sport_id, max_teams, registration_deadline, fixtures_generated, created_by, settings, start_date, is_parent, parent_id, entry_kind';
+const T_COLS = 'id, name, status, sport_id, max_teams, registration_deadline, fixtures_generated, created_by, settings, start_date, is_parent, parent_id, entry_kind, format';
 type Person = { id: string; name: string | null; username: string | null; gender: string | null; dob: string | null; deleted_at?: string | null };
 type Refusal = { status: number; body: { error: string; code: string; user_id?: string } };
 
@@ -96,7 +96,8 @@ async function playersRefusal(
     return no(409, 'TOURNAMENT_FINISHED', t.status === 'completed' ? 'This tournament is finished.' : 'This tournament was cancelled.');
   }
   if (!opts.asOrganiser && t.registration_deadline && new Date(t.registration_deadline) < new Date()) return no(400, 'REGISTRATION_CLOSED', 'Registration closed');
-  if (t.fixtures_generated) return no(409, 'REGISTRATION_CLOSED', 'Registration is closed — the draw has already been made.');
+  // Stage 9 · T16: a ladder or box league takes newcomers after it's set (the bottom rung / box).
+  if (t.fixtures_generated && (t as { format?: string | null }).format !== 'ladder' && (t as { format?: string | null }).format !== 'box') return no(409, 'REGISTRATION_CLOSED', 'Registration is closed — the draw has already been made.');
   const ppl = await people(userIds);
   for (const id of userIds) {
     const p = ppl.get(id);

@@ -296,8 +296,8 @@ describe('F3/F4 · generating fixtures', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'tournaments.controller.ts'), 'utf8');
     const caps = src.match(/code: 'SCHEDULE_CAPACITY'/g) ?? [];
     const released = src.match(/await releaseFixtureClaim\(id\); return res\.status\(400\)\.json\(\{ error: sched\w*\.error, code: 'SCHEDULE_CAPACITY' \}\)/g) ?? [];
-    expect(caps.length).toBe(4); // BUILD 4.15 adds the Swiss draw
-    expect(released.length).toBe(4);
+    expect(caps.length).toBe(5); // BUILD 4.15 adds the Swiss draw; Stage 9 · T16 the box league
+    expect(released.length).toBe(5);
   });
 });
 

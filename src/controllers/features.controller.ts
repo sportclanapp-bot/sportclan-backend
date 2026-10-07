@@ -327,7 +327,7 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
 // Must match the tournament_officials.role CHECK (migration 036). 'organiser'
 // was listed here too, but the CHECK refuses it, so adding one passed this
 // check and then 500'd on the insert. Organisers are co-organisers (064).
-export const OFFICIAL_ROLES = ['umpire', 'referee', 'scorer', 'commentator', 'assistant']; // Stage 8 · F11: + assistant (migration 125)
+export const OFFICIAL_ROLES = ['umpire', 'referee', 'scorer', 'commentator', 'assistant', 'chief_referee', 'deputy_referee']; // Stage 8 · F11: + assistant (migration 125) · Stage 10 · TT12: + the tournament's referee and deputy (migration 134)
 
 export async function addTournamentOfficial(req: Request, res: Response) {
   const userId = req.userId;

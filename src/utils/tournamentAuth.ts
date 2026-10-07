@@ -122,7 +122,7 @@ export async function canDefault(
   if (!match.tournament_id) return false;
   const ids = await familyLookupIds(match.tournament_id);
   const { data } = await supabase.from('tournament_officials').select('id')
-    .in('tournament_id', ids).eq('user_id', userId).in('role', ['referee', 'umpire']).limit(1);
+    .in('tournament_id', ids).eq('user_id', userId).in('role', ['referee', 'umpire', 'chief_referee', 'deputy_referee']).limit(1); // TT12: the tournament's referee and deputy
   return (data ?? []).length > 0;
 }
 

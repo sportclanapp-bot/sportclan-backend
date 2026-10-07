@@ -24,6 +24,15 @@ export type SportTerms = {
   venue: string;
   name: string;
   areaNames: string;
+  /**
+   * Stage 10 · TT12 · the tournament's official above the match officials (who
+   * decides defaults, walkovers and disputes) and their deputy, in the sport's
+   * words — "Referee" / "Deputy referee" (ITTF, BWF, ITF), "Chief arbiter"
+   * (FIDE), "Match referee" (cricket)… — and the generic assistant's word.
+   */
+  referee: string;
+  deputyReferee: string | null;
+  assistant: string;
 };
 
 const key = (s: string | null | undefined): string => String(s ?? '').toLowerCase().replace(/[-_\s]/g, '');
@@ -31,13 +40,14 @@ const key = (s: string | null | undefined): string => String(s ?? '').toLowerCas
 /** "Pitch" → "Pitches", "Court" → "Courts". */
 const plural = (w: string): string => (/(ch|sh|s|x)$/i.test(w) ? `${w}es` : `${w}s`);
 
-const t = (area: string, official: string, assistants: AssistantRole[], venue: string, name: string, areaNames: string): SportTerms => ({
+const t = (area: string, official: string, assistants: AssistantRole[], venue: string, name: string, areaNames: string, referee = 'Referee', deputyReferee: string | null = 'Deputy referee'): SportTerms => ({
   area, areas: plural(area), official, officials: plural(official), assistants, venue, name, areaNames,
+  referee, deputyReferee, assistant: `Assistant ${official.toLowerCase()}`,
 });
 
 /** Cricket's words: every screen's words before Stage 8, and the default. */
 const CRICKET = t('Ground', 'Umpire', [{ key: 'umpire_2', label: 'Second umpire' }, { key: 'third_umpire', label: 'Third umpire' }],
-  'e.g. MCA Ground', 'e.g. Mumbai T20 Cup 2026', 'e.g. MCA Pitch 1, Turf A');
+  'e.g. MCA Ground', 'e.g. Mumbai T20 Cup 2026', 'e.g. MCA Pitch 1, Turf A', 'Match referee', null);
 
 const TERMS: Record<string, SportTerms> = {
   cricket: CRICKET,
@@ -45,13 +55,13 @@ const TERMS: Record<string, SportTerms> = {
     { key: 'assistant_referee_1', label: 'Assistant referee 1' },
     { key: 'assistant_referee_2', label: 'Assistant referee 2' },
     { key: 'fourth_official', label: 'Fourth official' },
-  ], 'e.g. Hindu Gymkhana Turf', 'e.g. Bandra Sunday League 2026', 'e.g. Turf A, Turf B'),
+  ], 'e.g. Hindu Gymkhana Turf', 'e.g. Bandra Sunday League 2026', 'e.g. Turf A, Turf B', 'Match commissioner', null),
   hockey: t('Pitch', 'Umpire', [{ key: 'umpire_2', label: 'Second umpire' }, { key: 'technical_officer', label: 'Technical officer' }],
-    'e.g. Municipal Hockey Stadium', 'e.g. Pune Hockey Cup 2026', 'e.g. Pitch 1, Pitch 2'),
+    'e.g. Municipal Hockey Stadium', 'e.g. Pune Hockey Cup 2026', 'e.g. Pitch 1, Pitch 2', 'Technical delegate', null),
   basketball: t('Court', 'Referee', [{ key: 'umpire_1', label: 'Umpire 1' }, { key: 'umpire_2', label: 'Umpire 2' }, { key: 'table_official', label: 'Table official' }],
-    'e.g. City Indoor Stadium', 'e.g. Delhi 3x3 Cup 2026', 'e.g. Court 1, Court 2'),
+    'e.g. City Indoor Stadium', 'e.g. Delhi 3x3 Cup 2026', 'e.g. Court 1, Court 2', 'Commissioner', null),
   volleyball: t('Court', 'Referee', [{ key: 'second_referee', label: 'Second referee' }, { key: 'line_judge', label: 'Line judge' }],
-    'e.g. City Indoor Stadium', 'e.g. Goa Beach Volleyball Cup 2026', 'e.g. Court 1, Court 2'),
+    'e.g. City Indoor Stadium', 'e.g. Goa Beach Volleyball Cup 2026', 'e.g. Court 1, Court 2', 'Referee delegate', null),
   badminton: t('Court', 'Umpire', [{ key: 'service_judge', label: 'Service judge' }, { key: 'line_judge', label: 'Line judge' }],
     'e.g. City Indoor Stadium', 'e.g. Pune Badminton Open 2026', 'e.g. Court 1, Court 2'),
   tennis: t('Court', 'Umpire', [{ key: 'line_judge', label: 'Line judge' }],
@@ -59,13 +69,13 @@ const TERMS: Record<string, SportTerms> = {
   tabletennis: t('Table', 'Umpire', [{ key: 'assistant_umpire', label: 'Assistant umpire' }],
     'e.g. Community Hall', 'e.g. Thane TT Championship 2026', 'e.g. Table 1, Table 2'),
   pickleball: t('Court', 'Referee', [{ key: 'line_judge', label: 'Line judge' }],
-    'e.g. City Indoor Stadium', 'e.g. Bengaluru Pickleball Open 2026', 'e.g. Court 1, Court 2'),
+    'e.g. City Indoor Stadium', 'e.g. Bengaluru Pickleball Open 2026', 'e.g. Court 1, Court 2', 'Head referee', 'Deputy head referee'),
   chess: t('Board', 'Arbiter', [{ key: 'deputy_arbiter', label: 'Deputy arbiter' }],
-    'e.g. Community Hall', 'e.g. Thane Rapid Open 2026', 'e.g. Board 1, Board 2'),
+    'e.g. Community Hall', 'e.g. Thane Rapid Open 2026', 'e.g. Board 1, Board 2', 'Chief arbiter', 'Deputy chief arbiter'),
   carrom: t('Board', 'Umpire', [],
-    'e.g. Dadar Club Hall', 'e.g. Dadar Carrom Championship 2026', 'e.g. Board 1, Board 2'),
+    'e.g. Dadar Club Hall', 'e.g. Dadar Carrom Championship 2026', 'e.g. Board 1, Board 2', 'Chief referee', 'Deputy chief referee'),
   kabaddi: t('Court', 'Referee', [{ key: 'umpire_1', label: 'Umpire 1' }, { key: 'umpire_2', label: 'Umpire 2' }],
-    'e.g. Shahu Stadium', 'e.g. Kolhapur Kabaddi Cup 2026', 'e.g. Court 1, Court 2'),
+    'e.g. Shahu Stadium', 'e.g. Kolhapur Kabaddi Cup 2026', 'e.g. Court 1, Court 2', 'Technical delegate', null),
 };
 
 /** A sport's words. An unknown or missing sport gets cricket's (as before Stage 8). */

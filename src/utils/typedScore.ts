@@ -58,7 +58,8 @@ function rallyWon(a: number, b: number, target: number, cap: number | null | und
 const label = (s: TypedSet) => `${s.a}-${s.b}`;
 
 /** Rally sports (rally scoring). */
-function rallyPoints(rules: MatchRules, sets: TypedSet[], sideOut: boolean): { problem: string | null; points: TypedPoint[]; winner: TypedSide | null } {
+function rallyPoints(rules: MatchRules, sets: TypedSet[], sideOut: boolean, u: 'game' | 'set' = 'game'): { problem: string | null; points: TypedPoint[]; winner: TypedSide | null } {
+  const U = u === 'set' ? 'Set' : 'Game'; // volleyball plays sets
   const bestOf = rules.bestOf ?? 3;
   const winBy2 = rules.winBy2 ?? true;
   const points: TypedPoint[] = [];
@@ -67,8 +68,8 @@ function rallyPoints(rules: MatchRules, sets: TypedSet[], sideOut: boolean): { p
   let soState = sideOut ? sideOutStart(so) : null;
   for (let g = 0; g < sets.length; g++) {
     const set = sets[g]!;
-    if (gamesWinner(wonA, wonB, bestOf, rules.allGames)) return { problem: `The match was already won before game ${g + 1}.`, points, winner: null };
-    if (set.a === set.b) return { problem: `Game ${g + 1} (${label(set)}) has no winner.`, points, winner: null };
+    if (gamesWinner(wonA, wonB, bestOf, rules.allGames)) return { problem: `The match was already won before ${u} ${g + 1}.`, points, winner: null };
+    if (set.a === set.b) return { problem: `${U} ${g + 1} (${label(set)}) has no winner.`, points, winner: null };
     const deciding = g + 1 === bestOf;
     const target = deciding && rules.finalTarget ? rules.finalTarget : rules.target ?? 11;
     const winner: TypedSide = set.a > set.b ? 'A' : 'B';
@@ -78,8 +79,8 @@ function rallyPoints(rules: MatchRules, sets: TypedSet[], sideOut: boolean): { p
     for (let i = 0; i < order.length; i++) {
       if (order[i] === 'A') a++; else b++;
       const w = rallyWon(a, b, target, rules.cap, winBy2);
-      if (w && i < order.length - 1) return { problem: `Game ${g + 1}: ${label(set)} isn’t a score a game can finish on (it ends at ${a}-${b}).`, points, winner: null };
-      if (!w && i === order.length - 1) return { problem: `Game ${g + 1}: ${label(set)} isn’t finished — ${winBy2 ? `to ${target}, win by 2${rules.cap ? ` (up to ${rules.cap})` : ''}` : `to ${target}`}.`, points, winner: null };
+      if (w && i < order.length - 1) return { problem: `${U} ${g + 1}: ${label(set)} isn’t a score a ${u} can finish on (it ends at ${a}-${b}).`, points, winner: null };
+      if (!w && i === order.length - 1) return { problem: `${U} ${g + 1}: ${label(set)} isn’t finished — ${winBy2 ? `to ${target}, win by 2${rules.cap ? ` (up to ${rules.cap})` : ''}` : `to ${target}`}.`, points, winner: null };
     }
     if (soState) {
       // Side-out: a point scores only for the server — a rally first wins the serve back.
@@ -98,7 +99,7 @@ function rallyPoints(rules: MatchRules, sets: TypedSet[], sideOut: boolean): { p
     if (winner === 'A') wonA++; else wonB++;
   }
   const decided = gamesWinner(wonA, wonB, bestOf, rules.allGames);
-  if (!decided) return { problem: rules.allGames ? `Every game is played: ${bestOf} games.` : `The match isn’t finished: the first to ${Math.ceil(bestOf / 2)} games wins.`, points, winner: null };
+  if (!decided) return { problem: rules.allGames ? `Every ${u} is played: ${bestOf} ${u}s.` : `The match isn’t finished: the first to ${Math.ceil(bestOf / 2)} ${u}s wins.`, points, winner: null };
   return { problem: null, points, winner: decided };
 }
 
@@ -160,7 +161,7 @@ export function typedMatchPoints(sport: string | null | undefined, rules: Partia
   }
   const r = { ...(standardRules(sport) as MatchRules), ...(rules ?? {}) } as MatchRules;
   if (key === 'tennis') return tennisPoints(r, sets as TypedSet[]);
-  return rallyPoints(r, sets as TypedSet[], key === 'pickleball' && r.scoring === 'sideout');
+  return rallyPoints(r, sets as TypedSet[], key === 'pickleball' && r.scoring === 'sideout', key === 'volleyball' ? 'set' : 'game');
 }
 
 /**

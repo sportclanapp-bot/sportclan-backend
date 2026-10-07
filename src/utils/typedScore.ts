@@ -29,7 +29,7 @@ export type TypedSet = { a: number; b: number; tbA?: number | null; tbB?: number
 /** A point to record, as the pad sends it (side-out pickleball: a rally). */
 export type TypedPoint = { side: TypedSide; kind?: 'rally' };
 
-export const TYPED_SPORTS = ['badminton', 'tabletennis', 'pickleball', 'volleyball', 'tennis'] as const;
+export const TYPED_SPORTS = ['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball'] as const;
 const sportKey = (s: string | null | undefined) => String(s ?? '').toLowerCase().replace(/[-_\s]/g, '');
 export const typedScoreSport = (s: string | null | undefined): boolean => (TYPED_SPORTS as readonly string[]).includes(sportKey(s));
 

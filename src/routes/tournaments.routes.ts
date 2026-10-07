@@ -1,4 +1,5 @@
 import { redraw } from '../controllers/redraw.controller';
+import { listAnnouncements, postAnnouncement, deleteAnnouncement } from '../controllers/announcements.controller';
 import { getSquad, setSquad, checkSquadPlayer, setSquadLock, getDiscipline } from '../controllers/squads.controller';
 import { setLots } from '../controllers/lots.controller';
 import { Router } from 'express';
@@ -98,6 +99,10 @@ router.put('/:id/squads/:teamId', authenticateToken, setSquad);
 router.patch('/:id/squads/:teamId/check', authenticateToken, checkSquadPlayer);
 router.put('/:id/squad-lock', authenticateToken, setSquadLock);
 router.get('/:id/discipline', authenticateToken, getDiscipline);
+// Stage 8 · F21: the organiser's announcements (any sport).
+router.get('/:id/announcements', authenticateToken, listAnnouncements);
+router.post('/:id/announcements', authenticateToken, postAnnouncement);
+router.delete('/:id/announcements/:aid', authenticateToken, deleteAnnouncement);
 router.get('/:id/entries', authenticateToken, getEntriesPage); // Oct 2026: entries a page at a time
 // Badminton gap 6: after a retirement, the entry here and its players' entries in the other events.
 router.get('/:id/teams/:teamId/related-entries', authenticateToken, relatedEntries);

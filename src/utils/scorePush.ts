@@ -79,7 +79,8 @@ export function scorePush(args: {
       return { title: `Match tiebreak to ${teamName}`, body: `${teamName} wins the match tiebreak · ${mine(tb.A, tb.B)}` };
     }
     const games = mine(setsA[n - 1] ?? 0, setsB[n - 1] ?? 0);
-    const tbText = tb ? ` (${mine(tb.A, tb.B)})` : '';
+    // Stage 9 · T5: the loser's tiebreak points, as tennis writes it — "7–6(5)".
+    const tbText = tb ? `(${Math.min(tb.A, tb.B)})` : '';
     return { title: `Set to ${teamName}`, body: `${teamName} wins set ${n} · ${games}${tbText}` };
   }
 

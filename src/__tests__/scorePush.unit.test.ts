@@ -27,7 +27,7 @@ test('tennis: a game inside a set sends nothing; a set end quotes the set and it
   expect(scorePush({ slug: 'tennis', side: 'A', teamName: 'A', summary: mid })).toBeNull();
   const end = { A: { sets: [6, 3, 7], games: 0, points: 0 }, B: { sets: [4, 6, 6], games: 0, points: 0 }, set_tiebreaks: [null, null, { A: 7, B: 5 }] };
   expect(scorePush({ slug: 'tennis', side: 'A', teamName: 'SC434 Fresh QA', summary: end }))
-    .toEqual({ title: 'Set to SC434 Fresh QA', body: 'SC434 Fresh QA wins set 3 · 7–6 (7–5)' });
+    .toEqual({ title: 'Set to SC434 Fresh QA', body: 'SC434 Fresh QA wins set 3 · 7–6(5)' });
 });
 
 test('football goals are unchanged: every one is the moment', () => {

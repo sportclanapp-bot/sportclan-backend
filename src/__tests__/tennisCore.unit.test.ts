@@ -48,7 +48,7 @@ const FIXTURES: Array<{ name: string; seq: S[]; expect: Partial<ReturnType<typeo
   {
     name: 'a 2-1 match, and a point after it changes nothing',
     seq: [...set('A', 6, 4), ...set('B', 6, 3), ...sixAll(), ...tb('A', 7, 5), 'B', 'B'],
-    expect: { winner: 'A', setsWon: { A: 2, B: 1 }, points: { A: 0, B: 0 }, label: '6–4 · 3–6 · 7–6 (7–5)' },
+    expect: { winner: 'A', setsWon: { A: 2, B: 1 }, points: { A: 0, B: 0 }, label: '6–4 · 3–6 · 7–6(5)' },
   },
 ];
 

@@ -212,5 +212,17 @@ export function tennisPointsDisplay(s: TennisScore, scoring: TennisGameScoring =
 
 /** "6–4", or "7–6 (7–5)" for a tiebreak set. */
 export function tennisSetLabel(x: TennisSet): string {
-  return x.tiebreak ? `${x.A}–${x.B} (${x.tiebreak.A}–${x.tiebreak.B})` : `${x.A}–${x.B}`;
+  return tennisSetText(x.A, x.B, x.tiebreak ?? null);
+}
+
+/**
+ * Stage 9 · T5 · one set the way tennis writes it: "6–4"; a tiebreak set with
+ * the loser's tiebreak points, "7–6(5)"; a match tiebreak (stored as a 1–0
+ * set with its points) in brackets, "[10–7]". `dash` lets a plain-text line
+ * use "-".
+ */
+export function tennisSetText(a: number, b: number, tb: { A: number; B: number } | null | undefined, dash = '–'): string {
+  if (tb && a + b === 1) return `[${tb.A}${dash}${tb.B}]`;
+  if (tb) return `${a}${dash}${b}(${Math.min(tb.A, tb.B)})`;
+  return `${a}${dash}${b}`;
 }

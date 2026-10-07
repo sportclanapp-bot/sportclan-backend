@@ -221,6 +221,67 @@ export function carromOptsOf(rules: MatchRules): { gamesToWin: number; target: n
 /** BUILD 3.72 · carrom's two games: the official 25 (queen +3 below 22) and the home 29 (queen +5 below 24). */
 export const CARROM_PRESETS = [{ target: 25, queenPoints: 3, name: 'Official' }, { target: 29, queenPoints: 5, name: 'Home' }] as const;
 
+/**
+ * Stage 9 · T14 · how long a match slot is, from the format. Each sport's
+ * standard (the sports table's default_duration_minutes, migration 066 — kept
+ * the same here) scaled by how much play the rules ask for: sets × games a
+ * set for tennis; games × points for the rally sports and carrom; overs for
+ * cricket. Timed sports and chess are worked out from their clock: periods,
+ * breaks, and both players' time. Null when the rules don't say (a timed sport
+ * with no period length) — the sport's standard then. Rounded up to 5 minutes;
+ * the organiser's own number always wins.
+ */
+export const SPORT_SLOT_MINUTES: Readonly<Record<string, number>> = {
+  cricket: 180, football: 90, hockey: 70, tennis: 90, basketball: 60, volleyball: 45, badminton: 30, pickleball: 30, carrom: 30, tabletennis: 20, chess: 60,
+};
+const up5 = (m: number) => Math.max(5, Math.ceil(m / 5) * 5);
+/** Expected sets / games played in a best-of-n: all the winner needs, and 40% of the rest. */
+const expectedUnits = (bestOf: number) => { const toWin = Math.ceil(bestOf / 2); return toWin + 0.4 * (bestOf - toWin); };
+function playUnits(key: string, r: Partial<MatchRules>): number | null {
+  if (key === 'tennis') {
+    if (r.timeLimitMinutes) return null;
+    const bestOf = r.bestOf ?? 3;
+    const perSet = (r.gamesPerSet ?? 6) * (r.adScoring === 'noad' ? 0.85 : r.adScoring === 'semiad' ? 0.92 : 1);
+    if (r.matchTiebreak && bestOf > 1) {
+      // Full sets: all the winner needs, and 40% of the rest but the last; the match tiebreak (40%) ≈ 1.5 games.
+      const toWin = Math.ceil(bestOf / 2);
+      return (toWin + 0.4 * (bestOf - toWin - 1)) * perSet + 0.4 * 1.5;
+    }
+    return expectedUnits(bestOf) * perSet;
+  }
+  if (key === 'cricket') return r.overs != null ? r.overs * 2 + 3 : null; // two innings, and the change of innings
+  if (key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' || key === 'carrom') {
+    const target = r.target ?? null;
+    if (!target) return null;
+    const sideOut = key === 'pickleball' && r.scoring === 'sideout' ? 1.5 : 1;
+    const games = r.rubbers ? r.rubbers * expectedUnits(r.bestOf ?? 3) : expectedUnits(r.bestOf ?? 1);
+    return games * target * sideOut;
+  }
+  return null;
+}
+export function slotMinutes(sport: string | null | undefined, rules: Partial<MatchRules> | null | undefined): number | null {
+  const key = lengthKey(sport);
+  const std = SPORT_RULES[key] as Partial<MatchRules> | undefined;
+  const base = SPORT_SLOT_MINUTES[key];
+  if (!std || base == null) return null;
+  const r = { ...std, ...(rules ?? {}) } as Partial<MatchRules>;
+  if (key === 'tennis' && r.timeLimitMinutes) return up5(r.timeLimitMinutes + 10); // a timed match, warm-up and change-over
+  if (key === 'football' || key === 'hockey' || key === 'basketball') {
+    if (!r.periodMinutes) return null;
+    const periods = r.periods ?? 2;
+    const breaks = periods === 2 ? (r.halfTimeMinutes ?? 10) : periods === 4 ? (key === 'basketball' ? 2 + 15 + 2 : 2 + 10 + 2) : 0;
+    const stoppages = key === 'basketball' ? 1.5 : 1; // the clock stops in basketball
+    return up5(periods * r.periodMinutes * stoppages + breaks + 10);
+  }
+  if (key === 'chess') {
+    const base2 = (r.baseMinutes ?? 5) * 2 + ((r.incrementSeconds ?? 0) * 40 * 2) / 60; // 40 moves each
+    return up5(base2 + 5);
+  }
+  const want = playUnits(key, r); const was = playUnits(key, std);
+  if (want == null || !was) return null;
+  return up5((base * want) / was);
+}
+
 /** BUILD 3.59+ · the tennis core's options from a match's rules (tennisCore.TennisOpts). */
 export function tennisOptsOf(rules: MatchRules): { setsToWin: number; gamesPerSet: number; tiebreak: boolean; tiebreakTo: number; matchTiebreak: boolean; scoring: 'ad' | 'noad' | 'semiad'; tiebreakAt: number | null; finalSetTiebreakTo: number | null } {
   return { setsToWin: winsToWin(rules), gamesPerSet: rules.gamesPerSet ?? 6, tiebreak: rules.tiebreak !== false, tiebreakTo: rules.tiebreakTo ?? 7, matchTiebreak: rules.matchTiebreak === true, scoring: rules.adScoring ?? 'ad', tiebreakAt: rules.tiebreakAt ?? null, finalSetTiebreakTo: rules.finalSetTiebreakTo ?? null };

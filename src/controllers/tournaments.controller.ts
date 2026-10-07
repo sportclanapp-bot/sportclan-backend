@@ -61,7 +61,8 @@ import { crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { withWalkoverScore } from '../utils/walkoverScore';
 import { DEFAULT_OVERS } from '../utils/cricketRules';
-import { legacyFromRules, rulesOf, stageRules, tournamentRulesRefusal, normalizeRules, STAGE_KEYS, type Stage } from '../utils/matchRules';
+import { legacyFromRules, rulesOf, stageRules, tournamentRulesRefusal, normalizeRules, STAGE_KEYS, SPORT_SLOT_MINUTES, slotMinutes, type MatchRules, type Stage } from '../utils/matchRules';
+import { lengthKey } from '../utils/matchLength';
 import { groupsDrawRefusal, planGroups } from '../utils/groupsPlan';
 import {
   buildSchedule, timeToMinutes, keyOf, formatSlotIst,
@@ -3549,7 +3550,11 @@ export function buildTournamentScheduleConfig(
 ): SchedulingConfig {
   // Stage 8 · F14: an unnamed area is "Pitch 2" / "Court 2" / "Board 2" by sport (cricket: "Ground 2", as before).
   const areaWord = sportSlug ? sportTerms(sportSlug).area : undefined;
-  const hasWindow = !!(t.daily_start_time && t.daily_end_time && t.match_duration_minutes);
+  // Stage 9 · T14: no match length set — the format's (a pro set is short, best
+  // of 5 long), else the sport's standard, else an hour.
+  const fromFormat = sportSlug ? slotMinutes(sportSlug, (t.match_rules as { default?: Partial<MatchRules> } | null)?.default ?? null) : null;
+  const duration = Number(t.match_duration_minutes) || fromFormat || (sportSlug ? SPORT_SLOT_MINUTES[lengthKey(sportSlug)] : null) || null;
+  const hasWindow = !!(t.daily_start_time && t.daily_end_time && duration);
   if (!hasWindow) {
     // Oct 2026 (Dipak): no day hours — still across every court / ground the
     // organiser set (it put everything on Ground 1), with their match length and
@@ -3558,7 +3563,7 @@ export function buildTournamentScheduleConfig(
     return {
       startDateYmd, endDateYmd: null,
       dailyStartMin: 9 * 60, dailyEndMin: 21 * 60,
-      durationMin: Math.max(1, Number(t.match_duration_minutes ?? 60) || 60),
+      durationMin: Math.max(1, duration ?? 60),
       bufferMin: Math.max(0, Number(t.buffer_minutes ?? 10)),
       groundCount: Math.max(1, Number(t.ground_count ?? 1) || 1),
       groundNames: Array.isArray(t.ground_names) ? (t.ground_names as string[]) : null,
@@ -3572,7 +3577,7 @@ export function buildTournamentScheduleConfig(
     endDateYmd: (t.end_date as string) ?? startDateYmd,
     dailyStartMin: timeToMinutes(t.daily_start_time, 9 * 60),
     dailyEndMin: timeToMinutes(t.daily_end_time, 21 * 60),
-    durationMin: Math.max(1, Number(t.match_duration_minutes)),
+    durationMin: Math.max(1, duration ?? 60),
     bufferMin: Math.max(0, Number(t.buffer_minutes ?? 10)),
     groundCount: Math.max(1, Number(t.ground_count ?? 1)),
     groundNames: Array.isArray(t.ground_names) ? (t.ground_names as string[]) : null,

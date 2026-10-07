@@ -64,11 +64,29 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (goalSport && eventType === 'score') {
     if (p.kind === 'own_goal') return `🙈 Own goal by ${team} — goal to ${other}`;
     const ball = ctx.sport === 'hockey' ? '🥅' : '⚽';
-    return `${ball} GOAL! ${team}${player ? ` — ${player}` : ''}`;
+    // Stage 8 · F4: a goal from the spot says so.
+    return `${ball} GOAL! ${team}${player ? ` — ${player}` : ''}${p.penalty ? ' (penalty)' : ''}`;
   }
   if (goalSport && eventType === 'card') {
     const kind = CARD[p.kind as keyof typeof CARD] ?? 'Card';
+    // Stage 8 · F4: the red that follows a second yellow.
+    if (p.kind === 'red' && p.second_yellow) return `🟨🟥 Second yellow, sent off — ${player ? `${player} (${team})` : team}`;
     return `${kind} — ${player ? `${player} (${team})` : team}`;
+  }
+  // Stage 8 · F4: assists and substitutions on the timeline.
+  if (goalSport && eventType === 'assist') return `🅰️ Assist — ${player ? `${player} (${team})` : team}`;
+  if (goalSport && eventType === 'sub') {
+    const off = typeof p.off_name === 'string' && p.off_name.trim() ? p.off_name.trim() : null;
+    if (off && player) return `🔁 ${team}: ${player} on for ${off}`;
+    return `🔁 Substitution — ${team}${off ? `: ${off} off` : player ? `: ${player} on` : ''}`;
+  }
+  // Stage 8 · F10: the clock stopped and restarted, and the added time shown.
+  if (goalSport && eventType === 'note' && p.kind === 'clock_pause') return '⏸ Clock stopped';
+  if (goalSport && eventType === 'note' && p.kind === 'clock_resume') return '▶ Clock restarted';
+  if (goalSport && eventType === 'note' && p.kind === 'added_time' && typeof p.minutes === 'number') return `⏱ +${p.minutes} min added time`;
+  // Stage 8 · F9: the shoot-out, kick by kick.
+  if (goalSport && eventType === 'note' && p.kind === 'shootout_kick') {
+    return `${p.scored ? '✅ Scored' : '❌ Missed'} — ${ctx.sport === 'hockey' ? 'shoot-out' : 'penalty'} by ${player ? `${player} (${team})` : team}`;
   }
   if (eventType === 'period_change') {
     // BUILD 3.19: football's extra time.

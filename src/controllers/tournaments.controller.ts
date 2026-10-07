@@ -2826,7 +2826,7 @@ async function getGroupsConfig(tournamentId: string): Promise<GroupsConfig> {
 /** A fixture's rules at the draw: its stage's; a doubles event's are 2 a side (badminton gap 7). */
 export function fixtureRulesFor(sport: string | null | undefined, tournamentRules: unknown, stage: Stage, entryKind: string | null | undefined) {
   const rules = stageRules(sport, tournamentRules, stage);
-  if (entryKind === 'doubles' && doublesRulesSport(sport) && !(rules as { rubbers?: unknown }).rubbers) return { ...rules, players: 2 } as typeof rules;
+  if (entryKind === 'doubles' && doublesRulesSport(sport) && !(rules as { rubbers?: unknown }).rubbers && !(rules as { tie?: unknown }).tie) return { ...rules, players: 2 } as typeof rules; // Stage 9 · T3: a tie names its own singles / doubles
   return rules;
 }
 

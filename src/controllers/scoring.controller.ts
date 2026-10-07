@@ -20,7 +20,8 @@ import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber } from '../utils/cricketRules';
-import { DOUBLES_PLAYERS, carromOptsOf, doublesLineupProblem, rulesOf, setConfigOf, standardRules, tennisOptsOf, winsToWin } from '../utils/matchRules';
+import { DOUBLES_PLAYERS, carromOptsOf, doublesLineupProblem, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
+import { splitTie, tieNeed, unitsOf, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
@@ -776,6 +777,13 @@ export function bestOfState(
     const d = cmp(a, b) || cmp(summary?.A?.games, summary?.B?.games) || cmp(summary?.A?.points, summary?.B?.points);
     return { needed, decided: d !== 0, scored: true, leader: d > 0 ? 'A' : d < 0 ? 'B' : null };
   }
+  // Stage 9 · T3: a team tie says itself whether it's decided (its win rule; a draw has no leader).
+  if (summary?.tie && typeof summary.tie === 'object') {
+    const t = summary.tie as { decided?: 'A' | 'B' | 'draw' | null; rubbersA?: number; rubbersB?: number };
+    const spec = tieSpecOf(slug, rulesOf(slug, m));
+    const need = spec ? (spec.win === 'first' ? tieNeed(spec) : spec.rubbers.length) : needed;
+    return { needed: need, decided: t.decided != null, scored: true, leader: t.decided === 'A' || t.decided === 'B' ? t.decided : null };
+  }
   const scored = a + b > 0
     || (summary?.A?.sets?.length ?? 0) > 0 || (summary?.B?.sets?.length ?? 0) > 0
     || Number(summary?.A?.points ?? 0) + Number(summary?.B?.points ?? 0) > 0
@@ -830,6 +838,55 @@ export function rollupSets(
     }
   }
   return { setsA, setsB, setScoresA, setScoresB, curA, curB, decided };
+}
+
+/**
+ * Stage 9 · T3 · a team tie, any tie sport (tennis, badminton, table tennis,
+ * pickleball): the shared tieCore splits the events into the organiser's
+ * rubbers, each read by the sport's own engine — tennis's tennisCore, side-out
+ * pickleball's pickleballCore, the rally sports' set rollup. A rubber's A/B is
+ * the sets (tennis) or games (rally) it was won by, as before; its units are its
+ * games (tennis) or points (rally). The score is rubbers won — or, in a tie won
+ * on games, the games / points.
+ */
+export function rollupTieSpec(
+  slug: string, rules: MatchRules, spec: TieSpec,
+  events: { event_type: string; payload: any }[], sideOf: (p: any) => 'A' | 'B',
+): { scoreA: number; scoreB: number; setsA: number[]; setsB: number[]; gamesA: number; gamesB: number; curA: number; curB: number; rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B'; key: string; label: string; unitsA: number; unitsB: number }>; tie: { win: string; rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: 'A' | 'B' | 'draw' | null } } {
+  const own = !!rules.tie;
+  const single = { ...rules, tie: null, rubbers: null } as MatchRules;
+  const rulesFor = (r: TieRubber) => (own ? { ...single, players: r.players === 2 ? DOUBLES_PLAYERS : null } : single) as MatchRules;
+  type Read = { winner: 'A' | 'B' | null; sets: { A: number[]; B: number[] }; games: { A: number; B: number }; points: { A: number; B: number } };
+  const read = (evs: { event_type: string; payload: any }[], r: TieRubber): Read => {
+    const rr = rulesFor(r);
+    if (slug === 'tennis') {
+      const tr = tennisReplayEvents(evs.map((e) => ({ event_type: e.event_type, payload: { ...(e.payload || {}), team_side: sideOf(e.payload || {}) } })), tennisOptsOf(rr));
+      const t = tr.score;
+      return { winner: t.winner, sets: { A: t.sets.map((x) => x.A), B: t.sets.map((x) => x.B) }, games: t.games, points: t.points };
+    }
+    const cfg = setConfigOf(rr);
+    if (slug === 'pickleball' && rr.scoring === 'sideout') {
+      const sx = sideOutReplay(evs, { target: cfg.target, winBy2: cfg.winBy2, maxGames: cfg.maxSets, doubles: rr.players === DOUBLES_PLAYERS });
+      return { winner: sx.winner, sets: { A: sx.games.map((g) => g.A), B: sx.games.map((g) => g.B) }, games: sx.won, points: sx.cur };
+    }
+    const x = rollupSets(cfg, evs, sideOf);
+    return { winner: x.decided, sets: { A: x.setScoresA, B: x.setScoresB }, games: { A: x.setsA, B: x.setsB }, points: { A: x.curA, B: x.curB } };
+  };
+  const split = splitTie(events, spec, (evs, r) => {
+    const x = read(evs, r);
+    return { winner: x.winner, sets: x.sets, units: { A: unitsOf(x.sets.A), B: unitsOf(x.sets.B) } };
+  });
+  const o = split.outcome;
+  const cur = o.finished ? null : read(split.currentEvents, spec.rubbers[split.current] ?? spec.rubbers[0]!);
+  const won = (a: number[], b: number[]) => a.filter((v, i) => v > (b[i] ?? 0)).length;
+  return {
+    scoreA: spec.win === 'games' ? o.unitsA : o.rubbersA, scoreB: spec.win === 'games' ? o.unitsB : o.rubbersB,
+    setsA: [...split.results.flatMap((r) => r.sets.A), ...(cur ? cur.sets.A : [])], setsB: [...split.results.flatMap((r) => r.sets.B), ...(cur ? cur.sets.B : [])],
+    gamesA: cur?.games.A ?? 0, gamesB: cur?.games.B ?? 0, curA: cur?.points.A ?? 0, curB: cur?.points.B ?? 0,
+    rubber: o.finished ? split.results.length : split.results.length + 1,
+    results: split.results.map((r, i) => ({ A: won(r.sets.A, r.sets.B), B: won(r.sets.B, r.sets.A), winner: r.winner, key: r.key, label: spec.rubbers[i]?.label ?? r.key, unitsA: r.units.A, unitsB: r.units.B })),
+    tie: { win: spec.win, rubbersA: o.rubbersA, rubbersB: o.rubbersB, unitsA: o.unitsA, unitsB: o.unitsB, decided: o.decided },
+  };
 }
 
 /**
@@ -1203,6 +1260,7 @@ export async function recomputeSummary(
   let tennisState: TennisScore | null = null;
   let carromBoardsPlayed: number | null = null; // A5: boards played in the carrom game in play
   let tieRubbers: { rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' }> } | null = null; // BUILD 3.49
+  let tieSummary: ReturnType<typeof rollupTieSpec>['tie'] | null = null; // Stage 9 · T3
   let sideOutServe: { side: 'A' | 'B'; number: 1 | 2 } | null = null; // BUILD 3.58
   let tennisBuzzer = false; // BUILD 3.66
   const sides: Record<'A' | 'B', Record<string, any>> = { A, B };
@@ -1283,6 +1341,16 @@ export async function recomputeSummary(
       if (e.event_type === 'score') sides[sideOf(p)].score += Number(p.value ?? 0);
     }
     A.points = A.score; B.points = B.score;
+  } else if ((slug === 'tennis' || SET_CONFIG[slug]) && tieSpecOf(slug, rulesOf(slug, match))) {
+    // Stage 9 · T3: a team tie (any tie sport; badminton / table tennis's standard orders too).
+    const rules = rulesOf(slug, match);
+    const t = rollupTieSpec(slug, rules, tieSpecOf(slug, rules)!, events, sideOf);
+    A.score = t.scoreA; B.score = t.scoreB;
+    A.sets = t.setsA; B.sets = t.setsB;
+    A.games = t.gamesA; B.games = t.gamesB; // in the rubber in play
+    A.points = t.curA; B.points = t.curB;
+    tieRubbers = { rubber: t.rubber, results: t.results };
+    tieSummary = t.tie;
   } else if (slug === 'tennis') {
     // T-1/T-2 · per-POINT events through the shared rule (utils/tennisCore, the
     // same file the app scores with): points → games → sets, with a real 6-6
@@ -1458,6 +1526,7 @@ export async function recomputeSummary(
   summary.players = aggregatePlayers(slug, events as any[]);
   if (carromBoardsPlayed !== null) summary.boards_played = carromBoardsPlayed;
   if (tieRubbers) { summary.rubber = tieRubbers.rubber; summary.rubbers = tieRubbers.results; } // BUILD 3.49
+  if (tieSummary) summary.tie = tieSummary; // Stage 9 · T3: the win rule, rubbers and games each side
   if (sideOutServe) summary.serve = sideOutServe; // BUILD 3.58: who serves, and (doubles) server 1 or 2
   if (tennisBuzzer) summary.buzzer = true; // BUILD 3.66: time was called
   if (tennisState) {

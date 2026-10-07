@@ -135,6 +135,13 @@ export async function getTournamentStandings(req: Request, res: Response) {
     // Stage 8 · F8: fair play (when the order uses it) and the organiser's draws of lots.
     const extraFor = await rankExtrasFor(tournament as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string; team_a_id?: string | null; team_b_id?: string | null }>);
     const level: Array<{ group: string | null; team_ids: string[] }> = [];
+    // A draw of lots matters only once a group has played out: a group with a
+    // match still to play (or a team that never played) isn't reported level.
+    const { data: pendingRows } = await supabase.from('matches').select('group_label, round')
+      .eq('tournament_id', id).in('status', ['scheduled', 'live']).is('voided_at', null);
+    const pendingGroups = new Set(((pendingRows ?? []) as Array<{ group_label: string | null; round: number | null }>)
+      .filter((m) => tournament.format !== 'groups_knockout' || !!m.group_label || !(Number(m.round) >= 1))
+      .map((m) => m.group_label ?? 'default'));
     const byLot: Array<{ group: string | null; team_ids: string[] }> = [];
     for (const g of Array.from(byGroup.keys()).sort()) {
       const groupRows = byGroup.get(g)!;
@@ -155,7 +162,8 @@ export async function getTournamentStandings(req: Request, res: Response) {
       const detail = rankTeamsDetailed(groupRows.map((r) => r.teamId), tin.matches as any[], tiebreakerRules, pts, extraFor(lotsKey));
       const ranked = detail.order;
       // Teams level on every tie-break, until the organiser records a draw of lots.
-      for (const cl of detail.level) if (cl.some((id) => !withdrawnIds.has(id))) level.push({ group: g === 'default' ? null : g, team_ids: cl.filter((id) => !withdrawnIds.has(id)) });
+      const playedOut = !pendingGroups.has(g) && !(tournament.format !== 'groups_knockout' && pendingGroups.size > 0);
+      for (const cl of detail.level) if (playedOut && cl.every((tid) => (stats.get(tid)?.played ?? 0) > 0) && cl.some((id) => !withdrawnIds.has(id))) level.push({ group: g === 'default' ? null : g, team_ids: cl.filter((id) => !withdrawnIds.has(id)) });
       for (const cl of detail.byLot) byLot.push({ group: g === 'default' ? null : g, team_ids: cl });
       for (const id of ranked.filter((i) => !withdrawnIds.has(i))) orderIndex.set(id, running++);
       for (const id of ranked.filter((i) => withdrawnIds.has(i))) orderIndex.set(id, running++);

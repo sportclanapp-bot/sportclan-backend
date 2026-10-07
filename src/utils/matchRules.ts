@@ -123,6 +123,12 @@ export interface MatchRules {
   noLet?: boolean;
   /** Stage 9 · T10: tennis — the match changes balls (ITF 7/9): the pad says when. */
   ballChange?: boolean;
+  /**
+   * Stage 9 · T9 · the code-violation ladder, step by step ("warning,point,game,
+   * default"); null = the sport's standard (CONDUCT_LADDERS). Tennis, badminton,
+   * table tennis, pickleball, volleyball.
+   */
+  penaltyLadder?: string | null;
   /** BUILD 3.72: carrom — the queen's worth, 0–5 (3 official, 5 in the home game). */
   queenPoints?: number;
   /** BUILD 3.73: carrom — the queen counts only below target − queen (true, official), or always. */
@@ -153,11 +159,11 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   cricket: { style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, inningsMinutes: null, powerplayOvers: null, oneTipOneHand: false, sixAndOut: false, noLbw: false, drawAllowed: true },
   // BUILD 3.45: 15 a game capped at 21 (BAI from July 2026, BWF from 4 Jan 2027).
   // A match stored without rules still plays 21 / 30 — see rulesFromLegacy.
-  badminton: { players: null, bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true, rubbers: null }, // BUILD 3.47: players 2 = doubles; 3.49 rubbers
-  tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null }, // BUILD 3.54 rubbers
-  pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally' }, // BUILD 3.58: side-out; players 2 = doubles
-  volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2 },
-  tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null, tiebreakAt: null, finalSetTiebreakTo: null, noLet: false, ballChange: false }, // BUILD 3.59–3.66; Stage 9 · T2, T10 (players 2 = doubles)
+  badminton: { players: null, bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null }, // BUILD 3.47: players 2 = doubles; 3.49 rubbers
+  tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null }, // BUILD 3.54 rubbers
+  pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally', penaltyLadder: null }, // BUILD 3.58: side-out; players 2 = doubles
+  volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null },
+  tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null, tiebreakAt: null, finalSetTiebreakTo: null, noLet: false, ballChange: false, penaltyLadder: null }, // BUILD 3.59–3.66; Stage 9 · T2, T10, T9 (players 2 = doubles)
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50 }, // BUILD 3.72–3.77
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null },
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
@@ -280,6 +286,45 @@ export function slotMinutes(sport: string | null | undefined, rules: Partial<Mat
   const want = playUnits(key, r); const was = playUnits(key, std);
   if (want == null || !was) return null;
   return up5((base * want) / was);
+}
+
+/**
+ * Stage 9 · T9 · each sport's code-violation ladder (its governing body's): a
+ * warning; a point to the opponent (table tennis: then two); tennis: then the
+ * game; then a default. The organiser can set another (rules.penaltyLadder).
+ */
+export const CONDUCT_LADDERS: Readonly<Record<string, string>> = {
+  tennis: 'warning,point,game,default', // ITF / ATP point penalty schedule
+  badminton: 'warning,point,default', // BWF: yellow, red (a fault), black (disqualified)
+  tabletennis: 'warning,point,point2,default', // ITTF: yellow, yellow-red 1 point, 2 points, the referee
+  pickleball: 'warning,point,default', // technical warning, technical foul, forfeit
+  volleyball: 'warning,point,default', // FIVB: warning, penalty, disqualification
+};
+export type LadderStep = 'warning' | 'point' | 'point2' | 'game' | 'default';
+/** The organiser's other choices, per sport (the standard is "Standard"). */
+export const LADDER_CHOICES: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
+  tennis: [['warning,point,default', 'Warning, point, default'], ['warning,default', 'Warning, then default']],
+  badminton: [['warning,default', 'Warning, then default']],
+  tabletennis: [['warning,point,default', 'Warning, point, default'], ['warning,default', 'Warning, then default']],
+  pickleball: [['warning,default', 'Warning, then default']],
+  volleyball: [['warning,default', 'Warning, then default']],
+};
+export function ladderProblem(key: string, ladder: unknown): string | null {
+  if (typeof ladder !== 'string' || !ladder.trim() || ladder.length > 120) return 'Code violations are a list of steps.';
+  const steps = ladder.split(',').map((x) => x.trim());
+  const ok = new Set<string>(['warning', 'point', 'default', ...(key === 'tennis' ? ['game'] : []), ...(key === 'tabletennis' ? ['point2'] : [])]);
+  const odd = steps.find((x) => !ok.has(x));
+  if (odd) return `“${odd.slice(0, 20)}” isn’t a penalty here.`;
+  if (steps.slice(0, -1).includes('default')) return 'A default ends the match, so it can only be the last step.';
+  return null;
+}
+/** Stage 9 · T9: the ladder a match plays (its own, else the sport's), or [] for a sport without one. */
+export function conductLadder(sport: string | null | undefined, rules: Partial<MatchRules> | null | undefined): LadderStep[] {
+  const key = lengthKey(sport);
+  const std = CONDUCT_LADDERS[key];
+  if (!std) return [];
+  const own = rules?.penaltyLadder;
+  return (own && !ladderProblem(key, own) ? own : std).split(',') as LadderStep[];
 }
 
 /** BUILD 3.59+ · the tennis core's options from a match's rules (tennisCore.TennisOpts). */
@@ -431,7 +476,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', noLbw: 'No LBW', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', tiebreakAt: 'Tiebreak at', finalSetTiebreakTo: 'Final-set tiebreak', noLet: 'Lets', ballChange: 'New balls', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game', gameMinutes: 'Minutes a game', carromMode: 'Carrom game', queenValue: 'Queen (point carrom)',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', tiebreakAt: 'Tiebreak at', finalSetTiebreakTo: 'Final-set tiebreak', noLet: 'Lets', ballChange: 'New balls', penaltyLadder: 'Code violations', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game', gameMinutes: 'Minutes a game', carromMode: 'Carrom game', queenValue: 'Queen (point carrom)',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -646,9 +691,14 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
       return refuse(`The increment must be ${CHESS_INCREMENT_SECONDS[0]} to ${CHESS_INCREMENT_SECONDS[1]} seconds a move.`, 'incrementSeconds');
     }
   }
+  // Stage 9 · T9: a code-violation ladder — known steps, a default only last.
+  if (CONDUCT_LADDERS[key] && r.penaltyLadder !== null) {
+    const bad = ladderProblem(key, r.penaltyLadder);
+    if (bad) return refuse(bad, 'penaltyLadder');
+  }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'noLbw', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);

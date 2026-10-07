@@ -351,8 +351,9 @@ export async function validateScoringEvent(
       return refuse(400, { error: 'A rally without a point is for side-out pickleball.', code: 'BAD_RALLY' });
     }
   }
-  // A side-out match takes rallies, not points (a point would bypass the serve).
-  if (event_type === 'score' && payload && payload.kind !== 'rally' && match.sport_id) {
+  // A side-out match takes rallies, not points (a point would bypass the serve) —
+  // Stage 9 · T9: except a penalty point (a technical foul), which is one.
+  if (event_type === 'score' && payload && payload.kind !== 'rally' && payload.kind !== 'penalty' && match.sport_id) {
     const slug = normSportSlug((await getSport(match.sport_id))?.slug);
     if (slug === 'pickleball' && rulesOf(slug, match).scoring === 'sideout') {
       return refuse(409, { error: 'This match uses side-out scoring — update SportClan to score it.', code: 'SIDEOUT_NEEDS_UPDATE' });

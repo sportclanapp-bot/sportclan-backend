@@ -70,22 +70,34 @@ function gameWon(a: number, b: number, opts: SideOutOpts): PbSide | null {
 }
 
 /** One rally, won by `winner`. */
+/** A point to `side` (the game, and the match, may end on it). */
+function addPoint(s: SideOutState, side: PbSide, opts: SideOutOpts): SideOutState {
+  const cur = { ...s.cur, [side]: s.cur[side] + 1 };
+  const w = gameWon(cur.A, cur.B, opts);
+  if (!w) return { ...s, cur };
+  const games = [...s.games, cur];
+  const won = { ...s.won, [w]: s.won[w] + 1 };
+  const need = Math.floor(opts.maxGames / 2) + 1;
+  if (won[w] >= need) return { ...s, cur: { A: 0, B: 0 }, games, won, winner: w };
+  const game = s.game + 1;
+  return { cur: { A: 0, B: 0 }, games, won, game, server: firstServer(game), serverNum: opts.doubles ? 2 : 1, winner: null };
+}
+
 export function sideOutRally(s: SideOutState, winner: PbSide, opts: SideOutOpts): SideOutState {
   if (s.winner) return s;
-  if (winner === s.server) {
-    const cur = { ...s.cur, [winner]: s.cur[winner] + 1 };
-    const w = gameWon(cur.A, cur.B, opts);
-    if (!w) return { ...s, cur };
-    const games = [...s.games, cur];
-    const won = { ...s.won, [w]: s.won[w] + 1 };
-    const need = Math.floor(opts.maxGames / 2) + 1;
-    if (won[w] >= need) return { ...s, cur: { A: 0, B: 0 }, games, won, winner: w };
-    const game = s.game + 1;
-    return { cur: { A: 0, B: 0 }, games, won, game, server: firstServer(game), serverNum: opts.doubles ? 2 : 1, winner: null };
-  }
+  if (winner === s.server) return addPoint(s, winner, opts);
   // A fault on the serving side.
   if (opts.doubles && s.serverNum === 1) return { ...s, serverNum: 2 };
   return { ...s, server: other(s.server), serverNum: 1 };
+}
+
+/**
+ * Stage 9 · T9 · a penalty point (a technical foul): a point to `side` whoever
+ * is serving; the serve doesn't change.
+ */
+export function sideOutPenalty(s: SideOutState, side: PbSide, opts: SideOutOpts): SideOutState {
+  if (s.winner) return s;
+  return addPoint(s, side, opts);
 }
 
 /** The scorer's correction: the other side is serving. */
@@ -101,8 +113,9 @@ export function sideOutReplay(
 ): SideOutState {
   let s = sideOutStart(opts);
   for (const e of events) {
-    const p = (e.payload ?? {}) as { team_side?: unknown };
+    const p = (e.payload ?? {}) as { team_side?: unknown; kind?: unknown };
     if (e.event_type === 'serve_swap') s = sideOutSwap(s);
+    else if (e.event_type === 'score' && p.kind === 'penalty') s = sideOutPenalty(s, p.team_side === 'B' ? 'B' : 'A', opts); // Stage 9 · T9
     else if (e.event_type === 'score') s = sideOutRally(s, p.team_side === 'B' ? 'B' : 'A', opts);
   }
   return s;

@@ -19,7 +19,7 @@ import { istDay, istWhen } from '../utils/appTime';
 import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers, matchAudienceIds, matchFollowerIds } from '../utils/notify';
-import { isTournamentOrganiser, canOfficiateMatch } from '../utils/tournamentAuth';
+import { isTournamentOrganiser, canOfficiateMatch, canDefault } from '../utils/tournamentAuth';
 import { blockedUserIds } from '../utils/blocks';
 import { upsertVenue } from './venues.controller';
 
@@ -2736,10 +2736,15 @@ export async function completeMatch(req: Request, res: Response) {
     // reads "… won (… retired)".
     const retired = req.body?.retired === true;
     const retiredTeamId = typeof req.body?.retired_team_id === 'string' ? req.body.retired_team_id as string : null;
-    const walkover = walkoverIn === true || retired;
+    // Stage 9 · T9: a default ("def.") — the referee or organiser defaults a side
+    // during play (the end of the code-violation ladder): the other side wins
+    // with the score as it stood. Played, so rated, like a retirement.
+    const defaulted = req.body?.defaulted === true;
+    const defaultedTeamId = typeof req.body?.defaulted_team_id === 'string' ? req.body.defaulted_team_id as string : null;
+    const walkover = walkoverIn === true || retired || defaulted;
     // Badminton (Oct 2026, Dipak): a retirement was played — it moves ratings (a loss
     // for the side that retired). Only a true walkover is unrated.
-    const unplayed = walkover && !retired;
+    const unplayed = walkover && !retired && !defaulted;
 
     // SC-376: let the recorder submit the SCORE alongside the result.
     //
@@ -2787,6 +2792,9 @@ export async function completeMatch(req: Request, res: Response) {
     // the match state via a 400.
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can complete' : 'Only the creator or umpire can complete' });
+    }
+    if (defaulted && !(await canDefault(match, userId))) {
+      return res.status(403).json({ error: 'Only the referee, the umpire or the organiser can default a player.', code: 'NOT_REFEREE' });
     }
     // N1 (visual review): a match voided while live could still be completed,
     // and completion then moved the rating, wrote rating_history, paid the win
@@ -2921,6 +2929,15 @@ export async function completeMatch(req: Request, res: Response) {
     // decided result that advances the bracket. A walkover must name a winner.
     if (walkover && !winner_team_id) {
       return res.status(400).json({ error: retired ? 'A retirement needs the side that goes through.' : 'A walkover needs a winning team.' });
+    }
+    if (defaulted) {
+      const sides = [match.team_a_id, match.team_b_id];
+      if (!defaultedTeamId || !sides.includes(defaultedTeamId) || !sides.includes(winner_team_id) || defaultedTeamId === winner_team_id) {
+        return res.status(400).json({ error: 'Name the side defaulted; the other side wins.', code: 'BAD_DEFAULT' });
+      }
+      if (match.status !== 'live') {
+        return res.status(409).json({ error: 'Only a match being played can end in a default — before it starts, give a walkover.', code: 'NOT_LIVE' });
+      }
     }
     if (retired) {
       const sides = [match.team_a_id, match.team_b_id];
@@ -3562,7 +3579,13 @@ export async function completeMatch(req: Request, res: Response) {
       // result, and override the score-derived text ("… won by 0 runs") with the
       // forfeit label. winner_team_id is always present on a walkover → winnerSide
       // is set here.
-      if (retired && derivedSide) {
+      if (defaulted && derivedSide) {
+        // Stage 9 · T9: the score at the default stays; the result says who was defaulted.
+        const dName = defaultedTeamId === match.team_a_id ? aName : bName;
+        ss.defaulted = { team_id: defaultedTeamId, side: defaultedTeamId === match.team_a_id ? 'A' : 'B', ...(walkover_reason ? { reason: String(walkover_reason).slice(0, 200) } : {}) };
+        ss.result = `${derivedSide === 'A' ? aName : bName} won (${dName} defaulted)`;
+        resultForNotice = ss.result;
+      } else if (retired && derivedSide) {
         // Badminton gap 6: the score at retirement stays; the result says who retired.
         const rName = retiredTeamId === match.team_a_id ? aName : bName;
         ss.retired = { team_id: retiredTeamId, side: retiredTeamId === match.team_a_id ? 'A' : 'B', ...(walkover_reason ? { reason: String(walkover_reason).slice(0, 200) } : {}) };
@@ -3592,7 +3615,7 @@ export async function completeMatch(req: Request, res: Response) {
       // the pre-migration fallback, i.e. never in production.
       // Phase 3: decisive when a SIDE won — a singles or free-text win has no
       // team id, and keying on one recorded every such win as a draw.
-      patch.result_type = retired ? 'retired' : walkover ? 'walkover' : ((winner_team_id || patch.winner_team_id || derivedSide) ? 'decisive' : 'draw');
+      patch.result_type = defaulted ? 'default' : retired ? 'retired' : walkover ? 'walkover' : ((winner_team_id || patch.winner_team_id || derivedSide) ? 'decisive' : 'draw');
       // SC-415: stamp when the match was ACTUALLY completed. The activity heatmap
       // used to bucket by scheduled_at, so a match completed on a different day
       // from its slot landed on the wrong day — or vanished entirely when the

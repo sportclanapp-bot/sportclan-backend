@@ -108,3 +108,21 @@ export async function isTournamentScorer(tournamentId: string, userId: string): 
     .limit(1);
   return (data ?? []).length > 0;
 }
+
+/**
+ * Stage 9 · T9 · who may default a player or side: the match's umpire, the
+ * organiser (a casual match: its creator), or a tournament official who referees
+ * or umpires — not a scorer (in tennis only the referee defaults).
+ */
+export async function canDefault(
+  match: { tournament_id?: string | null; created_by?: string | null; umpire_id?: string | null; scorer_id?: string | null },
+  userId: string,
+): Promise<boolean> {
+  if (await canOfficiateMatch(match, userId, { scorers: false })) return true;
+  if (!match.tournament_id) return false;
+  const ids = await familyLookupIds(match.tournament_id);
+  const { data } = await supabase.from('tournament_officials').select('id')
+    .in('tournament_id', ids).eq('user_id', userId).in('role', ['referee', 'umpire']).limit(1);
+  return (data ?? []).length > 0;
+}
+

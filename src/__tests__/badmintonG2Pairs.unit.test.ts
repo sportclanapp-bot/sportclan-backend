@@ -80,7 +80,10 @@ describe('singles: enter as yourself', () => {
     const w = await run(enterSelf, PRIYA, { id: MS });
     expect(w.body).toMatchObject({ code: 'CATEGORY' });
     await run(enterSelf, AMIT, { id: MS });
+    // Stage 9 · T13: full with the waitlist turned off is refused (on, the default, it waits — stage9T13Waitlist).
+    (db.t('tournaments').find((x: any) => x.id === MS) as any).settings.waitlist = false;
     expect((await run(enterSelf, ORG, { id: MS })).body.code).toBe('TOURNAMENT_FULL');
+    (db.t('tournaments').find((x: any) => x.id === MS) as any).settings.waitlist = undefined;
     // an older app entering a team
     const CLUB = 'aaaaaaaa-aaaa-4aaa-8aaa-000000000011';
     db.t('teams').push({ id: CLUB, sport_id: SID, kind: 'club', deleted_at: null });

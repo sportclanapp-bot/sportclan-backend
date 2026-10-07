@@ -84,7 +84,7 @@ export async function eventLimitRefusal(
   if (events.length === 0) return null;
   const classOf = new Map(events.map((e) => [e.id, eventClass(e)]));
   const entries = await selectAllIn(events.map((e) => e.id), (c, f, to) => supabase.from('tournament_entries').select('tournament_id, team_id')
-    .in('tournament_id', c).in('status', ['pending', 'approved']).order('id').range(f, to));
+    .in('tournament_id', c).in('status', ['pending', 'approved', 'waitlisted']).order('id').range(f, to));
   const rows = (entries ?? []) as Array<{ tournament_id: string; team_id: string }>;
   if (rows.length === 0) return null;
   const members = await selectAllIn([...new Set(rows.map((r) => r.team_id))], (c, f, to) => supabase.from('team_members').select('team_id, user_id')

@@ -74,7 +74,8 @@ import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
-import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, swissRoundsProblem, tableInputs, amateurDeclarationRefusal } from '../utils/tournamentSettings';
+import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, swissRoundsProblem, tableInputs, amateurDeclarationRefusal, waitlistOn } from '../utils/tournamentSettings';
+import { promoteWaitlist } from '../utils/waitlist';
 import { drawOrder } from '../utils/drawOrder';
 import { sharedScheduleFor } from '../utils/sharedCourts';
 import { fillEntryLineups, doublesRulesSport } from '../utils/entryLineups';
@@ -630,6 +631,8 @@ const entryCols = (organiser: boolean) => `id, team_id, status, seed, group_labe
 
 export type EntrySummary = {
   approved: number; pending: number; withdrawn: number; rejected: number; total: number;
+  /** Stage 9 · T13: entries waiting for a place (in the total too). */
+  waitlisted: number;
   /** Organisers: approved entries marked paid. */
   fee_paid?: number;
   /** Groups → knockout: approved entries per group label (null = not placed), for the draw's check. */
@@ -643,8 +646,8 @@ export async function entrySummary(tournamentId: string, organiser: boolean, gro
     if (extra) q = extra(q);
     return ((await q).count ?? 0) as number;
   };
-  const [approved, pending, withdrawn, rejected] = await Promise.all(['approved', 'pending', 'withdrawn', 'rejected'].map((st) => count(st)));
-  const out: EntrySummary = { approved, pending, withdrawn, rejected, total: approved + pending + withdrawn + rejected };
+  const [approved, pending, withdrawn, rejected, waitlisted] = await Promise.all(['approved', 'pending', 'withdrawn', 'rejected', 'waitlisted'].map((st) => count(st)));
+  const out: EntrySummary = { approved, pending, withdrawn, rejected, waitlisted, total: approved + pending + withdrawn + rejected + waitlisted };
   if (organiser) out.fee_paid = await count('approved', (q) => q.not('fee_paid_at', 'is', null));
   if (groups) {
     const rows = await allRows<{ group_label: string | null }>(() => supabase.from('tournament_entries').select('group_label').eq('tournament_id', tournamentId).eq('status', 'approved'));
@@ -686,7 +689,7 @@ export async function getEntriesPage(req: Request, res: Response) {
     const { data: t } = await supabase.from('tournaments').select('id').eq('id', id).maybeSingle();
     if (!t) return res.status(404).json({ error: 'Tournament not found' });
     const status = String(req.query.status ?? 'approved');
-    if (!['approved', 'pending', 'withdrawn', 'rejected'].includes(status)) return res.status(400).json({ error: 'Unknown status.', code: 'BAD_STATUS' });
+    if (!['approved', 'pending', 'withdrawn', 'rejected', 'waitlisted'].includes(status)) return res.status(400).json({ error: 'Unknown status.', code: 'BAD_STATUS' });
     const offset = Math.max(0, Math.min(10_000_000, parseInt(String(req.query.offset ?? '0'), 10) || 0));
     const limit = Math.max(1, Math.min(ENTRY_PAGE_MAX, parseInt(String(req.query.limit ?? '50'), 10) || 50));
     const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 60) : '';
@@ -795,7 +798,7 @@ async function rosterOverlapConflict(
     .from('tournament_entries')
     .select('team_id')
     .eq('tournament_id', tournamentId)
-    .in('status', ['pending', 'approved'])
+    .in('status', ['pending', 'approved', 'waitlisted'])
     .neq('team_id', teamId));
   const otherTeamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
   if (otherTeamIds.length === 0) return null;
@@ -891,7 +894,7 @@ async function categoryRefusalFor(
 async function entryRefusal(
   t: EntryTournament,
   teamId: string,
-  opts: { capCounts: Array<'pending' | 'approved'>; deadline: boolean; overlap: boolean },
+  opts: { capCounts: Array<'pending' | 'approved'>; deadline: boolean; overlap: boolean; allowFull?: boolean },
 ): Promise<EntryRefusal | null> {
   // Badminton gap 1: a tournament made of events is entered through an event.
   if (t.is_parent) return { status: 409, body: ENTER_AN_EVENT };
@@ -930,7 +933,8 @@ async function entryRefusal(
       },
     };
   }
-  if (t.max_teams) {
+  // Stage 9 · T13: a full event with a waitlist takes the entry onto it (the caller decides where it lands).
+  if (t.max_teams && !opts.allowFull) {
     const { count } = await supabase
       .from('tournament_entries')
       .select('id', { count: 'exact', head: true })
@@ -1106,7 +1110,7 @@ async function entryVerdicts(tournament: EntryTournament, ids: string[], asOrgan
       ? supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id).in('status', capCounts)
       : Promise.resolve({ count: 0 }),
     selectAllIn(ids, (c, f, to) => supabase.from('team_members').select('team_id, user_id').in('team_id', c).order('id').range(f, to)),
-    allRows(() => supabase.from('tournament_entries').select('team_id').eq('tournament_id', id).in('status', ['pending', 'approved'])),
+    allRows(() => supabase.from('tournament_entries').select('team_id').eq('tournament_id', id).in('status', ['pending', 'approved', 'waitlisted'])),
   ]);
   const runs = new Set(((roles ?? []) as Array<{ team_id: string; role: string }>).filter((r) => r.role === 'captain' || r.role === 'vice_captain').map((r) => r.team_id));
   const live = new Map(((entered ?? []) as Array<{ team_id: string; status: string }>).map((e) => [e.team_id, e.status]));
@@ -1176,7 +1180,7 @@ async function entryVerdicts(tournament: EntryTournament, ids: string[], asOrgan
     if (t.sport_id && team.sport_id && team.sport_id !== t.sport_id) {
       return no(teamId, 'WRONG_SPORT', sportName ? `This is a ${sportName} tournament — enter a ${sportName} team.` : 'This tournament is for another sport — enter a team of its sport.');
     }
-    if (t.max_teams && (taken ?? 0) >= t.max_teams) return no(teamId, 'TOURNAMENT_FULL', 'Tournament is full');
+    if (t.max_teams && (taken ?? 0) >= t.max_teams && !waitlistOn(t as { settings?: unknown })) return no(teamId, 'TOURNAMENT_FULL', 'Tournament is full');
     const roster = rosterOf.get(teamId) ?? [];
     if (category && roster.length) {
       const players = roster.filter((u) => userById.has(u)).map((u) => {
@@ -1326,8 +1330,16 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string, 
 
   // Checked before the reopen/insert so a re-entry after a rejection is
   // re-validated too.
-  const refusal = await entryRefusal(tournament as EntryTournament, teamId, { capCounts: ['pending', 'approved'], deadline: true, overlap: true });
+  const waitOk = waitlistOn(tournament as { settings?: unknown });
+  const refusal = await entryRefusal(tournament as EntryTournament, teamId, { capCounts: ['pending', 'approved'], deadline: true, overlap: true, allowFull: waitOk });
   if (refusal) return refusal;
+  // Stage 9 · T13: full — the entry waits on the waitlist, in order.
+  let full = false;
+  if (waitOk && tournament.max_teams) {
+    const { count } = await supabase.from('tournament_entries').select('id', { count: 'exact', head: true })
+      .eq('tournament_id', tournamentId).in('status', ['pending', 'approved']);
+    full = (count ?? 0) >= tournament.max_teams;
+  }
   // Stage 9 · T12: an "amateurs only" event asks the captain to declare it.
   const amateurOnly = settingsOf(tournament as { settings?: unknown }).category?.amateurOnly === true;
   const notDeclared = amateurDeclarationRefusal(settingsOf(tournament as { settings?: unknown }).category, declaredAmateur);
@@ -1336,7 +1348,7 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string, 
   // BUILD 4.11: an open tournament takes a captain's entry straight in (up to
   // max teams); otherwise it waits for the organiser, as before.
   const open = settingsOf(tournament as { settings?: unknown }).entry === 'open';
-  const landing = open ? 'approved' : 'pending';
+  const landing = full ? 'waitlisted' : open ? 'approved' : 'pending';
 
   // SC-83: a team may re-enter after a REJECTED/WITHDRAWN entry. Reopen the
   // existing row to `pending` with a single filtered UPDATE (atomic per
@@ -1353,9 +1365,11 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string, 
         userId: organiserId,
         type: 'entry_requested',
         title: 'New tournament entry',
-        body: open
-          ? `${team?.name ?? 'A team'} entered ${tournament.name ?? 'your tournament'}.`
-          : `${team?.name ?? 'A team'} requested to enter ${tournament.name ?? 'your tournament'}.`,
+        body: full
+          ? `${team?.name ?? 'A team'} joined the waitlist for ${tournament.name ?? 'your tournament'}.`
+          : open
+            ? `${team?.name ?? 'A team'} entered ${tournament.name ?? 'your tournament'}.`
+            : `${team?.name ?? 'A team'} requested to enter ${tournament.name ?? 'your tournament'}.`,
         data: { tournamentId, teamId, entryId: entryRowId },
       });
     } catch { /* best-effort */ }
@@ -1372,7 +1386,7 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string, 
     .maybeSingle();
   if (reopened) {
     await notifyEntryRequested(reopened.id);
-    if (open) void awardTournamentBadges(teamId as string);
+    if (open && !full) void awardTournamentBadges(teamId as string);
     return { status: 200, body: { entry: reopened } };
   }
 
@@ -1536,6 +1550,10 @@ export async function updateEntry(req: Request, res: Response) {
     // withdrawn; a walkover hiccup must not fail the request.
     if (status === 'withdrawn') {
       try { await walkoverOnWithdraw(id, entry.team_id); } catch { /* best-effort */ }
+    }
+    // Stage 9 · T13: a place freed — the waitlist moves up (best-effort).
+    if ((status === 'withdrawn' || status === 'rejected') && (entry.status === 'pending' || entry.status === 'approved')) {
+      try { await promoteWaitlist(id); } catch { /* best-effort */ }
     }
 
     // Notify the team CAPTAIN when the organiser approves/rejects the entry
@@ -1782,7 +1800,7 @@ export async function updateTournament(req: Request, res: Response) {
         const slug = normSportSlug((await getSport(String((tournament as { sport_id?: string }).sport_id)))?.slug);
         const ek = entryKindRefusal(slug, update.entry_kind ?? 'team');
         if (ek) return res.status(400).json(ek);
-        const { count: anyEntries } = await supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id).in('status', ['pending', 'approved']);
+        const { count: anyEntries } = await supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', id).in('status', ['pending', 'approved', 'waitlisted']);
         if ((anyEntries ?? 0) > 0) return res.status(409).json({ error: 'Entries are in, so who enters (team, singles or doubles) can’t change.', code: 'ENTRY_KIND_LOCKED' });
         update.entry_kind = update.entry_kind ?? 'team';
       }
@@ -1972,6 +1990,10 @@ export async function updateTournament(req: Request, res: Response) {
         await cancelTournamentSideEffects(id, tournament.name ?? null, userId);
       } catch { /* best-effort */ }
     }
+    // Stage 9 · T13: a bigger draw (or no top) — the waitlist moves up (best-effort).
+    if ('max_teams' in update && (update.max_teams == null || Number(update.max_teams) > Number(tournament.max_teams ?? 0))) {
+      try { await promoteWaitlist(id); } catch { /* best-effort */ }
+    }
     return res.json({ tournament: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
@@ -2003,7 +2025,7 @@ async function cancelTournamentSideEffects(
     .from('tournament_entries')
     .select('team_id')
     .eq('tournament_id', tournamentId)
-    .in('status', ['pending', 'approved']));
+    .in('status', ['pending', 'approved', 'waitlisted']));
   const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
   if (teamIds.length === 0) return;
   const captains = await selectAllIn(teamIds, (c, f, to) => supabase

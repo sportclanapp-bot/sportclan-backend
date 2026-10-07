@@ -127,8 +127,9 @@ describe('F2 · the join code runs every entry rule', () => {
     expect([r.statusCode, r.body.code]).toEqual([409, 'REGISTRATION_CLOSED']);
     expect(writes()).toEqual([]);
   });
+  // Stage 9 · T13: with the waitlist turned off (on by default, the entry waits — stage9T13Waitlist).
   test('full (pending requests hold a place) → 400 TOURNAMENT_FULL', async () => {
-    mockNext = world({ count: 4 });
+    mockNext = world({ count: 4, t: { settings: { v: 1, waitlist: false } } });
     const r = await join();
     expect([r.statusCode, r.body.code]).toEqual([400, 'TOURNAMENT_FULL']);
     expect(mockLog.some((q) => q[0] === 'from:tournament_entries' && has(q, 'in:["status",["pending","approved"]]'))).toBe(true);

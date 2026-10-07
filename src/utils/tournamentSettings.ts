@@ -305,7 +305,18 @@ export type TournamentSettings = {
   discipline?: DisciplineRules;
   /** Stage 8 · F3: squads — an optional most players a squad (no app top), and when squads lock for captains. */
   squad?: SquadRules;
+  /**
+   * Stage 9 · T13: a full event puts new entries on a waitlist, in order (the
+   * default); false = it refuses them, as before. A withdrawal or a bigger draw
+   * moves the first one up.
+   */
+  waitlist?: boolean;
 };
+
+/** Stage 9 · T13: does a full event take entries onto its waitlist (on unless the organiser turned it off)? */
+export function waitlistOn(t: { settings?: unknown } | null | undefined): boolean {
+  return settingsOf(t).waitlist !== false;
+}
 
 /** Stage 8 · F3: 'draw' (the default) locks squads when the fixtures are made; 'deadline' at the entries deadline; 'manual' when the organiser says (lockedAt); 'never'. The organiser can always change a squad. */
 export type SquadRules = { size?: number | null; lock?: 'draw' | 'deadline' | 'manual' | 'never'; lockedAt?: string | null };
@@ -563,7 +574,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -696,6 +707,10 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('squad' in s) {
     if (s.squad) out.squad = s.squad; else delete out.squad;
   }
+  // Stage 9 · T13: kept only when turned off (on is the default).
+  if ('waitlist' in s) {
+    if (s.waitlist === false) out.waitlist = false; else delete out.waitlist;
+  }
   return out;
 }
 
@@ -722,6 +737,7 @@ function stage8Refusal(format: string | null | undefined, o: Record<string, any>
       if (!Array.isArray(v) || v.some((x) => typeof x !== 'string') || new Set(v).size !== v.length) return refuse('A draw of lots lists each team once.');
     }
   }
+  if (o.waitlist != null && typeof o.waitlist !== 'boolean') return refuse('A waitlist is on or off.'); // Stage 9 · T13
   if (o.bestNext != null) {
     if (!whole(o.bestNext) || o.bestNext < 0) return refuse('The best next-placed teams going through is a whole number.');
     if (format !== 'groups_knockout') return refuse('Best next-placed teams are for groups → knockout.');

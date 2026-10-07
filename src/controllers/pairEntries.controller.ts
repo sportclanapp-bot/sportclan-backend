@@ -27,7 +27,7 @@ import { sanitizeError } from '../utils/response';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { notifyUnlessBlocked } from '../utils/notify';
 import { isBlockedBetween, blockedUserIds } from '../utils/blocks';
-import { settingsOf, categoryProblem, amateurDeclarationRefusal } from '../utils/tournamentSettings';
+import { settingsOf, categoryProblem, amateurDeclarationRefusal, waitlistOn } from '../utils/tournamentSettings';
 import { syncTournamentChatMembers, syncAfterSuccess } from '../utils/tournamentChat';
 import { ENTER_AN_EVENT } from '../utils/tournamentEvents';
 import { LIMITS } from '../utils/validation';
@@ -61,7 +61,7 @@ async function people(ids: string[]): Promise<Map<string, Person>> {
 async function enteredPlayers(tournamentId: string): Promise<Map<string, { entry_id: string; team_id: string; status: string }>> {
   // Oct 2026: every entry and player (an event has no size cap).
   const entries = await allRows(() => supabase
-    .from('tournament_entries').select('id, team_id, status').eq('tournament_id', tournamentId).in('status', ['pending', 'approved']));
+    .from('tournament_entries').select('id, team_id, status').eq('tournament_id', tournamentId).in('status', ['pending', 'approved', 'waitlisted']));
   const rows = (entries ?? []) as Array<{ id: string; team_id: string; status: string }>;
   const out = new Map<string, { entry_id: string; team_id: string; status: string }>();
   if (rows.length === 0) return out;
@@ -84,7 +84,7 @@ const needed = (kind: string | null | undefined) => (kind === 'doubles' ? 2 : 1)
  *  `except`: an entry being changed (its own players aren't "already entered").
  */
 async function playersRefusal(
-  t: T, userIds: string[], opts: { asOrganiser: boolean; except?: string | null; capCounts?: Array<'pending' | 'approved'>; partial?: boolean },
+  t: T, userIds: string[], opts: { asOrganiser: boolean; except?: string | null; capCounts?: Array<'pending' | 'approved'>; partial?: boolean; allowFull?: boolean },
 ): Promise<Refusal | null> {
   if (t.is_parent) return { status: 409, body: ENTER_AN_EVENT };
   if (t.entry_kind !== 'singles' && t.entry_kind !== 'doubles') return no(409, 'ENTER_AS_TEAM', 'This tournament is entered by teams.');
@@ -107,7 +107,8 @@ async function playersRefusal(
     const e = entered.get(id);
     if (e && e.entry_id !== opts.except) return no(409, 'ALREADY_ENTERED', `${nameOf(ppl.get(id))} is already entered in this event.`, id);
   }
-  if (t.max_teams && !opts.except) {
+  // Stage 9 · T13: a full event with a waitlist takes the entry onto it.
+  if (t.max_teams && !opts.except && !opts.allowFull) {
     const { count } = await supabase.from('tournament_entries').select('id', { count: 'exact', head: true })
       .eq('tournament_id', t.id).in('status', opts.capCounts ?? (opts.asOrganiser ? ['approved'] : ['pending', 'approved']));
     if ((count ?? 0) >= t.max_teams) return no(400, 'TOURNAMENT_FULL', 'This event is full.');
@@ -151,7 +152,15 @@ function joinCode(): string {
  * event are closed (they're in).
  */
 /** Stage 9 · T12: `declared` — the players declared they're amateurs (an "amateurs only" event). */
-async function makeEntry(t: T, userIds: string[], status: 'pending' | 'approved', createdBy: string, declared = false): Promise<{ entry?: Record<string, unknown>; error?: string }> {
+/** Stage 9 · T13: is the event full (pending + approved at its size)? */
+async function isFull(t: T): Promise<boolean> {
+  if (!t.max_teams) return false;
+  const { count } = await supabase.from('tournament_entries').select('id', { count: 'exact', head: true })
+    .eq('tournament_id', t.id).in('status', ['pending', 'approved']);
+  return (count ?? 0) >= t.max_teams;
+}
+
+async function makeEntry(t: T, userIds: string[], status: 'pending' | 'approved' | 'waitlisted', createdBy: string, declared = false): Promise<{ entry?: Record<string, unknown>; error?: string }> {
   const ppl = await people(userIds);
   const { data: team, error: teamErr } = await supabase.from('teams').insert({
     sport_id: t.sport_id, name: entryTeamName(userIds.map((id) => nameOf(ppl.get(id)))), created_by: createdBy,
@@ -185,7 +194,7 @@ async function tellOrganiser(t: T, actorId: string, teamName: string, landed: st
     userId: t.created_by,
     type: 'entry_requested',
     title: 'New tournament entry',
-    body: landed === 'approved' ? `${teamName} entered ${t.name ?? 'your tournament'}.` : `${teamName} asked to enter ${t.name ?? 'your tournament'}.`,
+    body: landed === 'waitlisted' ? `${teamName} joined the waitlist for ${t.name ?? 'your tournament'}.` : landed === 'approved' ? `${teamName} entered ${t.name ?? 'your tournament'}.` : `${teamName} asked to enter ${t.name ?? 'your tournament'}.`,
     data: { tournamentId: t.id, entryId },
   });
 }
@@ -199,12 +208,13 @@ export async function enterSelf(req: Request, res: Response) {
     const t = await loadTournament(String(req.params.id));
     if (!t) return res.status(404).json({ error: 'Tournament not found' });
     if (t.entry_kind === 'doubles') return res.status(409).json({ error: 'This is a doubles event — invite a partner to enter.', code: 'NEEDS_PARTNER' });
-    const bad = await playersRefusal(t, [userId], { asOrganiser: false });
+    const bad = await playersRefusal(t, [userId], { asOrganiser: false, allowFull: waitlistOn(t) });
     if (bad) return res.status(bad.status).json(bad.body);
     // Stage 9 · T12: an "amateurs only" event asks for the declaration.
     const notDeclared = amateurDeclarationRefusal(settingsOf(t).category, (req.body ?? {}).declared_amateur);
     if (notDeclared) return res.status(400).json(notDeclared);
-    const landed = settingsOf(t).entry === 'open' ? 'approved' : 'pending';
+    // Stage 9 · T13: full — onto the waitlist.
+    const landed = waitlistOn(t) && await isFull(t) ? 'waitlisted' : settingsOf(t).entry === 'open' ? 'approved' : 'pending';
     const made = await makeEntry(t, [userId], landed, userId, settingsOf(t).category?.amateurOnly === true);
     if (!made.entry) return res.status(500).json({ error: made.error });
     void tellOrganiser(t, userId, String((made.entry.team as { name: string }).name), landed, String(made.entry.id));
@@ -282,7 +292,7 @@ export async function createPairInvite(req: Request, res: Response) {
     if (!entryId) {
       // Could I enter at all? (closed, drawn, full, my category …) — checked
       // with a stand-in partner where one isn't named yet.
-      const probe = await playersRefusal(t, invitee ? [userId, invitee] : [userId], { asOrganiser: false, partial: !invitee });
+      const probe = await playersRefusal(t, invitee ? [userId, invitee] : [userId], { asOrganiser: false, partial: !invitee, allowFull: waitlistOn(t) });
       if (probe) return res.status(probe.status).json(probe.body);
     } else {
       const probe = await playersRefusal(t, [userId, invitee!], { asOrganiser: false, except: entryId });
@@ -354,7 +364,7 @@ export async function answerPairInvite(req: Request, res: Response) {
       const bad = await playersRefusal(t, [inv.inviter_id, userId], { asOrganiser: false, except: inv.entry_id });
       if (bad) return res.status(bad.status).json(bad.body);
       const { data: entry } = await supabase.from('tournament_entries').select('id, team_id, status').eq('id', inv.entry_id).maybeSingle();
-      if (!entry || !['pending', 'approved'].includes((entry as { status: string }).status)) return res.status(409).json({ error: 'That entry is no longer in the event.', code: 'INVITE_CLOSED' });
+      if (!entry || !['pending', 'approved', 'waitlisted'].includes((entry as { status: string }).status)) return res.status(409).json({ error: 'That entry is no longer in the event.', code: 'INVITE_CLOSED' });
       const teamId = (entry as { team_id: string }).team_id;
       const { data: members } = await supabase.from('team_members').select('user_id').eq('team_id', teamId);
       const old = ((members ?? []) as Array<{ user_id: string }>).map((m) => m.user_id).filter((u) => u !== inv.inviter_id);
@@ -374,16 +384,17 @@ export async function answerPairInvite(req: Request, res: Response) {
       });
       return res.json({ entry: { id: inv.entry_id, team_id: teamId } });
     }
-    const bad = await playersRefusal(t, [inv.inviter_id, userId], { asOrganiser: false });
+    const bad = await playersRefusal(t, [inv.inviter_id, userId], { asOrganiser: false, allowFull: waitlistOn(t) });
     if (bad) return res.status(bad.status).json(bad.body);
-    const landed = settingsOf(t).entry === 'open' ? 'approved' : 'pending';
+    // Stage 9 · T13: full — the pair waits on the waitlist.
+    const landed = waitlistOn(t) && await isFull(t) ? 'waitlisted' : settingsOf(t).entry === 'open' ? 'approved' : 'pending';
     // The inviter captains the pair (they asked); the one accepting is co-captain.
     const made = await makeEntry(t, [inv.inviter_id, userId], landed, inv.inviter_id, settingsOf(t).category?.amateurOnly === true);
     if (!made.entry) return res.status(500).json({ error: made.error });
     await supabase.from('tournament_pair_invites').update({ status: 'accepted', responded_at: now }).eq('id', inv.id);
     void notifyUnlessBlocked(userId, {
       userId: inv.inviter_id, type: 'pair_accepted', title: 'Partner request accepted',
-      body: `${nameOf(ppl.get(userId))} accepted — you’re ${landed === 'approved' ? 'entered' : 'waiting for the organiser'} in ${t.name ?? 'the doubles event'}.`,
+      body: `${nameOf(ppl.get(userId))} accepted — you’re ${landed === 'approved' ? 'entered' : landed === 'waitlisted' ? 'on the waitlist' : 'waiting for the organiser'} in ${t.name ?? 'the doubles event'}.`,
       data: { tournamentId: t.id, entryId: String(made.entry.id) },
     });
     void tellOrganiser(t, userId, String((made.entry.team as { name: string }).name), landed, String(made.entry.id));
@@ -458,7 +469,7 @@ export async function relatedEntries(req: Request, res: Response) {
       const { data: sibs } = await supabase.from('tournaments').select('id, event_label, status').eq('parent_id', t.parent_id).neq('id', t.id).in('status', ['upcoming', 'live']);
       const sib = (sibs ?? []) as Array<{ id: string; event_label: string | null }>;
       if (sib.length) {
-        const { data: ents } = await supabase.from('tournament_entries').select('id, tournament_id, team_id, status').in('tournament_id', sib.map((x) => x.id)).in('status', ['pending', 'approved']);
+        const { data: ents } = await supabase.from('tournament_entries').select('id, tournament_id, team_id, status').in('tournament_id', sib.map((x) => x.id)).in('status', ['pending', 'approved', 'waitlisted']);
         const rows = (ents ?? []) as Array<{ id: string; tournament_id: string; team_id: string; status: string }>;
         const { data: mem2 } = rows.length ? await supabase.from('team_members').select('team_id, user_id').in('team_id', rows.map((r) => r.team_id)).in('user_id', players) : { data: [] };
         const hit = new Set(((mem2 ?? []) as Array<{ team_id: string }>).map((m) => m.team_id));
@@ -468,7 +479,7 @@ export async function relatedEntries(req: Request, res: Response) {
         others = rows.filter((r) => hit.has(r.team_id)).map((r) => ({ tournament_id: r.tournament_id, event_label: labelOf.get(r.tournament_id) ?? null, entry_id: r.id, team_name: nameOf.get(r.team_id) ?? null, status: r.status }));
       }
     }
-    return res.json({ this_entry: own && ['pending', 'approved'].includes((own as { status: string }).status) ? { entry_id: (own as { id: string }).id } : null, others });
+    return res.json({ this_entry: own && ['pending', 'approved', 'waitlisted'].includes((own as { status: string }).status) ? { entry_id: (own as { id: string }).id } : null, others });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -103,7 +103,20 @@ describe('SC-334 profile graphs — real per-point / per-day values', () => {
       expect(c.type).toBe(expectedType);
       if (c.matches > 0) activeDays += 1;
     }
-    expect(activeDays).toBeGreaterThan(0); // Aarav has recent activity
+    expect(activeDays).toBeGreaterThanOrEqual(0); // Aarav's seed matches (July 2026) have aged off the 84-day grid
+  });
+
+  // Oct 2026 (2.12.0 release run): the "has recent activity" half used Aarav, whose
+  // seeded matches are now older than 84 days — the test went stale, not the code.
+  // It now takes this week's most active player, who by definition played lately.
+  it('activity-heatmap: this week\'s most active player shows matches on the grid', async () => {
+    const { data: pow } = await call('GET', '/leaderboard/player-of-week', token);
+    const top = (pow.players || []).find((p: any) => p.user?.id && (p.matches_this_week ?? 0) > 0);
+    if (!top) return; // a dead week: nothing to show
+    const { data } = await call('GET', `/users/${top.user.id}/activity-heatmap`, token);
+    const cells: any[] = data.heatmap || [];
+    expect(cells.length).toBe(84);
+    expect(cells.filter((c) => c.matches > 0).length).toBeGreaterThan(0);
   });
 
   // NOTE on the single-point edge: the seed populates user_sport_profiles aggregates

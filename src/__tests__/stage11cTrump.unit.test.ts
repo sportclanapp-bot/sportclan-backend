@@ -27,3 +27,12 @@ describe('trump match · server', () => {
     expect(rulesRefusal('badminton', { ...standardRules('badminton'), tie: { ...pbl, trumps: { A: 'MD' } } })?.error).toMatch(/picked by the teams/);
   });
 });
+
+describe('a lost trump costs a point (2.14)', () => {
+  it('turns 3 – 3 into 2 – 3', () => {
+    const s = (w: 'A' | 'B', a: number, b: number) => ({ key: 'x', winner: w, sets: { A: [a], B: [b] }, units: { A: a, B: b } });
+    const sheet = [s('A', 15, 0), s('A', 15, 0), s('A', 15, 0), s('B', 13, 15), s('B', 13, 15)];
+    expect(tieOutcome({ ...pbl, trumps: { A: 'XD', B: 'MS2' } }, sheet)).toMatchObject({ rubbersA: 3, rubbersB: 3, decided: 'A' });
+    expect(tieOutcome({ ...pbl, trumpLoss: true, trumps: { A: 'XD', B: 'MS2' } }, sheet)).toMatchObject({ rubbersA: 2, rubbersB: 3, decided: 'B' });
+  });
+});

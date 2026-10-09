@@ -165,6 +165,7 @@ export async function getTieLineup(req: Request, res: Response) {
       locked: m.status !== 'scheduled',
       // Stage 11 follow-up: a trump tie — each side's pick (as its order is seen) and the line for both.
       trump: spec.trump === true,
+      trump_loss: spec.trump === true && spec.trumpLoss === true, // 2.14: a lost trump costs a point
       trump_text: spec.trump ? tieTrumpText(spec, shownTrumps, { A: m.team_a_name ?? 'Team A', B: m.team_b_name ?? 'Team B' }) : null,
       sides: {
         A: { name: m.team_a_name, submitted: inA, can_set: can.A && m.status === 'scheduled', lineup: seeA ? named(ups.A) : null, members: members.A, trump: shownTrumps.A ?? null },

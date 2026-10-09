@@ -1017,7 +1017,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     const dec = rules.tie.rubbers.filter((x) => x.decider);
     if (dec.length) parts.push(`level: ${dec.map((x) => x.label).join(', ')} decides`);
     for (const x of rules.tie.rubbers) if ((x.value ?? 1) > 1) parts.push(`${x.label} worth ${x.value}`);
-    if (rules.tie.trump) parts.push('a trump match each (counts double)'); // Stage 11 follow-up
+    if (rules.tie.trump) parts.push(`a trump match each (counts double${rules.tie.trumpLoss ? '; lost: −1' : ''})`); // Stage 11 follow-up; 2.14: PBL's −1
   }
   // BUILD 3.37+: a rally sport's own points, said when they differ from the standard.
   if (RALLY_LIMITS[key]) {

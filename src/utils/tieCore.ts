@@ -60,6 +60,8 @@ export type TieSpec = {
    * matches won ('all'), counted in points. The organiser turns it on per tie.
    */
   trump?: boolean;
+  /** 2.14 follow-up · PBL's rule: a side that loses its trump match loses a point (−1 in the tie score). Needs `trump`. */
+  trumpLoss?: boolean;
   /** Runtime only (never stored in the rules): each side's pick, from matches.tie_trumps. */
   trumps?: Partial<Record<TieSide, string | null>> | null;
 };
@@ -111,6 +113,8 @@ export function tieSpecProblem(spec: unknown): string | null {
   if (s.trump != null && typeof s.trump !== 'boolean') return 'A trump match is on or off.';
   if (s.trump === true && s.win !== 'all') return 'A trump match is for a tie on most matches won (all played).';
   if (s.trump === true && (s.rubbers as TieRubber[]).filter((r) => !r.decider).length < 2) return 'A trump match needs at least two matches to pick from.';
+  if (s.trumpLoss != null && typeof s.trumpLoss !== 'boolean') return 'A lost trump costing a point is on or off.';
+  if (s.trumpLoss === true && s.trump !== true) return 'A lost trump can cost a point only with a trump match.';
   return null;
 }
 
@@ -134,7 +138,7 @@ export function tieTrumpsOf(x: unknown): Partial<Record<TieSide, string>> | null
 export function tieTrumpText(spec: TieSpec, trumps: Partial<Record<TieSide, string | null>> | null | undefined, names: Record<TieSide, string>): string | null {
   const label = (k: string | null | undefined) => spec.rubbers.find((r) => r.key === k)?.label ?? null;
   const parts = (['A', 'B'] as const).map((s) => (label(trumps?.[s]) ? `${names[s]}: ${label(trumps?.[s])}` : null)).filter(Boolean);
-  return parts.length ? `🃏 Trump ${parts.length === 1 ? 'match' : 'matches'} — ${parts.join(' · ')} (counts double for the side that picked it)` : null;
+  return parts.length ? `🃏 Trump ${parts.length === 1 ? 'match' : 'matches'} — ${parts.join(' · ')} (counts double for the side that picked it${spec.trumpLoss ? '; lost, it costs that side a point' : ''})` : null;
 }
 
 /** Stage 10 · TT1 · a position's letter: the first side A, B, C…; the second X, Y, Z, then U, V, W… (then numbered). */
@@ -284,8 +288,13 @@ export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>):
   const hasDecider = regular < spec.rubbers.length;
   // Stage 11 follow-up: a trump match counts double for the side that picked it.
   const worthFor = (i: number, side: TieSide) => (spec.rubbers[i]?.value ?? 1) * (spec.trump && spec.rubbers[i] && spec.trumps?.[side] === spec.rubbers[i]!.key ? 2 : 1);
+  // 2.14 follow-up: with PBL's rule on, a side that loses its own trump loses a point.
+  const lostTrump = (i: number, loser: TieSide) => (spec.trump && spec.trumpLoss && spec.rubbers[i] && spec.trumps?.[loser] === spec.rubbers[i]!.key ? 1 : 0);
   results.forEach((r, i) => {
-    if (i < regular) { if (r.winner === 'A') rubbersA += worthFor(i, 'A'); else if (r.winner === 'B') rubbersB += worthFor(i, 'B'); }
+    if (i < regular) {
+      if (r.winner === 'A') { rubbersA += worthFor(i, 'A'); rubbersB -= lostTrump(i, 'B'); }
+      else if (r.winner === 'B') { rubbersB += worthFor(i, 'B'); rubbersA -= lostTrump(i, 'A'); }
+    }
     unitsA += r.units.A; unitsB += r.units.B;
   });
   const allRegular = results.length >= regular;

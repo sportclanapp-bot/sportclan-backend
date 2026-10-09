@@ -411,7 +411,43 @@ export type RubberRead = { winner: TieSide | 'draw' | null; sets: { A: number[];
  */
 export function splitTie<E extends { event_type: string }>(
   events: ReadonlyArray<E>, spec: TieSpec, rubberOf: (events: E[], rubber: TieRubber) => RubberRead,
-): { results: RubberResult[]; current: number; currentEvents: E[]; outcome: TieOutcome; ends: number[] } {
+): { results: RubberResult[]; current: number; currentEvents: E[]; outcome: TieOutcome; ends: number[]; boards?: Record<string, { events: E[]; result: RubberResult | null }> } {
+  // Stage 12 follow-up · boards played at the same time (team chess, each board on
+  // its own clock): events carry the board's key and are split by it. A match
+  // with no keyed events is the old one-after-another split, unchanged.
+  const boardKeyOf = (e: E): string | null => {
+    const b = (e as { payload?: { board?: unknown } }).payload?.board;
+    return typeof b === 'string' && spec.rubbers.some((r) => r.key === b) ? b : null;
+  };
+  if (events.some((e) => boardKeyOf(e))) {
+    const evs = new Map<string, E[]>(spec.rubbers.map((r) => [r.key, [] as E[]]));
+    const done = new Map<string, RubberResult>(); const endAt = new Map<string, number>();
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i]!;
+      // An event with no key (an older pad) goes to the first board still open.
+      const key = boardKeyOf(e) ?? spec.rubbers.find((r) => !done.has(r.key))?.key ?? null;
+      if (!key || done.has(key)) continue;
+      evs.get(key)!.push(e);
+      if (e.event_type !== 'score' && e.event_type !== 'note' && e.event_type !== 'result') continue;
+      const rubber = spec.rubbers.find((r) => r.key === key)!;
+      const r = rubberOf(evs.get(key)!, rubber);
+      if (!r.winner) continue;
+      done.set(key, { key, winner: r.winner, sets: r.sets, units: r.units }); endAt.set(key, i);
+    }
+    const order = spec.rubbers.filter((r) => done.has(r.key));
+    const results = order.map((r) => done.get(r.key)!);
+    const all = results.length === spec.rubbers.length;
+    const partial = (): TieOutcome => ({
+      rubbersA: results.filter((r) => r.winner === 'A').length, rubbersB: results.filter((r) => r.winner === 'B').length,
+      unitsA: results.reduce((t, r) => t + r.units.A, 0), unitsB: results.reduce((t, r) => t + r.units.B, 0), decided: null, finished: false,
+    });
+    const open = spec.rubbers.findIndex((r) => !done.has(r.key));
+    return {
+      results, current: open < 0 ? results.length : open, currentEvents: open < 0 ? [] : evs.get(spec.rubbers[open]!.key)!,
+      outcome: all ? tieOutcome(spec, results) : partial(), ends: order.map((r) => endAt.get(r.key)!),
+      boards: Object.fromEntries(spec.rubbers.map((r) => [r.key, { events: evs.get(r.key)!, result: done.get(r.key) ?? null }])),
+    };
+  }
   const results: RubberResult[] = [];
   // 2.14: the index (in `events`) of the event that ended each match — the timeline's trump lines go there.
   const ends: number[] = [];

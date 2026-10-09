@@ -983,8 +983,10 @@ export function rollupTieSpec(
     setsA: [...split.results.flatMap((r) => r.sets.A), ...(cur ? cur.sets.A : [])], setsB: [...split.results.flatMap((r) => r.sets.B), ...(cur ? cur.sets.B : [])],
     gamesA: cur?.games.A ?? 0, gamesB: cur?.games.B ?? 0, curA: cur?.points.A ?? 0, curB: cur?.points.B ?? 0,
     rubber: o.finished ? split.results.length : split.results.length + 1,
-    results: split.results.map((r, i) => ({ A: won(r.sets.A, r.sets.B), B: won(r.sets.B, r.sets.A), winner: r.winner, key: r.key, label: spec.rubbers[i]?.label ?? r.key, unitsA: r.units.A, unitsB: r.units.B })),
-    tie: { win: spec.win, rubbersA: o.rubbersA, rubbersB: o.rubbersB, unitsA: o.unitsA, unitsB: o.unitsB, decided: o.decided, ...(o.decider ? { decider: true } : {}) }, // Stage 11 · PB3: won in the deciding match
+    results: split.results.map((r) => ({ A: won(r.sets.A, r.sets.B), B: won(r.sets.B, r.sets.A), winner: r.winner, key: r.key, label: spec.rubbers.find((x) => x.key === r.key)?.label ?? r.key, unitsA: r.units.A, unitsB: r.units.B })),
+    tie: { win: spec.win, rubbersA: o.rubbersA, rubbersB: o.rubbersB, unitsA: o.unitsA, unitsB: o.unitsB, decided: o.decided, ...(o.decider ? { decider: true } : {}), // Stage 11 · PB3: won in the deciding match
+      // Stage 12 follow-up: boards on their own clocks — how many are finished.
+      ...(split.boards ? { boards: { done: split.results.length, of: spec.rubbers.length } } : {}) },
     // 2.14: each finished match as the engine read it, and the event that ended it (the timeline's trump lines).
     finished: split.results, ends: split.ends,
   };

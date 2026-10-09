@@ -86,7 +86,7 @@ import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSepar
 import { scheduleRefusal } from '../utils/scheduleFields';
 import { swissFirstRound, type SwissRound } from '../utils/swiss';
 import { dutchFirstRound, dutchRound, dutchHistory } from '../utils/swissDutch';
-import { seededGroupFixtures } from '../utils/groupOrder';
+import { bergerRounds, seededGroupFixtures } from '../utils/groupOrder';
 import { BOX_DEFAULT, boxesOf, boxLabel, challengeProblem, ladderAfter, nextBoxOrder } from '../utils/ladderBox';
 import {
   SHARED_KEYS, EVENT_KEYS, eventsListRefusal, eventName, entryKindRefusal, eventLabelRefusal, refreshParentStatus, refreshParentOf,
@@ -4310,10 +4310,13 @@ export async function generateFixtures(req: Request, res: Response) {
       // both legs automatically (computeStats/rankTeams iterate every match).
       const doubleLeg = format === 'league';
       let mno = 0;
-      for (let i = 0; i < teams.length; i++) {
-        for (let j = i + 1; j < teams.length; j++) {
-          const legs: Array<[number, number]> = doubleLeg ? [[i, j], [j, i]] : [[i, j]];
-          for (const [h, a] of legs) {
+      // Stage 12 · CH9: FIDE's Berger tables, every sport — numbered rounds, and each side's
+      // colour (chess: team A is White) or home / away alternating; a league's second half is
+      // the first with sides reversed.
+      const berger = bergerRounds(teams.length, doubleLeg);
+      for (let r = 0; r < berger.length; r++) {
+        {
+          for (const [h, a] of berger[r]!) {
             matchRows.push({
               sport_id: tournament.sport_id,
               tournament_id: id,
@@ -4326,7 +4329,7 @@ export async function generateFixtures(req: Request, res: Response) {
               status: 'scheduled',
               score_summary: {},
               created_by: userId,
-              round: 1,
+              round: r + 1,
               match_no: mno,
               is_ranked: true, // SC-251: round-robin / league matches are ranked too.
               ...fixtureDefaults,

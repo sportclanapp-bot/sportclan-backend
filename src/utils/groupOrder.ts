@@ -47,3 +47,38 @@ export function seededGroupFixtures<T>(groups: T[][]): Array<{ group: number; a:
   }
   return out;
 }
+
+/**
+ * Stage 12 · CH9 · FIDE's Berger tables (C.05 Annex 1): the rounds of a round
+ * robin of `n` players (by pairing number, 0-based), each pair [first, second]
+ * — first is White in chess, the first-named (home) side elsewhere. Round 1 is
+ * 1–n, 2–(n−1)…; each next round adds n/2 to every number (mod n−1) and the
+ * last player's colour alternates, so every player's colours alternate as far
+ * as a round robin allows. An odd field adds a "bye" number that sits out.
+ *
+ * `double`: the second cycle is the first with colours / sides reversed; the
+ * first cycle's last two rounds swap (FIDE's advice) so nobody has the same
+ * colour three times across the join.
+ */
+export function bergerRounds(n: number, double = false): Array<Array<[number, number]>> {
+  if (n < 2) return [];
+  const size = n % 2 === 0 ? n : n + 1;
+  const last = size - 1; // the fixed number (0-based)
+  const m = size - 1;
+  let round: Array<[number, number]> = Array.from({ length: size / 2 }, (_, i) => [i, last - i] as [number, number]);
+  const rounds: Array<Array<[number, number]>> = [];
+  for (let r = 0; r < m; r++) {
+    rounds.push(round);
+    const shift = (k: number) => (k === last ? last : (k + size / 2) % m);
+    round = round.map(([a, b], i) => {
+      const x = shift(a); const y = shift(b);
+      // Board 1 holds the fixed player: their colour alternates round by round.
+      if (i === 0) return (r % 2 === 0 ? [last, x === last ? y : x] : [x === last ? y : x, last]) as [number, number];
+      return [x, y] as [number, number];
+    });
+  }
+  const drop = (rs: Array<Array<[number, number]>>) => rs.map((rd) => rd.filter(([a, b]) => a < n && b < n));
+  if (!double) return drop(rounds);
+  const first = rounds.length >= 2 ? [...rounds.slice(0, -2), rounds[rounds.length - 1]!, rounds[rounds.length - 2]!] : rounds;
+  return drop([...first, ...first.map((rd) => rd.map(([a, b]) => [b, a] as [number, number]))]);
+}

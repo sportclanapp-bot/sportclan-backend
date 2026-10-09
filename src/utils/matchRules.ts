@@ -168,6 +168,17 @@ export interface MatchRules {
   /** Chess: the clock. */
   baseMinutes?: number;
   incrementSeconds?: number;
+  /**
+   * Stage 12 · CH6 · the rest of a chess clock, each optional: a delay (the
+   * clock waits this many seconds each move before it runs — the US / Bronstein
+   * "delay"); the increment only from move N (the Global Chess League's +2 s
+   * from move 41); a second period (FIDE's "90 minutes for 40 moves, then 30
+   * more" — minutes added to a player's clock after their Nth move).
+   */
+  delaySeconds?: number | null;
+  incrementFromMove?: number | null;
+  secondPeriodMoves?: number | null;
+  secondPeriodMinutes?: number | null;
 }
 
 /**
@@ -188,7 +199,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null },
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
   basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false },
-  chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true, tie: null }, // Stage 12 · CH5: team matches
+  chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true, tie: null, delaySeconds: null, incrementFromMove: null, secondPeriodMoves: null, secondPeriodMinutes: null }, // Stage 12 · CH5: team matches · CH6: the rest of the clock
 };
 
 /** The sport's standard rules, versioned. Unknown sport → just the version. */
@@ -304,7 +315,7 @@ export function slotMinutes(sport: string | null | undefined, rules: Partial<Mat
     return up5(periods * r.periodMinutes * stoppages + breaks + 10);
   }
   if (key === 'chess') {
-    const base2 = (r.baseMinutes ?? 5) * 2 + ((r.incrementSeconds ?? 0) * 40 * 2) / 60; // 40 moves each
+    const base2 = (r.baseMinutes ?? 5) * 2 + ((r.incrementSeconds ?? 0) * 40 * 2) / 60 + (r.secondPeriodMinutes ?? 0) * 2; // 40 moves each · CH6: the second period's minutes
     return up5(base2 + 5);
   }
   const want = playUnits(key, r); const was = playUnits(key, std);
@@ -507,17 +518,32 @@ export function setConfigOf(rules: MatchRules): { target: number; cap?: number; 
  * or more; bullet (under 3) is the usual online split of blitz. Decision
  * 30 Sep 2026: 10+0 is blitz, as FIDE has it (BUILD 3.67 had it rapid).
  */
-export function chessClockLabel(baseMinutes: number, incrementSeconds = 0): string {
-  const t = baseMinutes + incrementSeconds;
+export function chessClockLabel(baseMinutes: number, incrementSeconds = 0, extraMinutes = 0): string {
+  // Stage 12 · CH6: a second period that comes before move 60 counts too (FIDE's 60-move estimate).
+  const t = baseMinutes + incrementSeconds + extraMinutes;
   if (t < 3) return 'Bullet';
   if (t <= 10) return 'Blitz';
   if (t < 60) return 'Rapid';
   return 'Classical';
 }
 
-/** BUILD 3.67: a chess clock's limits. */
-export const CHESS_BASE_MINUTES: [number, number] = [1, 120];
-export const CHESS_INCREMENT_SECONDS: [number, number] = [0, 60];
+/**
+ * Stage 12 · CH6 · a chess clock in words: "90 min + 30 s a move · +30 min after move 40",
+ * "20 min + 2 s a move from move 41", "5 min · 3 s delay".
+ */
+export function chessClockText(r: Partial<MatchRules>): string {
+  const b = r.baseMinutes ?? 5; const i = r.incrementSeconds ?? 0;
+  const parts = [`${b} min${i ? ` + ${i} s a move${r.incrementFromMove && r.incrementFromMove > 1 ? ` from move ${r.incrementFromMove}` : ''}` : ''}`];
+  if (r.secondPeriodMoves && r.secondPeriodMinutes) parts.push(`+${r.secondPeriodMinutes} min after move ${r.secondPeriodMoves}`);
+  if (r.delaySeconds) parts.push(`${r.delaySeconds} s delay`);
+  return parts.join(' · ');
+}
+/** Stage 12 · CH6 · the extra minutes a second period adds inside FIDE's 60 moves. */
+export const chessExtraMinutes = (r: Partial<MatchRules>): number => (r.secondPeriodMoves && r.secondPeriodMoves < 60 ? r.secondPeriodMinutes ?? 0 : 0);
+
+/** BUILD 3.67: a chess clock's limits. Stage 12 · CH6 (Dipak): no top — the organiser's clock. */
+export const CHESS_BASE_MINUTES: [number, number] = [1, Number.MAX_SAFE_INTEGER];
+export const CHESS_INCREMENT_SECONDS: [number, number] = [0, Number.MAX_SAFE_INTEGER];
 
 /**
  * The `format` / `overs` to store beside the rules, for display and for older
@@ -537,7 +563,7 @@ export function legacyFromRules(
   if (key === 'chess') {
     const b = rules.baseMinutes ?? 5;
     const i = rules.incrementSeconds ?? 0;
-    return { format: `${chessClockLabel(b, i)} · ${b}+${i}`, overs: null };
+    return { format: `${chessClockLabel(b, i, chessExtraMinutes(rules))} · ${b}+${i}`, overs: null };
   }
   return { format: key || null, overs: null };
 }
@@ -581,7 +607,18 @@ export function rulesOf(
 // field at a time — here, and nowhere else.
 
 /** Chess clocks offered today, as [base minutes, increment seconds]. */
-export const CHESS_CLOCKS: Array<[number, number]> = [[1, 0], [5, 0], [3, 2], [10, 0], [15, 10], [30, 0]];
+export const CHESS_CLOCKS: Array<[number, number]> = [[1, 0], [5, 0], [3, 2], [10, 0], [15, 10], [30, 0],
+  // Stage 12 · CH6: the Indian opens' and FIDE's classical and rapid clocks.
+  [10, 5], [20, 10], [25, 10], [45, 10], [60, 30], [90, 30]];
+/**
+ * Stage 12 · CH6 · tournament clocks beyond "M+S" (the stage chips): FIDE's
+ * standard (90 minutes for 40 moves, +30, with 30 s a move from move 1 — the
+ * Olympiad) and the Global Chess League's (20 minutes, +2 s from move 41).
+ */
+export const CHESS_CONTROLS: Array<{ value: string; label: string; rules: Partial<MatchRules> }> = [
+  { value: '90/40+30+30', label: '90/40 + 30, 30 s a move (FIDE standard)', rules: { baseMinutes: 90, incrementSeconds: 30, secondPeriodMoves: 40, secondPeriodMinutes: 30 } },
+  { value: '20+2@41', label: '20 + 2 s from move 41 (GCL)', rules: { baseMinutes: 20, incrementSeconds: 2, incrementFromMove: 41 } },
+];
 
 type Refusal = { error: string; code: 'BAD_RULES'; field: string | null };
 const refuse = (error: string, field: string | null = null): Refusal => ({ error, code: 'BAD_RULES', field });
@@ -801,13 +838,14 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (!isWhole(r.bestOf) || !(offered as number[]).includes(r.bestOf)) return refuse(`Match length must be best of ${listOf(offered)}.`, 'bestOf');
   }
   if (key === 'chess') {
-    // BUILD 3.67: any clock — 1–120 minutes plus 0–60 seconds a move (the chips are presets).
-    if (!isWhole(r.baseMinutes) || r.baseMinutes < CHESS_BASE_MINUTES[0] || r.baseMinutes > CHESS_BASE_MINUTES[1]) {
-      return refuse(`The clock must be ${CHESS_BASE_MINUTES[0]} to ${CHESS_BASE_MINUTES[1]} minutes.`, 'baseMinutes');
-    }
-    if (!isWhole(r.incrementSeconds) || r.incrementSeconds < CHESS_INCREMENT_SECONDS[0] || r.incrementSeconds > CHESS_INCREMENT_SECONDS[1]) {
-      return refuse(`The increment must be ${CHESS_INCREMENT_SECONDS[0]} to ${CHESS_INCREMENT_SECONDS[1]} seconds a move.`, 'incrementSeconds');
-    }
+    // BUILD 3.67: any clock (the chips are presets). Stage 12 · CH6 (Dipak): no top — 1 minute or more, any increment.
+    if (!isWhole(r.baseMinutes) || r.baseMinutes < CHESS_BASE_MINUTES[0]) return refuse('The clock must be 1 minute or more.', 'baseMinutes');
+    if (!isWhole(r.incrementSeconds) || r.incrementSeconds < 0) return refuse('The increment is a whole number of seconds a move.', 'incrementSeconds');
+    if (r.delaySeconds != null && (!isWhole(r.delaySeconds) || r.delaySeconds < 0)) return refuse('A delay is a whole number of seconds.', 'delaySeconds');
+    if (r.incrementFromMove != null && (!isWhole(r.incrementFromMove) || r.incrementFromMove < 1)) return refuse('The increment starts at move 1 or later.', 'incrementFromMove');
+    if ((r.secondPeriodMoves == null) !== (r.secondPeriodMinutes == null)) return refuse('A second period needs both its move and its minutes.', 'secondPeriodMoves');
+    if (r.secondPeriodMoves != null && (!isWhole(r.secondPeriodMoves) || r.secondPeriodMoves < 1)) return refuse('A second period starts after move 1 or later.', 'secondPeriodMoves');
+    if (r.secondPeriodMinutes != null && (!isWhole(r.secondPeriodMinutes) || r.secondPeriodMinutes < 1)) return refuse('A second period adds 1 minute or more.', 'secondPeriodMinutes');
   }
   // Stage 9 · T3: a team tie of the organiser's own matches.
   if ((TIE_SPORTS as readonly string[]).includes(key) && r.tie !== null && r.tie !== undefined) {
@@ -835,7 +873,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (bad) return refuse(bad, 'penaltyLadder');
   }
   // Everything else is fixed at the sport's standard for now.
-  const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'noLbw', 'bestOf', 'baseMinutes', 'incrementSeconds',
+  const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'noLbw', 'bestOf', 'baseMinutes', 'incrementSeconds', 'delaySeconds', 'incrementFromMove', 'secondPeriodMoves', 'secondPeriodMinutes',
     ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(RALLY_TIMED.has(key) ? ['timeLimitMinutes', 'timedLevel'] : []), ...(key === 'tabletennis' ? ['winBy2'] : []), ...(key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' ? ['allGames'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...((TIE_SPORTS as readonly string[]).includes(key) ? ['tie'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;

@@ -117,8 +117,8 @@ describe('BUILD 2.2 · create', () => {
   it('the older format path is validated too: a chess clock out of range → 400 (it used to be stored as sent)', async () => {
     asSport('chess');
     mockNext = onCreate;
-    // BUILD 3.67: any clock 1–120 min + 0–60 s is fine now (10+5 is); 150 minutes isn't.
-    const r = await call(createMatch, { body: body({ sport_id: 'cricket', format: 'Classical · 150+0' }) });
+    // BUILD 3.67 · Stage 12 · CH6 (Dipak): any clock of 1 minute or more is fine; 0 minutes isn't.
+    const r = await call(createMatch, { body: body({ sport_id: 'cricket', format: 'Blitz · 0+0' }) });
     expect([r.statusCode, r.body.code, r.body.field]).toEqual([400, 'BAD_RULES', 'baseMinutes']);
     const ok = await call(createMatch, { body: body({ sport_id: 'cricket', format: 'Rapid · 15+10' }) });
     expect(ok.statusCode).toBeLessThan(300);

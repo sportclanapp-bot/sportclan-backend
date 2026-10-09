@@ -57,7 +57,8 @@ import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/ma
 import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
 import { applyChessTcDeltas, recordChessTc } from '../utils/chessTcRatings';
 import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules, conductWords, tieSpecOf } from '../utils/matchRules';
-import { tieTossOf, tieTossText } from '../utils/tieCore';
+import { tieTossOf, tieTossText, tieTrumpText } from '../utils/tieCore';
+import { hasTrump, trumpsFor } from '../utils/tieTrumps';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, superOverPlayedText, tieFallbackText, boundariesOf, type SuperOverState, type TieFallback, typedScoreRefusal, typedScoreWinner, typedOversToBalls, type UnfinishedEnd } from '../utils/cricketRules';
 import { withWalkoverScore } from '../utils/walkoverScore';
@@ -1551,7 +1552,7 @@ export async function getCommentary(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, sport_id, team_a_name, team_b_name, format, overs, rules, tie_toss')
+      .select('id, sport_id, team_a_name, team_b_name, format, overs, rules, tie_toss, status')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1719,6 +1720,14 @@ export async function getCommentary(req: Request, res: Response) {
       enriched.unshift({ id: `tie-toss-${match.id}`, over_ball: null, event_type: 'note', commentary: line, text: line, payload: { kind: 'tie_toss' }, timestamp: toss.at ?? null, is_wicket: false, is_boundary: false });
     }
 
+    // Stage 11 follow-up: the trump picks, once the tie has started (before that a
+    // side's pick is hidden from the other side, like its order).
+    const trumpSpec = tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null);
+    const picks = trumpSpec?.trump ? await trumpsFor(match.id as string) : null;
+    const trumpLine = trumpSpec && picks && ((picks.A && picks.B) || (match as { status?: string }).status !== 'scheduled')
+      ? tieTrumpText(trumpSpec, picks, { A: teamA, B: teamB }) : null;
+    if (trumpLine) enriched.splice(toss && tossSpec ? 1 : 0, 0, { id: `tie-trumps-${match.id}`, over_ball: null, event_type: 'note', commentary: trumpLine, text: trumpLine, payload: { kind: 'tie_trumps' }, timestamp: null, is_wicket: false, is_boundary: false });
+
     // Return newest-first.
     enriched.reverse();
     return res.json({
@@ -1744,6 +1753,14 @@ export async function getMatch(req: Request, res: Response) {
     const timer = stepTimer();
     const { data: match, error } = await supabase.from('matches').select('*').eq('id', id).maybeSingle();
     if (error || !match) return res.status(404).json({ error: 'Match not found' });
+    // Stage 11 follow-up: a trump tie's picks, once both sides have picked or the
+    // tie has started (before that a side's pick is hidden from the other side; the
+    // line-up screen shows its own).
+    if (hasTrump((match as { rules?: unknown }).rules)) {
+      const t = await trumpsFor(id as string);
+      // Both picked = both orders given (a pick comes with its order), or the tie has started.
+      (match as { tie_trumps?: unknown }).tie_trumps = t && ((t.A && t.B) || (match as { status?: string }).status !== 'scheduled') ? t : null;
+    }
     timer.mark('load');
     // Everything below depends only on the match row, and each read was awaited
     // in turn: ~11 round-trips at ~300 ms from Render, ~3.3 s for every Match

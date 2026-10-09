@@ -814,6 +814,8 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     const bad = tieSpecProblem(r.tie);
     if (bad) return refuse(bad, 'tie');
     if (r.rubbers) return refuse('A tie is its own list of matches, or a standard order — not both.', 'tie');
+    // Stage 11 follow-up: the trump picks are the teams' (with their orders), never the rules'.
+    if ((r.tie as TieSpec).trumps != null) return refuse('Trump matches are picked by the teams with their orders.', 'tie');
     // Stage 11 · PB3: a match's own rules (the DreamBreaker) are the sport's rules over the tie's.
     for (const rb of (r.tie as TieSpec).rubbers) {
       if (!rb.rules) continue;
@@ -1015,6 +1017,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     const dec = rules.tie.rubbers.filter((x) => x.decider);
     if (dec.length) parts.push(`level: ${dec.map((x) => x.label).join(', ')} decides`);
     for (const x of rules.tie.rubbers) if ((x.value ?? 1) > 1) parts.push(`${x.label} worth ${x.value}`);
+    if (rules.tie.trump) parts.push('a trump match each (counts double)'); // Stage 11 follow-up
   }
   // BUILD 3.37+: a rally sport's own points, said when they differ from the standard.
   if (RALLY_LIMITS[key]) {

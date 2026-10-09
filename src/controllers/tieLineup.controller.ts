@@ -22,6 +22,11 @@
  * Stage 10 · TT1b: who names A, B, C is the toss (ITTF: the winner chooses) or
  * the organiser's pick, recorded before either order (matches.tie_toss); with
  * none, the first-named side names A, B, C as before. PUT /matches/:id/tie-toss.
+ *
+ * Stage 11 follow-up: a trump tie (rules.tie.trump, badminton's PBL) — each side
+ * gives its trump match with its order ({ trump: key }); it counts double for
+ * that side. Hidden from the other side until both orders are in, like the
+ * orders (match_tie_trumps).
  */
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -30,7 +35,8 @@ import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { isTeamManager } from '../utils/teamAuth';
 import { getSport } from '../utils/sportCache';
 import { rubberPlayers, tieSpecOf, type MatchRules } from '../utils/matchRules';
-import { expandPositions, letterSideOf, positionsOf, positionsProblem, tieTossOf, tieTossProblem, tieTossText, type TieSpec, type TieToss } from '../utils/tieCore';
+import { expandPositions, letterSideOf, positionsOf, positionsProblem, tieTossOf, tieTossProblem, tieTossText, tieTrumpProblem, tieTrumpText, type TieSpec, type TieToss } from '../utils/tieCore';
+import { setTrump, trumpsFor } from '../utils/tieTrumps';
 import { ageOn } from '../utils/tournamentSettings';
 import { notifyUsers } from '../utils/notify';
 
@@ -138,6 +144,9 @@ export async function getTieLineup(req: Request, res: Response) {
     const nameOf = new Map(((us ?? []) as Array<{ id: string; name: string | null; username: string | null }>).map((u) => [u.id, u.name || u.username || 'Player']));
     for (const s of ['A', 'B'] as Side[]) members[s] = memIds[s].map((u) => ({ id: u, name: nameOf.get(u) ?? 'Player' }));
     const named = (l: Lineup | null) => (l ? Object.fromEntries(order.map((r) => [r, (l[r] ?? []).map((u) => ({ id: u, name: nameOf.get(u) ?? 'Player' }))])) : null);
+    // Stage 11 follow-up: the trump picks, seen as the orders are.
+    const trumps = spec.trump ? await trumpsFor(id) : null;
+    const shownTrumps = { ...(seeA && trumps?.A ? { A: trumps.A } : {}), ...(seeB && trumps?.B ? { B: trumps.B } : {}) };
     return res.json({
       order,
       // Stage 9 · T3: each match's name, singles/doubles and any combined age.
@@ -154,9 +163,12 @@ export async function getTieLineup(req: Request, res: Response) {
         can_record: tossBy && m.status === 'scheduled' && !ups.A && !ups.B,
       } : null,
       locked: m.status !== 'scheduled',
+      // Stage 11 follow-up: a trump tie — each side's pick (as its order is seen) and the line for both.
+      trump: spec.trump === true,
+      trump_text: spec.trump ? tieTrumpText(spec, shownTrumps, { A: m.team_a_name ?? 'Team A', B: m.team_b_name ?? 'Team B' }) : null,
       sides: {
-        A: { name: m.team_a_name, submitted: inA, can_set: can.A && m.status === 'scheduled', lineup: seeA ? named(ups.A) : null, members: members.A },
-        B: { name: m.team_b_name, submitted: inB, can_set: can.B && m.status === 'scheduled', lineup: seeB ? named(ups.B) : null, members: members.B },
+        A: { name: m.team_a_name, submitted: inA, can_set: can.A && m.status === 'scheduled', lineup: seeA ? named(ups.A) : null, members: members.A, trump: shownTrumps.A ?? null },
+        B: { name: m.team_b_name, submitted: inB, can_set: can.B && m.status === 'scheduled', lineup: seeB ? named(ups.B) : null, members: members.B, trump: shownTrumps.B ?? null },
       },
     });
   } catch {
@@ -192,6 +204,12 @@ export async function setTieLineup(req: Request, res: Response) {
       : req.body?.lineup as Lineup;
     const bad = tieSpecLineupProblem(spec, lineup, members, letters);
     if (bad) return res.status(400).json({ error: bad, code: 'BAD_LINEUP' });
+    // Stage 11 follow-up: a trump tie's order comes with the side's trump match.
+    const trumpKey = req.body?.trump;
+    if (spec.trump) {
+      const tbad = tieTrumpProblem(spec, trumpKey);
+      if (tbad) return res.status(400).json({ error: tbad, code: 'BAD_TRUMP' });
+    }
     // Stage 9 · T3: a match for pairs "90+" — the pair's combined age today.
     const aged = spec.rubbers.filter((r) => r.pairAgeMin != null);
     if (aged.length) {
@@ -217,6 +235,7 @@ export async function setTieLineup(req: Request, res: Response) {
     await supabase.from('match_participants').delete().eq('match_id', id).eq('team_side', side);
     const { error } = await supabase.from('match_participants').insert([...roles].map(([u, rs]) => ({ match_id: id, user_id: u, team_side: side, role: `${TIE}${rs.join(',')}` })));
     if (error) return res.status(500).json({ error: 'The order wasn’t saved. Try again.' });
+    if (spec.trump && !(await setTrump(id, side, String(trumpKey), userId))) return res.status(500).json({ error: 'The trump match wasn’t saved. Try again.' });
     // Both orders in (for the first time): both sides hear it.
     if (otherWasIn && !wasIn) {
       try {

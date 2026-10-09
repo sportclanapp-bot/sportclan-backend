@@ -53,6 +53,15 @@ export type TieSpec = {
   firstTo?: number | null;
   /** A player may play more than one rubber of a kind (Davis Cup's reverse singles). Default: one singles and one doubles at most. */
   repeatPlayers?: boolean;
+  /**
+   * Stage 11 follow-up · a trump match (badminton's PBL, any tie sport): before
+   * the tie each side picks one of its matches (not a deciding one) with its
+   * order; that match counts double for the side that picked it. A tie on most
+   * matches won ('all'), counted in points. The organiser turns it on per tie.
+   */
+  trump?: boolean;
+  /** Runtime only (never stored in the rules): each side's pick, from matches.tie_trumps. */
+  trumps?: Partial<Record<TieSide, string | null>> | null;
 };
 
 export const TIE_SPORTS = ['badminton', 'tennis', 'tabletennis', 'pickleball'] as const;
@@ -98,7 +107,34 @@ export function tieSpecProblem(spec: unknown): string | null {
   const n = regularValue(s.rubbers as TieRubber[]); // Stage 11 · PB3: in what the matches are worth
   if (s.firstTo != null && (s.win !== 'first' || !isWhole(s.firstTo) || s.firstTo < 1 || s.firstTo > n)) return `First to 1 to ${n}${(s.rubbers as TieRubber[]).some((r) => (r.value ?? 1) !== 1) ? ' points' : ' matches'}.`;
   if (s.repeatPlayers != null && typeof s.repeatPlayers !== 'boolean') return 'Playing more than one match is on or off.';
+  // Stage 11 follow-up: a trump match — on or off, for a tie on most matches won.
+  if (s.trump != null && typeof s.trump !== 'boolean') return 'A trump match is on or off.';
+  if (s.trump === true && s.win !== 'all') return 'A trump match is for a tie on most matches won (all played).';
+  if (s.trump === true && (s.rubbers as TieRubber[]).filter((r) => !r.decider).length < 2) return 'A trump match needs at least two matches to pick from.';
   return null;
+}
+
+/** Stage 11 follow-up · why a side's trump pick can't stand, or null: one of the tie's matches, not a deciding one. */
+export function tieTrumpProblem(spec: TieSpec, key: unknown): string | null {
+  if (!spec.trump) return 'This tie has no trump match.';
+  const r = spec.rubbers.find((x) => x.key === key);
+  if (!r) return 'Pick your trump match.';
+  if (r.decider) return 'A deciding match can’t be your trump.';
+  return null;
+}
+/** A stored pick per side, or null (junk is dropped). */
+export function tieTrumpsOf(x: unknown): Partial<Record<TieSide, string>> | null {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return null;
+  const t = x as Record<string, unknown>;
+  const out: Partial<Record<TieSide, string>> = {};
+  for (const s of ['A', 'B'] as const) if (typeof t[s] === 'string' && t[s]) out[s] = t[s] as string;
+  return Object.keys(out).length ? out : null;
+}
+/** "🃏 Trump matches — PYC: Mixed doubles · Deccan: Men’s singles 1" (only the sides that have picked). */
+export function tieTrumpText(spec: TieSpec, trumps: Partial<Record<TieSide, string | null>> | null | undefined, names: Record<TieSide, string>): string | null {
+  const label = (k: string | null | undefined) => spec.rubbers.find((r) => r.key === k)?.label ?? null;
+  const parts = (['A', 'B'] as const).map((s) => (label(trumps?.[s]) ? `${names[s]}: ${label(trumps?.[s])}` : null)).filter(Boolean);
+  return parts.length ? `🃏 Trump ${parts.length === 1 ? 'match' : 'matches'} — ${parts.join(' · ')} (counts double for the side that picked it)` : null;
 }
 
 /** Stage 10 · TT1 · a position's letter: the first side A, B, C…; the second X, Y, Z, then U, V, W… (then numbered). */
@@ -219,7 +255,7 @@ export function regularValue(rubbers: ReadonlyArray<TieRubber>): number {
   return rubbers.filter((r) => !r.decider).reduce((n, r) => n + (r.value ?? 1), 0);
 }
 /** Stage 11 · PB3: whether any match is worth more than 1 (the tie's score is then points, not matches). */
-export const tieWeighted = (spec: TieSpec): boolean => spec.rubbers.some((r) => (r.value ?? 1) !== 1);
+export const tieWeighted = (spec: TieSpec): boolean => spec.trump === true || spec.rubbers.some((r) => (r.value ?? 1) !== 1); // Stage 11 follow-up: a trump counts double
 
 /** Rubbers a side needs in a 'first' tie (Stage 11 · PB3: in what they're worth; deciding matches don't count). */
 export function tieNeed(spec: TieSpec): number {
@@ -246,9 +282,10 @@ export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>):
   let rubbersA = 0, rubbersB = 0, unitsA = 0, unitsB = 0;
   const regular = spec.rubbers.filter((r) => !r.decider).length;
   const hasDecider = regular < spec.rubbers.length;
+  // Stage 11 follow-up: a trump match counts double for the side that picked it.
+  const worthFor = (i: number, side: TieSide) => (spec.rubbers[i]?.value ?? 1) * (spec.trump && spec.rubbers[i] && spec.trumps?.[side] === spec.rubbers[i]!.key ? 2 : 1);
   results.forEach((r, i) => {
-    const worth = spec.rubbers[i]?.value ?? 1;
-    if (i < regular) { if (r.winner === 'A') rubbersA += worth; else if (r.winner === 'B') rubbersB += worth; }
+    if (i < regular) { if (r.winner === 'A') rubbersA += worthFor(i, 'A'); else if (r.winner === 'B') rubbersB += worthFor(i, 'B'); }
     unitsA += r.units.A; unitsB += r.units.B;
   });
   const allRegular = results.length >= regular;

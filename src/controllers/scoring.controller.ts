@@ -23,6 +23,7 @@ import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHi
 import { typedMatchPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
 import { splitTie, tieNeed, unitsOf, type TieRubber, type TieSpec } from '../utils/tieCore';
+import { trumpsFor } from '../utils/tieTrumps';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
@@ -1400,7 +1401,9 @@ export async function recomputeSummary(
   } else if ((slug === 'tennis' || SET_CONFIG[slug]) && tieSpecOf(slug, rulesOf(slug, match))) {
     // Stage 9 · T3: a team tie (any tie sport; badminton / table tennis's standard orders too).
     const rules = rulesOf(slug, match);
-    const t = rollupTieSpec(slug, rules, tieSpecOf(slug, rules)!, events, sideOf);
+    // Stage 11 follow-up: the teams' trump picks count a match double for the side that picked it.
+    const tSpec = tieSpecOf(slug, rules)!;
+    const t = rollupTieSpec(slug, rules, { ...tSpec, trumps: tSpec.trump ? await trumpsFor(matchId) : null }, events, sideOf);
     A.score = t.scoreA; B.score = t.scoreB;
     A.sets = t.setsA; B.sets = t.setsB;
     A.games = t.gamesA; B.games = t.gamesB; // in the rubber in play
@@ -1781,7 +1784,8 @@ export async function typedScore(req: Request, res: Response) {
     const { count } = await supabase.from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id).eq('event_type', 'score');
     if (count) return res.status(409).json({ error: 'This match has points on the pad — finish it there, or undo them first.', code: 'SCORED_ON_PAD' });
     const rules = rulesOf(slug, m as never) as MatchRules;
-    const spec = tieSpecOf(slug, rules);
+    const spec0 = tieSpecOf(slug, rules);
+    const spec = spec0 ? { ...spec0, trumps: spec0.trump ? await trumpsFor(id) : null } : null; // Stage 11 follow-up: the teams' trump picks
     const body = (req.body ?? {}) as { sets?: unknown; rubbers?: unknown };
     const got = spec ? typedTiePoints(slug, rules, spec, body.rubbers) : typedMatchPoints(slug, rules, body.sets);
     if (got.problem) return res.status(400).json({ error: got.problem, code: 'BAD_TYPED_SCORE' });

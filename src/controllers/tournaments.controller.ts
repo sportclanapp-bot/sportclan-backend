@@ -3414,6 +3414,18 @@ export async function swissContext(tournamentId: string) {
  * Stage 12 · CH2 · pair round `roundNo` the FIDE way (utils/swissDutch): the
  * byes asked for and late entrants' missed rounds first, then everyone else.
  */
+/** Stage 12 · CH2: late entrants' missed rounds before `roundNo` (0 or ½ each), and the rows they score as. */
+export function swissLateRounds(ctx: NonNullable<Awaited<ReturnType<typeof swissContext>>>, roundNo: number) {
+  const playedRounds = new Map<string, Set<number>>();
+  for (const m of ctx.ms) for (const id of [m.team_a_id, m.team_b_id]) if (id && m.round != null) (playedRounds.get(id) ?? playedRounds.set(id, new Set()).get(id)!).add(Number(m.round));
+  const late = roundNo > 1 ? ctx.ids.flatMap((id) => {
+    const had = playedRounds.get(id) ?? new Set<number>();
+    return Array.from({ length: roundNo - 1 }, (_, i) => i + 1).filter((r) => !had.has(r)).map((r) => ({ team: id, round: r, kind: (ctx.sw.lateEntry === 'half' ? 'half' : 'zero') as 'half' | 'zero' }));
+  }) : [];
+  const virtual: GMatchRow[] = late.map((l) => ({ team_a_id: l.team, team_b_id: null, winner_team_id: null, status: 'completed', round: l.round, score_summary: { bye: true, bye_kind: l.kind } }));
+  return { late, virtual };
+}
+
 export function swissPairRound(ctx: NonNullable<Awaited<ReturnType<typeof swissContext>>>, roundNo: number) {
   const reqs = ctx.sw.requests ?? {};
   const requested = ctx.ids.flatMap((id) => { const k = reqs[id]?.[String(roundNo)]; return k ? [{ team: id, kind: k as SwissByeKind }] : []; });

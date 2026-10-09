@@ -15,7 +15,7 @@ import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { settingsOf } from '../utils/tournamentSettings';
 import { colourPreference, dutchHistory } from '../utils/swissDutch';
 import { computeStats } from '../utils/standings';
-import { swissContext, swissInsertRound, swissPairRound, type SwissByeKind } from './tournaments.controller';
+import { swissContext, swissInsertRound, swissLateRounds, swissPairRound, type SwissByeKind } from './tournaments.controller';
 import { fillEntryLineups } from '../utils/entryLineups';
 
 type Ctx = NonNullable<Awaited<ReturnType<typeof swissContext>>>;
@@ -72,7 +72,8 @@ export async function getSwiss(req: Request, res: Response) {
   const sw = ctx.sw;
   const base = { rounds: sw.rounds, paired: sw.paired ?? 0, check: sw.check === true, late_entry: sw.lateEntry ?? 'zero', colours: ctx.colours, can_manage: can };
   if (!can) return res.json(base);
-  const pts = computeStats(ctx.ids, ctx.ms as never[], undefined, ctx.pts);
+  // A late entrant's missed rounds count as they will once the round is published (the pairing counts them already).
+  const pts = computeStats(ctx.ids, [...ctx.ms, ...swissLateRounds(ctx, sw.draft?.round ?? (sw.paired ?? 0) + 1).virtual] as never[], undefined, ctx.pts);
   const requests = Object.entries(sw.requests ?? {}).flatMap(([team, byRound]) => Object.entries(byRound).map(([round, kind]) => ({ team_id: team, name: ctx.nameOf.get(team) ?? 'Player', round: Number(round), kind })))
     .sort((x, y) => x.round - y.round || x.name.localeCompare(y.name));
   const draft = sw.draft ? {

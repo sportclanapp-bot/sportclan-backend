@@ -46,6 +46,8 @@ const tpl = (win: number, draw: number, loss: number, extra: Partial<PointsTempl
   win, draw, loss, noResult: null, walkoverWin: null, walkoverLoss: null, sets: null, ...extra,
 });
 
+/** Stage 11 · PB3: the team-tie sports, whose ties can score a win in the deciding match apart (MLP: 3 / 2 / 1 / 0). */
+export const TIE_POINT_SPORTS: ReadonlySet<string> = new Set(['badminton', 'tennis', 'tabletennis', 'pickleball']);
 /** Sports where a match can end level. The others hide the draw field. */
 export const DRAW_SPORTS = new Set(['cricket', 'football', 'hockey', 'chess']);
 
@@ -94,7 +96,8 @@ export function pointsRefusal(sport: string | null | undefined, p: unknown): Ref
   if (t.walkoverLoss != null && (t.walkoverLoss as number) > loss) return refuse('A walkover loss can’t be worth more than a loss.');
   if (t.walkoverWin != null && (t.walkoverWin as number) > win) return refuse('A walkover win can’t be worth more than a win.');
   if (t.sets != null) {
-    if (sportKeyOf(sport) !== 'volleyball') return refuse('Points by set score are for volleyball.');
+    // Stage 11 · PB3: and team ties — a tie won in its deciding match (MLP 3/2/1/0).
+    if (sportKeyOf(sport) !== 'volleyball' && !TIE_POINT_SPORTS.has(sportKeyOf(sport))) return refuse('Points by set score are for volleyball, and by the deciding match for team ties.');
     const s = t.sets as Record<string, unknown>;
     const pair = (x: unknown): x is [number, number] => Array.isArray(x) && x.length === 2 && isPoint(x[0]) && isPoint(x[1]) && x[0] > x[1];
     if (typeof s !== 'object' || !pair(s.straight) || !pair(s.decider)) {

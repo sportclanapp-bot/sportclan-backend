@@ -904,11 +904,12 @@ export function rollupSets(
 export function rollupTieSpec(
   slug: string, rules: MatchRules, spec: TieSpec,
   events: { event_type: string; payload: any }[], sideOf: (p: any) => 'A' | 'B',
-): { scoreA: number; scoreB: number; setsA: number[]; setsB: number[]; gamesA: number; gamesB: number; curA: number; curB: number; rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B'; key: string; label: string; unitsA: number; unitsB: number }>; tie: { win: string; rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: 'A' | 'B' | 'draw' | null } } {
+): { scoreA: number; scoreB: number; setsA: number[]; setsB: number[]; gamesA: number; gamesB: number; curA: number; curB: number; rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw'; key: string; label: string; unitsA: number; unitsB: number }>; tie: { win: string; rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: 'A' | 'B' | 'draw' | null; decider?: boolean } } {
   const own = !!rules.tie;
   const single = { ...rules, tie: null, rubbers: null } as MatchRules;
-  const rulesFor = (r: TieRubber) => (own ? { ...single, players: r.players === 2 ? DOUBLES_PLAYERS : null } : single) as MatchRules;
-  type Read = { winner: 'A' | 'B' | null; sets: { A: number[]; B: number[] }; games: { A: number; B: number }; points: { A: number; B: number } };
+  // Stage 11 · PB3: a match with its own rules (the DreamBreaker) plays those over the tie's.
+  const rulesFor = (r: TieRubber) => (own ? { ...single, ...((r.rules ?? {}) as Partial<MatchRules>), players: r.players === 2 ? DOUBLES_PLAYERS : null, tie: null, rubbers: null } : single) as MatchRules;
+  type Read = { winner: 'A' | 'B' | 'draw' | null; sets: { A: number[]; B: number[] }; games: { A: number; B: number }; points: { A: number; B: number } };
   const read = (evs: { event_type: string; payload: any }[], r: TieRubber): Read => {
     const rr = rulesFor(r);
     if (slug === 'tennis') {
@@ -917,12 +918,13 @@ export function rollupTieSpec(
       return { winner: t.winner, sets: { A: t.sets.map((x) => x.A), B: t.sets.map((x) => x.B) }, games: t.games, points: t.points };
     }
     const cfg = setConfigOf(rr);
+    // Stage 11 · PB9: a timed match inside a tie can end level ('draw').
     if (slug === 'pickleball' && rr.scoring === 'sideout') {
-      const sx = sideOutReplay(evs, { target: cfg.target, winBy2: cfg.winBy2, maxGames: cfg.maxSets, doubles: rr.players === DOUBLES_PLAYERS, ...(cfg.allGames ? { allGames: true } : {}) });
-      return { winner: sx.winner, sets: { A: sx.games.map((g) => g.A), B: sx.games.map((g) => g.B) }, games: sx.won, points: sx.cur };
+      const sx = sideOutReplay(evs.filter((e) => rr.timeLimitMinutes || !(e.event_type === 'note' && e.payload?.kind === 'buzzer')), { target: cfg.target, winBy2: cfg.winBy2, maxGames: cfg.maxSets, doubles: rr.players === DOUBLES_PLAYERS, ...(cfg.allGames ? { allGames: true } : {}), ...(rr.timeLimitMinutes ? { timedLevel: rr.timedLevel ?? 'next_point' } : {}) });
+      return { winner: sx.level ? 'draw' : sx.winner, sets: { A: sx.games.map((g) => g.A), B: sx.games.map((g) => g.B) }, games: sx.won, points: sx.cur };
     }
-    const x = rollupSets(cfg, evs, sideOf);
-    return { winner: x.decided, sets: { A: x.setScoresA, B: x.setScoresB }, games: { A: x.setsA, B: x.setsB }, points: { A: x.curA, B: x.curB } };
+    const x = rollupSets(cfg, evs, sideOf, rr.timeLimitMinutes ? { level: rr.timedLevel === 'draw' ? 'draw' : 'next_point' } : null);
+    return { winner: x.level ? 'draw' : x.decided, sets: { A: x.setScoresA, B: x.setScoresB }, games: { A: x.setsA, B: x.setsB }, points: { A: x.curA, B: x.curB } };
   };
   const split = splitTie(events, spec, (evs, r) => {
     const x = read(evs, r);
@@ -937,7 +939,7 @@ export function rollupTieSpec(
     gamesA: cur?.games.A ?? 0, gamesB: cur?.games.B ?? 0, curA: cur?.points.A ?? 0, curB: cur?.points.B ?? 0,
     rubber: o.finished ? split.results.length : split.results.length + 1,
     results: split.results.map((r, i) => ({ A: won(r.sets.A, r.sets.B), B: won(r.sets.B, r.sets.A), winner: r.winner, key: r.key, label: spec.rubbers[i]?.label ?? r.key, unitsA: r.units.A, unitsB: r.units.B })),
-    tie: { win: spec.win, rubbersA: o.rubbersA, rubbersB: o.rubbersB, unitsA: o.unitsA, unitsB: o.unitsB, decided: o.decided },
+    tie: { win: spec.win, rubbersA: o.rubbersA, rubbersB: o.rubbersB, unitsA: o.unitsA, unitsB: o.unitsB, decided: o.decided, ...(o.decider ? { decider: true } : {}) }, // Stage 11 · PB3: won in the deciding match
   };
 }
 
@@ -1312,7 +1314,7 @@ export async function recomputeSummary(
   const B: Record<string, any> = { score: 0 };
   let tennisState: TennisScore | null = null;
   let carromBoardsPlayed: number | null = null; // A5: boards played in the carrom game in play
-  let tieRubbers: { rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' }> } | null = null; // BUILD 3.49
+  let tieRubbers: { rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw' }> } | null = null; // BUILD 3.49 · Stage 11 · PB9: a level timed match
   let tieSummary: ReturnType<typeof rollupTieSpec>['tie'] | null = null; // Stage 9 · T3
   let sideOutServe: { side: 'A' | 'B'; number: 1 | 2 } | null = null; // BUILD 3.58
   let tennisBuzzer = false; // BUILD 3.66

@@ -179,7 +179,7 @@ export function typedTiePoints(
     const rubber = spec.rubbers[i];
     if (!rubber) return { problem: `This tie has ${spec.rubbers.length} matches.`, points, winner: null };
     if (tieOutcome(spec, results).finished) return { problem: `The tie was decided before ${rubber.label}.`, points, winner: null };
-    const own = { ...(rules ?? {}), tie: null, rubbers: null, players: rubber.players === 2 ? 2 : null } as Partial<MatchRules>;
+    const own = { ...(rules ?? {}), ...((rubber.rules ?? {}) as Partial<MatchRules>), tie: null, rubbers: null, players: rubber.players === 2 ? 2 : null } as Partial<MatchRules>; // Stage 11 · PB3: a match's own rules
     const m = typedMatchPoints(sport, own, rubbers[i]);
     if (m.problem) return { problem: `${rubber.label}: ${m.problem}`, points, winner: null };
     points.push(...m.points);

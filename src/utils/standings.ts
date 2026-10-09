@@ -211,7 +211,10 @@ function resultPoints(m: GMatch, pts: PointsModel, winnerScore: number, loserSco
     return [pts.walkoverWin ?? straight?.[0] ?? pts.win, pts.walkoverLoss ?? straight?.[1] ?? pts.loss];
   }
   if (pts.sets) {
-    const decider = winnerScore > 1 && loserScore === winnerScore - 1;
+    // Stage 11 · PB3: a team tie won in its deciding match (MLP's DreamBreaker:
+    // 2 to the winner, 1 to the loser) — else volleyball's set score.
+    const tie = m.score_summary?.tie;
+    const decider = tie && typeof tie === 'object' ? tie.decider === true : winnerScore > 1 && loserScore === winnerScore - 1;
     return decider ? pts.sets.decider : pts.sets.straight;
   }
   return [pts.win, pts.loss];

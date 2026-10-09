@@ -32,7 +32,19 @@ export type TieSide = 'A' | 'B';
  * captain names their positions once and every match follows (A v X, B v Y,
  * A v Y…). A match without positions is the captain's free choice.
  */
-export type TieRubber = { key: string; label: string; players: 1 | 2; pairAgeMin?: number | null; a?: number[] | null; b?: number[] | null };
+export type TieRubber = {
+  key: string; label: string; players: 1 | 2; pairAgeMin?: number | null; a?: number[] | null; b?: number[] | null;
+  /**
+   * Stage 11 · PB3 · league ties (MLP, WPBL, IPBL, PBL):
+   *  - `value`: what winning this match is worth to the tie (IPBL's Grand Rally 2; default 1);
+   *  - `decider`: played only when the tie is level after the other matches — MLP's
+   *    DreamBreaker at 2-2, WPBL's mixed decider; its winner wins the tie;
+   *  - `rules`: this match's own rules over the tie's (the DreamBreaker: singles,
+   *    rally scoring to 21, one game) — checked by the sport's rules;
+   *  - `rotateEvery`: the pad says "rotate players" every N points (DreamBreaker 4, Grand Rally 3).
+   */
+  value?: number | null; decider?: boolean; rules?: Record<string, unknown> | null; rotateEvery?: number | null;
+};
 export type TieWin = 'first' | 'all' | 'games';
 export type TieSpec = {
   rubbers: TieRubber[];
@@ -71,10 +83,20 @@ export function tieSpecProblem(spec: unknown): string | null {
         if (!Array.isArray(pos) || pos.length !== x.players || pos.some((n) => !isWhole(n) || n < 1) || new Set(pos).size !== pos.length) return `${x.label.trim()}: ${x.players === 1 ? 'one position' : 'two different positions'} a side.`;
       }
     }
+    // Stage 11 · PB3: worth, decider, own rules, rotation — the organiser's numbers, no top.
+    if (x.value != null && (!isWhole(x.value) || x.value < 1)) return `${x.label.trim()}: a match is worth 1 or more.`;
+    if (x.decider != null && typeof x.decider !== 'boolean') return `${x.label.trim()}: a deciding match is on or off.`;
+    if (x.rotateEvery != null && (!isWhole(x.rotateEvery) || x.rotateEvery < 1)) return `${x.label.trim()}: rotate every 1 or more points.`;
+    if (x.rules != null && (typeof x.rules !== 'object' || Array.isArray(x.rules) || 'tie' in x.rules || 'rubbers' in x.rules)) return `${x.label.trim()}: its own rules are a match’s rules.`;
   }
+  // Stage 11 · PB3: deciding matches come last, after at least one other.
+  const rs = s.rubbers as Array<{ decider?: boolean }>;
+  const firstDecider = rs.findIndex((r) => r.decider === true);
+  if (firstDecider === 0) return 'A tie needs a match before its deciding match.';
+  if (firstDecider > 0 && rs.slice(firstDecider).some((r) => r.decider !== true)) return 'Deciding matches come last.';
   if (s.win !== 'first' && s.win !== 'all' && s.win !== 'games') return 'A tie is won by the first to a number of matches, by most matches, or by most games.';
-  const n = (s.rubbers as unknown[]).length;
-  if (s.firstTo != null && (s.win !== 'first' || !isWhole(s.firstTo) || s.firstTo < 1 || s.firstTo > n)) return `First to 1 to ${n} matches.`;
+  const n = regularValue(s.rubbers as TieRubber[]); // Stage 11 · PB3: in what the matches are worth
+  if (s.firstTo != null && (s.win !== 'first' || !isWhole(s.firstTo) || s.firstTo < 1 || s.firstTo > n)) return `First to 1 to ${n}${(s.rubbers as TieRubber[]).some((r) => (r.value ?? 1) !== 1) ? ' points' : ' matches'}.`;
   if (s.repeatPlayers != null && typeof s.repeatPlayers !== 'boolean') return 'Playing more than one match is on or off.';
   return null;
 }
@@ -192,39 +214,71 @@ export function tieTossText(spec: TieSpec, toss: TieToss | null | undefined, nam
   return `No toss recorded, so ${names.A} (named first) is ${abcL} · ${names.B} is ${xyzL}`;
 }
 
-/** Rubbers a side needs in a 'first' tie. */
+/** Stage 11 · PB3: what the matches before any deciding match are worth together. */
+export function regularValue(rubbers: ReadonlyArray<TieRubber>): number {
+  return rubbers.filter((r) => !r.decider).reduce((n, r) => n + (r.value ?? 1), 0);
+}
+/** Stage 11 · PB3: whether any match is worth more than 1 (the tie's score is then points, not matches). */
+export const tieWeighted = (spec: TieSpec): boolean => spec.rubbers.some((r) => (r.value ?? 1) !== 1);
+
+/** Rubbers a side needs in a 'first' tie (Stage 11 · PB3: in what they're worth; deciding matches don't count). */
 export function tieNeed(spec: TieSpec): number {
-  return spec.firstTo ?? Math.floor(spec.rubbers.length / 2) + 1;
+  return spec.firstTo ?? Math.floor(regularValue(spec.rubbers) / 2) + 1;
 }
 
-/** A finished rubber: who won it, its sets (games / points per set), and the units it adds (tennis: games; rally: points). */
-export type RubberResult = { key: string; winner: TieSide; sets: { A: number[]; B: number[] }; units: { A: number; B: number } };
-export type TieOutcome = { rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: TieSide | 'draw' | null; finished: boolean };
+/**
+ * A finished rubber: who won it (Stage 11 · PB9: or 'draw' — a timed match left
+ * level), its sets (games / points per set), and the units it adds (tennis:
+ * games; rally: points).
+ */
+export type RubberResult = { key: string; winner: TieSide | 'draw'; sets: { A: number[]; B: number[] }; units: { A: number; B: number } };
+/** Stage 11 · PB3: `decider` — the tie went to its deciding match (the 3/2/1/0 table points read it). */
+export type TieOutcome = { rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: TieSide | 'draw' | null; finished: boolean; decider?: boolean };
 
-/** Where the tie stands after these finished rubbers. */
+/**
+ * Where the tie stands after these finished rubbers. Rubbers count what they're
+ * worth (Stage 11 · PB3). Deciding matches are played only when the matches
+ * before them leave the tie level on its win rule (rubbers; games for a tie on
+ * games) — then the first deciding match won decides it; without one, level is
+ * settled as before (most games / matches, else a draw).
+ */
 export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>): TieOutcome {
   let rubbersA = 0, rubbersB = 0, unitsA = 0, unitsB = 0;
-  for (const r of results) {
-    if (r.winner === 'A') rubbersA += 1; else rubbersB += 1;
+  const regular = spec.rubbers.filter((r) => !r.decider).length;
+  const hasDecider = regular < spec.rubbers.length;
+  results.forEach((r, i) => {
+    const worth = spec.rubbers[i]?.value ?? 1;
+    if (i < regular) { if (r.winner === 'A') rubbersA += worth; else if (r.winner === 'B') rubbersB += worth; }
     unitsA += r.units.A; unitsB += r.units.B;
-  }
-  const all = results.length >= spec.rubbers.length;
+  });
+  const allRegular = results.length >= regular;
   const by = (a: number, b: number): TieSide | null => (a > b ? 'A' : b > a ? 'B' : null);
   let decided: TieSide | 'draw' | null = null;
+  let level = false; // the regular matches are played and leave the tie level
   if (spec.win === 'first') {
     const need = tieNeed(spec);
     decided = rubbersA >= need ? 'A' : rubbersB >= need ? 'B' : null;
-    if (!decided && all) decided = by(rubbersA, rubbersB) ?? by(unitsA, unitsB) ?? 'draw';
-  } else if (all) {
-    decided = spec.win === 'all'
-      ? by(rubbersA, rubbersB) ?? by(unitsA, unitsB) ?? 'draw'
-      : by(unitsA, unitsB) ?? by(rubbersA, rubbersB) ?? 'draw';
+    if (!decided && allRegular) { decided = by(rubbersA, rubbersB); level = !decided; }
+  } else if (allRegular) {
+    decided = spec.win === 'all' ? by(rubbersA, rubbersB) : by(unitsA, unitsB);
+    level = !decided;
   }
-  return { rubbersA, rubbersB, unitsA, unitsB, decided, finished: decided !== null };
+  let decider = false;
+  if (level) {
+    if (hasDecider) {
+      // The deciding matches, in order: the first one won decides the tie.
+      const won = results.slice(regular).find((r) => r.winner === 'A' || r.winner === 'B');
+      if (won) { decided = won.winner; decider = true; if (won.winner === 'A') rubbersA += spec.rubbers[results.indexOf(won)]?.value ?? 1; else rubbersB += spec.rubbers[results.indexOf(won)]?.value ?? 1; }
+      else if (results.length >= spec.rubbers.length) decided = (spec.win === 'games' ? by(rubbersA, rubbersB) : by(unitsA, unitsB)) ?? 'draw';
+    } else {
+      decided = (spec.win === 'games' ? by(rubbersA, rubbersB) : by(unitsA, unitsB)) ?? 'draw';
+    }
+  }
+  return { rubbersA, rubbersB, unitsA, unitsB, decided, finished: decided !== null, ...(decider ? { decider: true } : {}) };
 }
 
-/** One rubber's events read by the sport's engine: its winner (if decided), sets and units. */
-export type RubberRead = { winner: TieSide | null; sets: { A: number[]; B: number[] }; units: { A: number; B: number } };
+/** One rubber's events read by the sport's engine: its winner (if decided; Stage 11 · PB9: 'draw' when it ended level), sets and units. */
+export type RubberRead = { winner: TieSide | 'draw' | null; sets: { A: number[]; B: number[] }; units: { A: number; B: number } };
 
 /**
  * Split a match's events into the tie's rubbers. Every event belongs to the

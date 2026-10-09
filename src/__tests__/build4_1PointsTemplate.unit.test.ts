@@ -145,7 +145,7 @@ describe('BUILD 4.1 · the template is checked', () => {
   });
   test('set-score points are volleyball’s, and need sensible pairs', () => {
     const sets = { straight: [3, 0], decider: [2, 1] };
-    expect(pointsRefusal('football', { win: 3, draw: 1, loss: 0, sets })?.error).toBe('Points by set score are for volleyball.');
+    expect(pointsRefusal('football', { win: 3, draw: 1, loss: 0, sets })?.error).toBe('Points by set score are for volleyball, and by the deciding match for team ties.'); // Stage 11 · PB3
     expect(pointsRefusal('volleyball', { win: 3, draw: 1, loss: 0, sets })).toBeNull();
     expect(pointsRefusal('volleyball', { win: 3, draw: 1, loss: 0, sets: { straight: [2, 1], decider: [3, 0] } })?.error).toMatch(/can’t be worth more than a straight win/);
   });

@@ -814,6 +814,14 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     const bad = tieSpecProblem(r.tie);
     if (bad) return refuse(bad, 'tie');
     if (r.rubbers) return refuse('A tie is its own list of matches, or a standard order — not both.', 'tie');
+    // Stage 11 · PB3: a match's own rules (the DreamBreaker) are the sport's rules over the tie's.
+    for (const rb of (r.tie as TieSpec).rubbers) {
+      if (!rb.rules) continue;
+      const merged: Record<string, unknown> = { ...given, ...rb.rules, tie: null, rubbers: null, players: rb.players === 2 ? DOUBLES_PLAYERS : null };
+      for (const k of ['rubbers', 'players']) if (!(k in std)) delete merged[k]; // only the fields this sport has
+      const own = rulesRefusal(key, merged);
+      if (own) return refuse(`${rb.label}: ${own.error}`, 'tie');
+    }
   }
   // Stage 9 · T9: a code-violation ladder — known steps, a default only last.
   if (CONDUCT_LADDERS[key] && r.penaltyLadder !== null) {
@@ -1003,6 +1011,10 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (rules.tie && !tieSpecProblem(rules.tie)) {
     const n = rules.tie.rubbers.length;
     parts.push(`team tie · ${n} ${n === 1 ? 'match' : 'matches'} · ${rules.tie.win === 'first' ? `first to ${tieNeedOf(rules.tie)}` : rules.tie.win === 'all' ? 'most matches' : `most ${key === 'tennis' ? 'games' : 'points'}`}`);
+    // Stage 11 · PB3: a deciding match when level; a match worth more.
+    const dec = rules.tie.rubbers.filter((x) => x.decider);
+    if (dec.length) parts.push(`level: ${dec.map((x) => x.label).join(', ')} decides`);
+    for (const x of rules.tie.rubbers) if ((x.value ?? 1) > 1) parts.push(`${x.label} worth ${x.value}`);
   }
   // BUILD 3.37+: a rally sport's own points, said when they differ from the standard.
   if (RALLY_LIMITS[key]) {

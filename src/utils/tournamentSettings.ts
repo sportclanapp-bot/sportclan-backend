@@ -306,6 +306,15 @@ export type TournamentSettings = {
   entry?: EntryMode;
   /** 4.12 · a knockout's semi-final losers play for third place. */
   thirdPlace?: boolean;
+  /**
+   * Stage 11 · PB4 · double elimination (USA Pickleball 15.B.1; any knockout
+   * sport): a side is out after its second loss. The main draw's losers drop
+   * into a back draw; the back draw's winner meets the main draw's winner in
+   * the final, and if the back-draw side wins it a reset final is played.
+   * Knockout and groups → knockout; no third-place match, qualifying or
+   * consolation draw beside it (the back draw's final loser is third).
+   */
+  doubleElim?: boolean;
   /** 4.13 · keep entries from the same club / state apart in the draw (the entry's club label). */
   separateClubs?: boolean;
   /** 4.14 · who may play: gender, an age limit on the start date, a rating band in the sport. Absent = open. */
@@ -611,7 +620,7 @@ export const SEEDING_MODES: readonly SeedingMode[] = ['registration', 'random', 
  * Settings the draw is made from. They're fixed once it's made (the fixtures
  * already reflect them); the points and tie-breaks are fixed once a result is in.
  */
-export const DRAW_KEYS = ['bestThirds', 'seeding', 'restMinutes', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'directSeeds'] as const;
+export const DRAW_KEYS = ['bestThirds', 'seeding', 'restMinutes', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'directSeeds', 'doubleElim'] as const;
 
 /** Which draw setting an edit changes, if any (to refuse it once the draw is made). */
 export function changedDrawKey(current: TournamentSettings, incoming: Record<string, unknown>, keys: readonly string[] = DRAW_KEYS): string | null {
@@ -632,7 +641,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist', 'qualifying', 'consolation', 'ladder', 'box', 'directSeeds']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist', 'qualifying', 'consolation', 'ladder', 'box', 'directSeeds', 'doubleElim']);
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -672,6 +681,13 @@ export function settingsRefusal(sport: string | null | undefined, format: string
   if (o.separateClubs != null) {
     if (typeof o.separateClubs !== 'boolean') return refuse('Keeping clubs apart is on or off.');
     if (o.separateClubs && format !== 'knockout' && format !== 'groups_knockout') return refuse('Keeping clubs apart is for a draw — a knockout or groups.');
+  }
+  // Stage 11 · PB4: double elimination — a knockout's (or groups → knockout's), alone.
+  if (o.doubleElim != null) {
+    if (typeof o.doubleElim !== 'boolean') return refuse('Double elimination is on or off.');
+    if (o.doubleElim && format && format !== 'knockout' && format !== 'groups_knockout') return refuse('Double elimination is for a knockout.');
+    if (o.doubleElim && o.thirdPlace) return refuse('Double elimination has no third-place match — the back draw’s final loser is third.');
+    if (o.doubleElim && (o.qualifying != null || o.consolation != null)) return refuse('A double-elimination draw has its own back draw — it can’t be a qualifying or consolation draw.');
   }
   if (o.thirdPlace != null) {
     if (typeof o.thirdPlace !== 'boolean') return refuse('A third-place match is on or off.');
@@ -724,6 +740,10 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('thirdPlace' in s) {
     if (s.thirdPlace) out.thirdPlace = true;
     else delete out.thirdPlace;
+  }
+  if ('doubleElim' in s) { // Stage 11 · PB4
+    if (s.doubleElim) out.doubleElim = true;
+    else delete out.doubleElim;
   }
   if ('entry' in s) {
     if (s.entry === 'open') out.entry = 'open';

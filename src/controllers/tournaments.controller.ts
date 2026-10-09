@@ -55,6 +55,7 @@ import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { allRows, selectAll, selectAllIn, IN_CHUNK } from '../utils/selectAll';
+import { backNext, backRoundName, backRounds, loserTarget } from '../utils/doubleElim'; // Stage 11 · PB4
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, isCount, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { rankTeams, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, bestNextCount, groupsKnockoutSize, type PointsModel } from '../utils/standings';
 import { placeGroupTiersApart, crossGroupFirstRound } from '../utils/koFirstRound';
@@ -2342,7 +2343,7 @@ export async function getBracket(req: Request, res: Response) {
       // SC-433: next_match_id / next_slot say where each winner goes. The offline
       // hub needs them to show the next round locally — without them it would
       // have to guess a bracket shape the server would then disagree with.
-      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label, venue, ground_label, voided_at, next_match_id, next_slot, third_place')
+      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label, venue, ground_label, voided_at, next_match_id, next_slot, third_place, bracket, loser_next_match_id, loser_next_slot')
       .eq('tournament_id', id)
       .order('round', { ascending: true })
       .order('match_no', { ascending: true })
@@ -2358,8 +2359,10 @@ export async function getBracket(req: Request, res: Response) {
     // Final and the third-place match stands alone at the end (their champion
     // card still names the champion, from the entries).
     const thirdPlace = (matches ?? []).filter((m: any) => m.third_place);
+    // Stage 11 · PB4: a double elimination's back draw, final and reset are listed after the main draw.
+    const deRows = (matches ?? []).filter((m: any) => m.bracket);
     for (const m of matches ?? []) {
-      if ((m as any).third_place) continue;
+      if ((m as any).third_place || (m as any).bracket) continue;
       const r = m.round ?? 1;
       if (!byRound.has(r)) byRound.set(r, []);
       byRound.get(r)!.push(m);
@@ -2389,10 +2392,25 @@ export async function getBracket(req: Request, res: Response) {
       return `Round ${r}`;
     };
 
-    const listed: Array<{ name: string; ms: any[] }> = roundKeys.map((r, idx) => ({ name: roundName(r, idx), ms: byRound.get(r)! }));
+    const de = deRows.length > 0;
+    const listed: Array<{ name: string; ms: any[]; bracket?: 'main' | 'back' | 'final' }> = roundKeys.map((r, idx) => {
+      const name = roundName(r, idx);
+      // Stage 11 · PB4: the main draw's rounds say so ("Main draw final").
+      return de && r > 0 ? { name: name === 'Final' ? 'Main draw final' : name === 'Semi-Finals' ? 'Main draw semi-finals' : name === 'Quarter-Finals' ? 'Main draw quarter-finals' : `Main draw round ${r}`, ms: byRound.get(r)!, bracket: 'main' as const } : { name, ms: byRound.get(r)! };
+    });
     if (thirdPlace.length) listed.push({ name: 'Third place', ms: thirdPlace });
-    const rounds = listed.map(({ name, ms }) => ({
+    if (de) {
+      const mainRounds = roundKeys.filter((r) => r > 0).length;
+      const backKeys = [...new Set(deRows.filter((m: any) => m.bracket === 'back').map((m: any) => Number(m.round)))].sort((a, b) => a - b);
+      for (const r of backKeys) listed.push({ name: backRoundName(mainRounds, r), ms: deRows.filter((m: any) => m.bracket === 'back' && Number(m.round) === r).sort((a: any, b: any) => (a.match_no ?? 0) - (b.match_no ?? 0)), bracket: 'back' });
+      const fin = deRows.filter((m: any) => m.bracket === 'final');
+      if (fin.length) listed.push({ name: 'Final', ms: fin, bracket: 'final' });
+      const reset = deRows.filter((m: any) => m.bracket === 'reset');
+      if (reset.length) listed.push({ name: 'Final · reset (if needed)', ms: reset, bracket: 'final' });
+    }
+    const rounds = listed.map(({ name, ms, bracket }) => ({
       name,
+      ...(bracket ? { bracket } : {}),
       matches: ms.map((m) => {
         const ss: any = m.score_summary ?? {};
         return {
@@ -2418,6 +2436,8 @@ export async function getBracket(req: Request, res: Response) {
           ground_label: (m as any).ground_label ?? null,
           venue: (m as any).venue ?? null,
           ...((m as any).third_place ? { third_place: true } : {}), // BUILD 4.12
+          ...((m as any).bracket === 'reset' && m.status === 'cancelled' ? { not_needed: true } : {}), // Stage 11 · PB4: the reset final wasn't needed
+          ...(de ? { next_match_id: (m as any).next_match_id ?? null } : {}), // Stage 11 · PB4: the back draw's lines follow the links
           ...(fmtLc === 'box' && m.group_label ? { group_label: m.group_label } : {}), // Stage 9 · T16: the match's box
         };
       }),
@@ -2426,7 +2446,7 @@ export async function getBracket(req: Request, res: Response) {
     // Stage 9 · T7: wild cards, qualifiers and lucky losers, by team (the draw shows "WC", "Q", "LL").
     const { data: tagged } = await supabase.from('tournament_entries').select('team_id, entry_tag').eq('tournament_id', id).not('entry_tag', 'is', null);
     const tags = Object.fromEntries(((tagged ?? []) as Array<{ team_id: string; entry_tag: string }>).map((e) => [e.team_id, e.entry_tag]));
-    return res.json({ tournament: { id: tournament.id, name: tournament.name, format: tournament.format, qualifying: !!settingsOf(tournament as { settings?: unknown }).qualifying }, rounds, tags });
+    return res.json({ tournament: { id: tournament.id, name: tournament.name, format: tournament.format, qualifying: !!settingsOf(tournament as { settings?: unknown }).qualifying, ...(de ? { double_elim: true } : {}) }, rounds, tags });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -2882,6 +2902,8 @@ async function insertSingleElim(
   slotFor: (round: number, matchNo: number) => { scheduled_at: string; ground_label: string } | undefined,
   thirdPlace = false,
   maxRounds: number | null = null,
+  /** Stage 11 · PB4: more columns for a main-draw match (a double elimination's loser links; the main final's link to the final). */
+  rowExtra: ((round: number, matchNo: number, roundsCount: number) => Record<string, unknown>) | null = null,
 ): Promise<{ byeMatchIds: string[] }> {
   const bracketSize = round1.length * 2;
   // Stage 9 · T7: a qualifying draw stops after its rounds; each last-round winner qualifies.
@@ -2931,6 +2953,7 @@ async function insertSingleElim(
         // Forward-only: existing fixtures are untouched (never rewrite settled ELO).
         is_ranked: true,
         ...(base.stageDefaults ? base.stageDefaults(knockoutStage(r, roundsCount)) : (base.fixtureDefaults ?? {})),
+        ...(rowExtra ? rowExtra(r, m, roundsCount) : {}), // Stage 11 · PB4
       });
     }
     const { data, error } = await supabase.from('matches').insert(rows).select('id, match_no');
@@ -2972,6 +2995,115 @@ async function insertSingleElim(
     if (!!a?.id !== !!b?.id) byeMatchIds.push(created[`1:${m}`]);
   }
   return { byeMatchIds };
+}
+
+/**
+ * Stage 11 · PB4 · a double-elimination draw (utils/doubleElim): the reset
+ * final, the final and the back draw first (top down, so each knows where its
+ * winner goes), then the main draw with each match's loser link and the main
+ * final leading to the final's A slot. Back-draw places a bye leaves empty are
+ * filled with "BYE" as the main draw's byes resolve (advanceDoubleElim).
+ * Back-draw, final and reset times are left to the fixture editor (the
+ * fallback start), like a bracket's later rounds before they're known.
+ */
+async function insertDoubleElim(
+  base: BracketBase,
+  round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>,
+  slotFor: (round: number, matchNo: number) => { scheduled_at: string; ground_label: string } | undefined,
+): Promise<{ byeMatchIds: string[] }> {
+  const k = Math.max(1, Math.round(Math.log2(round1.length * 2)));
+  const shell = (round: number, matchNo: number, bracket: 'back' | 'final' | 'reset', stage: Stage, next: { id: string; slot: 'A' | 'B' } | null) => ({
+    sport_id: base.sport_id, tournament_id: base.tournament_id, team_a_id: null, team_b_id: null, team_a_name: 'TBD', team_b_name: 'TBD',
+    scheduled_at: base.fallbackStartIso, ground_label: null, venue: base.venue, city_id: base.city_id, status: 'scheduled', score_summary: {},
+    created_by: base.created_by, round, match_no: matchNo, next_match_id: next?.id ?? null, next_slot: next?.slot ?? null, is_ranked: true, bracket,
+    ...(base.stageDefaults ? base.stageDefaults(stage) : (base.fixtureDefaults ?? {})),
+  });
+  const one = async (row: Record<string, unknown>): Promise<string> => {
+    const { data, error } = await supabase.from('matches').insert(row).select('id').single();
+    if (error || !data) throw new Error(error?.message ?? 'Could not make the draw.');
+    return (data as { id: string }).id;
+  };
+  await one(shell(k + 2, 0, 'reset', 'final', null));
+  const finalId = await one(shell(k + 1, 0, 'final', 'final', null));
+  const back: Record<string, string> = {}; // `${round}:${matchNo}` → id
+  const counts = backRounds(k);
+  for (let r = counts.length; r >= 1; r--) {
+    const rows = Array.from({ length: counts[r - 1]! }, (_, m) => {
+      const nx = backNext(k, r, m);
+      const next = nx.bracket === 'final' ? { id: finalId, slot: nx.slot } : { id: back[`${nx.round}:${nx.matchNo}`]!, slot: nx.slot };
+      return shell(r, m, 'back', r === counts.length ? 'qf' : 'knockout', next);
+    });
+    const { data, error } = await supabase.from('matches').insert(rows).select('id, match_no');
+    if (error) throw new Error(error.message);
+    for (const d of data ?? []) back[`${r}:${(d as { match_no: number }).match_no}`] = (d as { id: string }).id;
+  }
+  return insertSingleElim(base, round1, slotFor, false, null, (r, m, roundsCount) => {
+    const t = loserTarget(k, r, m);
+    const loserId = t.bracket === 'final' ? finalId : back[`${t.round}:${t.matchNo}`];
+    return {
+      loser_next_match_id: loserId ?? null, loser_next_slot: loserId ? t.slot : null,
+      ...(r === roundsCount ? { next_match_id: finalId, next_slot: 'A' } : {}),
+    };
+  });
+}
+
+/**
+ * Stage 11 · PB4 · a decided match of a double-elimination draw: its loser drops
+ * into the back draw (a main-draw match), its winner moves on; a slot a bye
+ * left empty reads "BYE", and a match with one team and a BYE goes to that
+ * team without play (two BYEs: it isn't played, and its BYE moves on). The
+ * final: the main-draw side wins it — champion, the reset isn't needed
+ * (cancelled); the back-draw side wins — both have lost once, the reset final
+ * is filled. The reset crowns its winner. A withdrawn team drops in as a BYE.
+ */
+type DeRow = { id: string; tournament_id: string; winner_team_id: string | null; next_match_id: string | null; next_slot: string | null; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null; bracket?: string | null; loser_next_match_id?: string | null; loser_next_slot?: string | null };
+async function advanceDoubleElim(m: DeRow): Promise<void> {
+  const winnerId = m.winner_team_id;
+  const nameOf = (id: string | null) => (id && id === m.team_a_id ? m.team_a_name : id && id === m.team_b_id ? m.team_b_name : null);
+  const loserId = winnerId === m.team_a_id ? m.team_b_id : winnerId === m.team_b_id ? m.team_a_id : null;
+  if (m.bracket === 'final') {
+    const { data: reset } = await supabase.from('matches').select('id, status').eq('tournament_id', m.tournament_id).eq('bracket', 'reset').maybeSingle();
+    if (winnerId && winnerId === m.team_a_id) {
+      // The main draw's winner hadn't lost: the champion. The reset isn't played.
+      if (reset && (reset as { status: string }).status === 'scheduled') await supabase.from('matches').update({ status: 'cancelled' }).eq('id', (reset as { id: string }).id);
+      await completeBracketIfDone(m.tournament_id, m);
+    } else if (winnerId && reset) {
+      // Both have lost once: the reset final, the same sides.
+      await supabase.from('matches').update({ team_a_id: m.team_a_id, team_b_id: m.team_b_id, team_a_name: m.team_a_name ?? 'TBD', team_b_name: m.team_b_name ?? 'TBD', status: 'scheduled' })
+        .eq('id', (reset as { id: string }).id).in('status', ['scheduled', 'cancelled']);
+    }
+    return;
+  }
+  if (m.bracket === 'reset') { if (winnerId) await completeBracketIfDone(m.tournament_id, m); return; }
+  if (!winnerId) return;
+  if (m.loser_next_match_id && m.loser_next_slot) {
+    const gone = loserId ? await withdrawnTeamIds(m.tournament_id) : [];
+    const drop = loserId && !gone.includes(loserId) ? loserId : null;
+    await placeDeTeam(m.loser_next_match_id, m.loser_next_slot as 'A' | 'B', drop, drop ? nameOf(drop) : null);
+  }
+  if (m.next_match_id && m.next_slot) await placeDeTeam(m.next_match_id, m.next_slot as 'A' | 'B', winnerId, nameOf(winnerId));
+}
+
+/** Put a team (or, null, a BYE) in a slot of a double-elimination match, then play out a bye there. */
+async function placeDeTeam(matchId: string, slot: 'A' | 'B', teamId: string | null, name: string | null): Promise<void> {
+  const { data: row } = await supabase.from('matches').select('id, status, team_a_id, team_b_id, team_a_name, team_b_name, next_match_id, next_slot').eq('id', matchId).maybeSingle();
+  if (!row) return;
+  const r = row as { id: string; status: string; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null; next_match_id: string | null; next_slot: string | null };
+  const col = slot === 'A' ? 'a' : 'b';
+  const had = r[`team_${col}_id`];
+  if (had === teamId && (teamId || r[`team_${col}_name`] === 'BYE')) return;
+  if (had && r.status !== 'scheduled') return; // started: frozen (as SC-87)
+  await supabase.from('matches').update({ [`team_${col}_id`]: teamId, [`team_${col}_name`]: teamId ? name ?? 'Winner' : 'BYE' }).eq('id', r.id);
+  const a = col === 'a' ? teamId : r.team_a_id; const b = col === 'b' ? teamId : r.team_b_id;
+  const aBye = col === 'a' ? !teamId : !r.team_a_id && r.team_a_name === 'BYE';
+  const bBye = col === 'b' ? !teamId : !r.team_b_id && r.team_b_name === 'BYE';
+  if (a && bBye) { await resolveMatchWinner(r.id, a); return; }
+  if (b && aBye) { await resolveMatchWinner(r.id, b); return; }
+  if (aBye && bBye) {
+    // Nobody to play: not played, and the BYE moves on.
+    await supabase.from('matches').update({ status: 'cancelled' }).eq('id', r.id).eq('status', 'scheduled');
+    if (r.next_match_id && r.next_slot) await placeDeTeam(r.next_match_id, r.next_slot as 'A' | 'B', null, null);
+  }
 }
 
 // Mark a bye/decided match completed and propagate its winner forward.
@@ -3276,7 +3408,7 @@ export async function advanceTournamentWinner(matchId: string): Promise<void> {
 async function advanceTournamentWinnerInner(matchId: string): Promise<void> {
   const { data: m } = await supabase
     .from('matches')
-    .select('id, tournament_id, winner_team_id, next_match_id, next_slot, group_label, round, match_no, team_a_id, team_b_id, team_a_name, team_b_name, third_place')
+    .select('id, tournament_id, winner_team_id, next_match_id, next_slot, group_label, round, match_no, team_a_id, team_b_id, team_a_name, team_b_name, third_place, bracket, loser_next_match_id, loser_next_slot')
     .eq('id', matchId)
     .maybeSingle();
   if (!m || !m.tournament_id) return;
@@ -3295,7 +3427,7 @@ async function advanceTournamentWinnerInner(matchId: string): Promise<void> {
   // for maybeSeedKnockout / getBracket). Bracket formats (knockout,
   // groups_knockout) don't match here and fall through to the unchanged logic.
   const { data: fmtRow } = await supabase
-    .from('tournaments').select('format').eq('id', m.tournament_id).maybeSingle();
+    .from('tournaments').select('format, settings').eq('id', m.tournament_id).maybeSingle();
   const fmt = (fmtRow as any)?.format;
   if (fmt === 'round_robin' || fmt === 'league') {
     await crownLeagueChampion(m.tournament_id);
@@ -3312,6 +3444,11 @@ async function advanceTournamentWinnerInner(matchId: string): Promise<void> {
   // Defensive: a non-bracket match with no round somehow reaching here has no
   // linkage to advance.
   if (m.round == null) return;
+  // Stage 11 · PB4: a double-elimination draw moves losers as well as winners.
+  if (settingsOf(fmtRow as { settings?: unknown }).doubleElim && (fmt === 'knockout' || fmt === 'groups_knockout')) {
+    await advanceDoubleElim(m as DeRow);
+    return;
+  }
 
   const winnerId = m.winner_team_id;
   // No winner yet (e.g. a draw not decided) → the bracket waits; the organizer
@@ -3514,6 +3651,7 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
     .select('id, match_no, team_a_id, team_b_id')
     .eq('tournament_id', tournamentId)
     .is('group_label', null)
+    .is('bracket', null) // Stage 11 · PB4: not the back draw's first round
     .eq('round', 1), 'match_no');
   if (!ko1 || ko1.length === 0) return;
   if (ko1.some((k) => k.team_a_id || k.team_b_id)) return; // already seeded
@@ -3844,6 +3982,7 @@ export async function generateFixtures(req: Request, res: Response) {
     const seeding = settingsOf(tournament as { settings?: unknown }).seeding ?? null;
     // BUILD 4.12: the semi-final losers play for third place.
     const thirdPlace = !!settingsOf(tournament as { settings?: unknown }).thirdPlace;
+    const doubleElim = !!settingsOf(tournament as { settings?: unknown }).doubleElim; // Stage 11 · PB4
     // Stage 9 · T7: a qualifying draw's rounds; a main draw waits for its qualifying draws.
     const qualRounds = settingsOf(tournament as { settings?: unknown }).qualifying?.rounds ?? null;
     const pendingQ = await qualifyingPending(tournament as { id: string; parent_id: string | null });
@@ -3990,7 +4129,8 @@ export async function generateFixtures(req: Request, res: Response) {
       const sched = buildSchedule(shape, schedCfg);
       if (!sched.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' }); }
       const slotFor = (r: number, m: number): SlotAssign | undefined => sched.assignments.get(keyOf(r, m));
-      const { byeMatchIds } = await insertSingleElim(base, round1, slotFor, thirdPlace, qualRounds);
+      // Stage 11 · PB4: double elimination — a back draw, the final and a reset beside the main draw.
+      const { byeMatchIds } = doubleElim ? await insertDoubleElim(base, round1, slotFor) : await insertSingleElim(base, round1, slotFor, thirdPlace, qualRounds);
       for (const byeId of byeMatchIds) {
         const { data: bm } = await supabase
           .from('matches')
@@ -4181,7 +4321,8 @@ export async function generateFixtures(req: Request, res: Response) {
         const { error } = await supabase.from('matches').insert(matchRows);
         if (error) throw new Error('fixture insert failed');
       }
-      await insertSingleElim(base, koRound1, (r, m) => schedGK.assignments.get(keyOf(r, m)), thirdPlace);
+      if (doubleElim) await insertDoubleElim(base, koRound1, (r, m) => schedGK.assignments.get(keyOf(r, m))); // Stage 11 · PB4
+      else await insertSingleElim(base, koRound1, (r, m) => schedGK.assignments.get(keyOf(r, m)), thirdPlace);
 
       // F-52: drawing the fixtures is preparation, not a start whistle. This goes
       // live only if the start date has arrived; otherwise the hourly sweep

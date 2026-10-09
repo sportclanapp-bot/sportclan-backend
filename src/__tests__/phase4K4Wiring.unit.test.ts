@@ -78,7 +78,7 @@ describe('K4-46 (62a4213) · V203 chess result reasons read as words, one style'
   it('K4-46 (62a4213): every reason label is words only — no emoji, no ½, no keycap digits', () => {
     const labels = [...CHESS_RESULT_REASONS.decisive, ...CHESS_RESULT_REASONS.draw].map((r) => r.label);
     expect(labels).toEqual([
-      'Checkmate', 'Resignation', 'Timeout',
+      'Checkmate', 'Resignation', 'Timeout', 'Two illegal moves', 'Phone or device', 'Arbiter decision', // Stage 12 · CH8
       'By agreement', 'Stalemate', 'Repetition', 'Insufficient material', '50-move rule',
     ]);
     for (const l of labels) expect(l).toMatch(/^[A-Za-z0-9][A-Za-z0-9 -]*$/);

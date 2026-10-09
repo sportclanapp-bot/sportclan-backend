@@ -23,6 +23,10 @@ export const CHESS_RESULT_REASONS: Record<'decisive' | 'draw', Array<{ id: strin
     { id: 'checkmate', label: 'Checkmate' },
     { id: 'resignation', label: 'Resignation' },
     { id: 'timeout', label: 'Timeout' },
+    // Stage 12 · CH8: the arbiter's — a second illegal move, a phone or device on the player, misconduct.
+    { id: 'illegal_move', label: 'Two illegal moves' },
+    { id: 'device', label: 'Phone or device' },
+    { id: 'conduct', label: 'Arbiter decision' },
   ],
   draw: [
     { id: 'draw_agreement', label: 'By agreement' },
@@ -64,4 +68,14 @@ export function chessTiebreakText(winnerName: string, method: ChessTiebreakMetho
   if (method === 'armageddon') return result === 'draw' ? `${winnerName} went through on the Armageddon draw` : `${winnerName} won the Armageddon`;
   if (method === 'organiser') return `${winnerName} goes through (organiser's call)`;
   return `${winnerName} won on tie-break`;
+}
+
+/**
+ * Stage 12 · CH8 · FIDE Laws 7.5.5, 9.5.3 and Appendix A.3 / B: the time an
+ * arbiter gives the opponent for an illegal move or a wrong draw claim — 2
+ * minutes in a standard game, 1 in rapid and blitz. A second illegal move by
+ * the same player loses (in every kind of game since the 2023 Laws).
+ */
+export function chessPenaltySeconds(clockLabel: string): number {
+  return clockLabel === 'Classical' ? 120 : 60;
 }

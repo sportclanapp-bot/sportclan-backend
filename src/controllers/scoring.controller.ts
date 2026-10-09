@@ -384,6 +384,27 @@ export async function validateScoringEvent(
     }
     if (payload.team_side !== 'A' && payload.team_side !== 'B') return refuse(400, { error: 'Say whose penalty it is.', code: 'BAD_NOTE' });
   }
+  // Stage 12 · CH8: the chess arbiter's time — added to a clock, or to the
+  // opponent of an illegal move or a wrong draw claim. Chess only; whole seconds.
+  if (event_type === 'note' && payload && (payload.kind === 'add_time' || payload.kind === 'illegal_move' || payload.kind === 'wrong_claim')) {
+    const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    if (slug !== 'chess') return refuse(400, { error: 'That’s a chess arbiter’s call.', code: 'BAD_NOTE' });
+    if (payload.side !== 'A' && payload.side !== 'B') return refuse(400, { error: 'Say which player.', code: 'BAD_NOTE' });
+    const secs = payload.seconds;
+    if (typeof secs !== 'number' || !Number.isInteger(secs) || secs < 0 || (payload.kind === 'add_time' && secs === 0)) {
+      return refuse(400, { error: 'The time is a whole number of seconds.', code: 'BAD_NOTE' });
+    }
+  }
+  // Stage 12 · CH8: the official corrects a running match clock (football, hockey) by whole seconds.
+  if (event_type === 'note' && payload && payload.kind === 'clock_adjust') {
+    const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    if ((slug !== 'football' && slug !== 'hockey') || !rulesOf(slug, match).periodMinutes) {
+      return refuse(400, { error: 'Only a running match clock can be corrected.', code: 'BAD_NOTE' });
+    }
+    if (typeof payload.seconds !== 'number' || !Number.isInteger(payload.seconds) || payload.seconds === 0) {
+      return refuse(400, { error: 'The correction is a whole number of seconds.', code: 'BAD_NOTE' });
+    }
+  }
   // BUILD 3.53: table tennis's expedite rule — table tennis only, and never
   // once both players have 9 points in the game (ITTF 2.15.1).
   if (event_type === 'note' && payload && payload.kind === 'expedite') {

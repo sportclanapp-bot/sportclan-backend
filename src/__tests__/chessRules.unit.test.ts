@@ -12,7 +12,7 @@ import path from 'path';
 
 describe('chessRules', () => {
   test('reasons: three decisive, five draws (incl. insufficient material, 50-move)', () => {
-    expect(CHESS_RESULT_REASONS.decisive.map((r) => r.id)).toEqual(['checkmate', 'resignation', 'timeout']);
+    expect(CHESS_RESULT_REASONS.decisive.map((r) => r.id)).toEqual(['checkmate', 'resignation', 'timeout', 'illegal_move', 'device', 'conduct']); // Stage 12 · CH8: and the arbiter's
     expect(CHESS_RESULT_REASONS.draw.map((r) => r.id)).toEqual(['draw_agreement', 'stalemate', 'repetition', 'insufficient_material', 'fifty_move']);
   });
   test('a reason must fit the result', () => {

@@ -195,7 +195,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally', penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.58: side-out; players 2 = doubles; Stage 11 · PB9 timed
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // Stage 11 · PB9 timed
   tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null, tiebreakAt: null, finalSetTiebreakTo: null, noLet: false, ballChange: false, penaltyLadder: null, tie: null }, // BUILD 3.59–3.66; Stage 9 · T2, T10, T9, T3 (players 2 = doubles)
-  carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50, tie: null }, // BUILD 3.72–3.77 · Stage 12 · CH5: team events
+  carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50, tie: null, penaltyLadder: null }, // BUILD 3.72–3.77 · Stage 12 · CH5: team events
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null },
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
   basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false },
@@ -341,6 +341,7 @@ export const CONDUCT_LADDERS: Readonly<Record<string, string>> = {
   pickleball: 'verbal,warning,foul,forfeit_game,default', // Stage 11 · PB6: USA Pickleball Sec. 22 (was warning, point, forfeit)
   volleyball: 'warning,point,default', // FIVB: warning, penalty, disqualification
   chess: 'warning,time,default', // Stage 12 · CH8 · FIDE 12.9: a warning, time to the opponent, the game lost
+  carrom: 'warning,board,default', // Stage 13 · CR7 · ICF Laws 51, 91, 126, 143: a warning, the board lost, the match lost
 };
 /** A step's key (the sport's own: CONDUCT_STEPS). */
 export type LadderStep = string;
@@ -355,7 +356,9 @@ export type LadderStep = string;
  */
 export type LadderEffect = 'none' | 'points' | 'point_off' | 'game' | 'forfeit_game' | 'match'
   // Stage 12 · CH8 · chess: time to the opponent's clock (2 minutes in a standard game, 1 in rapid / blitz).
-  | 'time';
+  | 'time'
+  // Stage 13 · CR7 · carrom: the board to the opponent, counted by the pieces and queen still on it (Law 91).
+  | 'board';
 export type LadderStepDef = { label: string; effect: LadderEffect; n?: number };
 const step = (label: string, effect: LadderEffect, n?: number): LadderStepDef => (n != null ? { label, effect, n } : { label, effect });
 /** Stage 11 · PB6: every step a sport's ladder may use, in that sport's words. */
@@ -369,6 +372,7 @@ export const CONDUCT_STEPS: Readonly<Record<string, Readonly<Record<string, Ladd
   },
   volleyball: { warning: step('warning', 'none'), point: step('penalty', 'points', 1), default: step('disqualification', 'match') },
   chess: { warning: step('warning', 'none'), time: step('time to the opponent', 'time'), default: step('game lost', 'match') }, // Stage 12 · CH8
+  carrom: { warning: step('warning', 'none'), board: step('board lost', 'board'), default: step('match lost', 'match') }, // Stage 13 · CR7
 };
 /** A step's definition in this sport (an unknown one reads as a warning). */
 export function ladderStepDef(sport: string | null | undefined, stepKey: string): LadderStepDef {
@@ -386,6 +390,7 @@ export const LADDER_CHOICES: Readonly<Record<string, ReadonlyArray<readonly [str
   pickleball: [['warning,foul,default', 'Warning, technical foul, forfeit'], ['warning,point,default', 'Warning, point, forfeit'], ['warning,default', 'Warning, then forfeit']], // Stage 11 · PB6
   volleyball: [['warning,default', 'Warning, then disqualification']],
   chess: [['warning,default', 'Warning, then the game lost'], ['default', 'The game lost straight away']], // Stage 12 · CH8
+  carrom: [['warning,default', 'Warning, then the match lost'], ['board,default', 'The board lost, then the match']], // Stage 13 · CR7
 };
 
 /**
@@ -400,6 +405,7 @@ export function conductWords(sport: string | null | undefined): ConductWords {
   if (key === 'tennis') return { title: 'code violation', out: 'default', outPast: 'defaulted', short: 'def.' };
   if (key === 'pickleball') return { title: 'misconduct', out: 'forfeit', outPast: 'forfeited', short: 'forfeit' };
   if (key === 'chess') return { title: 'misconduct', out: 'loss', outPast: 'lost', short: 'lost' }; // Stage 12 · CH8
+  if (key === 'carrom') return { title: 'misconduct', out: 'loss', outPast: 'lost the match', short: 'match lost' }; // Stage 13 · CR7
   return { title: 'misconduct', out: 'disqualification', outPast: 'disqualified', short: 'DQ' };
 }
 export function ladderProblem(key: string, ladder: unknown): string | null {

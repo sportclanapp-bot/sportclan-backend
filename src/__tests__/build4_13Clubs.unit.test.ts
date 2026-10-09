@@ -41,6 +41,6 @@ test('first round: clubmates don’t meet; the same-group rule holds too', () =>
   expect(kept.map((p) => [p.a!.id, p.b!.id])).toEqual([['a1', 'a2'], ['b1', 'b2']]); // the only swap would pair group mates
 });
 test('only for a draw', () => {
-  expect(settingsRefusal('carrom', 'league', { separateClubs: true })?.error).toBe('Keeping clubs apart is for a draw — a knockout or groups.');
+  expect(settingsRefusal('carrom', 'league', { separateClubs: true })?.error).toBe('Keeping clubs apart is for a draw — a knockout, groups or a Swiss.') // Stage 12 · CH2;
   expect(settingsRefusal('carrom', 'knockout', { separateClubs: true })).toBeNull();
 });

@@ -62,11 +62,24 @@ export type TieSpec = {
   trump?: boolean;
   /** 2.14 follow-up · PBL's rule: a side that loses its trump match loses a point (−1 in the tie score). Needs `trump`. */
   trumpLoss?: boolean;
+  /**
+   * Stage 12 · CH5 · team chess: colours by board — 'alternate' (the Olympiad: the
+   * first-named team has White on boards 1, 3, 5…), or 'same' (every board of a
+   * team the same colour, the first-named White — the Global Chess League).
+   */
+  colours?: 'alternate' | 'same';
+  /** Stage 12 · CH5 · a board's game points: win 1, draw ½ (default); GCL: win 3, a win with Black 4, draw 1. */
+  boardPoints?: { win: number; winBlack?: number; draw: number };
+  /** Stage 12 · CH5 · level on game points (most games) is a drawn match — chess's match points 1 each. */
+  level?: 'draw';
+  /** Stage 12 · CH5 · boards in a fixed order: a team's line-up keeps the order of its squad list. */
+  boardOrder?: boolean;
   /** Runtime only (never stored in the rules): each side's pick, from matches.tie_trumps. */
   trumps?: Partial<Record<TieSide, string | null>> | null;
 };
 
-export const TIE_SPORTS = ['badminton', 'tennis', 'tabletennis', 'pickleball'] as const;
+// Stage 12 · CH5: chess (team matches on boards) and carrom (team events in a fixed order) too.
+export const TIE_SPORTS = ['badminton', 'tennis', 'tabletennis', 'pickleball', 'chess', 'carrom'] as const;
 export const TIE_LABEL_MAX = 30;
 
 const isWhole = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n);
@@ -115,7 +128,29 @@ export function tieSpecProblem(spec: unknown): string | null {
   if (s.trump === true && (s.rubbers as TieRubber[]).filter((r) => !r.decider).length < 2) return 'A trump match needs at least two matches to pick from.';
   if (s.trumpLoss != null && typeof s.trumpLoss !== 'boolean') return 'A lost trump costing a point is on or off.';
   if (s.trumpLoss === true && s.trump !== true) return 'A lost trump can cost a point only with a trump match.';
+  // Stage 12 · CH5: team chess's colours and game points; level as a draw; a fixed board order.
+  if (s.colours != null && s.colours !== 'alternate' && s.colours !== 'same') return 'Colours alternate by board, or are the same on every board.';
+  if (s.boardPoints != null) {
+    const bp = s.boardPoints as Record<string, unknown>;
+    const num = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0 && Math.round(x * 2) === x * 2;
+    if (typeof bp !== 'object' || !num(bp.win) || !num(bp.draw) || (bp.winBlack != null && !num(bp.winBlack))) return 'A board’s points are whole or half numbers, 0 or more.';
+    if ((bp.draw as number) > (bp.win as number)) return 'A draw can’t be worth more than a win.';
+  }
+  if (s.level != null && s.level !== 'draw') return 'Level is a draw, or decided as the tie says.';
+  if (s.level === 'draw' && s.win !== 'games') return 'A level match stays a draw when the match goes to most game points.';
+  if (s.boardOrder != null && typeof s.boardOrder !== 'boolean') return 'A fixed board order is on or off.';
   return null;
+}
+
+/** Stage 12 · CH5 · which side has White on board `index` (0-based) of a team chess match. */
+export function boardWhite(spec: Pick<TieSpec, 'colours'>, index: number): TieSide {
+  return spec.colours === 'same' || index % 2 === 0 ? 'A' : 'B';
+}
+/** Stage 12 · CH5 · a board's points for its result. */
+export function boardPointsFor(spec: Pick<TieSpec, 'boardPoints'>, result: 'white' | 'black' | 'draw'): { white: number; black: number } {
+  const bp = spec.boardPoints ?? { win: 1, draw: 0.5 };
+  if (result === 'draw') return { white: bp.draw, black: bp.draw };
+  return result === 'white' ? { white: bp.win, black: 0 } : { white: 0, black: bp.winBlack ?? bp.win };
 }
 
 /** Stage 11 follow-up · why a side's trump pick can't stand, or null: one of the tie's matches, not a deciding one. */
@@ -308,6 +343,8 @@ export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>):
   } else if (allRegular) {
     decided = spec.win === 'all' ? by(rubbersA, rubbersB) : by(unitsA, unitsB);
     level = !decided;
+    // Stage 12 · CH5: chess — level on game points is a drawn match.
+    if (level && spec.level === 'draw' && regular === spec.rubbers.length) return { rubbersA, rubbersB, unitsA, unitsB, decided: 'draw', finished: true };
   }
   let decider = false;
   if (level) {
@@ -343,7 +380,7 @@ export function splitTie<E extends { event_type: string }>(
     const e = events[i]!;
     if (outcome.finished || results.length >= spec.rubbers.length) break;
     cur.push(e);
-    if (e.event_type !== 'score' && e.event_type !== 'note') continue; // Stage 11 · PB6 / PB9: a forfeited game or time called can end a match too
+    if (e.event_type !== 'score' && e.event_type !== 'note' && e.event_type !== 'result') continue; // Stage 11 · PB6 / PB9: a forfeited game or time called can end a match too · Stage 12 · CH5: a chess board's result
     const rubber = spec.rubbers[results.length]!;
     const r = rubberOf(cur, rubber);
     if (!r.winner) continue;

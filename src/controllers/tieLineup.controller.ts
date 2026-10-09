@@ -205,6 +205,21 @@ export async function setTieLineup(req: Request, res: Response) {
       : req.body?.lineup as Lineup;
     const bad = tieSpecLineupProblem(spec, lineup, members, letters);
     if (bad) return res.status(400).json({ error: bad, code: 'BAD_LINEUP' });
+    // Stage 12 · CH5: a fixed board order — the squad's numbers (1 = top board) go down the boards.
+    if (spec.boardOrder && m.tournament_id) {
+      const { data: sq } = await supabase.from('tournament_squads').select('user_id, jersey_number').eq('tournament_id', m.tournament_id).eq('team_id', teamId).is('removed_at', null);
+      const rank = new Map(((sq ?? []) as Array<{ user_id: string | null; jersey_number: number | null }>).filter((r) => r.user_id && r.jersey_number != null).map((r) => [r.user_id!, r.jersey_number!]));
+      if (rank.size) {
+        const seq = spec.rubbers.map((r) => (lineup as Record<string, string[]>)[r.key]?.[0]).filter((u): u is string => !!u);
+        const unranked = seq.find((u) => !rank.has(u));
+        if (unranked) return res.status(400).json({ error: 'Every player on a board needs a board-order number in the squad.', code: 'BOARD_ORDER' });
+        for (let k = 1; k < seq.length; k++) {
+          if (rank.get(seq[k]!)! < rank.get(seq[k - 1]!)!) {
+            return res.status(400).json({ error: `The board order is fixed: board ${k + 1}’s player is above board ${k}’s in the squad.`, code: 'BOARD_ORDER' });
+          }
+        }
+      }
+    }
     // Stage 11 follow-up: a trump tie's order comes with the side's trump match.
     const trumpKey = req.body?.trump;
     if (spec.trump) {

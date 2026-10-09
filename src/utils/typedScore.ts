@@ -21,7 +21,7 @@
 import { gamesWinner, standardRules, tennisOptsOf, type MatchRules } from './matchRules';
 import { emptyTennis, tennisPoint, type TennisScore } from './tennisCore';
 import { sideOutRally, sideOutStart, type SideOutOpts } from './pickleballCore';
-import { tieOutcome, type RubberResult, type TieSpec } from './tieCore';
+import { boardPointsFor, boardWhite, tieOutcome, type RubberResult, type TieSpec } from './tieCore';
 
 export type TypedSide = 'A' | 'B';
 /** One game (rally sports) or set (tennis): each side's score; a tennis set won 7-6 also gives its tiebreak points. */
@@ -194,4 +194,29 @@ export function typedTiePoints(
 /** "11-8, 9-11, 11-6" — the typed games for the timeline (a set's tiebreak in brackets). */
 export function typedScoreText(sets: TypedSet[]): string {
   return sets.map((x) => `${x.a}-${x.b}${x.tbA != null && x.tbB != null ? ` (${Math.min(x.tbA, x.tbB)})` : ''}`).join(', ');
+}
+
+/**
+ * Stage 12 · CH5 · a team chess match typed from its match sheet: each board's
+ * result in board order — 'A' or 'B' (that team won the board) or 'draw'. Each
+ * becomes the result the pad would have recorded (White / Black by the board's
+ * colours), and the match is worked out by game points. Every board is played.
+ */
+export const typedChessTie = (sport: string | null | undefined, spec: TieSpec | null): boolean => sportKey(sport) === 'chess' && !!spec;
+export function typedChessBoards(spec: TieSpec, boards: unknown): { problem: string | null; results: Array<'white' | 'black' | 'draw'>; winner: TypedSide | 'draw' | null } {
+  if (!Array.isArray(boards) || boards.length !== spec.rubbers.length) return { problem: `Give every board’s result (${spec.rubbers.length}).`, results: [], winner: null };
+  const results: Array<'white' | 'black' | 'draw'> = [];
+  const rr: RubberResult[] = [];
+  for (let i = 0; i < boards.length; i++) {
+    const b = boards[i];
+    if (b !== 'A' && b !== 'B' && b !== 'draw') return { problem: `${spec.rubbers[i]!.label}: who won it, or a draw.`, results: [], winner: null };
+    const white = boardWhite(spec, i);
+    const w: 'white' | 'black' | 'draw' = b === 'draw' ? 'draw' : b === white ? 'white' : 'black';
+    results.push(w);
+    const pts = boardPointsFor(spec, w);
+    const a = white === 'A' ? pts.white : pts.black; const bb = white === 'A' ? pts.black : pts.white;
+    rr.push({ key: spec.rubbers[i]!.key, winner: b, sets: { A: [a], B: [bb] }, units: { A: a, B: bb } });
+  }
+  const o = tieOutcome(spec, rr);
+  return { problem: null, results, winner: o.decided };
 }

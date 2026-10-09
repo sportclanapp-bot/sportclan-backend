@@ -83,7 +83,7 @@ test('a bye is a win’s points and a game played in the table', () => {
 });
 
 test('rules: chess only, with rounds; the rounds are fixed after the draw, the server’s own count isn’t an edit', () => {
-  expect(swissCreateRefusal('football', { swiss: { rounds: 5 } })?.error).toBe('Swiss is for chess.');
+  expect(swissCreateRefusal('football', { swiss: { rounds: 5 } })?.error).toBe('A Swiss is for chess and carrom, and for team events of team ties (badminton, tennis, table tennis, pickleball).') // Stage 12 · CH5;
   expect(swissCreateRefusal('chess', {})?.error).toBe('A Swiss needs its number of rounds.');
   // Oct 2026 (Dipak): no fixed top of 11 — at least 2; against the field where it's known.
   expect(settingsRefusal('chess', 'swiss', { swiss: { rounds: 12 } })).toBeNull();

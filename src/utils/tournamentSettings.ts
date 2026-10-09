@@ -47,7 +47,7 @@ const tpl = (win: number, draw: number, loss: number, extra: Partial<PointsTempl
 });
 
 /** Stage 11 · PB3: the team-tie sports, whose ties can score a win in the deciding match apart (MLP: 3 / 2 / 1 / 0). */
-export const TIE_POINT_SPORTS: ReadonlySet<string> = new Set(['badminton', 'tennis', 'tabletennis', 'pickleball']);
+export const TIE_POINT_SPORTS: ReadonlySet<string> = new Set(['badminton', 'tennis', 'tabletennis', 'pickleball', 'carrom']); // Stage 12 · CH5: carrom team events too
 /** Sports where a match can end level. The others hide the draw field. */
 export const DRAW_SPORTS = new Set(['cricket', 'football', 'hockey', 'chess']);
 
@@ -203,6 +203,8 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
       : key === 'basketball' ? 'Point'
         : key === 'volleyball' || key === 'tennis' ? 'Set'
           : key === 'chess' ? 'Score' : 'Game';
+  // Stage 12 · CH5: a team chess table — game points (each board's), match points first.
+  if (key === 'chess' && tie && (t === 'score_scored' || t === 'score_diff')) return t === 'score_scored' ? 'Game points' : 'Game point difference';
   switch (t) {
     case 'head_to_head': return key === 'chess' ? 'Direct encounter' : 'Head-to-head'; // Stage 12 · CH1: FIDE's word
     case 'wins': return 'Wins';
@@ -285,6 +287,12 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
       out.push({ key: 'fide_swiss', label: 'Buchholz', order: ['buchholz', 'sonneborn_berger', 'wins'] });
       // Stage 12 · CH1: every AICF / MCA circular — BH Cut-1, BH, SB, direct encounter, wins, wins with Black.
       out.push({ key: 'aicf', label: 'AICF / Indian open (Cut-1, Buchholz, SB, wins)', order: ['buchholz_cut1', 'buchholz', 'sonneborn_berger', 'head_to_head', 'wins', 'wins_black'] });
+      // Stage 12 · CH5: team chess — AICF National Team (match points, direct encounter, game points, SB) and
+      // the National Schools Team's order; the Olympiad's game points then Buchholz.
+      if (tie) {
+        out.push({ key: 'aicf_team', label: 'AICF team (encounter, game points, SB)', order: ['head_to_head', 'score_scored', 'sonneborn_berger'] });
+        out.push({ key: 'team_gp', label: 'Game points first (then Buchholz)', order: ['score_scored', 'buchholz', 'head_to_head'] });
+      }
       // CH9: FIDE round robin — SB, direct encounter, wins, Koya.
       out.push({ key: 'fide_rr_koya', label: 'Round robin (SB, encounter, wins, Koya)', order: ['sonneborn_berger', 'head_to_head', 'wins', 'koya'] });
       break;
@@ -450,8 +458,19 @@ export function ladderCreateRefusal(sport: string | null | undefined, format: st
   return null;
 }
 
-export function swissCreateRefusal(sport: string | null | undefined, settings: unknown): Refusal | null {
-  if (sportKeyOf(sport) !== 'chess') return refuse('Swiss is for chess.');
+/**
+ * Stage 12 · CH5 · who may run a Swiss: the board games (chess, carrom), and a
+ * team event of team ties in any tie sport (a team Swiss — the Olympiad's way).
+ * Football's Swiss stays off (F18, Dipak's call).
+ */
+export const SWISS_SPORTS: readonly string[] = ['chess', 'carrom'];
+export const TEAM_SWISS_SPORTS: readonly string[] = ['badminton', 'tennis', 'tabletennis', 'pickleball'];
+export function swissAllowed(sport: string | null | undefined, ctx: { entryKind?: string | null; ties?: boolean } = {}): boolean {
+  const k = sportKeyOf(sport);
+  return SWISS_SPORTS.includes(k) || (TEAM_SWISS_SPORTS.includes(k) && ctx.entryKind === 'team' && ctx.ties === true);
+}
+export function swissCreateRefusal(sport: string | null | undefined, settings: unknown, ctx: { entryKind?: string | null; ties?: boolean } = {}): Refusal | null {
+  if (!swissAllowed(sport, ctx)) return refuse('A Swiss is for chess and carrom, and for team events of team ties (badminton, tennis, table tennis, pickleball).');
   const sw = settings && typeof settings === 'object' ? (settings as { swiss?: unknown }).swiss : null;
   if (!sw) return refuse('A Swiss needs its number of rounds.');
   return null;

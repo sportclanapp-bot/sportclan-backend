@@ -20,9 +20,9 @@ import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber } from '../utils/cricketRules';
-import { typedMatchPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
+import { typedChessBoards, typedMatchPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
-import { splitTie, tieNeed, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
+import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { trumpsFor } from '../utils/tieTrumps';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
@@ -426,7 +426,8 @@ export async function validateScoringEvent(
   if (event_type === 'result' && payload && typeof payload === 'object'
     && (payload.winner === 'white' || payload.winner === 'black')
     && typeof payload.player_id === 'string' && !isGuestId(payload.player_id)) {
-    const wantSide = payload.winner === 'white' ? 'A' : 'B';
+    // Stage 12 · CH5: on a team chess board the winning team is named (its colour depends on the board).
+    const wantSide = payload.team_side === 'A' || payload.team_side === 'B' ? payload.team_side : payload.winner === 'white' ? 'A' : 'B';
     const { data: part } = await supabase
       .from('match_participants').select('team_side')
       .eq('match_id', matchId).eq('user_id', payload.player_id).maybeSingle();
@@ -913,6 +914,28 @@ export function rollupTieSpec(
   type Read = { winner: 'A' | 'B' | 'draw' | null; sets: { A: number[]; B: number[] }; games: { A: number; B: number }; points: { A: number; B: number } };
   const read = (evs: { event_type: string; payload: any }[], r: TieRubber): Read => {
     const rr = rulesFor(r);
+    // Stage 12 · CH5: a board of a team chess match — its result, by its colours, worth the board's points.
+    if (slug === 'chess') {
+      let w: 'white' | 'black' | 'draw' | undefined;
+      for (const e of evs) if (e.event_type === 'result') w = e.payload?.winner;
+      if (!w) return { winner: null, sets: { A: [], B: [] }, games: { A: 0, B: 0 }, points: { A: 0, B: 0 } };
+      const white = boardWhite(spec, Math.max(0, spec.rubbers.indexOf(r)));
+      const bp = boardPointsFor(spec, w);
+      const a = white === 'A' ? bp.white : bp.black; const b = white === 'A' ? bp.black : bp.white;
+      const winner: 'A' | 'B' | 'draw' = w === 'draw' ? 'draw' : w === 'white' ? white : (white === 'A' ? 'B' : 'A');
+      return { winner, sets: { A: [a], B: [b] }, games: { A: 0, B: 0 }, points: { A: 0, B: 0 } };
+    }
+    // Stage 12 · CH5: a carrom match in a team event — the shared carromCore, as a single match.
+    if (slug === 'carrom') {
+      if (rr.carromMode === 'points') {
+        const pc = pointCarromReplay(evs.filter((e) => e.event_type === 'score' && e.payload?.kind === 'coin').map((e) => ({ side: sideOf(e.payload || {}), coin: e.payload.coin })).filter((x) => x.coin === 'white' || x.coin === 'black' || x.coin === 'queen'),
+          { gamesToWin: winsToWin(rr), queenValue: rr.queenValue ?? 50 });
+        const done = pc.gamesWon.A >= winsToWin(rr) ? 'A' : pc.gamesWon.B >= winsToWin(rr) ? 'B' : null;
+        return { winner: done, sets: { A: pc.games.map((g) => g.A), B: pc.games.map((g) => g.B) }, games: pc.gamesWon, points: pc.points };
+      }
+      const c = carromReplay(evs.filter((e) => e.event_type === 'score' && e.payload?.kind === 'board').map((e) => ({ winner: sideOf(e.payload || {}), piecesLeft: carromPieces(e.payload.pieces_left), queen: e.payload.queen === true })), carromOptsOf(rr));
+      return { winner: c.winner ?? null, sets: { A: c.games.map((g) => g.A), B: c.games.map((g) => g.B) }, games: c.gamesWon, points: c.points };
+    }
     if (slug === 'tennis') {
       const tr = tennisReplayEvents(evs.map((e) => ({ event_type: e.event_type, payload: { ...(e.payload || {}), team_side: sideOf(e.payload || {}) } })), tennisOptsOf(rr));
       const t = tr.score;
@@ -1400,7 +1423,7 @@ export async function recomputeSummary(
       if (e.event_type === 'score') sides[sideOf(p)].score += Number(p.value ?? 0);
     }
     A.points = A.score; B.points = B.score;
-  } else if ((slug === 'tennis' || SET_CONFIG[slug]) && tieSpecOf(slug, rulesOf(slug, match))) {
+  } else if ((slug === 'tennis' || SET_CONFIG[slug] || slug === 'chess' || slug === 'carrom') && tieSpecOf(slug, rulesOf(slug, match))) { // Stage 12 · CH5: team chess and carrom ties too
     // Stage 9 · T3: a team tie (any tie sport; badminton / table tennis's standard orders too).
     const rules = rulesOf(slug, match);
     // Stage 11 follow-up: the teams' trump picks count a match double for the side that picked it.
@@ -1554,7 +1577,7 @@ export async function recomputeSummary(
     if (sos.length) summary.super_overs = sos;
     else delete summary.super_overs;
   }
-  if (slug === 'chess') {
+  if (slug === 'chess' && !tieSummary) { // Stage 12 · CH5: a team match's summary is its tie's
     summary.result = chessResult ?? 'No result yet';
     summary.winner_side = chessWinner;
     // Real move/clock rollup (no eval, no SAN — those need an engine / heavy
@@ -1614,7 +1637,7 @@ export async function recomputeSummary(
   // (guest-safe) with { name, side: winner_side }, so the scorecard/MVP can
   // attribute the result for casual/guest chess (registered chess already had a
   // participant fallback). A draw → empty map → no MVP.
-  if (slug === 'chess') {
+  if (slug === 'chess' && !tieSummary) {
     summary.players = chessWinnerId
       ? { [chessWinnerId]: { side: chessWinner, name: chessWinnerName ?? undefined, points: 1 } }
       : {};
@@ -1782,6 +1805,26 @@ export async function typedScore(req: Request, res: Response) {
       return res.status(409).json({ error: 'This match is already finished.', code: 'MATCH_FINISHED' });
     }
     const slug = normSportSlug((await getSport(m.sport_id as string))?.slug);
+    // Stage 12 · CH5: a team chess match typed from its match sheet — each board's result.
+    const chessSpec = slug === 'chess' ? tieSpecOf(slug, rulesOf(slug, m as never) as MatchRules) : null;
+    if (chessSpec) {
+      const { count: done } = await supabase.from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id).eq('event_type', 'result');
+      if (done) return res.status(409).json({ error: 'This match has board results on the pad — finish it there, or undo them first.', code: 'SCORED_ON_PAD' });
+      const got = typedChessBoards(chessSpec, (req.body ?? {}).boards);
+      if (got.problem) return res.status(400).json({ error: got.problem, code: 'BAD_TYPED_SCORE' });
+      const words = got.results.map((w, i) => `${chessSpec.rubbers[i]?.label ?? `Board ${i + 1}`} ${w === 'white' ? '1-0' : w === 'black' ? '0-1' : '½-½'}`).join(' · ');
+      const base = Date.now();
+      const rows = [
+        { match_id: id, event_type: 'note', payload: { kind: 'typed_score', text: words }, created_by: userId, created_at: new Date(base).toISOString() },
+        ...got.results.map((w, i) => ({ match_id: id, event_type: 'result', payload: { winner: w, typed: true }, created_by: userId, created_at: new Date(base + 1 + i).toISOString() })),
+      ];
+      const { error } = await supabase.from('match_events').insert(rows);
+      if (error) return res.status(500).json({ error: 'The result wasn’t saved. Try again.' });
+      await promoteToLive(id, m);
+      const summary = await recomputeSummary(id, { persist: true });
+      const winner = got.winner === 'A' || got.winner === 'B' ? got.winner : null;
+      return res.json({ ok: true, winner_side: winner, winner_team_id: winner ? (winner === 'A' ? m.team_a_id : m.team_b_id) : null, draw: got.winner === 'draw', text: words, summary });
+    }
     if (!typedScoreSport(slug)) return res.status(400).json({ error: 'Typed scores are for the sports scored in games or sets.', code: 'NOT_TYPED_SPORT' });
     const { count } = await supabase.from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id).eq('event_type', 'score');
     if (count) return res.status(409).json({ error: 'This match has points on the pad — finish it there, or undo them first.', code: 'SCORED_ON_PAD' });

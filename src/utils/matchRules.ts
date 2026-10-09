@@ -184,11 +184,11 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally', penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.58: side-out; players 2 = doubles; Stage 11 · PB9 timed
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // Stage 11 · PB9 timed
   tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null, tiebreakAt: null, finalSetTiebreakTo: null, noLet: false, ballChange: false, penaltyLadder: null, tie: null }, // BUILD 3.59–3.66; Stage 9 · T2, T10, T9, T3 (players 2 = doubles)
-  carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50 }, // BUILD 3.72–3.77
+  carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50, tie: null }, // BUILD 3.72–3.77 · Stage 12 · CH5: team events
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null },
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
   basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false },
-  chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true },
+  chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true, tie: null }, // Stage 12 · CH5: team matches
 };
 
 /** The sport's standard rules, versioned. Unknown sport → just the version. */
@@ -816,6 +816,10 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (r.rubbers) return refuse('A tie is its own list of matches, or a standard order — not both.', 'tie');
     // Stage 11 follow-up: the trump picks are the teams' (with their orders), never the rules'.
     if ((r.tie as TieSpec).trumps != null) return refuse('Trump matches are picked by the teams with their orders.', 'tie');
+    // Stage 12 · CH5: chess boards are one player each; colours and board points are chess's own.
+    const tt = r.tie as TieSpec;
+    if (key === 'chess' && tt.rubbers.some((x) => x.players !== 1)) return refuse('A chess board is one player a side.', 'tie');
+    if (key !== 'chess' && (tt.colours != null || tt.boardPoints != null)) return refuse('Colours by board and board points are for team chess.', 'tie');
     // Stage 11 · PB3: a match's own rules (the DreamBreaker) are the sport's rules over the tie's.
     for (const rb of (r.tie as TieSpec).rubbers) {
       if (!rb.rules) continue;

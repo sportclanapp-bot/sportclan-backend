@@ -3265,6 +3265,7 @@ export async function completeMatch(req: Request, res: Response) {
     // event, no winner named, no explicit draw) the completion used to go
     // through and store a draw nobody had entered. Walkovers are exempt.
     if (!winnerSide && !is_draw && !walkover && normSportSlug(sportRow?.slug) === 'chess'
+      && !(canonical?.tie && (canonical.tie as { decided?: unknown }).decided) // Stage 12 · CH5: a team match is decided by its boards
       && !['White wins', 'Black wins', 'Draw'].includes(String(canonical?.chess?.result ?? ''))) {
       return res.status(400).json({
         error: 'Record the result first: White wins, Black wins or a draw.',

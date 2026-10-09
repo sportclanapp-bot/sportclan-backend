@@ -71,7 +71,7 @@ test('create: chess with rounds, tie-breaks Buchholz first', async () => {
 test('create: not chess, or no rounds → 400', async () => {
   mockSportSlug = 'football';
   onInsert();
-  expect((await run(createTournament, { body: { ...body, settings: { v: 1, swiss: { rounds: 5 } } } })).body.error).toBe('Swiss is for chess.');
+  expect((await run(createTournament, { body: { ...body, settings: { v: 1, swiss: { rounds: 5 } } } })).body.error).toBe('A Swiss is for chess and carrom, and for team events of team ties (badminton, tennis, table tennis, pickleball).') // Stage 12 · CH5;
   mockSportSlug = 'chess';
   expect((await run(createTournament, { body })).body.error).toBe('A Swiss needs its number of rounds.');
 });
@@ -93,7 +93,8 @@ test('the draw: round 1 of 5 players — two games and a bye (a completed win), 
   const rows = mockLog.filter((q) => q[0] === 'from:matches' && has(q, 'insert:')).flatMap((q) => JSON.parse(q.find((c) => c.startsWith('insert:'))!.slice(7)));
   expect(rows.filter((r: any) => r.team_b_id)).toHaveLength(2);
   expect(rows.find((r: any) => !r.team_b_id)).toMatchObject({ team_a_id: 'p5', status: 'completed', winner_team_id: 'p5', round: 1, score_summary: { bye: true } });
-  expect(written('tournaments', 'update').find((u) => u.settings)?.settings).toEqual({ v: 1, swiss: { rounds: 4, paired: 1 } });
+  expect(written('tournaments', 'update').find((u) => u.settings)?.settings).toMatchObject({ v: 1, swiss: { rounds: 4, paired: 1 } }); // Stage 12 · CH2: + the pairing numbers fixed at the draw
+  expect(written('tournaments', 'update').find((u) => u.settings)?.settings.swiss.tpn).toHaveLength(5);
 });
 test('more rounds than the field can play → 400 SWISS_ROUNDS', async () => {
   setup(4, 5);

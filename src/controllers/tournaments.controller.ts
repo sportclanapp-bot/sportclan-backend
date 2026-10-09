@@ -252,7 +252,9 @@ async function tournamentRowFrom(body: Record<string, any>, kind: 'single' | 'pa
   if (lbBad) return bad(lbBad);
   // BUILD 4.15: a Swiss is chess, with its rounds.
   if (!parent && format === 'swiss') {
-    const swBad = swissCreateRefusal(createSportSlug, settings);
+    // Stage 12 · CH5: a team Swiss of team ties too (the tie is in the match rules).
+    const mr = match_rules as { default?: { tie?: unknown; rubbers?: unknown } } | null | undefined;
+    const swBad = swissCreateRefusal(createSportSlug, settings, { entryKind: entry_kind ?? 'team', ties: !!(mr?.default?.tie || mr?.default?.rubbers) });
     if (swBad) return bad(swBad);
     // Oct 2026: rounds up to one fewer than the players (no fixed top of 11).
     const players = Number.isInteger(Number(max_teams)) ? Number(max_teams) : null;
@@ -1678,7 +1680,8 @@ export async function updateTournament(req: Request, res: Response) {
     if (body.format === 'swiss' && (tournament as { format?: string }).format !== 'swiss') {
       const slug = normSportSlug((await getSport(String((tournament as { sport_id?: string }).sport_id)))?.slug);
       const merged = { ...settingsOf(tournament as { settings?: unknown }), ...((body.settings ?? {}) as object) };
-      const swBad = swissCreateRefusal(slug, merged);
+      const mr = (body.match_rules ?? (tournament as { match_rules?: unknown }).match_rules) as { default?: { tie?: unknown; rubbers?: unknown } } | null | undefined;
+      const swBad = swissCreateRefusal(slug, merged, { entryKind: (tournament as { entry_kind?: string | null }).entry_kind ?? 'team', ties: !!(mr?.default?.tie || mr?.default?.rubbers) });
       if (swBad) return res.status(400).json(swBad);
     }
     if (body.format !== undefined && !isValidTournamentFormat(body.format)) {

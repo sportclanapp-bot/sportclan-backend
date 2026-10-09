@@ -3,6 +3,7 @@ import { listAnnouncements, postAnnouncement, deleteAnnouncement } from '../cont
 import { getSquad, setSquad, checkSquadPlayer, setSquadLock, getDiscipline } from '../controllers/squads.controller';
 import { setLots } from '../controllers/lots.controller';
 import { getSwiss, setSwissBye, swapSwissPairing, publishSwissRound } from '../controllers/swiss.controller';
+import { getBoardPrizes } from '../controllers/boardPrizes.controller';
 import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
@@ -111,6 +112,7 @@ router.get('/:id/swiss', authenticateToken, getSwiss);
 router.put('/:id/swiss/byes', authenticateToken, setSwissBye);
 router.post('/:id/swiss/swap', authenticateToken, swapSwissPairing);
 router.post('/:id/swiss/publish', authenticateToken, publishSwissRound);
+router.get('/:id/board-prizes', authenticateToken, getBoardPrizes); // Stage 12 · CH5
 // Stage 8 · F3 / F16 / F5: squads, ID checks, bans.
 router.get('/:id/squads/:teamId', authenticateToken, getSquad);
 router.put('/:id/squads/:teamId', authenticateToken, setSquad);

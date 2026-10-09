@@ -317,7 +317,17 @@ const isBetween = (c: Criterion): c is keyof typeof BETWEEN => c in BETWEEN;
  * points (0 clean, less is worse — utils/fairPlay), and the order a draw of lots
  * put teams in when nothing else separates them (the organiser records it).
  */
-export type RankExtra = { fairPlay?: Map<string, number>; lots?: string[] };
+export type RankExtra = {
+  fairPlay?: Map<string, number>; lots?: string[];
+  /**
+   * Stage 11 · PB7 · best next-placed across groups of different sizes: the
+   * group matches and the points template. With them, a team's results against
+   * the teams placed below the smallest group's size are left out (the AFC /
+   * UEFA way), so every candidate is compared on the same number of matches —
+   * USA Pickleball: point difference isn't compared across pools of unequal size.
+   */
+  matches?: GMatch[]; pts?: PointsModel;
+};
 
 const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 'sonneborn_berger' | 'fair_play' | keyof typeof BETWEEN>, (s: TeamStat) => number> = {
   points: (s) => s.points,
@@ -533,6 +543,19 @@ export function bestPlacedAcrossGroups(
   tiebreakerRules?: any[], extra: RankExtra = {},
 ): string[] {
   if (count <= 0) return [];
+  // Stage 11 · PB7: groups of different sizes — each candidate's results against
+  // teams placed below the smallest group's size don't count.
+  const sizes = rankedGroups.map((g) => g.length).filter((n) => n > place); // the groups that have a team in this place
+  const smallest = sizes.length ? Math.min(...sizes) : 0;
+  if (extra.matches && sizes.some((n) => n !== smallest)) {
+    const placeOf = new Map<string, number>();
+    for (const g of rankedGroups) g.forEach((id, i) => placeOf.set(id, i));
+    const counted = extra.matches.filter((m) => {
+      const a = m.team_a_id; const b = m.team_b_id;
+      return !!a && !!b && (placeOf.get(a) ?? 0) < smallest && (placeOf.get(b) ?? 0) < smallest;
+    });
+    stats = computeStats(rankedGroups.flat(), counted, undefined, extra.pts ?? DEFAULT_POINTS);
+  }
   const per = (id: string, f: (s: TeamStat) => number) => {
     const s = stats.get(id);
     return s && s.played > 0 ? f(s) / s.played : 0;

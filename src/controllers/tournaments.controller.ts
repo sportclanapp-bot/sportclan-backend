@@ -3597,7 +3597,7 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
     const open = ko1.length * 2 - seeds.length;
     const count = Math.min(open, bestNextCount(st8, labels.map((l) => groupTeams[l].length), qualsPerGroup));
     const ranked = labels.map((label) => rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label)));
-    for (const id of bestPlacedAcrossGroups(ranked, qualsPerGroup, count, globalStats, tiebreakerRules, extraFor(''))) seeds.push({ id, name: nameOf[id] ?? 'Team' });
+    for (const id of bestPlacedAcrossGroups(ranked, qualsPerGroup, count, globalStats, tiebreakerRules, { ...extraFor(''), matches: tableMatches, pts })) seeds.push({ id, name: nameOf[id] ?? 'Team' });
   }
   if (seeds.length < 2) return;
   // FORMATS (28 Sep): cross-pair, so group mates don't meet straight away.

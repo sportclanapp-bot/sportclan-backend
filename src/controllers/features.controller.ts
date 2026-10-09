@@ -209,7 +209,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
         }
         const groups = Array.from(byGroupLive.keys()).sort().map((g) => byGroupLive.get(g)!);
         const count = bestNextCount(st8, groups.map((gr) => gr.length), qpg);
-        const best = new Set(bestPlacedAcrossGroups(groups, qpg, count, stats, tiebreakerRules, extraFor('')));
+        const best = new Set(bestPlacedAcrossGroups(groups, qpg, count, stats, tiebreakerRules, { ...extraFor(''), matches: tin.matches as any, pts })); // Stage 11 · PB7: groups of different sizes compared fairly
         for (const row of standings) if (best.has(row.teamId)) (row as any).qualified = true;
       }
     }

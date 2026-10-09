@@ -248,6 +248,9 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
       out.push({ key: 'atp', label: 'ATP Finals (played, head-to-head, sets %, games %)', order: ['wins', 'played', 'head_to_head', 'score_ratio', 'points_pct'] });
       out.push({ key: 'games', label: 'Total games won', order: ['points_won', 'head_to_head'] });
       break;
+    // Stage 11 · PB7: USA Pickleball 15.B.4 — head-to-head, point difference over
+    // every game, point difference between them, then points scored.
+    case 'pickleball': out.push({ key: 'usap', label: 'USA Pickleball (head-to-head, points)', order: ['head_to_head', 'points_diff', 'h2h_points_diff', 'points_won'] }); break;
     case 'chess':
       out.push({ key: 'fide_rr', label: 'Sonneborn-Berger', order: ['sonneborn_berger', 'head_to_head', 'wins'] });
       out.push({ key: 'fide_swiss', label: 'Buchholz', order: ['buchholz', 'sonneborn_berger', 'wins'] });

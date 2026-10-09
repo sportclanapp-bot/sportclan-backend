@@ -2406,7 +2406,7 @@ export async function getBracket(req: Request, res: Response) {
       const fin = deRows.filter((m: any) => m.bracket === 'final');
       if (fin.length) listed.push({ name: 'Final', ms: fin, bracket: 'final' });
       const reset = deRows.filter((m: any) => m.bracket === 'reset');
-      if (reset.length) listed.push({ name: 'Final · reset (if needed)', ms: reset, bracket: 'final' });
+      if (reset.length) listed.push({ name: 'Reset final', ms: reset, bracket: 'final' });
     }
     const rounds = listed.map(({ name, ms, bracket }) => ({
       name,
@@ -3003,8 +3003,8 @@ async function insertSingleElim(
  * winner goes), then the main draw with each match's loser link and the main
  * final leading to the final's A slot. Back-draw places a bye leaves empty are
  * filled with "BYE" as the main draw's byes resolve (advanceDoubleElim).
- * Back-draw, final and reset times are left to the fixture editor (the
- * fallback start), like a bracket's later rounds before they're known.
+ * Back-draw, final and reset times follow the main final, a round's gap apart;
+ * their courts are the organiser's to set (the fixture editor).
  */
 async function insertDoubleElim(
   base: BracketBase,
@@ -3012,9 +3012,14 @@ async function insertDoubleElim(
   slotFor: (round: number, matchNo: number) => { scheduled_at: string; ground_label: string } | undefined,
 ): Promise<{ byeMatchIds: string[] }> {
   const k = Math.max(1, Math.round(Math.log2(round1.length * 2)));
+  // The back draw, the final and the reset follow the main draw: each back round
+  // a round's gap after the main final's slot (courts left to the organiser).
+  const finalAt = slotFor(k, 0)?.scheduled_at; const firstAt = slotFor(1, 0)?.scheduled_at;
+  const gap = finalAt && firstAt && k > 1 ? (Date.parse(finalAt) - Date.parse(firstAt)) / (k - 1) : 0;
+  const after = (steps: number): string => (finalAt && gap > 0 ? new Date(Date.parse(finalAt) + steps * gap).toISOString() : base.fallbackStartIso);
   const shell = (round: number, matchNo: number, bracket: 'back' | 'final' | 'reset', stage: Stage, next: { id: string; slot: 'A' | 'B' } | null) => ({
     sport_id: base.sport_id, tournament_id: base.tournament_id, team_a_id: null, team_b_id: null, team_a_name: 'TBD', team_b_name: 'TBD',
-    scheduled_at: base.fallbackStartIso, ground_label: null, venue: base.venue, city_id: base.city_id, status: 'scheduled', score_summary: {},
+    scheduled_at: after(bracket === 'back' ? round : bracket === 'final' ? 2 * (k - 1) + 1 : 2 * (k - 1) + 2), ground_label: null, venue: base.venue, city_id: base.city_id, status: 'scheduled', score_summary: {},
     created_by: base.created_by, round, match_no: matchNo, next_match_id: next?.id ?? null, next_slot: next?.slot ?? null, is_ranked: true, bracket,
     ...(base.stageDefaults ? base.stageDefaults(stage) : (base.fixtureDefaults ?? {})),
   });

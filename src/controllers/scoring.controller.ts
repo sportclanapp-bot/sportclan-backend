@@ -21,7 +21,7 @@ import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointC
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber } from '../utils/cricketRules';
 import { typedMatchPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
-import { DOUBLES_PLAYERS, carromOptsOf, doublesLineupProblem, gamesWinner, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
+import { DOUBLES_PLAYERS, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
 import { splitTie, tieNeed, unitsOf, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
@@ -370,6 +370,17 @@ export async function validateScoringEvent(
     if (!timedHere) {
       return refuse(400, { error: 'Time is called only in a timed tennis match or carrom game.', code: 'BAD_NOTE' });
     }
+  }
+  // Stage 11 · PB6: a point off the offender, or the game forfeited — a step of
+  // this match's conduct ladder, in a sport scored in games (rally sports).
+  if (event_type === 'note' && payload && (payload.kind === 'point_off' || payload.kind === 'game_forfeit')) {
+    const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    const effect = payload.kind === 'point_off' ? 'point_off' : 'forfeit_game';
+    const onLadder = conductLadder(slug, rulesOf(slug, match)).some((k) => ladderStepDef(slug, k).effect === effect);
+    if (!SET_CONFIG[slug] || !onLadder) {
+      return refuse(400, { error: payload.kind === 'point_off' ? 'A point off isn’t a penalty in this match.' : 'Forfeiting a game isn’t a penalty in this match.', code: 'BAD_NOTE' });
+    }
+    if (payload.team_side !== 'A' && payload.team_side !== 'B') return refuse(400, { error: 'Say whose penalty it is.', code: 'BAD_NOTE' });
   }
   // BUILD 3.53: table tennis's expedite rule — table tennis only, and never
   // once both players have 9 points in the game (ITTF 2.15.1).
@@ -826,12 +837,22 @@ export function rollupSets(
   const setScoresA: number[] = [], setScoresB: number[] = [];
   for (const e of events) {
     if (decided) break;
-    if (e.event_type !== 'score') continue;
     const p: any = e.payload || {};
-    // Rally points are 1; carrom pieces/queen carry value (1 or 3).
-    const v = Number(p.value ?? 1);
-    if (sideOf(p) === 'A') curA += v; else curB += v;
     const target = cfg.finalTarget && period === cfg.maxSets ? cfg.finalTarget : cfg.target;
+    // Stage 11 · PB6: a technical foul takes a point off the offender; a
+    // forfeited game goes to the other side at its target to 0 (11-0).
+    if (e.event_type === 'note' && p.kind === 'point_off') {
+      if (sideOf(p) === 'A') curA = Math.max(0, curA - 1); else curB = Math.max(0, curB - 1);
+      continue;
+    }
+    if (e.event_type === 'note' && p.kind === 'game_forfeit') {
+      if (sideOf(p) === 'A') { curA = 0; curB = target; } else { curB = 0; curA = target; }
+    } else {
+      if (e.event_type !== 'score') continue;
+      // Rally points are 1; carrom pieces/queen carry value (1 or 3).
+      const v = Number(p.value ?? 1);
+      if (sideOf(p) === 'A') curA += v; else curB += v;
+    }
     const w = setWon(curA, curB, target, cfg.cap, cfg.winBy2);
     if (w) {
       setScoresA.push(curA); setScoresB.push(curB);

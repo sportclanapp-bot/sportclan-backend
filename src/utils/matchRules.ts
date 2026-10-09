@@ -305,21 +305,59 @@ export function slotMinutes(sport: string | null | undefined, rules: Partial<Mat
  * Stage 9 · T9 · each sport's code-violation ladder (its governing body's): a
  * warning; a point to the opponent (table tennis: then two); tennis: then the
  * game; then a default. The organiser can set another (rules.penaltyLadder).
+ *
+ * Stage 11 · PB6 · the ladder is data: each sport's steps (CONDUCT_STEPS) say
+ * what they're called and what they do, and a ladder is a list of a sport's
+ * own step keys. Pickleball (USA Pickleball, Sec. 22): a verbal warning, a
+ * technical warning, a technical foul (a point off the offender, or one to the
+ * opponent when they have none), the game forfeited (recorded 11-0), the match.
  */
 export const CONDUCT_LADDERS: Readonly<Record<string, string>> = {
   tennis: 'warning,point,game,default', // ITF / ATP point penalty schedule
   badminton: 'warning,point,default', // BWF: yellow, red (a fault), black (disqualified)
   tabletennis: 'warning,point,point2,default', // ITTF: yellow, yellow-red 1 point, 2 points, the referee
-  pickleball: 'warning,point,default', // technical warning, technical foul, forfeit
+  pickleball: 'verbal,warning,foul,forfeit_game,default', // Stage 11 · PB6: USA Pickleball Sec. 22 (was warning, point, forfeit)
   volleyball: 'warning,point,default', // FIVB: warning, penalty, disqualification
 };
-export type LadderStep = 'warning' | 'point' | 'point2' | 'game' | 'default';
+/** A step's key (the sport's own: CONDUCT_STEPS). */
+export type LadderStep = string;
+/**
+ * What a step does:
+ *   'none'          nothing else changes (a warning);
+ *   'points'        `n` points to the opponent;
+ *   'point_off'     a point off the offender's score in the game, or (at 0) one to the opponent;
+ *   'game'          the game in play to the opponent, point by point (tennis's game penalty);
+ *   'forfeit_game'  the game in play to the opponent, recorded at its target to 0 (11-0);
+ *   'match'         the match ends and goes to the opponent (a default / disqualification / forfeit).
+ */
+export type LadderEffect = 'none' | 'points' | 'point_off' | 'game' | 'forfeit_game' | 'match';
+export type LadderStepDef = { label: string; effect: LadderEffect; n?: number };
+const step = (label: string, effect: LadderEffect, n?: number): LadderStepDef => (n != null ? { label, effect, n } : { label, effect });
+/** Stage 11 · PB6: every step a sport's ladder may use, in that sport's words. */
+export const CONDUCT_STEPS: Readonly<Record<string, Readonly<Record<string, LadderStepDef>>>> = {
+  tennis: { warning: step('warning', 'none'), point: step('point penalty', 'points', 1), game: step('game penalty', 'game'), default: step('default', 'match') },
+  badminton: { warning: step('warning', 'none'), point: step('point penalty', 'points', 1), default: step('disqualification', 'match') },
+  tabletennis: { warning: step('warning', 'none'), point: step('point penalty', 'points', 1), point2: step('two-point penalty', 'points', 2), default: step('disqualification', 'match') },
+  pickleball: {
+    verbal: step('verbal warning', 'none'), warning: step('technical warning', 'none'), foul: step('technical foul', 'point_off'),
+    point: step('point penalty', 'points', 1), forfeit_game: step('game forfeit', 'forfeit_game'), default: step('match forfeit', 'match'),
+  },
+  volleyball: { warning: step('warning', 'none'), point: step('penalty', 'points', 1), default: step('disqualification', 'match') },
+};
+/** A step's definition in this sport (an unknown one reads as a warning). */
+export function ladderStepDef(sport: string | null | undefined, stepKey: string): LadderStepDef {
+  return CONDUCT_STEPS[lengthKey(sport)]?.[stepKey] ?? step('warning', 'none');
+}
+/** "verbal warning, technical warning, technical foul, game forfeit, match forfeit" — a ladder in the sport's words. */
+export function ladderWords(sport: string | null | undefined, ladder: string): string {
+  return ladder.split(',').map((k) => ladderStepDef(sport, k.trim()).label).join(', ');
+}
 /** The organiser's other choices, per sport (the standard is "Standard"). */
 export const LADDER_CHOICES: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
   tennis: [['warning,point,default', 'Warning, point, default'], ['warning,default', 'Warning, then default']],
   badminton: [['warning,default', 'Warning, then disqualification']],
   tabletennis: [['warning,point,default', 'Warning, point, disqualification'], ['warning,default', 'Warning, then disqualification']],
-  pickleball: [['warning,default', 'Warning, then forfeit']],
+  pickleball: [['warning,foul,default', 'Warning, technical foul, forfeit'], ['warning,point,default', 'Warning, point, forfeit'], ['warning,default', 'Warning, then forfeit']], // Stage 11 · PB6
   volleyball: [['warning,default', 'Warning, then disqualification']],
 };
 
@@ -339,10 +377,10 @@ export function conductWords(sport: string | null | undefined): ConductWords {
 export function ladderProblem(key: string, ladder: unknown): string | null {
   if (typeof ladder !== 'string' || !ladder.trim() || ladder.length > 120) return 'Code violations are a list of steps.';
   const steps = ladder.split(',').map((x) => x.trim());
-  const ok = new Set<string>(['warning', 'point', 'default', ...(key === 'tennis' ? ['game'] : []), ...(key === 'tabletennis' ? ['point2'] : [])]);
-  const odd = steps.find((x) => !ok.has(x));
+  const ok = CONDUCT_STEPS[key] ?? {}; // Stage 11 · PB6: the sport's own steps
+  const odd = steps.find((x) => !(x in ok));
   if (odd) return `“${odd.slice(0, 20)}” isn’t a penalty here.`;
-  if (steps.slice(0, -1).includes('default')) return 'A default ends the match, so it can only be the last step.';
+  if (steps.slice(0, -1).some((x) => ok[x]!.effect === 'match')) return `A ${conductWords(key).out} ends the match, so it can only be the last step.`;
   return null;
 }
 /** Stage 9 · T9: the ladder a match plays (its own, else the sport's), or [] for a sport without one. */

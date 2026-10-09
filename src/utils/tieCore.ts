@@ -240,7 +240,7 @@ export function splitTie<E extends { event_type: string }>(
   for (const e of events) {
     if (outcome.finished || results.length >= spec.rubbers.length) break;
     cur.push(e);
-    if (e.event_type !== 'score') continue;
+    if (e.event_type !== 'score' && e.event_type !== 'note') continue; // Stage 11 · PB6 / PB9: a forfeited game or time called can end a match too
     const rubber = spec.rubbers[results.length]!;
     const r = rubberOf(cur, rubber);
     if (!r.winner) continue;

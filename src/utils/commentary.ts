@@ -1,4 +1,4 @@
-import { conductWords } from './matchRules';
+import { conductWords, ladderStepDef } from './matchRules';
 /**
  * Timeline lines for football, hockey and basketball events (2026-09-26, after
  * MATCH_CREATE_TEST_5). The timeline printed these raw — `card {"kind":"red",
@@ -126,9 +126,12 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     const vb = ctx.sport === 'volleyball';
     const OFFENCE: Record<string, string> = { time: vb ? 'delay' : 'time', conduct: 'unsportsmanlike conduct', abuse: vb ? 'ball or equipment abuse' : 'racket or ball abuse', coaching: 'coaching', language: 'language', other: 'conduct' };
     const cw = conductWords(ctx.sport);
-    const PENALTY: Record<string, string> = { warning: 'warning', point: 'point penalty', point2: 'two-point penalty', game: 'game penalty', default: cw.out };
-    return `⚠️ ${cw.title.charAt(0).toUpperCase()}${cw.title.slice(1)} — ${player ? `${player} (${team})` : team} · ${OFFENCE[String(p.offence)] ?? 'conduct'} · ${PENALTY[String(p.penalty)] ?? 'warning'}`;
+    // Stage 11 · PB6: each step in the sport's own words (CONDUCT_STEPS).
+    return `⚠️ ${cw.title.charAt(0).toUpperCase()}${cw.title.slice(1)} — ${player ? `${player} (${team})` : team} · ${OFFENCE[String(p.offence)] ?? 'conduct'} · ${ladderStepDef(ctx.sport, String(p.penalty ?? 'warning')).label}`;
   }
+  // Stage 11 · PB6: what a technical foul or a game forfeit did to the score.
+  if (eventType === 'note' && p.kind === 'point_off') return `➖ A point off ${team}`;
+  if (eventType === 'note' && p.kind === 'game_forfeit') return `🏳️ Game forfeited by ${team}`;
   // Stage 10 · TT3: a paper-scored match typed in.
   if (eventType === 'note' && p.kind === 'typed_score') return `📝 Result entered from the score sheet: ${String(p.text ?? '')}`;
   if (eventType === 'note' && p.kind === 'warmup') return '⏱ Warm-up';

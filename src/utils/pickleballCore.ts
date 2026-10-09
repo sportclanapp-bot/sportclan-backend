@@ -102,6 +102,23 @@ export function sideOutPenalty(s: SideOutState, side: PbSide, opts: SideOutOpts)
   return addPoint(s, side, opts);
 }
 
+/**
+ * Stage 11 · PB6 · a technical foul (USA Pickleball 22): a point off the
+ * offender's score in the game; the serve doesn't change. (At 0 the app sends
+ * a penalty point to the opponent instead.)
+ */
+export function sideOutPointOff(s: SideOutState, offender: PbSide): SideOutState {
+  if (s.winner || s.cur[offender] <= 0) return s;
+  return { ...s, cur: { ...s.cur, [offender]: s.cur[offender] - 1 } };
+}
+
+/** Stage 11 · PB6 · the game in play forfeited by `offender`: the opponent takes it, recorded at the target to 0 (11-0). */
+export function sideOutForfeitGame(s: SideOutState, offender: PbSide, opts: SideOutOpts): SideOutState {
+  if (s.winner) return s;
+  const to = other(offender);
+  return addPoint({ ...s, cur: { [to]: Math.max(opts.target, 0) - 1, [offender]: 0 } as { A: number; B: number } }, to, { ...opts, winBy2: false });
+}
+
 /** The scorer's correction: the other side is serving. */
 export function sideOutSwap(s: SideOutState): SideOutState {
   if (s.winner) return s;
@@ -117,6 +134,8 @@ export function sideOutReplay(
   for (const e of events) {
     const p = (e.payload ?? {}) as { team_side?: unknown; kind?: unknown };
     if (e.event_type === 'serve_swap') s = sideOutSwap(s);
+    else if (e.event_type === 'note' && p.kind === 'point_off') s = sideOutPointOff(s, p.team_side === 'B' ? 'B' : 'A'); // Stage 11 · PB6
+    else if (e.event_type === 'note' && p.kind === 'game_forfeit') s = sideOutForfeitGame(s, p.team_side === 'B' ? 'B' : 'A', opts);
     else if (e.event_type === 'score' && p.kind === 'penalty') s = sideOutPenalty(s, p.team_side === 'B' ? 'B' : 'A', opts); // Stage 9 · T9
     else if (e.event_type === 'score') s = sideOutRally(s, p.team_side === 'B' ? 'B' : 'A', opts);
   }

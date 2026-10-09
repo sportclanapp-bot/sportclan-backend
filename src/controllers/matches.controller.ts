@@ -43,7 +43,7 @@ import { validateSportForCreate, activeSportIds } from '../utils/sports';
 import { isTerminalMatchStatus, LIMITS, isCount, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner, recrownAfterVoidChange, tournamentSettingsOf } from './tournaments.controller';
-import { recomputeSummary, writeCricketInningsStats, bestOfState } from './scoring.controller';
+import { recomputeSummary, writeCricketInningsStats, bestOfState, rollupTieSpec } from './scoring.controller';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { awardBadgesSafe, revokeRecordBadgesSafe } from './badges.controller';
 import { isUuid } from '../utils/uuid';
@@ -57,7 +57,7 @@ import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/ma
 import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
 import { applyChessTcDeltas, recordChessTc } from '../utils/chessTcRatings';
 import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules, conductWords, tieSpecOf } from '../utils/matchRules';
-import { tieTossOf, tieTossText, tieTrumpText } from '../utils/tieCore';
+import { tieTossOf, tieTossText, tieTrumpResultLines, tieTrumpText } from '../utils/tieCore';
 import { hasTrump, trumpsFor } from '../utils/tieTrumps';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, superOverPlayedText, tieFallbackText, boundariesOf, type SuperOverState, type TieFallback, typedScoreRefusal, typedScoreWinner, typedOversToBalls, type UnfinishedEnd } from '../utils/cricketRules';
@@ -1727,6 +1727,18 @@ export async function getCommentary(req: Request, res: Response) {
     const trumpLine = trumpSpec && picks && ((picks.A && picks.B) || (match as { status?: string }).status !== 'scheduled')
       ? tieTrumpText(trumpSpec, picks, { A: teamA, B: teamB }) : null;
     if (trumpLine) enriched.splice(toss && tossSpec ? 1 : 0, 0, { id: `tie-trumps-${match.id}`, over_ball: null, event_type: 'note', commentary: trumpLine, text: trumpLine, payload: { kind: 'tie_trumps' }, timestamp: null, is_wicket: false, is_boundary: false });
+    // 2.14: a trump match's result where it happened — "Trump won: Delhi ×2 · tie now 1–2", and with
+    // PBL's rule on, "Trump lost: Pune −1 · tie now −1–1".
+    if (trumpSpec?.trump && picks && events?.length) {
+      const roll = rollupTieSpec(slug, rulesOf(slug, match as never) as MatchRules, { ...trumpSpec, trumps: picks }, events as never, (p: any) => (p?.team_side === 'B' ? 'B' : 'A'));
+      roll.ends.forEach((at, i) => {
+        const lines = tieTrumpResultLines({ ...trumpSpec, trumps: picks }, roll.finished.slice(0, i + 1), { A: teamA, B: teamB });
+        const ev = events![at];
+        if (!lines.length || !ev) return;
+        const pos = enriched.findIndex((x) => x.id === ev.id);
+        enriched.splice(pos < 0 ? enriched.length : pos + 1, 0, ...lines.map((line, k) => ({ id: `tie-trump-${i}-${k}-${match.id}`, over_ball: null, event_type: 'note', commentary: line, text: line, payload: { kind: 'tie_trump_result' }, timestamp: ev.created_at, is_wicket: false, is_boundary: false })));
+      });
+    }
 
     // Return newest-first.
     enriched.reverse();

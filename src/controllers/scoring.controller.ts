@@ -22,7 +22,7 @@ import { isKnockoutBracketMatch } from '../utils/knockout';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber } from '../utils/cricketRules';
 import { typedMatchPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
-import { splitTie, tieNeed, unitsOf, type TieRubber, type TieSpec } from '../utils/tieCore';
+import { splitTie, tieNeed, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { trumpsFor } from '../utils/tieTrumps';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
@@ -905,7 +905,7 @@ export function rollupSets(
 export function rollupTieSpec(
   slug: string, rules: MatchRules, spec: TieSpec,
   events: { event_type: string; payload: any }[], sideOf: (p: any) => 'A' | 'B',
-): { scoreA: number; scoreB: number; setsA: number[]; setsB: number[]; gamesA: number; gamesB: number; curA: number; curB: number; rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw'; key: string; label: string; unitsA: number; unitsB: number }>; tie: { win: string; rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: 'A' | 'B' | 'draw' | null; decider?: boolean } } {
+): { scoreA: number; scoreB: number; setsA: number[]; setsB: number[]; gamesA: number; gamesB: number; curA: number; curB: number; rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw'; key: string; label: string; unitsA: number; unitsB: number }>; tie: { win: string; rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: 'A' | 'B' | 'draw' | null; decider?: boolean }; finished: RubberResult[]; ends: number[] } {
   const own = !!rules.tie;
   const single = { ...rules, tie: null, rubbers: null } as MatchRules;
   // Stage 11 · PB3: a match with its own rules (the DreamBreaker) plays those over the tie's.
@@ -941,6 +941,8 @@ export function rollupTieSpec(
     rubber: o.finished ? split.results.length : split.results.length + 1,
     results: split.results.map((r, i) => ({ A: won(r.sets.A, r.sets.B), B: won(r.sets.B, r.sets.A), winner: r.winner, key: r.key, label: spec.rubbers[i]?.label ?? r.key, unitsA: r.units.A, unitsB: r.units.B })),
     tie: { win: spec.win, rubbersA: o.rubbersA, rubbersB: o.rubbersB, unitsA: o.unitsA, unitsB: o.unitsB, decided: o.decided, ...(o.decider ? { decider: true } : {}) }, // Stage 11 · PB3: won in the deciding match
+    // 2.14: each finished match as the engine read it, and the event that ended it (the timeline's trump lines).
+    finished: split.results, ends: split.ends,
   };
 }
 

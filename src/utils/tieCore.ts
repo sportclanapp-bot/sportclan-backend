@@ -333,11 +333,14 @@ export type RubberRead = { winner: TieSide | 'draw' | null; sets: { A: number[];
  */
 export function splitTie<E extends { event_type: string }>(
   events: ReadonlyArray<E>, spec: TieSpec, rubberOf: (events: E[], rubber: TieRubber) => RubberRead,
-): { results: RubberResult[]; current: number; currentEvents: E[]; outcome: TieOutcome } {
+): { results: RubberResult[]; current: number; currentEvents: E[]; outcome: TieOutcome; ends: number[] } {
   const results: RubberResult[] = [];
+  // 2.14: the index (in `events`) of the event that ended each match — the timeline's trump lines go there.
+  const ends: number[] = [];
   let cur: E[] = [];
   let outcome = tieOutcome(spec, results);
-  for (const e of events) {
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i]!;
     if (outcome.finished || results.length >= spec.rubbers.length) break;
     cur.push(e);
     if (e.event_type !== 'score' && e.event_type !== 'note') continue; // Stage 11 · PB6 / PB9: a forfeited game or time called can end a match too
@@ -345,10 +348,32 @@ export function splitTie<E extends { event_type: string }>(
     const r = rubberOf(cur, rubber);
     if (!r.winner) continue;
     results.push({ key: rubber.key, winner: r.winner, sets: r.sets, units: r.units });
+    ends.push(i);
     cur = [];
     outcome = tieOutcome(spec, results);
   }
-  return { results, current: results.length, currentEvents: cur, outcome };
+  return { results, current: results.length, currentEvents: cur, outcome, ends };
+}
+
+/**
+ * 2.14 · the timeline line when a trump match ends, or null: won ("🃏 Trump won: Delhi ×2 · tie now 1–2"),
+ * or lost with PBL's rule on ("🃏 Trump lost: Pune −1 · tie now −1–1"). A trump that ends level, or one
+ * lost with the rule off, says nothing. `results` is every match finished so far, this one last.
+ */
+export function tieTrumpResultLines(spec: TieSpec, results: ReadonlyArray<RubberResult>, names: Record<TieSide, string>): string[] {
+  const i = results.length - 1;
+  const r = results[i]; const rubber = spec.rubbers[i];
+  if (!spec.trump || !r || !rubber || rubber.decider || (r.winner !== 'A' && r.winner !== 'B')) return [];
+  const o = tieOutcome(spec, results);
+  const n = (x: number) => (x < 0 ? `−${-x}` : String(x));
+  const now = `tie now ${n(o.rubbersA)}–${n(o.rubbersB)}`;
+  const out: string[] = [];
+  for (const s of ['A', 'B'] as const) {
+    if (spec.trumps?.[s] !== rubber.key) continue;
+    if (r.winner === s) out.push(`🃏 Trump won: ${names[s]} ×2 · ${now}`);
+    else if (spec.trumpLoss) out.push(`🃏 Trump lost: ${names[s]} −1 · ${now}`);
+  }
+  return out;
 }
 
 /** The sum of a side's sets (tennis: games; the rally sports: points). */

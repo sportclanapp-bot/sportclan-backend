@@ -49,7 +49,7 @@ describe('tournament official roles', () => {
   it("'organiser' is refused with a 400 naming the allowed roles, before any query", async () => {
     const r = await call({ user_id: PERSON, role: 'organiser' });
     expect(r.statusCode).toBe(400);
-    expect(r.body.error).toBe('role must be one of: umpire, referee, scorer, commentator, assistant, chief_referee, deputy_referee'); // Stage 10 · TT12
+    expect(r.body.error).toBe('role must be one of: umpire, referee, scorer, commentator, assistant, chief_referee, deputy_referee, pairings, sector, fair_play'); // Stage 10 · TT12 · Stage 12 · CH11
     expect(mockFrom).not.toHaveBeenCalled();
   });
 });

@@ -20,6 +20,7 @@ import { deletedIdSet } from '../utils/activeUser';
 import { targetUserHidden } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
 import { getSport, normSportSlug } from '../utils/sportCache';
+import { sportTerms } from '../utils/sportTerms';
 import { LEADER_STATS, leaderUserIds, tournamentLeaders, type LeaderMatch, type StatsRow, type LeaderStat } from '../utils/tournamentLeaders';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -327,7 +328,7 @@ export async function getTournamentTopPerformers(req: Request, res: Response) {
 // Must match the tournament_officials.role CHECK (migration 036). 'organiser'
 // was listed here too, but the CHECK refuses it, so adding one passed this
 // check and then 500'd on the insert. Organisers are co-organisers (064).
-export const OFFICIAL_ROLES = ['umpire', 'referee', 'scorer', 'commentator', 'assistant', 'chief_referee', 'deputy_referee']; // Stage 8 · F11: + assistant (migration 125) · Stage 10 · TT12: + the tournament's referee and deputy (migration 134)
+export const OFFICIAL_ROLES = ['umpire', 'referee', 'scorer', 'commentator', 'assistant', 'chief_referee', 'deputy_referee', 'pairings', 'sector', 'fair_play']; // Stage 8 · F11: + assistant (migration 125) · Stage 10 · TT12: + the tournament's referee and deputy (migration 134) · Stage 12 · CH11: + pairings, sector, fair-play arbiters (migration 138)
 
 export async function addTournamentOfficial(req: Request, res: Response) {
   const userId = req.userId;
@@ -343,9 +344,14 @@ export async function addTournamentOfficial(req: Request, res: Response) {
     }
     const id = await rootTournamentId(String(req.params.id)); // badminton gap 1: kept on the tournament
 
-    const { data: tournament } = await supabase.from('tournaments').select('created_by').eq('id', id).maybeSingle();
+    const { data: tournament } = await supabase.from('tournaments').select('created_by, sport_id').eq('id', id).maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     if (!(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only organiser can add officials' });
+    // Stage 12 · CH11: the pairings / sector / anti-cheating arbiters only where the sport has them (chess).
+    if (role === 'pairings' || role === 'sector' || role === 'fair_play') {
+      const slug = (await getSport((tournament as { sport_id?: string }).sport_id ?? ''))?.slug;
+      if (!sportTerms(slug).deskRoles[role]) return res.status(400).json({ error: 'This sport doesn’t have that official.', code: 'ROLE_NOT_IN_SPORT' });
+    }
     const { data: person } = await supabase.from('users').select('id').eq('id', user_id).is('deleted_at', null).maybeSingle();
     if (!person) return res.status(404).json({ error: 'User not found' });
 

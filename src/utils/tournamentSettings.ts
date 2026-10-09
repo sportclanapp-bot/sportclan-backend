@@ -452,7 +452,37 @@ export type Category = {
    * a coach, an ex-professional or a marker (the organiser can still refuse an entry).
    */
   amateurOnly?: boolean | null;
+  /**
+   * Stage 12 · CH10 · the circulars' own words: "born on or after 1 Jan 2017"
+   * (an under-age group) and "born on or before 31 Dec 1970" (veterans), as
+   * 'YYYY-MM-DD'. When set, the date decides (the under-age / minimum age stays
+   * as the group's name); every sport.
+   */
+  bornFrom?: string | null;
+  bornTo?: string | null;
 };
+
+/** Stage 12 · CH10: a 'YYYY-MM-DD' that is a real date. */
+export const isIsoDate = (x: unknown): x is string => {
+  if (typeof x !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(x)) return false;
+  const d = new Date(`${x}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === x;
+};
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "1 Jan 2017". */
+export const dateWords = (iso: string): string => `${Number(iso.slice(8, 10))} ${MONTHS[Number(iso.slice(5, 7)) - 1] ?? ''} ${iso.slice(0, 4)}`;
+/**
+ * Stage 12 · CH10 · the AICF-style dates for an age group in a tournament
+ * starting `start` ('YYYY-MM-DD'): U-N = born on or after 1 Jan (year − N);
+ * N+ = born on or before 31 Dec (year − N).
+ */
+export function circularDates(start: string, g: { underAge?: number | null; minAge?: number | null }): { bornFrom?: string; bornTo?: string } {
+  const y = Number(start.slice(0, 4));
+  if (!y) return {};
+  if (g.underAge != null) return { bornFrom: `${y - g.underAge}-01-01` };
+  if (g.minAge != null) return { bornTo: `${y - g.minAge}-12-31` };
+  return {};
+}
 
 /** Stage 9 · T12: a pair's combined age, 40 to 200. */
 export const PAIR_AGE_MIN: [number, number] = [40, 200];
@@ -463,7 +493,7 @@ export function categoryRefusal(c: unknown): Refusal | null {
   if (c === undefined || c === null) return null;
   if (typeof c !== 'object' || Array.isArray(c)) return refuse('A category must be an object.');
   const o = c as Record<string, unknown>;
-  const unknown = Object.keys(o).find((k) => !['gender', 'underAge', 'minAge', 'maxRating', 'minRating', 'ageBasis', 'pairAgeMin', 'amateurOnly'].includes(k));
+  const unknown = Object.keys(o).find((k) => !['gender', 'underAge', 'minAge', 'maxRating', 'minRating', 'ageBasis', 'pairAgeMin', 'amateurOnly', 'bornFrom', 'bornTo'].includes(k));
   if (unknown) return refuse(`“${unknown}” isn’t part of a category.`);
   if (o.ageBasis != null && o.ageBasis !== 'year') return refuse('Ages are on the start date, or by birth year.');
   if (o.gender != null && !['men', 'women', 'mixed'].includes(o.gender as string)) return refuse('A category is men’s, women’s, mixed or open.');
@@ -475,6 +505,10 @@ export function categoryRefusal(c: unknown): Refusal | null {
   if (o.maxRating != null && o.minRating != null && (o.minRating as number) > (o.maxRating as number)) return refuse('The lowest rating can’t be above the highest.');
   if (o.pairAgeMin != null && !isInt(o.pairAgeMin, PAIR_AGE_MIN[0], PAIR_AGE_MIN[1])) return refuse(`A pair’s combined age is ${PAIR_AGE_MIN[0]} to ${PAIR_AGE_MIN[1]}.`); // Stage 9 · T12
   if (o.amateurOnly != null && typeof o.amateurOnly !== 'boolean') return refuse('Amateurs only is on or off.');
+  // Stage 12 · CH10.
+  if (o.bornFrom != null && !isIsoDate(o.bornFrom)) return refuse('“Born on or after” is a date (YYYY-MM-DD).');
+  if (o.bornTo != null && !isIsoDate(o.bornTo)) return refuse('“Born on or before” is a date (YYYY-MM-DD).');
+  if (o.bornFrom != null && o.bornTo != null && (o.bornFrom as string) > (o.bornTo as string)) return refuse('“Born on or after” can’t be later than “born on or before”.');
   return null;
 }
 
@@ -484,6 +518,8 @@ export function storedCategory(c: Record<string, any> | null | undefined): Categ
   const out: Category = {};
   for (const k of ['gender', 'underAge', 'minAge', 'maxRating', 'minRating', 'pairAgeMin'] as const) if (c[k] != null) (out as Record<string, unknown>)[k] = c[k];
   if (c.amateurOnly === true) out.amateurOnly = true; // Stage 9 · T12
+  if (c.bornFrom) out.bornFrom = c.bornFrom; // Stage 12 · CH10
+  if (c.bornTo) out.bornTo = c.bornTo;
   // 7.11: by birth year — only meaningful with an age limit (Stage 9 · T12: or a pair's combined age).
   if (c.ageBasis === 'year' && (out.underAge != null || out.minAge != null || out.pairAgeMin != null)) out.ageBasis = 'year';
   return Object.keys(out).length ? out : null;
@@ -494,8 +530,11 @@ export function categoryLabel(c: Category | null | undefined): string | null {
   if (!c) return null;
   const parts: string[] = [];
   if (c.gender) parts.push(c.gender === 'men' ? 'Men’s' : c.gender === 'women' ? 'Women’s' : 'Mixed');
-  if (c.underAge != null) parts.push(`Under ${c.underAge}${c.ageBasis === 'year' ? ' (by birth year)' : ''}`);
-  if (c.minAge != null) parts.push(`${c.minAge} and over${c.ageBasis === 'year' ? ' (by birth year)' : ''}`);
+  // Stage 12 · CH10: a birth date decides when set ("Under 9 · born on or after 1 Jan 2017").
+  if (c.underAge != null) parts.push(`Under ${c.underAge}${c.ageBasis === 'year' && !c.bornFrom ? ' (by birth year)' : ''}`);
+  if (c.minAge != null) parts.push(`${c.minAge} and over${c.ageBasis === 'year' && !c.bornTo ? ' (by birth year)' : ''}`);
+  if (c.bornFrom) parts.push(`born on or after ${dateWords(c.bornFrom)}`);
+  if (c.bornTo) parts.push(`born on or before ${dateWords(c.bornTo)}`);
   if (c.minRating != null && c.maxRating != null) parts.push(`Rated ${c.minRating}–${c.maxRating}`);
   else if (c.maxRating != null) parts.push(`Rated up to ${c.maxRating}`);
   else if (c.minRating != null) parts.push(`Rated ${c.minRating} and up`);
@@ -536,17 +575,24 @@ export function categoryProblem(c: Category | null | undefined, players: Categor
       if (p.gender !== 'male' && p.gender !== 'female') return `${poss(p.name)} profile doesn’t list their gender as ${c.gender === 'men' ? 'man' : 'woman'}. Add it to the profile first.`;
       if (p.gender !== want) return `This is a ${c.gender === 'men' ? 'men’s' : 'women’s'} event, and ${p.name} can’t play in it.`;
     }
-    if (c.underAge != null || c.minAge != null) {
+    // Stage 12 · CH10: a birth-date limit decides on its own.
+    if (c.bornFrom || c.bornTo) {
+      const dob = p.dob && isIsoDate(p.dob.slice(0, 10)) ? p.dob.slice(0, 10) : null;
+      if (!dob) return `${poss(p.name)} profile doesn’t list their date of birth, and this event has an age limit. Add it to the profile first.`;
+      if (c.bornFrom && dob < c.bornFrom) return `This event is for players born on or after ${dateWords(c.bornFrom)}, and ${p.name} was born on ${dateWords(dob)}.`;
+      if (c.bornTo && dob > c.bornTo) return `This event is for players born on or before ${dateWords(c.bornTo)}, and ${p.name} was born on ${dateWords(dob)}.`;
+    }
+    if ((c.underAge != null && !c.bornFrom) || (c.minAge != null && !c.bornTo)) {
       // 7.11: by birth year, the age a player turns in the start date's year.
       const byYear = c.ageBasis === 'year';
       const age = p.dob ? (byYear ? ageInYear(p.dob, on) : ageOn(p.dob, on)) : null;
       if (age == null) return `${poss(p.name)} profile doesn’t list their date of birth, and this event has an age limit. Add it to the profile first.`;
       const year = on.getUTCFullYear();
-      if (c.underAge != null && age >= c.underAge) {
+      if (c.underAge != null && !c.bornFrom && age >= c.underAge) {
         return byYear ? `This is an under-${c.underAge} event by birth year (born ${year - c.underAge + 1} or later), and ${p.name} turns ${age} in ${year}.`
           : `This is an under-${c.underAge} event, and ${p.name} is ${age} on the start date.`;
       }
-      if (c.minAge != null && age < c.minAge) {
+      if (c.minAge != null && !c.bornTo && age < c.minAge) {
         return byYear ? `This event is for ${c.minAge} and over by birth year (born ${year - c.minAge} or earlier), and ${p.name} turns ${age} in ${year}.`
           : `This event is for ${c.minAge} and over, and ${p.name} is ${age} on the start date.`;
       }

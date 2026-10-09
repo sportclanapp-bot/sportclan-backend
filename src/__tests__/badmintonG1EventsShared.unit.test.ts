@@ -49,7 +49,8 @@ test('a plain tournament checks only its own co-organisers (as before)', async (
 test('the tournament’s scorer scores every event', async () => {
   mockNext = (q) => {
     if (q[0] === 'from:tournaments') return { data: { id: E, parent_id: P } };
-    if (q[0] === 'from:tournament_officials') return { data: arg(q, 'in')[1].includes(P) ? [{ id: 'o' }] : [] };
+    // Stage 12 · CH11: the roles are an in() too now — read the tournament ids' one.
+    if (q[0] === 'from:tournament_officials') return { data: q.filter((c) => c.startsWith('in:')).map((c) => JSON.parse(c.slice(3))).find((a) => a[0] === 'tournament_id')[1].includes(P) ? [{ id: 'o' }] : [] };
     return { data: null };
   };
   expect(await isTournamentScorer(E, 'sc')).toBe(true);

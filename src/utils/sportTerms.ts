@@ -33,6 +33,13 @@ export type SportTerms = {
   referee: string;
   deputyReferee: string | null;
   assistant: string;
+  /**
+   * Stage 12 · CH11 · the tournament's other officials, by function, where the
+   * sport has them (chess: Pairings, Sector and Anti-cheating arbiters). Empty
+   * elsewhere — every other sport's equivalents are its match assistants and
+   * its referee / deputy.
+   */
+  deskRoles: Partial<Record<'pairings' | 'sector' | 'fair_play', string>>;
 };
 
 const key = (s: string | null | undefined): string => String(s ?? '').toLowerCase().replace(/[-_\s]/g, '');
@@ -42,7 +49,7 @@ const plural = (w: string): string => (/(ch|sh|s|x)$/i.test(w) ? `${w}es` : `${w
 
 const t = (area: string, official: string, assistants: AssistantRole[], venue: string, name: string, areaNames: string, referee = 'Referee', deputyReferee: string | null = 'Deputy referee'): SportTerms => ({
   area, areas: plural(area), official, officials: plural(official), assistants, venue, name, areaNames,
-  referee, deputyReferee, assistant: `Assistant ${official.toLowerCase()}`,
+  referee, deputyReferee, assistant: `Assistant ${official.toLowerCase()}`, deskRoles: {},
 });
 
 /** Cricket's words: every screen's words before Stage 8, and the default. */
@@ -70,8 +77,9 @@ const TERMS: Record<string, SportTerms> = {
     'e.g. Community Hall', 'e.g. Thane TT Championship 2026', 'e.g. Table 1, Table 2'),
   pickleball: t('Court', 'Referee', [{ key: 'line_judge', label: 'Line judge' }],
     'e.g. City Indoor Stadium', 'e.g. Bengaluru Pickleball Open 2026', 'e.g. Court 1, Court 2', 'Head referee', 'Deputy head referee'),
-  chess: t('Board', 'Arbiter', [{ key: 'deputy_arbiter', label: 'Deputy arbiter' }],
+  chess: { ...t('Board', 'Arbiter', [{ key: 'deputy_arbiter', label: 'Deputy arbiter' }],
     'e.g. Community Hall', 'e.g. Thane Rapid Open 2026', 'e.g. Board 1, Board 2', 'Chief arbiter', 'Deputy chief arbiter'),
+    deskRoles: { pairings: 'Pairings arbiter', sector: 'Sector arbiter', fair_play: 'Anti-cheating arbiter' } }, // Stage 12 · CH11 (FIDE)
   carrom: t('Board', 'Umpire', [],
     'e.g. Dadar Club Hall', 'e.g. Dadar Carrom Championship 2026', 'e.g. Board 1, Board 2', 'Chief referee', 'Deputy chief referee'),
   kabaddi: t('Court', 'Referee', [{ key: 'umpire_1', label: 'Umpire 1' }, { key: 'umpire_2', label: 'Umpire 2' }],

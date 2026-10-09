@@ -104,7 +104,7 @@ export async function isTournamentScorer(tournamentId: string, userId: string): 
     .select('id')
     .in('tournament_id', ids)
     .eq('user_id', userId)
-    .eq('role', 'scorer')
+    .in('role', ['scorer', 'pairings', 'sector', 'fair_play']) // Stage 12 · CH11: chess's pairings, sector and anti-cheating arbiters enter results too
     .limit(1);
   return (data ?? []).length > 0;
 }
@@ -122,7 +122,7 @@ export async function canDefault(
   if (!match.tournament_id) return false;
   const ids = await familyLookupIds(match.tournament_id);
   const { data } = await supabase.from('tournament_officials').select('id')
-    .in('tournament_id', ids).eq('user_id', userId).in('role', ['referee', 'umpire', 'chief_referee', 'deputy_referee']).limit(1); // TT12: the tournament's referee and deputy
+    .in('tournament_id', ids).eq('user_id', userId).in('role', ['referee', 'umpire', 'chief_referee', 'deputy_referee', 'sector']).limit(1); // TT12: the tournament's referee and deputy · CH11: a sector arbiter
   return (data ?? []).length > 0;
 }
 

@@ -1370,6 +1370,7 @@ export async function recomputeSummary(
   const B: Record<string, any> = { score: 0 };
   let tennisState: TennisScore | null = null;
   let carromBoardsPlayed: number | null = null; // A5: boards played in the carrom game in play
+  let carromSlams: { A: number; B: number } | null = null; // Stage 13 · CR6: White / Black slams each side
   let tieRubbers: { rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw' }> } | null = null; // BUILD 3.49 · Stage 11 · PB9: a level timed match
   let tieSummary: ReturnType<typeof rollupTieSpec>['tie'] | null = null; // Stage 9 · T3
   let sideOutServe: { side: 'A' | 'B'; number: 1 | 2 } | null = null; // BUILD 3.58
@@ -1514,6 +1515,13 @@ export async function recomputeSummary(
     A.sets = c.games.map((g) => g.A); B.sets = c.games.map((g) => g.B);    // each game's final score
     A.points = c.points.A; B.points = c.points.B;                          // the game in play
     carromBoardsPlayed = c.boards;
+    // Stage 13 · CR6: slams, counted for the match's stats (a board won break-to-finish / in the first turn).
+    const slams = { A: 0, B: 0 };
+    for (const e of events) {
+      const p: any = e.payload || {};
+      if (e.event_type === 'score' && p.kind === 'board' && (p.slam === 'white' || p.slam === 'black')) slams[sideOf(p)] += 1;
+    }
+    if (slams.A + slams.B > 0) carromSlams = slams;
   } else if (SET_CONFIG[slug]) {
     // Decision B: best-of from the match's preset (the deciding set is still the
     // last possible one, so a best-of-3 volleyball match plays its 3rd to 15).
@@ -1645,6 +1653,7 @@ export async function recomputeSummary(
   // and the A7-002 results surface don't change.
   summary.players = aggregatePlayers(slug, events as any[]);
   if (carromBoardsPlayed !== null) summary.boards_played = carromBoardsPlayed;
+  if (carromSlams) summary.slams = carromSlams; // Stage 13 · CR6
   if (tieRubbers) { summary.rubber = tieRubbers.rubber; summary.rubbers = tieRubbers.results; } // BUILD 3.49
   if (tieSummary) summary.tie = tieSummary; // Stage 9 · T3: the win rule, rubbers and games each side
   if (sideOutServe) summary.serve = sideOutServe; // BUILD 3.58: who serves, and (doubles) server 1 or 2

@@ -156,7 +156,15 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (eventType === 'serve_swap') return '🔁 Serve changed';
   if (ctx.sport === 'carrom' && eventType === 'score' && p.kind === 'board') {
     const v = Number(p.value ?? 0);
-    return `⚪ Board to ${team} · +${v}${player ? ` (${player})` : ''}`;
+    // Stage 13 · CR6: a slam says so (White: break to finish; Black: all the rest in the first turn).
+    const slam = p.slam === 'white' ? '🎯 White slam! ' : p.slam === 'black' ? '🎯 Black slam! ' : '';
+    return `${slam}⚪ Board to ${team} · +${v}${player ? ` (${player})` : ''}`;
+  }
+  // Stage 13 · CR4: the toss — who won it and what they chose; the extra board's toss after the board limit.
+  if (ctx.sport === 'carrom' && eventType === 'note' && p.kind === 'toss') {
+    const who = p.winner === 'B' ? ctx.teamB : ctx.teamA;
+    if (p.extra === true) return `🪙 Toss for the extra board — ${who} breaks`;
+    return `🪙 Toss — ${who} won it and chose ${p.choice === 'side' ? 'a side (the other breaks)' : 'to break'}`;
   }
   if (ctx.sport === 'tennis' && eventType === 'score' && (p.kind === 'ace' || p.kind === 'double_fault')) {
     return p.kind === 'ace' ? `🎾 Ace — point to ${team}` : `Double fault — point to ${team}`;

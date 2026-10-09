@@ -135,7 +135,10 @@ export type TiebreakToken =
   // a team is separated the rest are ranked again among themselves, then lots.
   | 'h2h_score_diff' | 'h2h_score_scored' | 'h2h_score_ratio' | 'h2h_points_diff' | 'h2h_points_ratio'
   // Stage 11 follow-up · USA Pickleball 15.B.4: point difference against the next-placed team.
-  | 'points_diff_vs_next';
+  | 'points_diff_vs_next'
+  // Stage 12 · CH1 · FIDE C.07 (2026), chess: Buchholz Cut-1 and Median-1, wins with Black,
+  // games with Black, progressive score, average rating of opponents; CH9 · Koya (round robin).
+  | 'buchholz_cut1' | 'buchholz_median' | 'wins_black' | 'games_black' | 'progressive' | 'aro' | 'koya';
 
 const ALIASES: Record<string, TiebreakToken> = {
   head_to_head: 'head_to_head', h2h: 'head_to_head', head2head: 'head_to_head', headtohead: 'head_to_head',
@@ -161,7 +164,16 @@ const ALIASES: Record<string, TiebreakToken> = {
   h2h_score_ratio: 'h2h_score_ratio', h2h_game_ratio: 'h2h_score_ratio', h2h_set_ratio: 'h2h_score_ratio',
   h2h_points_diff: 'h2h_points_diff', h2h_points_ratio: 'h2h_points_ratio',
   points_diff_vs_next: 'points_diff_vs_next', point_difference_vs_next: 'points_diff_vs_next',
+  // Stage 12 · CH1 / CH9 · FIDE's codes too.
+  bh: 'buchholz', buchholz_cut1: 'buchholz_cut1', bh_c1: 'buchholz_cut1', 'bh-c1': 'buchholz_cut1', buchholz_cut_1: 'buchholz_cut1',
+  buchholz_median: 'buchholz_median', bh_m1: 'buchholz_median', median_buchholz: 'buchholz_median',
+  wins_black: 'wins_black', bwg: 'wins_black', wins_with_black: 'wins_black', games_black: 'games_black', bpg: 'games_black', games_with_black: 'games_black',
+  progressive: 'progressive', ps: 'progressive', progressive_score: 'progressive', cumulative: 'progressive',
+  aro: 'aro', average_rating_opponents: 'aro', avg_opp_rating: 'aro', koya: 'koya', ks: 'koya', koya_system: 'koya',
 };
+
+/** Stage 12 · CH1 / CH9: the tie-breaks only chess has. */
+const CHESS_TIEBREAKS = new Set<string>(['buchholz', 'sonneborn_berger', 'buchholz_cut1', 'buchholz_median', 'wins_black', 'games_black', 'progressive', 'aro', 'koya']);
 
 /** A stored or typed name as its canonical token, or null for one the table doesn't know. */
 export function tiebreakToken(x: unknown): TiebreakToken | null {
@@ -171,11 +183,11 @@ export function tiebreakToken(x: unknown): TiebreakToken | null {
 /** The tie-breaks this sport can use (run rate is cricket's; Buchholz and Sonneborn-Berger chess's). */
 export function tiebreaksFor(sport: string | null | undefined): TiebreakToken[] {
   const key = sportKeyOf(sport);
-  const all: TiebreakToken[] = ['head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'h2h_score_ratio', 'h2h_points_diff', 'h2h_points_ratio', 'wins', 'played', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'points_diff_vs_next', 'points_won', 'points_pct', 'fair_play', 'buchholz', 'sonneborn_berger'];
+  const all: TiebreakToken[] = ['head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'h2h_score_ratio', 'h2h_points_diff', 'h2h_points_ratio', 'wins', 'played', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'points_diff_vs_next', 'points_won', 'points_pct', 'fair_play', 'buchholz', 'buchholz_cut1', 'buchholz_median', 'sonneborn_berger', 'koya', 'progressive', 'wins_black', 'games_black', 'aro'];
   const rally = key === 'badminton' || key === 'tabletennis' || key === 'volleyball' || key === 'pickleball';
   // Stage 9 · T4: every sport scored in sets of games or points — tennis's games, the rally sports' points.
   const inSets = rally || key === 'tennis';
-  return all.filter((t) => (t === 'nrr' ? key === 'cricket' : t === 'buchholz' || t === 'sonneborn_berger' ? key === 'chess'
+  return all.filter((t) => (t === 'nrr' ? key === 'cricket' : CHESS_TIEBREAKS.has(t) ? key === 'chess'
     : t === 'points_diff' || t === 'points_won' || t === 'points_pct' || t === 'h2h_points_diff' || t === 'h2h_points_ratio' || t === 'points_diff_vs_next' ? inSets
       : t === 'h2h_score_diff' || t === 'h2h_score_scored' || t === 'h2h_score_ratio' ? key !== 'chess'
       : t === 'played' ? key === 'tennis'
@@ -192,7 +204,7 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
         : key === 'volleyball' || key === 'tennis' ? 'Set'
           : key === 'chess' ? 'Score' : 'Game';
   switch (t) {
-    case 'head_to_head': return 'Head-to-head';
+    case 'head_to_head': return key === 'chess' ? 'Direct encounter' : 'Head-to-head'; // Stage 12 · CH1: FIDE's word
     case 'wins': return 'Wins';
     case 'nrr': return 'Net run rate';
     case 'score_diff': return `${unit} difference`;
@@ -215,6 +227,14 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
     case 'h2h_points_ratio': return key === 'tennis' ? 'Game ratio between them' : 'Points ratio between them';
     // Stage 11 follow-up · USA Pickleball 15.B.4.
     case 'points_diff_vs_next': return key === 'tennis' ? 'Game difference against the next-placed' : 'Points difference against the next-placed';
+    // Stage 12 · CH1 / CH9.
+    case 'buchholz_cut1': return 'Buchholz Cut-1';
+    case 'buchholz_median': return 'Median Buchholz';
+    case 'wins_black': return 'Wins with Black';
+    case 'games_black': return 'Games with Black';
+    case 'progressive': return 'Progressive score';
+    case 'aro': return 'Average rating of opponents';
+    case 'koya': return 'Koya';
   }
 }
 
@@ -263,6 +283,10 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
     case 'chess':
       out.push({ key: 'fide_rr', label: 'Sonneborn-Berger', order: ['sonneborn_berger', 'head_to_head', 'wins'] });
       out.push({ key: 'fide_swiss', label: 'Buchholz', order: ['buchholz', 'sonneborn_berger', 'wins'] });
+      // Stage 12 · CH1: every AICF / MCA circular — BH Cut-1, BH, SB, direct encounter, wins, wins with Black.
+      out.push({ key: 'aicf', label: 'AICF / Indian open (Cut-1, Buchholz, SB, wins)', order: ['buchholz_cut1', 'buchholz', 'sonneborn_berger', 'head_to_head', 'wins', 'wins_black'] });
+      // CH9: FIDE round robin — SB, direct encounter, wins, Koya.
+      out.push({ key: 'fide_rr_koya', label: 'Round robin (SB, encounter, wins, Koya)', order: ['sonneborn_berger', 'head_to_head', 'wins', 'koya'] });
       break;
     default: break;
   }

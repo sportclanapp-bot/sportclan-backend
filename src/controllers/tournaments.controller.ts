@@ -3200,7 +3200,7 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
     if (teamIds.length === 0) return null;
     // Oct 2026: every match (a 64-team league has 2016; an unpaged read stops at 1000).
     const matches = await allRows(() => supabase
-      .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
+      .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, overs, round')
       .eq('tournament_id', tournamentId).is('voided_at', null));
     // Badminton gap 6: a withdrawn player's results deleted (BWF GCR), when the tournament says so.
     const tin = tableInputs((t as any)?.settings, teamIds, (matches ?? []) as any[], await withdrawnTeamIds(tournamentId));
@@ -3296,7 +3296,7 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
 
   const matches = await allRows(() => supabase
     .from('matches')
-    .select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, overs')
+    .select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, overs, round')
     .eq('tournament_id', tournamentId)
     .is('voided_at', null)); // SC-424: a voided fixture is not a played fixture · Oct 2026: every row
   const { data: trow } = await supabase

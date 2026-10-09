@@ -23,6 +23,8 @@ export type GMatch = {
   score_summary?: any;
   /** Allotted overs per side (cricket). Needed for the ICC all-out rule below. */
   overs?: number | null;
+  /** Stage 12 · CH1: the round (a Swiss's progressive score; the order of unplayed rounds). */
+  round?: number | null;
 };
 
 export type TeamStat = {
@@ -241,7 +243,12 @@ export function computeStats(
     // points and a game played. (A knockout bye isn't marked: it only advances.)
     if (a && !b && !scope && m.score_summary?.bye === true && m.status === 'completed' && table.has(a)) {
       const r = table.get(a)!;
-      r.played++; r.won++; r.points += pts.win;
+      // Stage 12 · CH2: a bye asked for — half a point ('half'), nothing ('zero',
+      // also "absent this round"), or a full one; the pairing's own bye is a win.
+      const kind = m.score_summary?.bye_kind;
+      if (kind === 'half') { r.drawn++; r.points += pts.draw; }
+      else if (kind === 'zero') { /* not played, no points */ }
+      else { r.played++; r.won++; r.points += pts.win; }
       continue;
     }
     if (!a || !b || !table.has(a) || !table.has(b)) continue;
@@ -304,6 +311,8 @@ export function computeStats(
 }
 
 type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play' | 'points_won' | 'points_pct' | 'played'
+  // Stage 12 · CH1 · FIDE C.07 (2026): Buchholz Cut-1 and Median-1, wins with Black, games with Black, progressive score, average rating of opponents; CH9 · Koya.
+  | 'buchholz_cut1' | 'buchholz_median' | 'wins_black' | 'games_black' | 'progressive' | 'aro' | 'koya'
   // Stage 10 · TT4: counted only in the matches between the tied teams.
   | 'h2h_score_diff' | 'h2h_score_scored' | 'h2h_score_ratio' | 'h2h_points_diff' | 'h2h_points_ratio'
   // Stage 11 follow-up · USA Pickleball 15.B.4: point difference against the next-placed team.
@@ -332,9 +341,15 @@ export type RankExtra = {
    * USA Pickleball: point difference isn't compared across pools of unequal size.
    */
   matches?: GMatch[]; pts?: PointsModel;
+  /** Stage 12 · CH1: each entry's rating, for the average rating of opponents (absent = unrated). */
+  ratings?: Map<string, number>;
 };
 
-const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 'sonneborn_berger' | 'fair_play' | 'points_diff_vs_next' | keyof typeof BETWEEN>, (s: TeamStat) => number> = {
+type ChessCriterion = 'buchholz' | 'sonneborn_berger' | 'buchholz_cut1' | 'buchholz_median' | 'wins_black' | 'games_black' | 'progressive' | 'aro' | 'koya';
+const CHESS_CRITERIA = new Set<Criterion>(['buchholz', 'sonneborn_berger', 'buchholz_cut1', 'buchholz_median', 'wins_black', 'games_black', 'progressive', 'aro', 'koya']);
+const isChessCriterion = (c: Criterion): c is ChessCriterion => CHESS_CRITERIA.has(c);
+
+const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'fair_play' | 'points_diff_vs_next' | ChessCriterion | keyof typeof BETWEEN>, (s: TeamStat) => number> = {
   points: (s) => s.points,
   wins: (s) => s.won,
   score_diff: (s) => s.diff,
@@ -360,26 +375,37 @@ const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 
   played: (s) => s.played,
 };
 
+
 /**
- * BUILD 4.2 · each team's played opponents and results, counted by the same
- * rules as computeStats (a no-result is no game). Chess's Buchholz and
- * Sonneborn-Berger are built from it.
+ * Stage 12 · CH1 · each player's rounds the FIDE way (C.07, 2026): every game
+ * played (opponent, result, colour) and every unplayed round — the pairing's
+ * bye (a win), a bye asked for (half / zero / full), absent (zero), a forfeit
+ * won or lost. "Voluntary" unplayed rounds (VUR) are the ones the player chose
+ * or caused: a bye asked for, absent, a forfeit lost. Side B played Black.
  */
-function opponentLog(teamIds: string[], matches: GMatch[]): Map<string, Array<{ opp: string; res: 'w' | 'd' | 'l' }>> {
+type ChessRound = { round: number; opp: string | null; res: 'w' | 'd' | 'l'; played: boolean; vur: boolean; black: boolean };
+function chessLog(teamIds: string[], matches: GMatch[]): Map<string, ChessRound[]> {
   const inSet = new Set(teamIds);
-  const log = new Map<string, Array<{ opp: string; res: 'w' | 'd' | 'l' }>>(teamIds.map((id) => [id, []]));
-  for (const m of matches) {
-    const a = m.team_a_id;
-    const b = m.team_b_id;
-    if (!a || !b || !inSet.has(a) || !inSet.has(b)) continue;
+  const log = new Map<string, ChessRound[]>(teamIds.map((id) => [id, []]));
+  matches.forEach((m, i) => {
+    const a = m.team_a_id; const b = m.team_b_id;
+    const round = Number(m.round ?? i + 1) || i + 1;
+    if (a && !b && m.score_summary?.bye === true && m.status === 'completed' && inSet.has(a)) {
+      const kind = m.score_summary?.bye_kind;
+      log.get(a)!.push({ round, opp: null, res: kind === 'half' ? 'd' : kind === 'zero' ? 'l' : 'w', played: false, vur: kind === 'half' || kind === 'zero' || kind === 'full', black: false });
+      return;
+    }
+    if (!a || !b || !inSet.has(a) || !inSet.has(b)) return;
     const terminal = m.status === 'completed' || m.status === 'abandoned';
-    if (!terminal && !m.winner_team_id) continue;
-    if (m.status === 'abandoned' && !m.winner_team_id) continue;
-    const ra = m.winner_team_id === a ? 'w' : m.winner_team_id === b ? 'l' : 'd';
-    const rb = ra === 'w' ? 'l' : ra === 'l' ? 'w' : 'd';
-    log.get(a)!.push({ opp: b, res: ra });
-    log.get(b)!.push({ opp: a, res: rb });
-  }
+    if (!terminal && !m.winner_team_id) return;
+    if (m.status === 'abandoned' && !m.winner_team_id) return;
+    const ra: 'w' | 'd' | 'l' = m.winner_team_id === a ? 'w' : m.winner_team_id === b ? 'l' : 'd';
+    const rb: 'w' | 'd' | 'l' = ra === 'w' ? 'l' : ra === 'l' ? 'w' : 'd';
+    const forfeit = isWalkover(m);
+    log.get(a)!.push({ round, opp: b, res: ra, played: !forfeit, vur: forfeit && ra === 'l', black: false });
+    log.get(b)!.push({ round, opp: a, res: rb, played: !forfeit, vur: forfeit && rb === 'l', black: true });
+  });
+  for (const l of log.values()) l.sort((x, y) => x.round - y.round);
   return log;
 }
 
@@ -397,7 +423,15 @@ function mapRule(token: string): Criterion | null {
   if (t === 'wins' || t === 'won') return 'wins';
   // BUILD 4.2
   if (t === 'score_ratio' || t === 'set_ratio' || t === 'game_ratio' || t === 'goal_ratio') return 'score_ratio';
-  if (t === 'buchholz') return 'buchholz';
+  if (t === 'buchholz' || t === 'bh') return 'buchholz';
+  // Stage 12 · CH1 · FIDE C.07 codes too.
+  if (t === 'buchholz_cut1' || t === 'bh_c1' || t === 'bh-c1' || t === 'buchholz_cut_1') return 'buchholz_cut1';
+  if (t === 'buchholz_median' || t === 'bh_m1' || t === 'median_buchholz') return 'buchholz_median';
+  if (t === 'wins_black' || t === 'bwg' || t === 'wins_with_black') return 'wins_black';
+  if (t === 'games_black' || t === 'bpg' || t === 'games_with_black') return 'games_black';
+  if (t === 'progressive' || t === 'ps' || t === 'progressive_score' || t === 'cumulative') return 'progressive';
+  if (t === 'aro' || t === 'average_rating_opponents' || t === 'avg_opp_rating') return 'aro';
+  if (t === 'koya' || t === 'ks' || t === 'koya_system') return 'koya';
   if (t === 'sonneborn_berger' || t === 'sb' || t === 'sonneborn-berger') return 'sonneborn_berger';
   if (t === 'points_diff' || t === 'point_difference' || t === 'rally_points_diff' || t === 'points_difference') return 'points_diff'; // badminton gap 10
   if (t === 'games_diff' || t === 'games_difference' || t === 'game_difference') return 'games_diff'; // badminton 7.16
@@ -455,7 +489,7 @@ export function rankTeamsDetailed(
   const lotIndex = new Map((extra.lots ?? []).map((id, i) => [id, i]));
   const order = buildOrder(tiebreakerRules);
   const globalStats = computeStats(teamIds, matches, undefined, pts);
-  let opps: ReturnType<typeof opponentLog> | null = null;
+  let chess: ReturnType<typeof chessLog> | null = null; // Stage 12 · CH1
 
   // Stage 11 follow-up · USA Pickleball 15.B.4: the other teams' places on the
   // steps before "point difference against the next-placed team", worked out once.
@@ -499,12 +533,53 @@ export function rankTeamsDetailed(
     // the points of the opponents beaten, plus half those drawn with.
     // Stage 8 · F8: fair-play points (higher is better: 0 is a clean record).
     if (crit === 'fair_play') return new Map(ids.map((id) => [id, extra.fairPlay?.get(id) ?? 0]));
-    if (crit === 'buchholz' || crit === 'sonneborn_berger') {
-      opps = opps ?? opponentLog(teamIds, matches);
+    // Stage 12 · CH1 · FIDE C.07 (2026): a player's own unplayed rounds count as
+    // games against a "dummy opponent" with the player's own score; an
+    // opponent's voluntary unplayed rounds at the end of their event (a bye asked
+    // for in the last round, or followed only by others) count as draws in their
+    // score; Cut-1 drops a voluntary unplayed round first, else the lowest;
+    // Median drops the highest and the lowest.
+    if (isChessCriterion(crit)) {
+      chess = chess ?? chessLog(teamIds, matches);
       const ptsOf = (id: string) => globalStats.get(id)?.points ?? 0;
-      return new Map(ids.map((id) => [id, (opps!.get(id) ?? []).reduce((sum, o) => sum + (
-        crit === 'buchholz' ? ptsOf(o.opp) : o.res === 'w' ? ptsOf(o.opp) : o.res === 'd' ? ptsOf(o.opp) / 2 : 0
-      ), 0)]));
+      const resPts = (r: 'w' | 'd' | 'l') => (r === 'w' ? pts.win : r === 'd' ? pts.draw : pts.loss);
+      const adjusted = (id: string) => {
+        const rs = chess!.get(id) ?? [];
+        let score = ptsOf(id);
+        for (let k = rs.length - 1; k >= 0 && !rs[k]!.played && rs[k]!.vur; k--) score += pts.draw - resPts(rs[k]!.res);
+        return score;
+      };
+      const valueOf = (id: string): number => {
+        const rs = chess!.get(id) ?? [];
+        const own = ptsOf(id);
+        const winPts = pts.win || 1;
+        switch (crit) {
+          case 'wins_black': return rs.filter((r) => r.played && r.black && r.res === 'w').length;
+          case 'games_black': return rs.filter((r) => r.played && r.black).length;
+          case 'progressive': { let run = 0; return rs.reduce((sum, r) => { run += resPts(r.res); return sum + run; }, 0); }
+          case 'aro': {
+            const rated = rs.filter((r) => r.played && r.opp && extra.ratings?.has(r.opp)).map((r) => extra.ratings!.get(r.opp!)!);
+            return rated.length ? Math.round(rated.reduce((x, y) => x + y, 0) / rated.length) : 0;
+          }
+          case 'koya': return rs.filter((r) => r.played && r.opp && ptsOf(r.opp) * 2 >= (globalStats.get(r.opp)?.played ?? 0) * winPts).reduce((sum, r) => sum + resPts(r.res), 0);
+          case 'sonneborn_berger': return rs.reduce((sum, r) => sum + (r.played ? (r.res === 'w' ? adjusted(r.opp!) : r.res === 'd' ? adjusted(r.opp!) / 2 : 0) : (resPts(r.res) / winPts) * own), 0);
+          default: {
+            const parts = rs.map((r) => ({ v: r.played ? adjusted(r.opp!) : own, vur: !r.played && r.vur }));
+            if (crit === 'buchholz') return parts.reduce((x, y) => x + y.v, 0);
+            if (crit === 'buchholz_cut1') {
+              if (!parts.length) return 0;
+              const pool = parts.some((x) => x.vur) ? parts.filter((x) => x.vur) : parts;
+              const drop = Math.min(...pool.map((x) => x.v));
+              return parts.reduce((x, y) => x + y.v, 0) - drop;
+            }
+            // Median-1: the highest and the lowest out.
+            if (parts.length < 3) return parts.reduce((x, y) => x + y.v, 0);
+            const vs = parts.map((x) => x.v).sort((x, y) => x - y);
+            return vs.slice(1, -1).reduce((x, y) => x + y, 0);
+          }
+        }
+      };
+      return new Map(ids.map((id) => [id, valueOf(id)]));
     }
     const fn = GLOBAL_CRITERION[crit];
     return new Map(ids.map((id) => [id, fn(globalStats.get(id)!)]));
@@ -600,7 +675,7 @@ export function bestPlacedAcrossGroups(
   const lotIndex = new Map((extra.lots ?? []).map((id, i) => [id, i]));
   const value = (id: string, c: Criterion): number | null => {
     if (c === 'fair_play') return extra.fairPlay?.get(id) ?? 0;
-    if (c === 'head_to_head' || c === 'buchholz' || c === 'sonneborn_berger' || c === 'score_rate' || isBetween(c) || c === 'points_diff_vs_next') return null; // TT4: teams from different groups never met
+    if (c === 'head_to_head' || isChessCriterion(c) || c === 'score_rate' || isBetween(c) || c === 'points_diff_vs_next') return null; // TT4: teams from different groups never met · CH1: nor the chess ones
     if (c === 'score_ratio') return GLOBAL_CRITERION.score_ratio(stats.get(id) ?? ({} as TeamStat));
     // Stage 9 · T4: a share is already per game; matches played can't compare groups of different sizes.
     if (c === 'points_pct') return GLOBAL_CRITERION.points_pct(stats.get(id) ?? ({ rallyFor: 0, rallyAgainst: 0 } as TeamStat));

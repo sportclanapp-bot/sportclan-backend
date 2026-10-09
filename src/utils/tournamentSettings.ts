@@ -133,7 +133,9 @@ export type TiebreakToken =
   // Stage 10 · TT4: counted only in the matches between the tied teams (ITTF's
   // games and points ratios among the tied, UEFA's head-to-head goals); after
   // a team is separated the rest are ranked again among themselves, then lots.
-  | 'h2h_score_diff' | 'h2h_score_scored' | 'h2h_score_ratio' | 'h2h_points_diff' | 'h2h_points_ratio';
+  | 'h2h_score_diff' | 'h2h_score_scored' | 'h2h_score_ratio' | 'h2h_points_diff' | 'h2h_points_ratio'
+  // Stage 11 follow-up · USA Pickleball 15.B.4: point difference against the next-placed team.
+  | 'points_diff_vs_next';
 
 const ALIASES: Record<string, TiebreakToken> = {
   head_to_head: 'head_to_head', h2h: 'head_to_head', head2head: 'head_to_head', headtohead: 'head_to_head',
@@ -158,6 +160,7 @@ const ALIASES: Record<string, TiebreakToken> = {
   h2h_score_diff: 'h2h_score_diff', h2h_goal_difference: 'h2h_score_diff', h2h_score_scored: 'h2h_score_scored', h2h_goals_for: 'h2h_score_scored',
   h2h_score_ratio: 'h2h_score_ratio', h2h_game_ratio: 'h2h_score_ratio', h2h_set_ratio: 'h2h_score_ratio',
   h2h_points_diff: 'h2h_points_diff', h2h_points_ratio: 'h2h_points_ratio',
+  points_diff_vs_next: 'points_diff_vs_next', point_difference_vs_next: 'points_diff_vs_next',
 };
 
 /** A stored or typed name as its canonical token, or null for one the table doesn't know. */
@@ -168,12 +171,12 @@ export function tiebreakToken(x: unknown): TiebreakToken | null {
 /** The tie-breaks this sport can use (run rate is cricket's; Buchholz and Sonneborn-Berger chess's). */
 export function tiebreaksFor(sport: string | null | undefined): TiebreakToken[] {
   const key = sportKeyOf(sport);
-  const all: TiebreakToken[] = ['head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'h2h_score_ratio', 'h2h_points_diff', 'h2h_points_ratio', 'wins', 'played', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'points_won', 'points_pct', 'fair_play', 'buchholz', 'sonneborn_berger'];
+  const all: TiebreakToken[] = ['head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'h2h_score_ratio', 'h2h_points_diff', 'h2h_points_ratio', 'wins', 'played', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'points_diff_vs_next', 'points_won', 'points_pct', 'fair_play', 'buchholz', 'sonneborn_berger'];
   const rally = key === 'badminton' || key === 'tabletennis' || key === 'volleyball' || key === 'pickleball';
   // Stage 9 · T4: every sport scored in sets of games or points — tennis's games, the rally sports' points.
   const inSets = rally || key === 'tennis';
   return all.filter((t) => (t === 'nrr' ? key === 'cricket' : t === 'buchholz' || t === 'sonneborn_berger' ? key === 'chess'
-    : t === 'points_diff' || t === 'points_won' || t === 'points_pct' || t === 'h2h_points_diff' || t === 'h2h_points_ratio' ? inSets
+    : t === 'points_diff' || t === 'points_won' || t === 'points_pct' || t === 'h2h_points_diff' || t === 'h2h_points_ratio' || t === 'points_diff_vs_next' ? inSets
       : t === 'h2h_score_diff' || t === 'h2h_score_scored' || t === 'h2h_score_ratio' ? key !== 'chess'
       : t === 'played' ? key === 'tennis'
         : t === 'games_diff' ? key === 'badminton' || key === 'tabletennis' : t === 'fair_play' ? key === 'football' || key === 'hockey' : true));
@@ -210,6 +213,8 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
     case 'h2h_score_ratio': return `${unit} ratio between them`;
     case 'h2h_points_diff': return key === 'tennis' ? 'Game difference between them' : 'Points difference between them';
     case 'h2h_points_ratio': return key === 'tennis' ? 'Game ratio between them' : 'Points ratio between them';
+    // Stage 11 follow-up · USA Pickleball 15.B.4.
+    case 'points_diff_vs_next': return key === 'tennis' ? 'Game difference against the next-placed' : 'Points difference against the next-placed';
   }
 }
 
@@ -253,7 +258,8 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
       break;
     // Stage 11 · PB7: USA Pickleball 15.B.4 — head-to-head, point difference over
     // every game, point difference between them, then points scored.
-    case 'pickleball': out.push({ key: 'usap', label: 'USA Pickleball (head-to-head, points)', order: ['head_to_head', 'points_diff', 'h2h_points_diff', 'points_won'] }); break;
+    // Stage 11 follow-up: and 15.B.4's 4th step, point difference against the next-placed team.
+    case 'pickleball': out.push({ key: 'usap', label: 'USA Pickleball (head-to-head, points)', order: ['head_to_head', 'points_diff', 'h2h_points_diff', 'points_diff_vs_next', 'points_won'] }); break;
     case 'chess':
       out.push({ key: 'fide_rr', label: 'Sonneborn-Berger', order: ['sonneborn_berger', 'head_to_head', 'wins'] });
       out.push({ key: 'fide_swiss', label: 'Buchholz', order: ['buchholz', 'sonneborn_berger', 'wins'] });

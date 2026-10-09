@@ -49,7 +49,7 @@ describe('PB7 · the USA Pickleball preset', () => {
   it('is offered for pickleball, in the 15.B.4 order, and stores', () => {
     const usap = tiebreakPresetsFor('pickleball').find((p) => p.key === 'usap')!;
     expect(usap.label).toBe('USA Pickleball (head-to-head, points)');
-    expect(usap.order).toEqual(['head_to_head', 'points_diff', 'h2h_points_diff', 'points_won']);
+    expect(usap.order).toEqual(['head_to_head', 'points_diff', 'h2h_points_diff', 'points_diff_vs_next', 'points_won']);
     expect(tiebreakRefusal('pickleball', usap.order)).toBeNull();
   });
   it('isn’t offered for other sports', () => {

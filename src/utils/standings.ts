@@ -305,7 +305,9 @@ export function computeStats(
 
 type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play' | 'points_won' | 'points_pct' | 'played'
   // Stage 10 · TT4: counted only in the matches between the tied teams.
-  | 'h2h_score_diff' | 'h2h_score_scored' | 'h2h_score_ratio' | 'h2h_points_diff' | 'h2h_points_ratio';
+  | 'h2h_score_diff' | 'h2h_score_scored' | 'h2h_score_ratio' | 'h2h_points_diff' | 'h2h_points_ratio'
+  // Stage 11 follow-up · USA Pickleball 15.B.4: point difference against the next-placed team.
+  | 'points_diff_vs_next';
 const BETWEEN: Record<'h2h_score_diff' | 'h2h_score_scored' | 'h2h_score_ratio' | 'h2h_points_diff' | 'h2h_points_ratio', (s: TeamStat) => number> = {
   h2h_score_diff: (s) => s.diff,
   h2h_score_scored: (s) => s.scored,
@@ -332,7 +334,7 @@ export type RankExtra = {
   matches?: GMatch[]; pts?: PointsModel;
 };
 
-const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 'sonneborn_berger' | 'fair_play' | keyof typeof BETWEEN>, (s: TeamStat) => number> = {
+const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'buchholz' | 'sonneborn_berger' | 'fair_play' | 'points_diff_vs_next' | keyof typeof BETWEEN>, (s: TeamStat) => number> = {
   points: (s) => s.points,
   wins: (s) => s.won,
   score_diff: (s) => s.diff,
@@ -410,6 +412,7 @@ function mapRule(token: string): Criterion | null {
   if (t === 'h2h_score_ratio' || t === 'h2h_game_ratio' || t === 'h2h_set_ratio') return 'h2h_score_ratio';
   if (t === 'h2h_points_diff') return 'h2h_points_diff';
   if (t === 'h2h_points_ratio') return 'h2h_points_ratio';
+  if (t === 'points_diff_vs_next' || t === 'point_difference_vs_next') return 'points_diff_vs_next'; // Stage 11 follow-up
   return null; // 'team_id' and unknowns handled by the terminator
 }
 
@@ -454,7 +457,34 @@ export function rankTeamsDetailed(
   const globalStats = computeStats(teamIds, matches, undefined, pts);
   let opps: ReturnType<typeof opponentLog> | null = null;
 
+  // Stage 11 follow-up · USA Pickleball 15.B.4: the other teams' places on the
+  // steps before "point difference against the next-placed team", worked out once.
+  let provisional: string[] | null = null;
+  const provisionalOrder = (): string[] => {
+    if (!provisional) {
+      const list = Array.isArray(tiebreakerRules) ? tiebreakerRules : [];
+      const at = list.findIndex((x) => mapRule(x) === 'points_diff_vs_next');
+      provisional = rankTeamsDetailed(teamIds, matches, at > 0 ? list.slice(0, at) : ['points'], pts, { ...extra, lots: [] }).order;
+    }
+    return provisional;
+  };
+
   function keyMapFor(crit: Criterion, ids: string[]): Map<string, number> {
+    // Stage 11 follow-up · USA Pickleball 15.B.4: each tied team's point difference
+    // in its matches against the highest-placed team outside the tie; still level,
+    // against the next one down, and so on. (Game difference in tennis; goal or
+    // run difference for a sport without points.)
+    if (crit === 'points_diff_vs_next') {
+      const tied = new Set(ids);
+      for (const other of provisionalOrder().filter((id) => !tied.has(id))) {
+        const m = new Map(ids.map((id) => {
+          const st = computeStats([id, other], matches, new Set([id, other]), pts).get(id)!;
+          return [id, st.rallyFor + st.rallyAgainst > 0 ? st.rallyDiff : st.diff] as [string, number];
+        }));
+        if (new Set(m.values()).size > 1) return m;
+      }
+      return new Map(ids.map((id) => [id, 0]));
+    }
     if (crit === 'head_to_head') {
       const h2h = computeStats(ids, matches, new Set(ids), pts);
       return new Map(ids.map((id) => [id, h2h.get(id)?.points ?? 0]));
@@ -570,7 +600,7 @@ export function bestPlacedAcrossGroups(
   const lotIndex = new Map((extra.lots ?? []).map((id, i) => [id, i]));
   const value = (id: string, c: Criterion): number | null => {
     if (c === 'fair_play') return extra.fairPlay?.get(id) ?? 0;
-    if (c === 'head_to_head' || c === 'buchholz' || c === 'sonneborn_berger' || c === 'score_rate' || isBetween(c)) return null; // TT4: teams from different groups never met
+    if (c === 'head_to_head' || c === 'buchholz' || c === 'sonneborn_berger' || c === 'score_rate' || isBetween(c) || c === 'points_diff_vs_next') return null; // TT4: teams from different groups never met
     if (c === 'score_ratio') return GLOBAL_CRITERION.score_ratio(stats.get(id) ?? ({} as TeamStat));
     // Stage 9 · T4: a share is already per game; matches played can't compare groups of different sizes.
     if (c === 'points_pct') return GLOBAL_CRITERION.points_pct(stats.get(id) ?? ({ rallyFor: 0, rallyAgainst: 0 } as TeamStat));

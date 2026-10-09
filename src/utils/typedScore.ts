@@ -203,13 +203,21 @@ export function typedScoreText(sets: TypedSet[]): string {
  * colours), and the match is worked out by game points. Every board is played.
  */
 export const typedChessTie = (sport: string | null | undefined, spec: TieSpec | null): boolean => sportKey(sport) === 'chess' && !!spec;
-export function typedChessBoards(spec: TieSpec, boards: unknown): { problem: string | null; results: Array<'white' | 'black' | 'draw'>; winner: TypedSide | 'draw' | null } {
-  if (!Array.isArray(boards) || boards.length !== spec.rubbers.length) return { problem: `Give every board’s result (${spec.rubbers.length}).`, results: [], winner: null };
+export function typedChessBoards(spec: TieSpec, boards: unknown): { problem: string | null; results: Array<'white' | 'black' | 'draw'>; winner: TypedSide | 'draw' | null; units?: { A: number; B: number } } {
+  // Stage 12 · CH7: a mini-match's play-off games are only played when needed — the games up to the decision.
+  const hasDeciders = spec.rubbers.some((r) => r.decider);
+  const given = Array.isArray(boards) ? (hasDeciders ? boards.slice(0, (boards as unknown[]).reduce((n: number, b, i) => (b ? i + 1 : n), 0)) : boards) : null;
+  const regular = spec.rubbers.filter((r) => !r.decider).length;
+  if (!given || (hasDeciders ? given.length < regular || given.length > spec.rubbers.length : given.length !== spec.rubbers.length)) {
+    return { problem: hasDeciders ? `Give every game’s result (${regular}), and the play-offs that were played.` : `Give every board’s result (${spec.rubbers.length}).`, results: [], winner: null };
+  }
   const results: Array<'white' | 'black' | 'draw'> = [];
   const rr: RubberResult[] = [];
-  for (let i = 0; i < boards.length; i++) {
-    const b = boards[i];
+  for (let i = 0; i < given.length; i++) {
+    const b = given[i];
     if (b !== 'A' && b !== 'B' && b !== 'draw') return { problem: `${spec.rubbers[i]!.label}: who won it, or a draw.`, results: [], winner: null };
+    // Nothing after the match is decided.
+    if (i > 0 && tieOutcome(spec, rr).finished) return { problem: `${spec.rubbers[i]!.label} wasn’t needed: the match was already decided.`, results: [], winner: null };
     const white = boardWhite(spec, i);
     const w: 'white' | 'black' | 'draw' = b === 'draw' ? 'draw' : b === white ? 'white' : 'black';
     results.push(w);
@@ -218,5 +226,6 @@ export function typedChessBoards(spec: TieSpec, boards: unknown): { problem: str
     rr.push({ key: spec.rubbers[i]!.key, winner: b, sets: { A: [a], B: [bb] }, units: { A: a, B: bb } });
   }
   const o = tieOutcome(spec, rr);
-  return { problem: null, results, winner: o.decided };
+  if (hasDeciders && !o.finished) return { problem: 'Still level: give the next play-off game.', results: [], winner: null };
+  return { problem: null, results, winner: o.decided, units: { A: rr.reduce((t, r) => t + r.units.A, 0), B: rr.reduce((t, r) => t + r.units.B, 0) } };
 }

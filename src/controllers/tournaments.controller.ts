@@ -87,6 +87,7 @@ import { scheduleRefusal } from '../utils/scheduleFields';
 import { swissFirstRound, type SwissRound } from '../utils/swiss';
 import { dutchFirstRound, dutchRound, dutchHistory } from '../utils/swissDutch';
 import { bergerRounds, seededGroupFixtures } from '../utils/groupOrder';
+import { declineStaleByeRequests } from '../utils/swissByeRequests';
 import { BOX_DEFAULT, boxesOf, boxLabel, challengeProblem, ladderAfter, nextBoxOrder } from '../utils/ladderBox';
 import {
   SHARED_KEYS, EVENT_KEYS, eventsListRefusal, eventName, entryKindRefusal, eventLabelRefusal, refreshParentStatus, refreshParentOf,
@@ -3387,7 +3388,7 @@ export type SwissByeKind = 'half' | 'zero' | 'absent';
  */
 export async function swissContext(tournamentId: string) {
   const { data: t } = await supabase
-    .from('tournaments').select('id, sport_id, venue, city_id, created_by, settings, tiebreaker_rules, match_rules, match_duration_minutes, buffer_minutes, format')
+    .from('tournaments').select('id, name, sport_id, venue, city_id, created_by, settings, tiebreaker_rules, match_rules, match_duration_minutes, buffer_minutes, format, entry_kind')
     .eq('id', tournamentId).maybeSingle();
   if (!t) return null;
   const settings = settingsOf(t as { settings?: unknown });
@@ -3459,6 +3460,8 @@ type GMatchRow = { team_a_id: string | null; team_b_id: string | null; winner_te
 
 /** Stage 12 · CH2 · write a paired round (and its byes) as match rows, timed after the round before. */
 export async function swissInsertRound(ctx: NonNullable<Awaited<ReturnType<typeof swissContext>>>, roundNo: number, paired: ReturnType<typeof swissPairRound>): Promise<void> {
+  // Stage 12 follow-up: requests still waiting for this round can't be met now.
+  await declineStaleByeRequests(ctx.t.id as string, roundNo).catch(() => 0);
   const rules = stageRules(ctx.slug, (ctx.t as { match_rules?: unknown }).match_rules ?? null, 'group');
   const legacy = legacyFromRules(ctx.slug, rules);
   const rows = swissRoundRows(paired.round, roundNo, ctx.nameOf, {
@@ -4312,6 +4315,8 @@ export async function generateFixtures(req: Request, res: Response) {
       await supabase.from('tournaments')
         .update({ status: statusAfterFixtures(tournament.start_date as string | null), settings: { ...settingsOf(tournament as { settings?: unknown }), swiss: { ...(swSet ?? {}), rounds, paired: 1, tpn } } })
         .eq('id', id);
+      // Stage 12 follow-up: requests still waiting for round 1 can't be met now.
+      await declineStaleByeRequests(id, 1).catch(() => 0);
       return res.json({ success: true, matchesCreated: rows.length, format });
     }
 

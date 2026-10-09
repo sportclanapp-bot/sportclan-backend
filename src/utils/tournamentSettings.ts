@@ -365,9 +365,11 @@ export type TournamentSettings = {
    * score nothing (FIDE's default) or half a point. Server-kept: `tpn` (the
    * pairing numbers fixed at the draw), `requests` (byes asked for, by entry
    * and round: 'half', 'zero', 'absent'), `draft` (a round waiting to be published).
+   * Stage 12 follow-up: `askUntil` — players may ask for a bye for a round up to
+   * this one (the organiser's choice; unset: any round not yet paired; 0: they can't ask).
    */
   swiss?: {
-    rounds: number; paired?: number; check?: boolean; lateEntry?: 'zero' | 'half';
+    rounds: number; paired?: number; check?: boolean; lateEntry?: 'zero' | 'half'; askUntil?: number;
     tpn?: string[]; requests?: Record<string, Record<string, 'half' | 'zero' | 'absent'>>;
     draft?: { round: number; pairs: Array<{ white: string; black: string }>; bye: string | null };
   };
@@ -783,9 +785,10 @@ export function settingsRefusal(sport: string | null | undefined, format: string
     const bad = swissRoundsProblem(r);
     if (bad) return refuse(bad);
     // Stage 12 · CH2.
-    const sw = o.swiss as { check?: unknown; lateEntry?: unknown };
+    const sw = o.swiss as { check?: unknown; lateEntry?: unknown; askUntil?: unknown };
     if (sw.check != null && typeof sw.check !== 'boolean') return refuse('Checking pairings before publishing is on or off.');
     if (sw.lateEntry != null && sw.lateEntry !== 'zero' && sw.lateEntry !== 'half') return refuse('A late entrant’s missed rounds score nothing or half a point.');
+    if (sw.askUntil != null && (typeof sw.askUntil !== 'number' || !Number.isInteger(sw.askUntil) || sw.askUntil < 0 || (typeof r === 'number' && sw.askUntil > r))) return refuse('Players can ask for byes up to a round of this Swiss (0: they can’t ask).');
   }
   const catBad = categoryRefusal(o.category);
   if (catBad) return catBad;
@@ -845,6 +848,7 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
         ...(cur?.paired != null ? { paired: cur.paired } : {}),
         ...(s.swiss.check === true ? { check: true } : {}),
         ...(s.swiss.lateEntry === 'half' ? { lateEntry: 'half' as const } : {}),
+        ...(typeof s.swiss.askUntil === 'number' ? { askUntil: s.swiss.askUntil } : {}),
         ...(cur?.tpn ? { tpn: cur.tpn } : {}), ...(cur?.requests ? { requests: cur.requests } : {}), ...(cur?.draft ? { draft: cur.draft } : {}),
       };
     }
@@ -1015,4 +1019,17 @@ export function tableInputs<M extends { team_a_id?: string | null; team_b_id?: s
     teamIds: teamIds.filter((t) => !gone.has(t)),
     matches: matches.filter((m) => !gone.has(m.team_a_id ?? '') && !gone.has(m.team_b_id ?? '')),
   };
+}
+
+/**
+ * Stage 12 follow-up · the rounds a player may still ask a bye for: after the
+ * last round paired (or drafted for the arbiter: that one still can, the draft
+ * is paired again), up to the organiser's limit.
+ */
+export function byeAskRounds(sw: { rounds: number; paired?: number; askUntil?: number } | null | undefined): number[] {
+  if (!sw) return [];
+  const last = Math.min(sw.rounds, sw.askUntil ?? sw.rounds);
+  const out: number[] = [];
+  for (let r = (sw.paired ?? 0) + 1; r <= last; r++) out.push(r);
+  return out;
 }

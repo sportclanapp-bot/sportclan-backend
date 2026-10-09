@@ -2,7 +2,7 @@ import { redraw } from '../controllers/redraw.controller';
 import { listAnnouncements, postAnnouncement, deleteAnnouncement } from '../controllers/announcements.controller';
 import { getSquad, setSquad, checkSquadPlayer, setSquadLock, getDiscipline } from '../controllers/squads.controller';
 import { setLots } from '../controllers/lots.controller';
-import { getSwiss, setSwissBye, swapSwissPairing, publishSwissRound } from '../controllers/swiss.controller';
+import { getSwiss, setSwissBye, swapSwissPairing, publishSwissRound, myByeRequests, askSwissBye, withdrawSwissBye, decideSwissBye } from '../controllers/swiss.controller';
 import { getBoardPrizes } from '../controllers/boardPrizes.controller';
 import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
@@ -112,6 +112,11 @@ router.get('/:id/swiss', authenticateToken, getSwiss);
 router.put('/:id/swiss/byes', authenticateToken, setSwissBye);
 router.post('/:id/swiss/swap', authenticateToken, swapSwissPairing);
 router.post('/:id/swiss/publish', authenticateToken, publishSwissRound);
+// Stage 12 follow-up: byes a player asks for.
+router.get('/:id/swiss/bye-requests/mine', authenticateToken, myByeRequests);
+router.post('/:id/swiss/bye-requests', authenticateToken, askSwissBye);
+router.delete('/:id/swiss/bye-requests/:reqId', authenticateToken, withdrawSwissBye);
+router.post('/:id/swiss/bye-requests/:reqId/decide', authenticateToken, decideSwissBye);
 router.get('/:id/board-prizes', authenticateToken, getBoardPrizes); // Stage 12 · CH5
 // Stage 8 · F3 / F16 / F5: squads, ID checks, bans.
 router.get('/:id/squads/:teamId', authenticateToken, getSquad);

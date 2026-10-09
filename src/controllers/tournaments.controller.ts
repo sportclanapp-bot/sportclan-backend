@@ -3506,7 +3506,7 @@ async function swissAfterResult(tournamentId: string): Promise<void> {
     // Tell the organiser and the pairings arbiters the round is ready to check.
     const { data: offs } = await supabase.from('tournament_officials').select('user_id').eq('tournament_id', tournamentId).in('role', ['pairings', 'chief_referee', 'deputy_referee']);
     const who = [...new Set([ctx.t.created_by as string, ...((offs ?? []) as Array<{ user_id: string }>).map((o) => o.user_id)])];
-    await notifyUsers(who, { type: 'tournament', title: `Round ${next} pairings are ready`, body: 'Check them, swap if needed, then publish.', data: { tournamentId } }).catch(() => undefined);
+    await notifyUsers(who, { type: 'tournament_updated', title: `Round ${next} pairings are ready`, body: 'Check them, swap if needed, then publish.', data: { tournamentId } }).catch(() => undefined);
     return;
   }
   await swissInsertRound(ctx, next, result);

@@ -25,7 +25,7 @@ export async function declineStaleByeRequests(tournamentId: string, round: numbe
   const rows = (data ?? []) as Array<{ team_id: string; round: number; kind: ByeKind }>;
   for (const r of rows) {
     await notifyUsers(await entryPlayers(r.team_id), {
-      type: 'tournament', title: `No bye in round ${r.round}`,
+      type: 'tournament_updated', title: `No bye in round ${r.round}`,
       body: `Round ${r.round} was paired before your request for ${byeWords(r.kind)} was decided — check your pairing.`,
       data: { tournamentId },
     }).catch(() => undefined);

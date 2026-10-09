@@ -220,7 +220,7 @@ export async function askSwissBye(req: Request, res: Response) {
   }
   const who = ctx.nameOf.get(team) ?? 'A player';
   await notifyUsers(await byeDeciders(ctx), {
-    type: 'tournament', title: `${who} asks for a bye`,
+    type: 'tournament_updated', title: `${who} asks for a bye`,
     body: `Round ${r}: ${byeWords(kind)}. Approve or decline it on the Pairings desk.`, data: { tournamentId: id },
   }, { actorId: userId }).catch(() => undefined);
   return res.json({ ok: true, request: data });
@@ -241,7 +241,7 @@ export async function withdrawSwissBye(req: Request, res: Response) {
   await supabase.from('swiss_bye_requests').update({ status: 'withdrawn', decided_at: new Date().toISOString() }).eq('id', r.id).in('status', ['pending', 'approved']);
   if (r.status === 'approved') {
     await writeBye(ctx, id, r.team_id, r.round, null);
-    await notifyUsers(await byeDeciders(ctx), { type: 'tournament', title: `${ctx.nameOf.get(r.team_id) ?? 'A player'} will play round ${r.round}`, body: 'They took back their bye.', data: { tournamentId: id } }, { actorId: userId }).catch(() => undefined);
+    await notifyUsers(await byeDeciders(ctx), { type: 'tournament_updated', title: `${ctx.nameOf.get(r.team_id) ?? 'A player'} will play round ${r.round}`, body: 'They took back their bye.', data: { tournamentId: id } }, { actorId: userId }).catch(() => undefined);
   }
   return res.json({ ok: true });
 }
@@ -266,7 +266,7 @@ export async function decideSwissBye(req: Request, res: Response) {
   if (!claim || claim.length === 0) return res.status(409).json({ error: 'That request was just decided.', code: 'DECIDED' });
   if (approve) await writeBye(ctx, id, r.team_id, r.round, r.kind);
   await notifyUsers(await entryPlayers(r.team_id), {
-    type: 'tournament', title: approve ? `Bye approved · round ${r.round}` : `Bye declined · round ${r.round}`,
+    type: 'tournament_updated', title: approve ? `Bye approved · round ${r.round}` : `Bye declined · round ${r.round}`,
     body: approve ? `You have ${byeWords(r.kind)} in round ${r.round} of ${(ctx.t as { name?: string }).name ?? 'the Swiss'}.` : `Your request for ${byeWords(r.kind)} in round ${r.round} was declined — you’ll be paired as usual.`,
     data: { tournamentId: id },
   }, { actorId: userId }).catch(() => undefined);

@@ -2,6 +2,7 @@ import { redraw } from '../controllers/redraw.controller';
 import { listAnnouncements, postAnnouncement, deleteAnnouncement } from '../controllers/announcements.controller';
 import { getSquad, setSquad, checkSquadPlayer, setSquadLock, getDiscipline } from '../controllers/squads.controller';
 import { setLots } from '../controllers/lots.controller';
+import { getSwiss, setSwissBye, swapSwissPairing, publishSwissRound } from '../controllers/swiss.controller';
 import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
@@ -105,6 +106,11 @@ router.get('/:id/awards', authenticateToken, getAwards);
 router.put('/:id/awards', authenticateToken, setAwards);
 // Stage 8 · F8: a draw of lots for teams level on every tie-break.
 router.put('/:id/lots', authenticateToken, setLots);
+// Stage 12 · CH2: a Swiss run the FIDE way — byes asked for, checking / swapping, publishing.
+router.get('/:id/swiss', authenticateToken, getSwiss);
+router.put('/:id/swiss/byes', authenticateToken, setSwissBye);
+router.post('/:id/swiss/swap', authenticateToken, swapSwissPairing);
+router.post('/:id/swiss/publish', authenticateToken, publishSwissRound);
 // Stage 8 · F3 / F16 / F5: squads, ID checks, bans.
 router.get('/:id/squads/:teamId', authenticateToken, getSquad);
 router.put('/:id/squads/:teamId', authenticateToken, setSquad);

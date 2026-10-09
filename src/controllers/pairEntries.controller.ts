@@ -25,7 +25,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { isUuid } from '../utils/uuid';
 import { sanitizeError } from '../utils/response';
-import { isTournamentOrganiser } from '../utils/tournamentAuth';
+import { isTournamentOrganiser, swissTakesLateEntries } from '../utils/tournamentAuth';
 import { notifyUnlessBlocked } from '../utils/notify';
 import { isBlockedBetween, blockedUserIds } from '../utils/blocks';
 import { settingsOf, categoryProblem, amateurDeclarationRefusal, waitlistOn } from '../utils/tournamentSettings';
@@ -99,7 +99,7 @@ async function playersRefusal(
   }
   if (!opts.asOrganiser && t.registration_deadline && new Date(t.registration_deadline) < new Date()) return no(400, 'REGISTRATION_CLOSED', 'Registration closed');
   // Stage 9 · T16: a ladder or box league takes newcomers after it's set (the bottom rung / box).
-  if (t.fixtures_generated && (t as { format?: string | null }).format !== 'ladder' && (t as { format?: string | null }).format !== 'box') return no(409, 'REGISTRATION_CLOSED', 'Registration is closed — the draw has already been made.');
+  if (t.fixtures_generated && (t as { format?: string | null }).format !== 'ladder' && (t as { format?: string | null }).format !== 'box' && !swissTakesLateEntries(t as never)) return no(409, 'REGISTRATION_CLOSED', 'Registration is closed — the draw has already been made.'); // Stage 12 · CH2: a Swiss takes late entries
   const ppl = await people(userIds);
   for (const id of userIds) {
     const p = ppl.get(id);

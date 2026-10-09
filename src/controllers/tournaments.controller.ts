@@ -69,7 +69,7 @@ import {
   buildSchedule, timeToMinutes, keyOf, formatSlotIst,
   type SchedulingConfig, type FixtureShape, type SlotAssign,
 } from '../utils/scheduleFixtures';
-import { isTournamentOrganiser, authorizeCarveout, logAdminAction } from '../utils/tournamentAuth';
+import { isTournamentOrganiser, authorizeCarveout, logAdminAction, swissTakesLateEntries } from '../utils/tournamentAuth';
 import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
@@ -84,7 +84,8 @@ import { fillEntryLineups, doublesRulesSport } from '../utils/entryLineups';
 import { eventLimitRefusal, eventLimitsRefusal, storedEventLimits } from '../utils/eventLimits';
 import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSeparation';
 import { scheduleRefusal } from '../utils/scheduleFields';
-import { swissFirstRound, swissNextRound, type SwissRound } from '../utils/swiss';
+import { swissFirstRound, type SwissRound } from '../utils/swiss';
+import { dutchFirstRound, dutchRound, dutchHistory } from '../utils/swissDutch';
 import { seededGroupFixtures } from '../utils/groupOrder';
 import { BOX_DEFAULT, boxesOf, boxLabel, challengeProblem, ladderAfter, nextBoxOrder } from '../utils/ladderBox';
 import {
@@ -921,7 +922,7 @@ async function entryRefusal(
   }
   // SC-99: no new entries once the bracket is generated (they would never play).
   // Stage 9 · T16: a ladder or box league takes newcomers (the bottom rung / box).
-  if (t.fixtures_generated && (t as { format?: string | null }).format !== 'ladder' && (t as { format?: string | null }).format !== 'box') {
+  if (t.fixtures_generated && (t as { format?: string | null }).format !== 'ladder' && (t as { format?: string | null }).format !== 'box' && !swissTakesLateEntries(t as never)) { // Stage 12 · CH2: a Swiss takes late entries
     return { status: 409, body: { error: 'Registration is closed — the bracket has already been generated.', code: 'REGISTRATION_CLOSED' } };
   }
   const { data: team } = await supabase.from('teams').select('id, sport_id, kind').eq('id', teamId).maybeSingle();
@@ -1185,7 +1186,7 @@ async function entryVerdicts(tournament: EntryTournament, ids: string[], asOrgan
       return no(teamId, 'TOURNAMENT_FINISHED', t.status === 'completed' ? 'This tournament is finished.' : 'This tournament was cancelled.');
     }
     if (!asOrganiser && t.registration_deadline && new Date(t.registration_deadline) < new Date()) return no(teamId, 'REGISTRATION_CLOSED', 'Registration closed');
-    if (t.fixtures_generated) return no(teamId, 'REGISTRATION_CLOSED', 'Registration is closed — the bracket has already been generated.');
+    if (t.fixtures_generated && !swissTakesLateEntries(t as never)) return no(teamId, 'REGISTRATION_CLOSED', 'Registration is closed — the bracket has already been generated.'); // Stage 12 · CH2
     if (!team) return no(teamId, 'TEAM_NOT_FOUND', 'Team not found');
     if (t.sport_id && team.sport_id && team.sport_id !== t.sport_id) {
       return no(teamId, 'WRONG_SPORT', sportName ? `This is a ${sportName} tournament — enter a ${sportName} team.` : 'This tournament is for another sport — enter a team of its sport.');
@@ -3332,6 +3333,8 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
 function swissRoundRows(
   round: SwissRound, roundNo: number, nameOf: Map<string, string>,
   base: { sport_id: unknown; tournament_id: string; venue: unknown; city_id: unknown; created_by: string; fixtureDefaults: Record<string, unknown> },
+  // Stage 12 · CH2: byes asked for this round (half / zero / absent), and late entrants' missed rounds.
+  extra: { requested?: Array<{ team: string; kind: SwissByeKind }>; late?: Array<{ team: string; round: number; kind: 'half' | 'zero' }> } = {},
 ): any[] {
   const rows: any[] = round.pairs.map((p, i) => ({
     sport_id: base.sport_id, tournament_id: base.tournament_id,
@@ -3350,7 +3353,107 @@ function swissRoundRows(
       created_by: base.created_by, round: roundNo, match_no: round.pairs.length, is_ranked: false, ...base.fixtureDefaults,
     });
   }
+  // Stage 12 · CH2: a bye asked for — half a point, none, or absent (none) — and a late entrant's missed rounds.
+  const byeRow = (team: string, r: number, kind: 'half' | 'zero', words: string, more: Record<string, unknown>) => ({
+    sport_id: base.sport_id, tournament_id: base.tournament_id,
+    team_a_id: team, team_b_id: null, team_a_name: nameOf.get(team) ?? 'Player', team_b_name: 'BYE',
+    venue: base.venue, city_id: base.city_id, status: 'completed', winner_team_id: null,
+    score_summary: { bye: true, bye_kind: kind, ...more, A: { score: kind === 'half' ? 0.5 : 0 }, B: { score: 0 }, result: words },
+    created_by: base.created_by, round: r, match_no: 900 + rows.length, is_ranked: false, ...base.fixtureDefaults,
+  });
+  for (const q of extra.requested ?? []) {
+    const nm = nameOf.get(q.team) ?? 'Player';
+    rows.push(q.kind === 'half' ? byeRow(q.team, roundNo, 'half', `${nm} takes a half-point bye`, { requested: true })
+      : q.kind === 'absent' ? byeRow(q.team, roundNo, 'zero', `${nm} is absent this round (no points)`, { requested: true, absent: true })
+        : byeRow(q.team, roundNo, 'zero', `${nm} takes a zero-point bye`, { requested: true }));
+  }
+  for (const l of extra.late ?? []) {
+    const nm = nameOf.get(l.team) ?? 'Player';
+    rows.push(byeRow(l.team, l.round, l.kind, `${nm} joined late (round ${l.round}: ${l.kind === 'half' ? 'half a point' : 'no points'})`, { late: true }));
+  }
   return rows;
+}
+
+/** Stage 12 · CH2 · a bye a player asks for (or the arbiter records): half a point, none, or absent (none). */
+export type SwissByeKind = 'half' | 'zero' | 'absent';
+
+/**
+ * Stage 12 · CH2 · everything a Swiss round is paired from: the tournament, its
+ * entries in pairing-number order (fixed at the draw, late entrants after),
+ * every result so far, and who asked for a bye.
+ */
+export async function swissContext(tournamentId: string) {
+  const { data: t } = await supabase
+    .from('tournaments').select('id, sport_id, venue, city_id, created_by, settings, tiebreaker_rules, match_rules, match_duration_minutes, buffer_minutes, format')
+    .eq('id', tournamentId).maybeSingle();
+  if (!t) return null;
+  const settings = settingsOf(t as { settings?: unknown });
+  const sw = settings.swiss;
+  if (!sw) return null;
+  const entries = (await allRows(() => supabase
+    .from('tournament_entries').select('team_id, seed, entered_at, club, team:teams!team_id(id, name, short_name)')
+    .eq('tournament_id', tournamentId).eq('status', 'approved'))) as Array<{ team_id: string; seed?: number | null; entered_at?: string | null; club?: string | null; team?: { name?: string } | null }>;
+  // Pairing numbers: fixed at the draw (settings.swiss.tpn); late entrants after, by the seeding.
+  const fixed = (sw.tpn ?? []).filter((id) => entries.some((e) => e.team_id === id));
+  const rest = drawOrder(entries.filter((e) => !fixed.includes(e.team_id)), settings.seeding === 'random' ? null : settings.seeding ?? null).map((e) => e.team_id);
+  const ids = [...fixed, ...rest];
+  const nameOf = new Map(entries.map((e) => [e.team_id, e.team?.name ?? 'Player']));
+  const clubOfTeam = new Map(entries.map((e) => [e.team_id, e.club?.trim() || null]));
+  const ms = ((await allRows(() => supabase
+    .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, scheduled_at, overs, round')
+    .eq('tournament_id', tournamentId).is('voided_at', null))) ?? []) as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; score_summary: any; scheduled_at: string | null; round: number | null }>;
+  const pts = await tournamentPoints(t as any);
+  const slug = normSportSlug((await getSport(t.sport_id as string))?.slug);
+  return { t, settings, sw, ids, nameOf, clubOf: (id: string) => clubOfTeam.get(id) ?? null, ms, pts, slug, colours: slug === 'chess' };
+}
+
+/**
+ * Stage 12 · CH2 · pair round `roundNo` the FIDE way (utils/swissDutch): the
+ * byes asked for and late entrants' missed rounds first, then everyone else.
+ */
+export function swissPairRound(ctx: NonNullable<Awaited<ReturnType<typeof swissContext>>>, roundNo: number) {
+  const reqs = ctx.sw.requests ?? {};
+  const requested = ctx.ids.flatMap((id) => { const k = reqs[id]?.[String(roundNo)]; return k ? [{ team: id, kind: k as SwissByeKind }] : []; });
+  const playedRounds = new Map<string, Set<number>>();
+  for (const m of ctx.ms) for (const id of [m.team_a_id, m.team_b_id]) if (id && m.round != null) (playedRounds.get(id) ?? playedRounds.set(id, new Set()).get(id)!).add(Number(m.round));
+  // A late entrant: approved after the draw, nothing in the rounds before this one.
+  const late = roundNo > 1 ? ctx.ids.flatMap((id) => {
+    const had = playedRounds.get(id) ?? new Set<number>();
+    return Array.from({ length: roundNo - 1 }, (_, i) => i + 1).filter((r) => !had.has(r)).map((r) => ({ team: id, round: r, kind: (ctx.sw.lateEntry === 'half' ? 'half' : 'zero') as 'half' | 'zero' }));
+  }) : [];
+  const virtual: GMatchRow[] = late.map((l) => ({ team_a_id: l.team, team_b_id: null, winner_team_id: null, status: 'completed', round: l.round, score_summary: { bye: true, bye_kind: l.kind } }));
+  const all = [...(ctx.ms as GMatchRow[]), ...virtual];
+  const pool = ctx.ids.filter((id) => !requested.some((q) => q.team === id));
+  if (roundNo === 1) return { round: dutchFirstRound(pool, ctx.colours), requested, late };
+  const upTo = (r: number) => computeStats(ctx.ids, all.filter((m) => Number(m.round ?? 0) <= r) as never[], undefined, ctx.pts);
+  const cache = new Map<number, ReturnType<typeof upTo>>();
+  const pointsAfter = (r: number) => (cache.get(r) ?? cache.set(r, upTo(r)).get(r)!);
+  const before = pointsAfter(roundNo - 1);
+  const history = dutchHistory(ctx.ids, all.map((m) => ({
+    round: Number(m.round ?? 0), white: m.team_a_id, black: m.team_b_id, bye: m.score_summary?.bye === true,
+    byeKind: m.score_summary?.bye_kind ?? null, forfeit: m.score_summary?.walkover === true || (m.status === 'abandoned' && !!m.winner_team_id), winner: m.winner_team_id,
+  })), (id, r) => pointsAfter(r - 1).get(id)?.points ?? 0);
+  const round = dutchRound({
+    players: pool, tpn: new Map(ctx.ids.map((id, i) => [id, i + 1])), points: new Map(pool.map((id) => [id, before.get(id)?.points ?? 0])),
+    history, colours: ctx.colours, lastRound: roundNo === ctx.sw.rounds, winPoints: ctx.pts.win, roundsPlayed: roundNo - 1,
+    ...(ctx.settings.separateClubs ? { clubOf: ctx.clubOf } : {}),
+  });
+  return { round, requested, late };
+}
+type GMatchRow = { team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; round: number | null; score_summary: any };
+
+/** Stage 12 · CH2 · write a paired round (and its byes) as match rows, timed after the round before. */
+export async function swissInsertRound(ctx: NonNullable<Awaited<ReturnType<typeof swissContext>>>, roundNo: number, paired: ReturnType<typeof swissPairRound>): Promise<void> {
+  const rules = stageRules(ctx.slug, (ctx.t as { match_rules?: unknown }).match_rules ?? null, 'group');
+  const legacy = legacyFromRules(ctx.slug, rules);
+  const rows = swissRoundRows(paired.round, roundNo, ctx.nameOf, {
+    sport_id: ctx.t.sport_id, tournament_id: ctx.t.id as string, venue: ctx.t.venue ?? null, city_id: ctx.t.city_id ?? null,
+    created_by: ctx.t.created_by as string, fixtureDefaults: { format: legacy.format, rules },
+  }, { requested: paired.requested, late: paired.late });
+  const lastAt = Math.max(...ctx.ms.map((m) => (m.scheduled_at ? Date.parse(m.scheduled_at) : 0)), Date.now());
+  const gap = (Number((ctx.t as any).match_duration_minutes ?? 60) + Number((ctx.t as any).buffer_minutes ?? 10)) * 60000;
+  for (const r of rows) r.scheduled_at = new Date(lastAt + gap).toISOString();
+  if (rows.length) await supabase.from('matches').insert(rows).select('id');
 }
 
 /**
@@ -3360,47 +3463,35 @@ function swissRoundRows(
  */
 async function swissAfterResult(tournamentId: string): Promise<void> {
   if (await hasUnplayedFixtures(tournamentId)) return;
-  const { data: t } = await supabase
-    .from('tournaments').select('id, sport_id, venue, city_id, created_by, settings, tiebreaker_rules, match_rules, match_duration_minutes, buffer_minutes')
-    .eq('id', tournamentId).maybeSingle();
-  if (!t) return;
-  const sw = settingsOf(t as { settings?: unknown }).swiss;
-  if (!sw) return;
+  const ctx = await swissContext(tournamentId);
+  if (!ctx) return;
+  const sw = ctx.sw;
   const paired = sw.paired ?? 1;
+  if (sw.draft) return; // Stage 12 · CH2: the next round waits for the arbiter to publish it
   if (paired >= sw.rounds) { await crownLeagueChampion(tournamentId); return; }
   // Claim the next round.
+  const next = paired + 1;
+  const result = swissPairRound(ctx, next);
+  // Stage 12 · CH2: "check pairings before publishing" — keep it as a draft for the arbiter.
+  const swNext = sw.check
+    ? { ...sw, draft: { round: next, pairs: result.round.pairs, bye: result.round.bye } }
+    : { ...sw, paired: next };
   const { data: claim } = await supabase
     .from('tournaments')
-    .update({ settings: { ...settingsOf(t as { settings?: unknown }), swiss: { rounds: sw.rounds, paired: paired + 1 } }, updated_at: new Date().toISOString() })
+    .update({ settings: { ...ctx.settings, swiss: swNext }, updated_at: new Date().toISOString() })
     .eq('id', tournamentId)
     .eq('settings->swiss->>paired', String(paired))
+    .is('settings->swiss->draft', null)
     .select('id');
   if (!claim || claim.length === 0) return;
-  const entries = await allRows(() => supabase
-    .from('tournament_entries').select('team_id, seed, entered_at, team:teams!team_id(id, name, short_name)')
-    .eq('tournament_id', tournamentId).eq('status', 'approved'));
-  const seeded = drawOrder(((entries ?? []) as Array<{ team_id: string; seed?: number | null; entered_at?: string | null }>), settingsOf(t as { settings?: unknown }).seeding ?? null);
-  const ids = seeded.map((e) => e.team_id);
-  const nameOf = new Map(((entries ?? []) as Array<{ team_id: string; team?: { name?: string } | null }>).map((e) => [e.team_id, e.team?.name ?? 'Player']));
-  const matches = await allRows(() => supabase
-    .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, scheduled_at, overs')
-    .eq('tournament_id', tournamentId).is('voided_at', null)); // Oct 2026: every row
-  const ms = (matches ?? []) as Array<{ team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; score_summary: any; scheduled_at: string | null }>;
-  const pts = await tournamentPoints(t as any);
-  const ranked = rankTeams(ids, ms as any[], ((t as any).tiebreaker_rules ?? []) as any[], pts);
-  const next = swissNextRound(ranked, ms.map((m) => ({ white: m.team_a_id, black: m.team_b_id, bye: m.score_summary?.bye === true })));
-  const slug = normSportSlug((await getSport(t.sport_id as string))?.slug);
-  const rules = stageRules(slug, (t as { match_rules?: unknown }).match_rules ?? null, 'group');
-  const legacy = legacyFromRules(slug, rules);
-  const rows = swissRoundRows(next, paired + 1, nameOf, {
-    sport_id: t.sport_id, tournament_id: tournamentId, venue: t.venue ?? null, city_id: t.city_id ?? null,
-    created_by: t.created_by as string, fixtureDefaults: { format: legacy.format, rules },
-  });
-  // Timed after the previous round's last game (its length plus the buffer).
-  const lastAt = Math.max(...ms.map((m) => (m.scheduled_at ? Date.parse(m.scheduled_at) : 0)), Date.now());
-  const gap = (Number((t as any).match_duration_minutes ?? 60) + Number((t as any).buffer_minutes ?? 10)) * 60000;
-  for (const r of rows) r.scheduled_at = new Date(lastAt + gap).toISOString();
-  await supabase.from('matches').insert(rows).select('id');
+  if (sw.check) {
+    // Tell the organiser and the pairings arbiters the round is ready to check.
+    const { data: offs } = await supabase.from('tournament_officials').select('user_id').eq('tournament_id', tournamentId).in('role', ['pairings', 'chief_referee', 'deputy_referee']);
+    const who = [...new Set([ctx.t.created_by as string, ...((offs ?? []) as Array<{ user_id: string }>).map((o) => o.user_id)])];
+    await notifyUsers(who, { type: 'tournament', title: `Round ${next} pairings are ready`, body: 'Check them, swap if needed, then publish.', data: { tournamentId } }).catch(() => undefined);
+    return;
+  }
+  await swissInsertRound(ctx, next, result);
 }
 
 export async function advanceTournamentWinner(matchId: string): Promise<void> {
@@ -4188,16 +4279,23 @@ export async function generateFixtures(req: Request, res: Response) {
         await releaseFixtureClaim(id);
         return res.status(400).json({ error: `${teams.length} players can play at most ${plural(teams.length - 1, 'Swiss round', 'Swiss rounds')} without meeting twice; this one has ${rounds}.`, code: 'SWISS_ROUNDS' });
       }
-      const r1 = swissFirstRound(teams.map((t) => t.id));
+      // Stage 12 · CH2: FIDE's round 1 (colours only in chess), the pairing numbers fixed from here on,
+      // and any byes asked for round 1 before the draw.
+      const swSet = settingsOf(tournament as { settings?: unknown }).swiss;
+      const tpn = teams.map((t) => t.id);
+      const req1 = tpn.flatMap((tid) => { const k = swSet?.requests?.[tid]?.['1']; return k ? [{ team: tid, kind: k as SwissByeKind }] : []; });
+      const sportSlug = normSportSlug((await getSport(tournament.sport_id as string))?.slug);
+      const r1 = dutchFirstRound(tpn.filter((tid) => !req1.some((q) => q.team === tid)), sportSlug === 'chess');
+      void swissFirstRound; // BUILD 4.15's round 1 is kept for older tests; the draw uses FIDE's.
       const nameOfId = new Map(teams.map((t) => [t.id, t.name]));
-      const rows = swissRoundRows(r1, 1, nameOfId, { sport_id: tournament.sport_id, tournament_id: id, venue: tournament.venue ?? null, city_id: tournament.city_id ?? null, created_by: userId, fixtureDefaults });
+      const rows = swissRoundRows(r1, 1, nameOfId, { sport_id: tournament.sport_id, tournament_id: id, venue: tournament.venue ?? null, city_id: tournament.city_id ?? null, created_by: userId, fixtureDefaults }, { requested: req1 });
       const sched = applyScheduleToRows(rows.filter((r) => !r.score_summary?.bye), schedCfg, fallbackStartIso);
       if (!sched.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' }); }
       for (const r of rows) if (r.score_summary?.bye) r.scheduled_at = rows.find((x) => !x.score_summary?.bye)?.scheduled_at ?? fallbackStartIso;
       const { error } = await supabase.from('matches').insert(rows).select('id');
       if (error) throw new Error('fixture insert failed');
       await supabase.from('tournaments')
-        .update({ status: statusAfterFixtures(tournament.start_date as string | null), settings: { ...settingsOf(tournament as { settings?: unknown }), swiss: { rounds, paired: 1 } } })
+        .update({ status: statusAfterFixtures(tournament.start_date as string | null), settings: { ...settingsOf(tournament as { settings?: unknown }), swiss: { ...(swSet ?? {}), rounds, paired: 1, tpn } } })
         .eq('id', id);
       return res.json({ success: true, matchesCreated: rows.length, format });
     }

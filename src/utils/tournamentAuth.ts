@@ -126,3 +126,9 @@ export async function canDefault(
   return (data ?? []).length > 0;
 }
 
+/** Stage 12 · CH2 · a Swiss takes late entries while it has rounds still to pair (they score nothing — or half — for the rounds missed). */
+export function swissTakesLateEntries(t: { format?: string | null; settings?: unknown }): boolean {
+  if (t.format !== 'swiss') return false;
+  const sw = (t.settings && typeof t.settings === 'object' ? (t.settings as { swiss?: { rounds?: number; paired?: number } }).swiss : null) ?? null;
+  return !sw || (sw.paired ?? 0) < (sw.rounds ?? 0);
+}

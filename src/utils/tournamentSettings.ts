@@ -350,7 +350,19 @@ export type TournamentSettings = {
   /** 4.14 · who may play: gender, an age limit on the start date, a rating band in the sport. Absent = open. */
   category?: Category;
   /** 4.15 · a Swiss (chess): how many rounds; `paired` is the last round the server paired (it writes that, not the app). */
-  swiss?: { rounds: number; paired?: number };
+  /**
+   * BUILD 4.15 · a Swiss's rounds; `paired` is the server's bookkeeping.
+   * Stage 12 · CH2 (FIDE): `check` — the arbiter checks (and can swap) each
+   * round before it's published; `lateEntry` — a late entrant's missed rounds
+   * score nothing (FIDE's default) or half a point. Server-kept: `tpn` (the
+   * pairing numbers fixed at the draw), `requests` (byes asked for, by entry
+   * and round: 'half', 'zero', 'absent'), `draft` (a round waiting to be published).
+   */
+  swiss?: {
+    rounds: number; paired?: number; check?: boolean; lateEntry?: 'zero' | 'half';
+    tpn?: string[]; requests?: Record<string, Record<string, 'half' | 'zero' | 'absent'>>;
+    draft?: { round: number; pairs: Array<{ white: string; black: string }>; bye: string | null };
+  };
   /** Cricket gap 6 (5 Oct 2026) · the walkover rule, shown to teams: a team not ready this many minutes after its start time loses by walkover (5–60). */
   graceMinutes?: number;
   /** …or one that can't field this many players (2–15). */
@@ -751,12 +763,17 @@ export function settingsRefusal(sport: string | null | undefined, format: string
     // Oct 2026: no fixed top — against the field's size where the caller knows it.
     const bad = swissRoundsProblem(r);
     if (bad) return refuse(bad);
+    // Stage 12 · CH2.
+    const sw = o.swiss as { check?: unknown; lateEntry?: unknown };
+    if (sw.check != null && typeof sw.check !== 'boolean') return refuse('Checking pairings before publishing is on or off.');
+    if (sw.lateEntry != null && sw.lateEntry !== 'zero' && sw.lateEntry !== 'half') return refuse('A late entrant’s missed rounds score nothing or half a point.');
   }
   const catBad = categoryRefusal(o.category);
   if (catBad) return catBad;
   if (o.separateClubs != null) {
     if (typeof o.separateClubs !== 'boolean') return refuse('Keeping clubs apart is on or off.');
-    if (o.separateClubs && format !== 'knockout' && format !== 'groups_knockout') return refuse('Keeping clubs apart is for a draw — a knockout or groups.');
+    // Stage 12 · CH2: in a Swiss, clubs (or states) are kept apart in the last round.
+    if (o.separateClubs && format !== 'knockout' && format !== 'groups_knockout' && format !== 'swiss') return refuse('Keeping clubs apart is for a draw — a knockout, groups or a Swiss.');
   }
   // Stage 11 · PB4: double elimination — a knockout's (or groups → knockout's), alone.
   if (o.doubleElim != null) {
@@ -801,7 +818,17 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   }
   if ('swiss' in s) {
     // The app sets the rounds; `paired` is the server's own bookkeeping.
-    if (s.swiss) out.swiss = { rounds: Number(s.swiss.rounds), ...(current?.swiss?.paired != null ? { paired: current.swiss.paired } : {}) };
+    // Stage 12 · CH2: the organiser sets check / lateEntry; tpn, requests and draft are the server's.
+    if (s.swiss) {
+      const cur = current?.swiss;
+      out.swiss = {
+        rounds: Number(s.swiss.rounds),
+        ...(cur?.paired != null ? { paired: cur.paired } : {}),
+        ...(s.swiss.check === true ? { check: true } : {}),
+        ...(s.swiss.lateEntry === 'half' ? { lateEntry: 'half' as const } : {}),
+        ...(cur?.tpn ? { tpn: cur.tpn } : {}), ...(cur?.requests ? { requests: cur.requests } : {}), ...(cur?.draft ? { draft: cur.draft } : {}),
+      };
+    }
     else delete out.swiss;
   }
   if ('category' in s) {

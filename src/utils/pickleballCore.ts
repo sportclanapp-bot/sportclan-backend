@@ -29,6 +29,8 @@ export interface SideOutOpts {
   doubles: boolean;
   /** Stage 10 · TT5: every game is played; the match goes to more games won. */
   allGames?: boolean;
+  /** Stage 11 · PB9: a timed match — level at time: the next point wins, or it ends level. */
+  timedLevel?: 'next_point' | 'draw';
 }
 
 export interface SideOutState {
@@ -43,6 +45,10 @@ export interface SideOutState {
   /** Doubles: 1 or 2. Singles: always 1. */
   serverNum: 1 | 2;
   winner: PbSide | null;
+  /** Stage 11 · PB9: time has been called. */
+  buzzer?: boolean;
+  /** Stage 11 · PB9: the match ended level at time (no winner). */
+  level?: boolean;
 }
 
 const other = (s: PbSide): PbSide => (s === 'A' ? 'B' : 'A');
@@ -86,8 +92,8 @@ function addPoint(s: SideOutState, side: PbSide, opts: SideOutOpts): SideOutStat
 }
 
 export function sideOutRally(s: SideOutState, winner: PbSide, opts: SideOutOpts): SideOutState {
-  if (s.winner) return s;
-  if (winner === s.server) return addPoint(s, winner, opts);
+  if (s.winner || s.level) return s;
+  if (winner === s.server) return afterTime(addPoint(s, winner, opts));
   // A fault on the serving side.
   if (opts.doubles && s.serverNum === 1) return { ...s, serverNum: 2 };
   return { ...s, server: other(s.server), serverNum: 1 };
@@ -98,8 +104,37 @@ export function sideOutRally(s: SideOutState, winner: PbSide, opts: SideOutOpts)
  * is serving; the serve doesn't change.
  */
 export function sideOutPenalty(s: SideOutState, side: PbSide, opts: SideOutOpts): SideOutState {
-  if (s.winner) return s;
-  return addPoint(s, side, opts);
+  if (s.winner || s.level) return s;
+  return afterTime(addPoint(s, side, opts));
+}
+
+/** Stage 11 · PB9: who's ahead at the buzzer — on games won, then on points in the game in play. */
+function leaderAtTime(s: SideOutState): PbSide | null {
+  if (s.won.A !== s.won.B) return s.won.A > s.won.B ? 'A' : 'B';
+  if (s.cur.A !== s.cur.B) return s.cur.A > s.cur.B ? 'A' : 'B';
+  return null;
+}
+/** The match ends at time: the game in play is recorded, and counts for its leader when games were level. */
+function endAtTime(s: SideOutState, winner: PbSide | null): SideOutState {
+  const played = s.cur.A + s.cur.B > 0;
+  const level = s.won.A === s.won.B;
+  const games = played ? [...s.games, { ...s.cur }] : s.games;
+  const won = played && level && winner ? { ...s.won, [winner]: s.won[winner] + 1 } : s.won;
+  return { ...s, cur: played ? { A: 0, B: 0 } : s.cur, games, won, winner, buzzer: true, ...(winner ? {} : { level: true }) };
+}
+/** Stage 11 · PB9 · time called at the buzzer: the side ahead wins; level, the next point (or it ends level). */
+export function sideOutCallTime(s: SideOutState, opts: SideOutOpts): SideOutState {
+  if (s.winner || s.level || s.buzzer) return s;
+  const lead = leaderAtTime(s);
+  if (lead) return endAtTime(s, lead);
+  if (opts.timedLevel === 'draw') return endAtTime(s, null);
+  return { ...s, buzzer: true };
+}
+/** After a point once time is called (level then): the side now ahead wins. */
+function afterTime(s: SideOutState): SideOutState {
+  if (!s.buzzer || s.winner) return s;
+  const lead = leaderAtTime(s);
+  return lead ? endAtTime(s, lead) : s;
 }
 
 /**
@@ -114,7 +149,7 @@ export function sideOutPointOff(s: SideOutState, offender: PbSide): SideOutState
 
 /** Stage 11 · PB6 · the game in play forfeited by `offender`: the opponent takes it, recorded at the target to 0 (11-0). */
 export function sideOutForfeitGame(s: SideOutState, offender: PbSide, opts: SideOutOpts): SideOutState {
-  if (s.winner) return s;
+  if (s.winner || s.level) return s;
   const to = other(offender);
   return addPoint({ ...s, cur: { [to]: Math.max(opts.target, 0) - 1, [offender]: 0 } as { A: number; B: number } }, to, { ...opts, winBy2: false });
 }
@@ -135,7 +170,8 @@ export function sideOutReplay(
     const p = (e.payload ?? {}) as { team_side?: unknown; kind?: unknown };
     if (e.event_type === 'serve_swap') s = sideOutSwap(s);
     else if (e.event_type === 'note' && p.kind === 'point_off') s = sideOutPointOff(s, p.team_side === 'B' ? 'B' : 'A'); // Stage 11 · PB6
-    else if (e.event_type === 'note' && p.kind === 'game_forfeit') s = sideOutForfeitGame(s, p.team_side === 'B' ? 'B' : 'A', opts);
+    else if (e.event_type === 'note' && p.kind === 'game_forfeit') s = afterTime(sideOutForfeitGame(s, p.team_side === 'B' ? 'B' : 'A', opts));
+    else if (e.event_type === 'note' && p.kind === 'buzzer') s = sideOutCallTime(s, opts); // Stage 11 · PB9
     else if (e.event_type === 'score' && p.kind === 'penalty') s = sideOutPenalty(s, p.team_side === 'B' ? 'B' : 'A', opts); // Stage 9 · T9
     else if (e.event_type === 'score') s = sideOutRally(s, p.team_side === 'B' ? 'B' : 'A', opts);
   }

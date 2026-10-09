@@ -21,5 +21,5 @@ test('completion: decided at the buzzer on games or points; not while level', ()
   expect(bestOfState('tennis', { A: { score: 0, games: 2, points: 1 }, B: { score: 0, games: 2, points: 1 }, buzzer: true }, m)?.decided).toBe(false);
   expect(bestOfState('tennis', { A: { score: 0, games: 3 }, B: { score: 0, games: 2 } }, m)?.decided).toBe(false); // no buzzer: sets as ever
   const src = fs.readFileSync(path.join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
-  expect(src).toContain("const timedHere = slug === 'tennis' ? !!rulesOf(slug, match).timeLimitMinutes"); // BUILD 3.76: and timed carrom
+  expect(src).toContain("const timedHere = slug === 'tennis' || RALLY_TIMED.has(slug) ? !!rulesOf(slug, match).timeLimitMinutes"); // BUILD 3.76: and timed carrom
 });

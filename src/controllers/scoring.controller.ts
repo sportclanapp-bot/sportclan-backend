@@ -21,7 +21,7 @@ import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointC
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber } from '../utils/cricketRules';
 import { typedMatchPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
-import { DOUBLES_PLAYERS, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
+import { DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
 import { splitTie, tieNeed, unitsOf, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
@@ -366,9 +366,10 @@ export async function validateScoringEvent(
   if (event_type === 'note' && payload && payload.kind === 'buzzer') {
     const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
     // BUILD 3.76: and a timed carrom game.
-    const timedHere = slug === 'tennis' ? !!rulesOf(slug, match).timeLimitMinutes : slug === 'carrom' ? !!rulesOf(slug, match).gameMinutes : false;
+    // Stage 11 · PB9: and a timed badminton, table tennis, pickleball or volleyball match.
+    const timedHere = slug === 'tennis' || RALLY_TIMED.has(slug) ? !!rulesOf(slug, match).timeLimitMinutes : slug === 'carrom' ? !!rulesOf(slug, match).gameMinutes : false;
     if (!timedHere) {
-      return refuse(400, { error: 'Time is called only in a timed tennis match or carrom game.', code: 'BAD_NOTE' });
+      return refuse(400, { error: 'Time is called only in a timed match (or a timed carrom game).', code: 'BAD_NOTE' });
     }
   }
   // Stage 11 · PB6: a point off the offender, or the game forfeited — a step of
@@ -784,6 +785,8 @@ export function bestOfState(
   const b = Number(summary?.B?.score ?? 0);
   // BUILD 3.66: a timed tennis match after the buzzer goes to the leader — on
   // sets, then games in the set in play, then points in the game in play.
+  // Stage 11 · PB9: a timed rally match that ended level at the buzzer is decided — a draw.
+  if (summary?.timed_level === true) return { needed, decided: true, scored: true, leader: null };
   if (summary?.buzzer === true) {
     const cmp = (x: unknown, y: unknown) => Number(x ?? 0) - Number(y ?? 0);
     const d = cmp(a, b) || cmp(summary?.A?.games, summary?.B?.games) || cmp(summary?.A?.points, summary?.B?.points);
@@ -830,14 +833,37 @@ export function rollupSets(
   cfg: { target: number; cap?: number; maxSets: number; finalTarget?: number; winBy2: boolean; allGames?: boolean },
   events: { event_type: string; payload: any }[],
   sideOf: (p: any) => 'A' | 'B',
-): { setsA: number; setsB: number; setScoresA: number[]; setScoresB: number[]; curA: number; curB: number; decided: 'A' | 'B' | null } {
+  /** Stage 11 · PB9: a timed match — what a level score at the buzzer does. */
+  timed: { level: 'next_point' | 'draw' } | null = null,
+): { setsA: number; setsB: number; setScoresA: number[]; setScoresB: number[]; curA: number; curB: number; decided: 'A' | 'B' | null; buzzer?: boolean; level?: boolean } {
   const need = Math.ceil(cfg.maxSets / 2);
   let curA = 0, curB = 0, setsA = 0, setsB = 0, period = 1;
   let decided: 'A' | 'B' | null = null;
+  let buzzer = false; let level = false;
   const setScoresA: number[] = [], setScoresB: number[] = [];
+  // Stage 11 · PB9: at the buzzer (or the first point after a level buzzer) the
+  // side ahead — on games, then on points in the game in play — wins; the game
+  // in play is recorded, and counts for its leader when games were level.
+  const leader = (): 'A' | 'B' | null => (setsA !== setsB ? (setsA > setsB ? 'A' : 'B') : curA !== curB ? (curA > curB ? 'A' : 'B') : null);
+  const endAtTime = (w: 'A' | 'B' | null) => {
+    if (curA + curB > 0) {
+      const wasLevel = setsA === setsB;
+      setScoresA.push(curA); setScoresB.push(curB);
+      if (wasLevel && w === 'A') setsA += 1; else if (wasLevel && w === 'B') setsB += 1;
+      curA = 0; curB = 0;
+    }
+    if (w) decided = w; else level = true;
+  };
   for (const e of events) {
-    if (decided) break;
+    if (decided || level) break;
     const p: any = e.payload || {};
+    if (timed && e.event_type === 'note' && p.kind === 'buzzer') {
+      if (buzzer) continue;
+      buzzer = true;
+      const l = leader();
+      if (l) endAtTime(l); else if (timed.level === 'draw') endAtTime(null);
+      continue;
+    }
     const target = cfg.finalTarget && period === cfg.maxSets ? cfg.finalTarget : cfg.target;
     // Stage 11 · PB6: a technical foul takes a point off the offender; a
     // forfeited game goes to the other side at its target to 0 (11-0).
@@ -861,8 +887,9 @@ export function rollupSets(
       void need;
       decided = gamesWinner(setsA, setsB, cfg.maxSets, cfg.allGames); // Stage 10 · TT5: or every game played
     }
+    if (buzzer && !decided) { const l = leader(); if (l) endAtTime(l); } // Stage 11 · PB9: the next point after a level buzzer
   }
-  return { setsA, setsB, setScoresA, setScoresB, curA, curB, decided };
+  return { setsA, setsB, setScoresA, setScoresB, curA, curB, decided, ...(buzzer ? { buzzer: true } : {}), ...(level ? { level: true } : {}) };
 }
 
 /**
@@ -1289,6 +1316,7 @@ export async function recomputeSummary(
   let tieSummary: ReturnType<typeof rollupTieSpec>['tie'] | null = null; // Stage 9 · T3
   let sideOutServe: { side: 'A' | 'B'; number: 1 | 2 } | null = null; // BUILD 3.58
   let tennisBuzzer = false; // BUILD 3.66
+  let rallyBuzzer = false; let rallyLevel = false; let rallyTimedWinner: 'A' | 'B' | null = null; // Stage 11 · PB9
   const sides: Record<'A' | 'B', Record<string, any>> = { A, B };
   const sideOf = (p: any): 'A' | 'B' => ((p?.team_side as 'A' | 'B') === 'B' ? 'B' : 'A');
   let chessResult: string | null = null; // SC-47
@@ -1436,11 +1464,14 @@ export async function recomputeSummary(
     if (slug === 'pickleball' && rules.scoring === 'sideout') {
       // BUILD 3.58: side-out scoring — only the server scores, so the serve is
       // replayed (the shared pickleballCore, as the app scores it).
-      const s = sideOutReplay(events, { target: cfg.target, winBy2: cfg.winBy2, maxGames: cfg.maxSets, doubles: rules.players === DOUBLES_PLAYERS, ...(cfg.allGames ? { allGames: true } : {}) });
+      const s = sideOutReplay(events.filter((e) => rules.timeLimitMinutes || !(e.event_type === 'note' && (e.payload as any)?.kind === 'buzzer')), { target: cfg.target, winBy2: cfg.winBy2, maxGames: cfg.maxSets, doubles: rules.players === DOUBLES_PLAYERS, ...(cfg.allGames ? { allGames: true } : {}), ...(rules.timeLimitMinutes ? { timedLevel: rules.timedLevel ?? 'next_point' } : {}) });
       A.score = s.won.A; B.score = s.won.B;
       A.sets = s.games.map((g) => g.A); B.sets = s.games.map((g) => g.B);
       A.points = s.cur.A; B.points = s.cur.B;
       sideOutServe = { side: s.server, number: s.serverNum };
+      if (s.buzzer) rallyBuzzer = true; // Stage 11 · PB9
+      if (s.level) rallyLevel = true;
+      if (s.winner && s.buzzer) rallyTimedWinner = s.winner;
     } else if (rules.rubbers) { // BUILD 3.54: table tennis ties too
       // BUILD 3.49: a team tie — the score is rubbers won; sets are every game.
       const t = rollupTie(cfg, rules.rubbers, events, sideOf);
@@ -1450,10 +1481,13 @@ export async function recomputeSummary(
       A.points = t.curA; B.points = t.curB;
       tieRubbers = { rubber: t.rubber, results: t.results };
     } else {
-      const r = rollupSets(cfg, events, sideOf);
+      const r = rollupSets(cfg, events, sideOf, rules.timeLimitMinutes ? { level: rules.timedLevel === 'draw' ? 'draw' : 'next_point' } : null); // Stage 11 · PB9
       A.score = r.setsA; B.score = r.setsB;
       A.sets = r.setScoresA; B.sets = r.setScoresB;
       A.points = r.curA; B.points = r.curB; // current in-progress set/board
+      if (r.buzzer) rallyBuzzer = true; // Stage 11 · PB9
+      if (r.level) rallyLevel = true;
+      if (r.decided && r.buzzer) rallyTimedWinner = r.decided;
     }
   } else if (slug === 'chess') {
     // SC-47: chess records a single `result` event ({winner: white|black|draw}).
@@ -1554,7 +1588,13 @@ export async function recomputeSummary(
   if (tieRubbers) { summary.rubber = tieRubbers.rubber; summary.rubbers = tieRubbers.results; } // BUILD 3.49
   if (tieSummary) summary.tie = tieSummary; // Stage 9 · T3: the win rule, rubbers and games each side
   if (sideOutServe) summary.serve = sideOutServe; // BUILD 3.58: who serves, and (doubles) server 1 or 2
-  if (tennisBuzzer) summary.buzzer = true; // BUILD 3.66: time was called
+  // BUILD 3.66 / Stage 11 · PB9: time was called (tennis, a timed rally match);
+  // a rally match that ended level at the buzzer says so. Recomputed each time
+  // (an undone buzzer takes them away).
+  delete summary.buzzer; delete summary.timed_level;
+  if (tennisBuzzer || rallyBuzzer) summary.buzzer = true;
+  if (rallyLevel) summary.timed_level = true;
+  void rallyTimedWinner;
   if (tennisState) {
     // The tiebreak in play, and each completed set's tiebreak points (or null),
     // so a hub card or result can say "7–6 (7–5)".

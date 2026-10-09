@@ -2863,7 +2863,9 @@ async function getGroupsConfig(tournamentId: string): Promise<GroupsConfig> {
 // matches that are byes (one real team) so the caller can auto-resolve them.
 /** A fixture's rules at the draw: its stage's; a doubles event's are 2 a side (badminton gap 7). */
 export function fixtureRulesFor(sport: string | null | undefined, tournamentRules: unknown, stage: Stage, entryKind: string | null | undefined) {
-  const rules = stageRules(sport, tournamentRules, stage);
+  let rules = stageRules(sport, tournamentRules, stage);
+  // Stage 11 · PB9: a knockout fixture can't end level — at the buzzer the next point wins.
+  if (stage !== 'group' && (rules as { timedLevel?: string }).timedLevel === 'draw') rules = { ...rules, timedLevel: 'next_point' } as typeof rules;
   if (entryKind === 'doubles' && doublesRulesSport(sport) && !(rules as { rubbers?: unknown }).rubbers && !(rules as { tie?: unknown }).tie) return { ...rules, players: 2 } as typeof rules; // Stage 9 · T3: a tie names its own singles / doubles
   return rules;
 }

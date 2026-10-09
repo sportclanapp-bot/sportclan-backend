@@ -93,7 +93,7 @@ describe('wiring', () => {
     expect(complete).not.toMatch(/outcome = winner_team_id ===/);
     expect(complete).not.toMatch(/draws: profile\.draws \+ \(!winner_team_id/);
     expect(complete).toMatch(/if \(winnerSide\) \{\s*const winnerIds/);
-    expect(complete).toContain('if (!winnerSide) {'); // the decisive-sport guard
+    expect(complete).toContain('if (!winnerSide && !drawByRules) {'); // the decisive-sport guard
   });
 
   test('completeMatch: a side win is decisive, not a draw', () => {

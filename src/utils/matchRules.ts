@@ -116,8 +116,15 @@ export interface MatchRules {
   matchTiebreak?: boolean;
   /** BUILD 3.63: tennis games — ad (standard), no-ad, or semi-ad. */
   adScoring?: 'ad' | 'noad' | 'semiad';
-  /** BUILD 3.66: tennis — a timed match (10–180 min), scored at the buzzer; null = untimed. */
+  /** BUILD 3.66: tennis — a timed match (10–180 min), scored at the buzzer; null = untimed. Stage 11 · PB9: the rally sports too (any whole number of minutes). */
   timeLimitMinutes?: number | null;
+  /**
+   * Stage 11 · PB9 · a timed rally match level at the buzzer (games, then the
+   * points in the game in play): 'next_point' — the next point wins (as tennis);
+   * 'draw' — it ends level (a league or group match, a match inside a team tie;
+   * a knockout fixture always plays the next point). WPBL: 15-minute matches.
+   */
+  timedLevel?: 'next_point' | 'draw';
   /**
    * Stage 9 · T2: tennis — the games-all score at which a set's tiebreak is
    * played, when earlier than games-all (Fast4: first to 4, tiebreak at 3-3);
@@ -172,10 +179,10 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   cricket: { style: 'limited', overs: 20, players: null, lastManStands: false, retireAt: null, bowlerOvers: null, extraRuns: 1, rebowl: true, freeHit: false, inningsMinutes: null, powerplayOvers: null, oneTipOneHand: false, sixAndOut: false, noLbw: false, drawAllowed: true },
   // BUILD 3.45: 15 a game capped at 21 (BAI from July 2026, BWF from 4 Jan 2027).
   // A match stored without rules still plays 21 / 30 — see rulesFromLegacy.
-  badminton: { players: null, bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null, tie: null, allGames: false }, // BUILD 3.47: players 2 = doubles; 3.49 rubbers
-  tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null, tie: null, allGames: false }, // BUILD 3.54 rubbers
-  pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally', penaltyLadder: null, tie: null, allGames: false }, // BUILD 3.58: side-out; players 2 = doubles
-  volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false },
+  badminton: { players: null, bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.47: players 2 = doubles; 3.49 rubbers; Stage 11 · PB9 timed
+  tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.54 rubbers; Stage 11 · PB9 timed
+  pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally', penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.58: side-out; players 2 = doubles; Stage 11 · PB9 timed
+  volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // Stage 11 · PB9 timed
   tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null, tiebreakAt: null, finalSetTiebreakTo: null, noLet: false, ballChange: false, penaltyLadder: null, tie: null }, // BUILD 3.59–3.66; Stage 9 · T2, T10, T9, T3 (players 2 = doubles)
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50 }, // BUILD 3.72–3.77
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null },
@@ -254,6 +261,8 @@ export const SPORT_SLOT_MINUTES: Readonly<Record<string, number>> = {
   cricket: 180, football: 90, hockey: 70, tennis: 90, basketball: 60, volleyball: 75, badminton: 30, pickleball: 30, carrom: 30, tabletennis: 20, chess: 60, // volleyball: best of 5 to 25 runs ~75 min (was 45, the old sport default — device pass)
 };
 const up5 = (m: number) => Math.max(5, Math.ceil(m / 5) * 5);
+/** Stage 11 · PB9: the rally sports a match can be timed in (tennis and carrom have their own clocks). */
+export const RALLY_TIMED: ReadonlySet<string> = new Set(['badminton', 'tabletennis', 'pickleball', 'volleyball']);
 /** Expected sets / games played in a best-of-n: all the winner needs, and 40% of the rest. */
 const expectedUnits = (bestOf: number) => { const toWin = Math.ceil(bestOf / 2); return toWin + 0.4 * (bestOf - toWin); };
 function playUnits(key: string, r: Partial<MatchRules>): number | null {
@@ -285,6 +294,8 @@ export function slotMinutes(sport: string | null | undefined, rules: Partial<Mat
   if (!std || base == null) return null;
   const r = { ...std, ...(rules ?? {}) } as Partial<MatchRules>;
   if (key === 'tennis' && r.timeLimitMinutes) return up5(r.timeLimitMinutes + 10); // a timed match, warm-up and change-over
+  // Stage 11 · PB9: a timed rally match — its minutes (each match of a tie) and a change-over.
+  if (RALLY_TIMED.has(key) && r.timeLimitMinutes) return up5((r.tie?.rubbers.length ?? r.rubbers ?? 1) * (r.timeLimitMinutes + 5));
   if (key === 'football' || key === 'hockey' || key === 'basketball') {
     if (!r.periodMinutes) return null;
     const periods = r.periods ?? 2;
@@ -577,7 +588,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', noLbw: 'No LBW', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
-  finalTarget: 'Deciding game target', winBy2: 'Win by 2', allGames: 'Every game played', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', tiebreakAt: 'Tiebreak at', finalSetTiebreakTo: 'Final-set tiebreak', noLet: 'Lets', ballChange: 'New balls', penaltyLadder: 'Code violations', tie: 'Team tie', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game', gameMinutes: 'Minutes a game', carromMode: 'Carrom game', queenValue: 'Queen (point carrom)',
+  finalTarget: 'Deciding game target', winBy2: 'Win by 2', allGames: 'Every game played', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', timedLevel: 'Level at time', tiebreakAt: 'Tiebreak at', finalSetTiebreakTo: 'Final-set tiebreak', noLet: 'Lets', ballChange: 'New balls', penaltyLadder: 'Code violations', tie: 'Team tie', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game', gameMinutes: 'Minutes a game', carromMode: 'Carrom game', queenValue: 'Queen (point carrom)',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
 };
 
@@ -672,6 +683,9 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   if (key === 'tennis' && typeof r.noLet !== 'boolean') return refuse('Lets are on or off.', 'noLet');
   if (key === 'tennis' && typeof r.ballChange !== 'boolean') return refuse('New balls are on or off.', 'ballChange'); // Stage 9 · T10
+  // Stage 11 · PB9: a timed rally match — any whole number of minutes (the organiser's), and what a level score at time does.
+  if (RALLY_TIMED.has(key) && r.timeLimitMinutes !== null && (!isWhole(r.timeLimitMinutes) || r.timeLimitMinutes < 1)) return refuse('A time limit must be off, or a whole number of minutes.', 'timeLimitMinutes');
+  if (RALLY_TIMED.has(key) && r.timedLevel !== 'next_point' && r.timedLevel !== 'draw') return refuse('Level at time: the next point wins, or it stays level.', 'timedLevel');
   // BUILD 3.58: pickleball scores every rally, or side-out (doubles: players 2).
   if (key === 'pickleball' && r.scoring !== 'rally' && r.scoring !== 'sideout') return refuse('Scoring is rally or side-out.', 'scoring');
   if (key === 'pickleball' && r.players !== null && r.players !== DOUBLES_PLAYERS) {
@@ -808,7 +822,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'noLbw', 'bestOf', 'baseMinutes', 'incrementSeconds',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(key === 'tabletennis' ? ['winBy2'] : []), ...(key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' ? ['allGames'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...((TIE_SPORTS as readonly string[]).includes(key) ? ['tie'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(RALLY_TIMED.has(key) ? ['timeLimitMinutes', 'timedLevel'] : []), ...(key === 'tabletennis' ? ['winBy2'] : []), ...(key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' ? ['allGames'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...((TIE_SPORTS as readonly string[]).includes(key) ? ['tie'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -1000,6 +1014,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     if (key === 'pickleball' && rules.scoring === 'sideout') parts.push('side-out scoring'); // BUILD 3.58
     if ((key === 'pickleball' || key === 'tabletennis') && rules.winBy2 === false) parts.push(key === 'tabletennis' ? `golden point at ${(rules.target ?? 11) - 1}-all` : 'golden point'); // BUILD 3.56 · Stage 10 · TT5
     if (rules.allGames) parts.push(`all ${rules.bestOf ?? 3} ${(RALLY_LIMITS[key]!.unit ?? 'set') === 'set' ? 'sets' : 'games'} played`); // Stage 10 · TT5
+    if (rules.timeLimitMinutes) parts.push(`timed · ${rules.timeLimitMinutes} min${rules.timedLevel === 'draw' ? ' · level stays level' : ''}`); // Stage 11 · PB9
     if (rules.timeoutsPerSet != null && rules.timeoutsPerSet !== std.timeoutsPerSet) parts.push(rules.timeoutsPerSet === 0 ? 'no timeouts' : `${rules.timeoutsPerSet} timeout${rules.timeoutsPerSet === 1 ? '' : 's'} a set`); // BUILD 3.42
     if (rules.finalTarget !== undefined && rules.finalTarget !== std.finalTarget) parts.push(rules.finalTarget == null ? 'decider the same' : `decider to ${rules.finalTarget}`); // BUILD 3.38
     return parts.length ? parts.join(' · ') : null;

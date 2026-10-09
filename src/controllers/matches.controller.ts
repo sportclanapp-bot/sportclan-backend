@@ -3242,7 +3242,11 @@ export async function completeMatch(req: Request, res: Response) {
         code: 'CHESS_RESULT_REQUIRED',
       });
     }
-    if (!winnerSide) {
+    // Stage 11 · PB9 / PB3: a timed match level at the buzzer under a "stays
+    // level" rule, or a team tie its win rule calls a draw, is a draw the
+    // rules allow — in any sport (a knockout fixture was refused above).
+    const drawByRules = canonical?.timed_level === true || canonical?.tie?.decided === 'draw';
+    if (!winnerSide && !drawByRules) {
       if (sportRow?.allows_draw === false) {
         // F-24: the old wording was "This sport can't end level", which a scorer
         // read at 2–1 in points — nothing was level. The condition is not "the

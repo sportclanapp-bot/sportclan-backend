@@ -1028,7 +1028,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     if (rules.allGames) parts.push(`all ${rules.bestOf ?? 3} ${(RALLY_LIMITS[key]!.unit ?? 'set') === 'set' ? 'sets' : 'games'} played`); // Stage 10 · TT5
     if (rules.timeLimitMinutes) parts.push(`timed · ${rules.timeLimitMinutes} min${rules.timedLevel === 'draw' ? ' · level stays level' : ''}`); // Stage 11 · PB9
     if (rules.timeoutsPerSet != null && rules.timeoutsPerSet !== std.timeoutsPerSet) parts.push(rules.timeoutsPerSet === 0 ? 'no timeouts' : `${rules.timeoutsPerSet} timeout${rules.timeoutsPerSet === 1 ? '' : 's'} a set`); // BUILD 3.42
-    if (rules.finalTarget !== undefined && rules.finalTarget !== std.finalTarget) parts.push(rules.finalTarget == null ? 'decider the same' : `decider to ${rules.finalTarget}`); // BUILD 3.38
+    if (rules.finalTarget !== undefined && rules.finalTarget !== std.finalTarget && (rules.bestOf ?? 3) > 1) parts.push(rules.finalTarget == null ? 'decider the same' : `decider to ${rules.finalTarget}`); // BUILD 3.38 (Stage 11 follow-up: a one-set match has no decider to mention)
     return parts.length ? parts.join(' · ') : null;
   }
   // BUILD 3.72+: carrom — said when it isn't the official game.

@@ -44,6 +44,15 @@ export type TieRubber = {
    *  - `rotateEvery`: the pad says "rotate players" every N points (DreamBreaker 4, Grand Rally 3).
    */
   value?: number | null; decider?: boolean; rules?: Record<string, unknown> | null; rotateEvery?: number | null;
+  /**
+   * Stage 12 · CH7 · a knockout mini-match's play-offs (FIDE's World Cup): deciding
+   * matches with the same `round` are played as a set (two rapid games), scored on
+   * points; the first set that ends with a side ahead decides the tie, a level set
+   * goes on to the next. Any tie sport can use it.
+   */
+  round?: number | null;
+  /** Stage 12 · CH7 · chess's Armageddon: a draw is a win for Black. A deciding match, last. */
+  armageddon?: boolean;
 };
 export type TieWin = 'first' | 'all' | 'games';
 export type TieSpec = {
@@ -112,7 +121,11 @@ export function tieSpecProblem(spec: unknown): string | null {
     if (x.decider != null && typeof x.decider !== 'boolean') return `${x.label.trim()}: a deciding match is on or off.`;
     if (x.rotateEvery != null && (!isWhole(x.rotateEvery) || x.rotateEvery < 1)) return `${x.label.trim()}: rotate every 1 or more points.`;
     if (x.rules != null && (typeof x.rules !== 'object' || Array.isArray(x.rules) || 'tie' in x.rules || 'rubbers' in x.rules)) return `${x.label.trim()}: its own rules are a match’s rules.`;
+    // Stage 12 · CH7: play-off sets and Armageddon — deciding matches only.
+    if (x.round != null && (!isWhole(x.round) || x.round < 1 || x.decider !== true)) return `${x.label.trim()}: a play-off set is a number, for a deciding match.`;
+    if (x.armageddon != null && (typeof x.armageddon !== 'boolean' || (x.armageddon && x.decider !== true))) return `${x.label.trim()}: Armageddon is a deciding game.`;
   }
+  if ((s.rubbers as TieRubber[]).slice(0, -1).some((r) => r.armageddon)) return 'Armageddon is the last game.';
   // Stage 11 · PB3: deciding matches come last, after at least one other.
   const rs = s.rubbers as Array<{ decider?: boolean }>;
   const firstDecider = rs.findIndex((r) => r.decider === true);
@@ -341,13 +354,41 @@ export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>):
     decided = rubbersA >= need ? 'A' : rubbersB >= need ? 'B' : null;
     if (!decided && allRegular) { decided = by(rubbersA, rubbersB); level = !decided; }
   } else if (allRegular) {
-    decided = spec.win === 'all' ? by(rubbersA, rubbersB) : by(unitsA, unitsB);
+    // Stage 12 · CH7: the regular matches' own games / points (not a play-off's).
+    const regA = results.slice(0, regular).reduce((t, r) => t + r.units.A, 0);
+    const regB = results.slice(0, regular).reduce((t, r) => t + r.units.B, 0);
+    decided = spec.win === 'all' ? by(rubbersA, rubbersB) : by(regA, regB);
     level = !decided;
     // Stage 12 · CH5: chess — level on game points is a drawn match.
     if (level && spec.level === 'draw' && regular === spec.rubbers.length) return { rubbersA, rubbersB, unitsA, unitsB, decided: 'draw', finished: true };
   }
   let decider = false;
-  if (level) {
+  // Stage 12 · CH7: play-off sets (deciders with a `round`) and Armageddon.
+  const grouped = spec.rubbers.some((r) => r.decider && (r.round != null || r.armageddon));
+  if (level && hasDecider && grouped) {
+    const winOf = (i: number): TieSide | 'draw' | null => {
+      const r = results[i]; if (!r) return null;
+      if (r.winner === 'draw' && spec.rubbers[i]?.armageddon) return boardWhite(spec, i) === 'A' ? 'B' : 'A'; // a draw: Black wins
+      return r.winner;
+    };
+    let i = regular;
+    while (i < spec.rubbers.length) {
+      const rd = spec.rubbers[i]!.round;
+      let j = i + 1;
+      while (rd != null && j < spec.rubbers.length && spec.rubbers[j]!.round === rd) j++;
+      if (results.length < j) break; // this set isn't played yet
+      let a = 0, b = 0;
+      for (let k = i; k < j; k++) {
+        const w = winOf(k);
+        if (spec.rubbers[k]!.armageddon) { if (w === 'A') a += 1; else if (w === 'B') b += 1; }
+        else { a += results[k]!.units.A; b += results[k]!.units.B; }
+      }
+      const won = by(a, b);
+      if (won) { decided = won; decider = true; if (won === 'A') rubbersA += 1; else rubbersB += 1; break; }
+      i = j;
+    }
+    if (!decided && results.length >= spec.rubbers.length) decided = 'draw';
+  } else if (level) {
     if (hasDecider) {
       // The deciding matches, in order: the first one won decides the tie.
       const won = results.slice(regular).find((r) => r.winner === 'A' || r.winner === 'B');

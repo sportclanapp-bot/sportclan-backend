@@ -16,7 +16,7 @@
  * A match stored before this (rules = null) plays exactly as it did: its rules
  * are read back from `format` / `overs` by rulesFromLegacy.
  */
-import { TIE_SPORTS, tieNeed as tieNeedOf, tieSpecProblem, type TieSpec } from './tieCore';
+import { TIE_SPORTS, tieNeed as tieNeedOf, tieSpecProblem, tieWeighted, type TieSpec } from './tieCore';
 import { MATCH_LENGTHS, bestOfFor, lengthKey } from './matchLength';
 import { OVERS_MIN, OVERS_MAX, PLAYERS_MIN, PLAYERS_MAX, RETIRE_MIN, RETIRE_MAX, EXTRA_RUNS_MIN, EXTRA_RUNS_MAX, INNINGS_MINUTES_MIN, INNINGS_MINUTES_MAX, isOfferedOvers } from './cricketRules';
 
@@ -1012,7 +1012,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   // Stage 9 · T3: the organiser's own tie, any tie sport.
   if (rules.tie && !tieSpecProblem(rules.tie)) {
     const n = rules.tie.rubbers.length;
-    parts.push(`team tie · ${n} ${n === 1 ? 'match' : 'matches'} · ${rules.tie.win === 'first' ? `first to ${tieNeedOf(rules.tie)}` : rules.tie.win === 'all' ? 'most matches' : `most ${key === 'tennis' ? 'games' : 'points'}`}`);
+    parts.push(`team tie · ${n} ${n === 1 ? 'match' : 'matches'} · ${rules.tie.win === 'first' ? `first to ${tieNeedOf(rules.tie)}` : rules.tie.win === 'all' ? (tieWeighted(rules.tie) ? 'most matches by worth' : 'most matches') /* Stage 11 follow-up: a match worth more, or a trump */ : `most ${key === 'tennis' ? 'games' : 'points'}`}`);
     // Stage 11 · PB3: a deciding match when level; a match worth more.
     const dec = rules.tie.rubbers.filter((x) => x.decider);
     if (dec.length) parts.push(`level: ${dec.map((x) => x.label).join(', ')} decides`);

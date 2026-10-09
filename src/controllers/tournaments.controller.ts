@@ -568,7 +568,7 @@ export async function addEvents(req: Request, res: Response) {
     const made = await eventRowsFor(parent as Record<string, any>, events, next);
     if ('refusal' in made) return res.status(400).json(made.refusal);
     const { data: rows, error } = await supabase.from('tournaments').insert(made.rows).select('*');
-    // Until migration 123 is applied the database still holds a tournament to 100 events.
+    // Until migration 123 is applied the database refuses more than 100 events (no app cap).
     if ((error as { code?: string } | null)?.code === '23514') return res.status(409).json({ error: 'This tournament can’t take more events yet. Try again later.', code: 'EVENTS_LIMIT_DB' });
     if (error || !rows) return res.status(500).json({ error: sanitizeError(error) || 'Failed to add the events' });
     await refreshParentStatus(id);
@@ -2363,9 +2363,11 @@ export async function getBracket(req: Request, res: Response) {
     // bracket column joined to the next, so there the semis still lead to the
     // Final and the third-place match stands alone at the end (their champion
     // card still names the champion, from the entries).
-    const thirdPlace = (matches ?? []).filter((m: any) => m.third_place);
+    const thirdPlace = (matches ?? []).filter((m: any) => m.third_place && m.bracket !== 'ko');
     // Stage 11 · PB4: a double elimination's back draw, final and reset are listed after the main draw.
-    const deRows = (matches ?? []).filter((m: any) => m.bracket);
+    const deRows = (matches ?? []).filter((m: any) => m.bracket && m.bracket !== 'ko');
+    // Stage 13 · CR9: the knockout after a Swiss, listed after its rounds.
+    const koRows = (matches ?? []).filter((m: any) => m.bracket === 'ko');
     for (const m of matches ?? []) {
       if ((m as any).third_place || (m as any).bracket) continue;
       const r = m.round ?? 1;
@@ -2398,12 +2400,22 @@ export async function getBracket(req: Request, res: Response) {
     };
 
     const de = deRows.length > 0;
-    const listed: Array<{ name: string; ms: any[]; bracket?: 'main' | 'back' | 'final' }> = roundKeys.map((r, idx) => {
+    const listed: Array<{ name: string; ms: any[]; bracket?: 'main' | 'back' | 'final' | 'ko' }> = roundKeys.map((r, idx) => {
       const name = roundName(r, idx);
       // Stage 11 · PB4: the main draw's rounds say so ("Main draw final").
       return de && r > 0 ? { name: name === 'Final' ? 'Main draw final' : name === 'Semi-Finals' ? 'Main draw semi-finals' : name === 'Quarter-Finals' ? 'Main draw quarter-finals' : `Main draw round ${r}`, ms: byRound.get(r)!, bracket: 'main' as const } : { name, ms: byRound.get(r)! };
     });
     if (thirdPlace.length) listed.push({ name: 'Third place', ms: thirdPlace });
+    if (koRows.length) {
+      const koKeys = [...new Set(koRows.filter((m: any) => !m.third_place).map((m: any) => Number(m.round)))].sort((a, b) => a - b);
+      koKeys.forEach((r, idx) => {
+        const fromEnd = koKeys.length - 1 - idx;
+        const name = fromEnd === 0 ? 'Final' : fromEnd === 1 ? 'Semi-Finals' : fromEnd === 2 ? 'Quarter-Finals' : `Knockout round ${r}`;
+        listed.push({ name, ms: koRows.filter((m: any) => !m.third_place && Number(m.round) === r).sort((a: any, b: any) => (a.match_no ?? 0) - (b.match_no ?? 0)), bracket: 'ko' });
+      });
+      const koThird = koRows.filter((m: any) => m.third_place);
+      if (koThird.length) listed.push({ name: 'Third place', ms: koThird, bracket: 'ko' });
+    }
     if (de) {
       const mainRounds = roundKeys.filter((r) => r > 0).length;
       const backKeys = [...new Set(deRows.filter((m: any) => m.bracket === 'back').map((m: any) => Number(m.round)))].sort((a, b) => a - b);
@@ -2441,6 +2453,7 @@ export async function getBracket(req: Request, res: Response) {
           ground_label: (m as any).ground_label ?? null,
           venue: (m as any).venue ?? null,
           ...((m as any).third_place ? { third_place: true } : {}), // BUILD 4.12
+          ...((m as any).bracket === 'ko' ? { ko: true, next_match_id: (m as any).next_match_id ?? null } : {}), // Stage 13 · CR9: the knockout after a Swiss
           ...((m as any).bracket === 'reset' && m.status === 'cancelled' ? { not_needed: true } : {}), // Stage 11 · PB4: the reset final wasn't needed
           ...(de ? { next_match_id: (m as any).next_match_id ?? null } : {}), // Stage 11 · PB4: the back draw's lines follow the links
           ...(fmtLc === 'box' && m.group_label ? { group_label: m.group_label } : {}), // Stage 9 · T16: the match's box
@@ -2989,6 +3002,7 @@ async function insertSingleElim(
         third_place: true,
         is_ranked: true,
         ...(base.stageDefaults ? base.stageDefaults('qf') : (base.fixtureDefaults ?? {})), // gap 4: played with the semi-finals
+        ...(rowExtra ? rowExtra(r, 1, roundsCount) : {}), // Stage 13 · CR9: the Swiss knockout's mark
       });
       if (tpErr) throw new Error(tpErr.message);
     }
@@ -3197,7 +3211,9 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
     const { data: tm } = await supabase.from('teams').select('name').eq('id', top).maybeSingle();
     return { id: top, name: (tm as { name?: string } | null)?.name ?? null };
   }
-  if (fmt === 'round_robin' || fmt === 'league' || fmt === 'swiss') { // BUILD 4.15: a Swiss is won on the table
+  // Stage 13 · CR9: a Swiss that fed a knockout is won in its final.
+  const swissKo = fmt === 'swiss' && !!settingsOf(t as { settings?: unknown }).swiss?.koDrawn;
+  if (fmt === 'round_robin' || fmt === 'league' || (fmt === 'swiss' && !swissKo)) { // BUILD 4.15: a Swiss is won on the table
     const entries = await allRows(() => supabase
       .from('tournament_entries').select('team_id, team:teams!team_id(id, name, short_name)')
       .eq('tournament_id', tournamentId).eq('status', 'approved'));
@@ -3224,6 +3240,7 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
     .eq('tournament_id', tournamentId)
     .is('next_match_id', null)
     .is('group_label', null)
+    .or(swissKo ? 'bracket.eq.ko' : 'bracket.is.null,bracket.neq.ko') // Stage 13 · CR9
     // BUILD 1.4: a final decided by a withdrawal walkover is abandoned WITH a
     // winner — it still crowns.
     .in('status', ['completed', 'abandoned'])
@@ -3249,7 +3266,7 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
 export async function recrownAfterVoidChange(matchId: string): Promise<void> {
   try {
     const { data: m } = await supabase
-      .from('matches').select('tournament_id, next_match_id, group_label').eq('id', matchId).maybeSingle();
+      .from('matches').select('tournament_id, next_match_id, group_label, bracket').eq('id', matchId).maybeSingle();
     if (!m?.tournament_id) return;
     const { data: t } = await supabase
       .from('tournaments').select('status, format, champion_team_id').eq('id', m.tournament_id).maybeSingle();
@@ -3262,7 +3279,7 @@ export async function recrownAfterVoidChange(matchId: string): Promise<void> {
     if (t.status === 'upcoming' || t.status === 'live') {
       if (m.group_label) await maybeSeedKnockout(m.tournament_id as string);
       else if (t.format === 'league' || t.format === 'round_robin') await crownLeagueChampion(m.tournament_id as string);
-      else if (t.format === 'swiss') await swissAfterResult(m.tournament_id as string); // BUILD 4.15
+      else if (t.format === 'swiss' && (m as { bracket?: string | null }).bracket !== 'ko') await swissAfterResult(m.tournament_id as string); // BUILD 4.15 · Stage 13 · CR9: not its knockout
       // BUILD 4.12: voiding the third-place match (or the final) can leave the
       // bracket finished — complete it then, as a completion would.
       else if (!m.next_match_id) await completeBracketIfDone(m.tournament_id as string);
@@ -3270,7 +3287,7 @@ export async function recrownAfterVoidChange(matchId: string): Promise<void> {
     }
     if (m.next_match_id || m.group_label) return;
     if (t.status !== 'completed') return;
-    if (t.format === 'league' || t.format === 'round_robin' || t.format === 'swiss') return;
+    if (t.format === 'league' || t.format === 'round_robin' || (t.format === 'swiss' && (m as { bracket?: string | null }).bracket !== 'ko')) return;
     const champ = await championOf(m.tournament_id as string);
     const next = champ?.id ?? null;
     if (next === (t.champion_team_id ?? null)) return;
@@ -3404,8 +3421,9 @@ export async function swissContext(tournamentId: string) {
   const nameOf = new Map(entries.map((e) => [e.team_id, e.team?.name ?? 'Player']));
   const clubOfTeam = new Map(entries.map((e) => [e.team_id, e.club?.trim() || null]));
   const ms = ((await allRows(() => supabase
+    // Stage 13 · CR9: the Swiss rounds only (not the knockout after them).
     .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, scheduled_at, overs, round')
-    .eq('tournament_id', tournamentId).is('voided_at', null))) ?? []) as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; score_summary: any; scheduled_at: string | null; round: number | null }>;
+    .eq('tournament_id', tournamentId).is('voided_at', null).is('bracket', null))) ?? []) as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; score_summary: any; scheduled_at: string | null; round: number | null }>;
   const pts = await tournamentPoints(t as any);
   const slug = normSportSlug((await getSport(t.sport_id as string))?.slug);
   return { t, settings, sw, ids, nameOf, clubOf: (id: string) => clubOfTeam.get(id) ?? null, ms, pts, slug, colours: slug === 'chess' };
@@ -3475,6 +3493,51 @@ export async function swissInsertRound(ctx: NonNullable<Awaited<ReturnType<typeo
 }
 
 /**
+ * Stage 13 · CR9 · after the last Swiss round: the top N of the table (by its
+ * points and tie-breaks, as the champion would have been picked) play a seeded
+ * knockout — 1 v N, 2 v N−1…, byes to the top seeds when N isn't a power of 2,
+ * the third-place match when the tournament has one. Its matches are marked
+ * bracket 'ko' (migration 140) and play the knockout stages' rules (a 90-minute
+ * final…). Drawn once (a CAS on settings.swiss.koDrawn); the final crowns.
+ */
+async function swissSeedKnockout(tournamentId: string): Promise<void> {
+  const ctx = await swissContext(tournamentId);
+  if (!ctx || ctx.sw.koDrawn) return;
+  const { data: claim } = await supabase.from('tournaments')
+    .update({ settings: { ...ctx.settings, swiss: { ...ctx.sw, koDrawn: true } }, updated_at: new Date().toISOString() })
+    .eq('id', tournamentId).is('settings->swiss->koDrawn', null).select('id');
+  if (!claim || claim.length === 0) return;
+  const trow = ctx.t as { settings?: unknown; tiebreaker_rules?: unknown; match_rules?: unknown; entry_kind?: string | null };
+  const tin = tableInputs(trow.settings, ctx.ids, ctx.ms as any[], await withdrawnTeamIds(tournamentId));
+  const ordered = rankTeams(tin.teamIds, tin.matches, ((trow.tiebreaker_rules ?? []) as any[]), ctx.pts, (await rankExtrasFor(trow as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>))(''));
+  const top = ordered.slice(0, Math.min(ctx.sw.knockout ?? 0, ordered.length));
+  if (top.length < 2) { await crownLeagueChampion(tournamentId); return; }
+  const seeds: TeamSlot[] = top.map((id) => ({ id, name: ctx.nameOf.get(id) ?? 'Player' }));
+  const round1 = seededRound1(seeds, nextPow2(seeds.length));
+  const stageDefaults = (stage: Stage): Record<string, unknown> => {
+    const rules = fixtureRulesFor(ctx.slug, trow.match_rules ?? null, stage, trow.entry_kind);
+    const legacy = legacyFromRules(ctx.slug, rules);
+    return { format: legacy.format, ...(ctx.slug === 'cricket' ? { overs: legacy.overs } : {}), rules };
+  };
+  // Timed after the last Swiss round, a round's gap apart; courts are the organiser's to set.
+  const lastAt = Math.max(...ctx.ms.map((m) => (m.scheduled_at ? Date.parse(m.scheduled_at) : 0)), Date.now());
+  const gap = (Number((ctx.t as any).match_duration_minutes ?? 60) + Number((ctx.t as any).buffer_minutes ?? 10)) * 60000;
+  const base: BracketBase = {
+    stageDefaults, fixtureDefaults: stageDefaults('knockout'),
+    sport_id: ctx.t.sport_id as string, tournament_id: tournamentId, venue: (ctx.t as any).venue ?? null, city_id: (ctx.t as any).city_id ?? null,
+    created_by: ctx.t.created_by as string, fallbackStartIso: new Date(lastAt + gap).toISOString(),
+  };
+  const thirdPlace = !!ctx.settings.thirdPlace;
+  const { byeMatchIds } = await insertSingleElim(base, round1, () => undefined, thirdPlace, null, (r) => ({ bracket: 'ko', scheduled_at: new Date(lastAt + r * gap).toISOString() }));
+  for (const byeId of byeMatchIds) {
+    const { data: bm } = await supabase.from('matches').select('team_a_id, team_b_id').eq('id', byeId).maybeSingle();
+    const winnerId = bm?.team_a_id ?? bm?.team_b_id;
+    if (winnerId) await resolveMatchWinner(byeId, winnerId);
+  }
+  await notifyUsers([ctx.t.created_by as string], { type: 'tournament_updated', title: 'The knockout is drawn', body: `The top ${top.length} of the Swiss go through.`, data: { tournamentId } }).catch(() => undefined);
+}
+
+/**
  * BUILD 4.15 · after a Swiss result: once the round is finished, pair the next
  * one (a CAS on settings.swiss.paired, so two results landing together pair it
  * once), or — after the last round — crown the standings leader.
@@ -3486,7 +3549,8 @@ async function swissAfterResult(tournamentId: string): Promise<void> {
   const sw = ctx.sw;
   const paired = sw.paired ?? 1;
   if (sw.draft) return; // Stage 12 · CH2: the next round waits for the arbiter to publish it
-  if (paired >= sw.rounds) { await crownLeagueChampion(tournamentId); return; }
+  // Stage 13 · CR9: the top N go on to a knockout; its final crowns the champion.
+  if (paired >= sw.rounds) { if (sw.knockout && sw.knockout >= 2) await swissSeedKnockout(tournamentId); else await crownLeagueChampion(tournamentId); return; }
   // Claim the next round.
   const next = paired + 1;
   const result = swissPairRound(ctx, next);
@@ -3551,7 +3615,8 @@ async function advanceTournamentWinnerInner(matchId: string): Promise<void> {
   if (fmt === 'ladder') { await ladderAfterResult(m as LadderMatch); return; }
   if (fmt === 'box') return;
   // BUILD 4.15: a Swiss pairs its next round, or crowns after the last.
-  if (fmt === 'swiss') {
+  // Stage 13 · CR9: a match of the knockout after the Swiss advances as a bracket.
+  if (fmt === 'swiss' && (m as { bracket?: string | null }).bracket !== 'ko') {
     await swissAfterResult(m.tournament_id);
     return;
   }
@@ -3672,14 +3737,17 @@ async function completeBracketIfDone(tournamentId: string, knownFinal: FinalRow 
     // thousands of unlinked matches no longer get read here).
     const { data: rows } = await supabase
       .from('matches')
-      .select('winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, round, third_place')
+      .select('winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, round, third_place, bracket')
       .eq('tournament_id', tournamentId)
       .is('next_match_id', null)
       .is('group_label', null)
       .is('voided_at', null)
       .order('round', { ascending: false })
-      .limit(3);
-    final = (Array.isArray(rows) ? rows : []).find((r) => !(r as { third_place?: boolean }).third_place) as FinalRow | undefined;
+      .limit(40);
+    // Stage 13 · CR9: after a Swiss, the knockout's final (not a Swiss round's last match).
+    const list = (Array.isArray(rows) ? rows : []) as Array<FinalRow & { third_place?: boolean; bracket?: string | null }>;
+    const ko = list.filter((r) => r.bracket === 'ko');
+    final = (ko.length ? ko : list).find((r) => !r.third_place) as FinalRow | undefined;
   }
   const winnerId = final?.winner_team_id as string | null | undefined;
   if (!final || !winnerId) return;

@@ -58,7 +58,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     // Get completed matches
     const allMatches = await allRows(() => supabase
       .from('matches')
-      .select('id, team_a_id, team_b_id, winner_team_id, score_summary, status, overs, group_label, round')
+      .select('id, team_a_id, team_b_id, winner_team_id, score_summary, status, overs, group_label, round, bracket')
       .eq('tournament_id', id)
       // BUILD 1.4: a walkover after a withdrawal is stored abandoned WITH a
       // winner; it's a win. (A no-winner abandon is skipped by computeStats.)
@@ -72,6 +72,8 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const matches = tournament.format === 'groups_knockout'
       ? (allMatches ?? []).filter((m: any) => !isKnockoutMatch(m))
       : boxRound != null ? (allMatches ?? []).filter((m: any) => Number(m.round) === boxRound)
+      // Stage 13 · CR9: a Swiss's table is its rounds, not the knockout after them.
+      : tournament.format === 'swiss' ? (allMatches ?? []).filter((m: any) => m.bracket !== 'ko')
       : allMatches;
 
     // Check if cricket for NRR

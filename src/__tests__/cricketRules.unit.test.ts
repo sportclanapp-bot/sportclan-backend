@@ -45,7 +45,9 @@ describe('cricketRules', () => {
     expect(isOfferedOvers('box', 20)).toBe(true); // BUILD 3.1: any whole number 1–50
     expect(isOfferedOvers('limited', 12)).toBe(true);
     expect(isOfferedOvers('limited', 0)).toBe(false);
-    expect(isOfferedOvers('limited', 51)).toBe(false);
+    expect(isOfferedOvers('limited', 51)).toBe(true); // Stage 13 · CR3: no top
+    expect(isOfferedOvers('limited', 200)).toBe(true);
+    expect(isOfferedOvers('limited', -1)).toBe(false);
     expect(isOfferedOvers('limited', 7.5)).toBe(false);
     expect(isOfferedOvers('limited', 50)).toBe(true);
     expect(isOfferedOvers('limited', null)).toBe(true);

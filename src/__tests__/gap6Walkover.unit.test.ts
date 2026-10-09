@@ -135,12 +135,15 @@ describe('a walkover on a league fixture', () => {
 });
 
 describe('the walkover rule in settings', () => {
-  test('grace 5–60 min, fewest players 2–15; 0 clears; anything else refused', () => {
+  test('grace and fewest players: whole, 1 or more (Stage 13 · CR3: no top); 0 clears; anything else refused', () => {
     expect(settingsRefusal('cricket', 'league', { graceMinutes: 15, minPlayers: 7 })).toBeNull();
     expect(settingsRefusal('cricket', 'league', { graceMinutes: 0, minPlayers: 0 })).toBeNull();
-    expect(settingsRefusal('cricket', 'league', { graceMinutes: 4 })?.error).toBe('The grace time must be 5 to 60 minutes.');
-    expect(settingsRefusal('cricket', 'league', { graceMinutes: 15.5 })?.error).toBe('The grace time must be 5 to 60 minutes.');
-    expect(settingsRefusal('cricket', 'league', { minPlayers: 16 })?.error).toBe('The fewest players a team can play with must be 2 to 15.');
+    for (const ok of [1, 4, 60, 61, 120]) expect(settingsRefusal('cricket', 'league', { graceMinutes: ok })).toBeNull();
+    for (const ok of [1, 15, 16, 30]) expect(settingsRefusal('cricket', 'league', { minPlayers: ok })).toBeNull();
+    expect(settingsRefusal('cricket', 'league', { graceMinutes: -1 })?.error).toBe('The grace time must be a whole number of minutes.');
+    expect(settingsRefusal('cricket', 'league', { graceMinutes: 15.5 })?.error).toBe('The grace time must be a whole number of minutes.');
+    expect(settingsRefusal('cricket', 'league', { minPlayers: -1 })?.error).toBe('The fewest players a team can play with must be a whole number, 1 or more.');
+    expect(settingsRefusal('cricket', 'league', { minPlayers: 6.5 })?.error).toBe('The fewest players a team can play with must be a whole number, 1 or more.');
     const s = storedSettings({ graceMinutes: 15, minPlayers: 7 }, { v: 1, restMinutes: 30 });
     expect(s).toEqual({ v: 1, restMinutes: 30, graceMinutes: 15, minPlayers: 7 });
     expect(storedSettings({ graceMinutes: 0 }, s)).toEqual({ v: 1, restMinutes: 30, minPlayers: 7 });

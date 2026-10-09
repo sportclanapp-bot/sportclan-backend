@@ -132,10 +132,10 @@ describe('Decision B · the server reads the match length preset', () => {
 
 describe('A5 · carrom on the server', () => {
   const sc = fs.readFileSync(path.join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
-  test('a board event may carry 0–12 points and 0–9 pieces; other scores stay 1–3', () => {
+  test('a board event may carry 0–(9 + the match’s queen) points and 0–9 pieces; other scores stay 1–3', () => {
     expect(sc).toContain("const isBoard = payload.kind === 'board';");
     expect(sc).toContain('outOfRange(payload.pieces_left, 0, CARROM_MAX_PIECES)');
-    expect(sc).toContain('outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_MAX)'); // BUILD 3.72: a queen up to 5
+    expect(sc).toContain('outOfRange(payload.value, 0, CARROM_MAX_PIECES + queenWorth)'); // BUILD 3.72 · Stage 13 · CR3: the match's own queen worth, no top
   });
   test('board events are replayed through the shared core, by the match preset', () => {
     expect(sc).toMatch(/slug === 'carrom' && events\.some[\s\S]{0,900}carromReplay\([\s\S]{0,800}carromOptsOf\(rulesOf\('carrom', match\)\)/); // BUILD 2.3 / 3.72: the match's rules

@@ -34,7 +34,8 @@ describe('V104 · manual Complete crowns the champion', () => {
   it('championOf uses the same rules as the automatic crowning', () => {
     const c = fnBody('championOf');
     expect(c).toMatch(/fmt === 'round_robin' \|\| fmt === 'league'[\s\S]*rankTeams\(/);
-    expect(c).toMatch(/\.is\('next_match_id', null\)\s*\.is\('group_label', null\)\s*(\/\/[^\n]*\n\s*)*\.in\('status', \['completed', 'abandoned'\]\)\s*\.is\('voided_at', null\)/);
+    // Stage 13 · CR9: a Swiss that fed a knockout is won in its final (bracket 'ko'); else the bracket's own final.
+    expect(c).toMatch(/\.is\('next_match_id', null\)\s*\.is\('group_label', null\)\s*\.or\(swissKo \? 'bracket\.eq\.ko' : 'bracket\.is\.null,bracket\.neq\.ko'\)\s*(\/\/[^\n]*\n\s*)*\.in\('status', \['completed', 'abandoned'\]\)\s*\.is\('voided_at', null\)/);
   });
 });
 

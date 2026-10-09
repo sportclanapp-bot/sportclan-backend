@@ -5,7 +5,8 @@ import { rollupSets } from '../controllers/scoring.controller';
 test('the range', () => {
   const std = standardRules('tabletennis');
   expect(rulesRefusal('tabletennis', { ...std, target: 21 })).toBeNull();
-  expect(rulesRefusal('tabletennis', { ...std, target: 22 })?.error).toBe('Points to win a game must be 5 to 21.');
+  for (const ok of [4, 22, 50]) expect(rulesRefusal('tabletennis', { ...std, target: ok })).toBeNull(); // Stage 13 · CR3: no top
+  for (const bad of [0, 10.5]) expect(rulesRefusal('tabletennis', { ...std, target: bad })?.error).toBe('Points to win a game must be 1 or more.');
 });
 test('a 21-point game ends at 21-19, not at 11', () => {
   const pts = (side: string, n: number) => Array.from({ length: n }, () => ({ event_type: 'score', payload: { team_side: side, value: 1 } }));

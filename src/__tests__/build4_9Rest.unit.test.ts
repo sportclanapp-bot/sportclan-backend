@@ -44,7 +44,8 @@ test('a rest that can’t fit says so', () => {
   expect(res.ok).toBe(false);
   if (!res.ok) expect(res.error).toMatch(/— or the 240-minute rest between a team’s matches\.$/);
 });
-test('rest is 0–240 minutes', () => {
-  expect(settingsRefusal('football', 'league', { restMinutes: 241 })?.error).toBe('Rest between a team’s matches must be 0 to 240 minutes.');
+test('rest is 0 or more whole minutes (Stage 13 · CR3: no top)', () => {
+  for (const ok of [0, 240, 241, 600]) expect(settingsRefusal('football', 'league', { restMinutes: ok })).toBeNull();
+  for (const bad of [-1, 30.5]) expect(settingsRefusal('football', 'league', { restMinutes: bad })?.error).toBe('Rest between a team’s matches must be a whole number of minutes.');
   expect(settingsRefusal('football', 'league', { restMinutes: 30 })).toBeNull();
 });

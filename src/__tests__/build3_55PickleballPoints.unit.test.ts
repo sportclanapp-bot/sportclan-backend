@@ -4,7 +4,8 @@ import { rollupSets } from '../controllers/scoring.controller';
 
 test('range and rollup', () => {
   expect(rulesRefusal('pickleball', { ...standardRules('pickleball'), target: 21 })).toBeNull();
-  expect(rulesRefusal('pickleball', { ...standardRules('pickleball'), target: 4 })?.field).toBe('target');
+  for (const ok of [4, 26, 50]) expect(rulesRefusal('pickleball', { ...standardRules('pickleball'), target: ok })).toBeNull(); // Stage 13 · CR3: no top
+  expect(rulesRefusal('pickleball', { ...standardRules('pickleball'), target: 0 })?.field).toBe('target');
   const pts = (n: number) => Array.from({ length: n }, () => ({ event_type: 'score', payload: { team_side: 'A', value: 1 } }));
   const cfg = setConfigOf({ ...standardRules('pickleball'), target: 15 });
   expect(rollupSets(cfg, pts(11), () => 'A').setScoresA).toEqual([]);

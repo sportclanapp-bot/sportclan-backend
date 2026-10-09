@@ -13,15 +13,15 @@ import { rulesRefusal, standardRules, rulesOf } from '../utils/matchRules';
 // eslint-disable-next-line import/first
 import { describeEvent } from '../utils/editLog';
 
-test('the value: 0, 1 or 2; standard 1; an older match 1', () => {
+test('the value: any whole number, 0 or more (Stage 13 · CR3: no top); standard 1; an older match 1', () => {
   const r = (extraRuns: unknown) => rulesRefusal('cricket', { ...standardRules('cricket'), extraRuns });
   expect(standardRules('cricket').extraRuns).toBe(1);
-  for (const ok of [0, 1, 2]) expect(r(ok)).toBeNull();
-  for (const bad of [3, -1, 1.5, '2', null]) expect(r(bad)?.field).toBe('extraRuns');
+  for (const ok of [0, 1, 2, 3, 5]) expect(r(ok)).toBeNull();
+  for (const bad of [-1, 1.5, '2', null]) expect(r(bad)?.error).toBe('A wide or no-ball is worth a whole number of runs, 0 or more.');
   expect(rulesOf('cricket', { format: 'T20', overs: 20 }).extraRuns).toBe(1);
 });
 test('an event’s penalty is its own; none means 1', () => {
-  expect([extraPenaltyOf({}), extraPenaltyOf({ penalty: 0 }), extraPenaltyOf({ penalty: 2 }), extraPenaltyOf({ penalty: 5 }), extraPenaltyOf(null)]).toEqual([1, 0, 2, 1, 1]);
+  expect([extraPenaltyOf({}), extraPenaltyOf({ penalty: 0 }), extraPenaltyOf({ penalty: 2 }), extraPenaltyOf({ penalty: 5 }), extraPenaltyOf({ penalty: -1 }), extraPenaltyOf(null)]).toEqual([1, 0, 2, 5, 1, 1]); // Stage 13 · CR3: a wide worth 5 is 5
   expect(isBallOfOver('extra', { type: 'Wd' })).toBe(false);
   expect(isBallOfOver('extra', { type: 'B' })).toBe(true);
   expect(isBallOfOver('wicket', { is_extra: true })).toBe(false);
@@ -35,7 +35,8 @@ describe('the server checks a wide / no-ball against the match', () => {
     expect(await validateScoringEvent('m1', match(2), { event_type: 'extra', payload: { team_side: 'A', type: 'Nb', is_extra: true, runs: 8, penalty: 2 } })).toBeNull();
     expect((await validateScoringEvent('m1', match(2), wd({ runs: 2, penalty: 1 })))?.body.code).toBe('BAD_PENALTY');
     expect((await validateScoringEvent('m1', match(2), wd({ runs: 1, penalty: 2 })))?.body.code).toBe('BAD_PENALTY');
-    expect((await validateScoringEvent('m1', match(2), wd({ runs: 9, penalty: 2 })))?.status).toBe(400);
+    expect(await validateScoringEvent('m1', match(2), wd({ runs: 9, penalty: 2 }))).toBeNull(); // Stage 13 · CR3: no top on runs off a ball
+    expect((await validateScoringEvent('m1', match(2), wd({ runs: -1, penalty: 2 })))?.status).toBe(400);
   });
   test('an older app (no penalty) is asked to update where a wide isn’t worth 1', async () => {
     expect(await validateScoringEvent('m1', match(0), wd({ runs: 1 }))).toEqual({
@@ -43,7 +44,8 @@ describe('the server checks a wide / no-ball against the match', () => {
       body: { error: 'This match counts a wide or no-ball as 0 runs. Update SportClan to score it.', code: 'EXTRA_RUNS_UPDATE_APP' },
     });
     expect(await validateScoringEvent('m1', match(1), wd({ runs: 1 }))).toBeNull(); // unchanged for the standard
-    expect((await validateScoringEvent('m1', match(1), wd({ runs: 8 })))?.status).toBe(400); // cap unchanged too
+    expect(await validateScoringEvent('m1', match(1), wd({ runs: 8 }))).toBeNull(); // Stage 13 · CR3: no top on runs
+    expect((await validateScoringEvent('m1', match(1), wd({ runs: 1.5 })))?.status).toBe(400); // still a whole number
   });
   test('byes are not checked against it', async () => {
     expect(await validateScoringEvent('m1', match(2), { event_type: 'extra', payload: { team_side: 'A', type: 'B', runs: 1, is_extra: true } })).toBeNull();

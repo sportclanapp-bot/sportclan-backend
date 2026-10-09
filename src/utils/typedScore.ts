@@ -17,19 +17,27 @@
  *
  * Sports: every one scored in games or sets — badminton, table tennis,
  * pickleball (rally or side-out), volleyball, tennis — and their team ties.
+ * Stage 13 · CR5: carrom too, game by game from the umpire's sheet (25-10,
+ * 17-22, or 18-12 when a game ends at its board limit or when time is called):
+ * each game becomes boards (and the time call) that carromCore replays.
  */
 import { gamesWinner, standardRules, tennisOptsOf, type MatchRules } from './matchRules';
 import { emptyTennis, tennisPoint, type TennisScore } from './tennisCore';
 import { sideOutRally, sideOutStart, type SideOutOpts } from './pickleballCore';
 import { boardPointsFor, boardWhite, tieOutcome, type RubberResult, type TieSpec } from './tieCore';
+import { carromReplay, type CarromItem, type CarromOpts } from './carromCore';
 
 export type TypedSide = 'A' | 'B';
 /** One game (rally sports) or set (tennis): each side's score; a tennis set won 7-6 also gives its tiebreak points. */
 export type TypedSet = { a: number; b: number; tbA?: number | null; tbB?: number | null };
-/** A point to record, as the pad sends it (side-out pickleball: a rally). */
-export type TypedPoint = { side: TypedSide; kind?: 'rally' };
+/**
+ * A point to record, as the pad sends it (side-out pickleball: a rally).
+ * Stage 13 · CR5: a carrom board (the opponent's pieces left, the queen) or
+ * time called in a timed carrom game.
+ */
+export type TypedPoint = { side: TypedSide; kind?: 'rally' | 'board' | 'buzzer'; piecesLeft?: number; queen?: boolean };
 
-export const TYPED_SPORTS = ['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball'] as const;
+export const TYPED_SPORTS = ['badminton', 'tennis', 'tabletennis', 'pickleball', 'carrom', 'volleyball'] as const;
 const sportKey = (s: string | null | undefined) => String(s ?? '').toLowerCase().replace(/[-_\s]/g, '');
 export const typedScoreSport = (s: string | null | undefined): boolean => (TYPED_SPORTS as readonly string[]).includes(sportKey(s));
 
@@ -151,6 +159,98 @@ function tennisPoints(rules: MatchRules, sets: TypedSet[]): { problem: string | 
   return { problem: null, points, winner: s.winner };
 }
 
+/** Stage 13 · CR5: n points as k boards, each worth 1–9 pieces (or null if they can't be). */
+function splitBoards(n: number, k: number): number[] | null {
+  if (k === 0) return n === 0 ? [] : null;
+  if (n < k || n > k * 9) return null;
+  const out = Array.from({ length: k }, () => Math.floor(n / k));
+  for (let i = 0; i < n % k; i++) out[i]! += 1;
+  return out;
+}
+
+/**
+ * Stage 13 · CR5 · carrom: each typed game → boards. A game won on points ends
+ * on the board that takes the winner to the target (the queen only where it
+ * still counts); a game at its board limit plays exactly that many boards; a
+ * timed game that ends short ends with time called. Then the boards are
+ * replayed by carromCore, so only a real, finished result under the match's
+ * rules is taken (no game after the match was won; 30-0 can't end a 25 game).
+ */
+function carromPoints(rules: MatchRules, sets: TypedSet[]): { problem: string | null; points: TypedPoint[]; winner: TypedSide | null } {
+  if (rules.carromMode === 'points') return { problem: 'Point carrom is scored piece by piece on the pad.', points: [], winner: null };
+  const bestOf = rules.bestOf ?? 3;
+  const o: CarromOpts = { gamesToWin: Math.ceil(bestOf / 2), target: rules.target ?? 25, queenPoints: rules.queenPoints ?? 3, queenCutoff: rules.queenCutoff ?? true, boardCap: rules.boardCap ?? null, gameMinutes: rules.gameMinutes ?? null };
+  const target = o.target!; const q = o.queenPoints!; const cutoff = o.queenCutoff !== false;
+  const points: TypedPoint[] = [];
+  const items: CarromItem[] = [];
+  for (let g = 0; g < sets.length; g++) {
+    const set = sets[g]!;
+    const before = carromReplay(items, o);
+    if (before.winner) return { problem: `The match was already won before game ${g + 1}.`, points, winner: null };
+    if (set.a === set.b) return { problem: `Game ${g + 1} (${label(set)}) has no winner.`, points, winner: null };
+    const winner: TypedSide = set.a > set.b ? 'A' : 'B';
+    const w = Math.max(set.a, set.b); const l = Math.min(set.a, set.b);
+    if (l >= target) return { problem: `Game ${g + 1}: ${label(set)} — the game ends when a side reaches ${target}.`, points, winner: null };
+    let wb: Array<{ p: number; queen: boolean }> | null = null;
+    let lb: number[] | null = null;
+    let buzzer = false;
+    if (w >= target) {
+      // Won on points: the last board crosses the target.
+      for (const queen of [false, true]) {
+        const last = Math.min(9 + (queen ? q : 0), w);
+        const prior = w - last;
+        if (prior >= target) continue;
+        if (queen && (cutoff && prior >= target - q)) continue;
+        if (queen && last < q) continue;
+        const pieces = queen ? last - q : last;
+        const rest = splitBoards(prior, Math.ceil(prior / 9));
+        if (rest) { wb = [...rest.map((p) => ({ p, queen: false })), { p: pieces, queen }]; break; }
+      }
+      lb = splitBoards(l, Math.ceil(l / 9));
+      if (wb && lb && o.boardCap != null && wb.length + lb.length > o.boardCap) {
+        // Within the board limit: fewer, bigger boards (the queen where it counts).
+        wb = null;
+      }
+    } else if (o.boardCap != null) {
+      // At the board limit: exactly that many boards, the winner ahead.
+      for (let nl = Math.ceil(l / 9); nl <= Math.max(l, 0) && !wb; nl++) {
+        const nw = o.boardCap - nl;
+        const ws = splitBoards(w, nw); const ls = splitBoards(l, nl);
+        if (ws && ls) { wb = ws.map((p) => ({ p, queen: false })); lb = ls; }
+      }
+      if (!wb && o.gameMinutes) { wb = (splitBoards(w, Math.ceil(w / 9)) ?? []).map((p) => ({ p, queen: false })); lb = splitBoards(l, Math.ceil(l / 9)); buzzer = true; }
+    } else if (o.gameMinutes) {
+      // Time called with the winner ahead.
+      wb = (splitBoards(w, Math.ceil(w / 9)) ?? []).map((p) => ({ p, queen: false })); lb = splitBoards(l, Math.ceil(l / 9)); buzzer = true;
+    }
+    if (!wb || !lb) {
+      const how = [o.boardCap != null ? `${o.boardCap} boards` : null, o.gameMinutes ? `${o.gameMinutes} minutes` : null].filter(Boolean).join(' or ');
+      return { problem: `Game ${g + 1}: ${label(set)} isn’t a finished game — to ${target}${how ? `, or ${how}` : ''}.`, points, winner: null };
+    }
+    // Boards in turn, the winner's last board last (the loser's never reach the target).
+    const loser: TypedSide = winner === 'A' ? 'B' : 'A';
+    const order: TypedPoint[] = [];
+    const wl = [...wb]; const ll = [...lb];
+    const lastW = w >= target ? wl.pop()! : null;
+    while (wl.length || ll.length) {
+      if (ll.length) order.push({ side: loser, kind: 'board', piecesLeft: ll.shift()!, queen: false });
+      if (wl.length) { const b = wl.shift()!; order.push({ side: winner, kind: 'board', piecesLeft: b.p, queen: b.queen }); }
+    }
+    if (lastW) order.push({ side: winner, kind: 'board', piecesLeft: lastW.p, queen: lastW.queen });
+    if (buzzer) order.push({ side: winner, kind: 'buzzer' });
+    for (const x of order) items.push(x.kind === 'buzzer' ? { buzzer: true } : { winner: x.side, piecesLeft: x.piecesLeft!, queen: x.queen === true });
+    const after = carromReplay(items, o);
+    const done = after.games[before.games.length];
+    if (!done || done.A !== set.a || done.B !== set.b) {
+      return { problem: `Game ${g + 1}: ${label(set)} isn’t a finished game under this match’s rules${done ? ` (it ends ${done.A}-${done.B})` : ''}.`, points, winner: null };
+    }
+    points.push(...order);
+  }
+  const end = carromReplay(items, o);
+  if (!end.winner) return { problem: `The match isn’t finished: the first to ${o.gamesToWin} ${o.gamesToWin === 1 ? 'game' : 'games'} wins.`, points, winner: null };
+  return { problem: null, points, winner: end.winner };
+}
+
 /** One match's typed score → its points, or why it can't be. */
 export function typedMatchPoints(sport: string | null | undefined, rules: Partial<MatchRules> | null | undefined, sets: unknown): { problem: string | null; points: TypedPoint[]; winner: TypedSide | null } {
   const key = sportKey(sport);
@@ -161,6 +261,7 @@ export function typedMatchPoints(sport: string | null | undefined, rules: Partia
   }
   const r = { ...(standardRules(sport) as MatchRules), ...(rules ?? {}) } as MatchRules;
   if (key === 'tennis') return tennisPoints(r, sets as TypedSet[]);
+  if (key === 'carrom') return carromPoints(r, sets as TypedSet[]); // Stage 13 · CR5
   return rallyPoints(r, sets as TypedSet[], key === 'pickleball' && r.scoring === 'sideout', key === 'volleyball' ? 'set' : 'game');
 }
 

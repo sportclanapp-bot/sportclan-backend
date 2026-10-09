@@ -99,8 +99,12 @@ test('checked: worded, and against what is already set', async () => {
   expect((await edit(SINGLE, { daily_end_time: '08:00' })).body).toMatchObject({ code: 'BAD_SCHEDULE', field: 'daily_end_time', error: 'The day ends after it starts.' });
   expect(updates('tournaments')).toHaveLength(0);
   expect(scheduleRefusal({ daily_start_time: '7am' })!.error).toBe('Day hours are HH:MM, e.g. 08:00.');
-  expect(scheduleRefusal({ match_duration_minutes: 0 })!.error).toBe('A match is 5 to 600 minutes.');
-  expect(scheduleRefusal({ buffer_minutes: -1 })!.error).toBe('The gap between matches is 0 to 240 minutes.');
+  expect(scheduleRefusal({ match_duration_minutes: 0 })!.error).toBe('A match is 1 minute or more.');
+  expect(scheduleRefusal({ match_duration_minutes: 2.5 })!.field).toBe('match_duration_minutes');
+  expect(scheduleRefusal({ buffer_minutes: -1 })!.error).toBe('The gap between matches is a whole number of minutes.');
+  // Stage 13 · CR3: no tops — the old tops (600 / 240) and above are fine.
+  expect(scheduleRefusal({ match_duration_minutes: 1, buffer_minutes: 0 })).toBeNull();
+  expect(scheduleRefusal({ match_duration_minutes: 601, buffer_minutes: 241 })).toBeNull();
   expect(scheduleRefusal({ ground_count: 0 })!.error).toBe('At least one court or ground.');
   expect(scheduleRefusal({ ground_count: 120, ground_names: Array.from({ length: 120 }, (_, i) => `Court ${i + 1}`) })).toBeNull(); // Oct 2026: no cap
   expect(scheduleRefusal({ ground_names: ['Court 1', 'court 1'] })!.error).toBe('Two courts have the same name.');

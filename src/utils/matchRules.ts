@@ -18,7 +18,7 @@
  */
 import { TIE_SPORTS, tieNeed as tieNeedOf, tieSpecProblem, tieWeighted, type TieSpec } from './tieCore';
 import { MATCH_LENGTHS, bestOfFor, lengthKey } from './matchLength';
-import { OVERS_MIN, OVERS_MAX, PLAYERS_MIN, PLAYERS_MAX, RETIRE_MIN, RETIRE_MAX, EXTRA_RUNS_MIN, EXTRA_RUNS_MAX, INNINGS_MINUTES_MIN, INNINGS_MINUTES_MAX, isOfferedOvers } from './cricketRules';
+import { OVERS_MIN, PLAYERS_MIN, PLAYERS_MAX, RETIRE_MIN, RETIRE_MAX, EXTRA_RUNS_MIN, EXTRA_RUNS_MAX, INNINGS_MINUTES_MIN, INNINGS_MINUTES_MAX, isOfferedOvers } from './cricketRules';
 
 export const RULES_VERSION = 1;
 
@@ -666,15 +666,15 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (r.style !== 'limited' && r.style !== 'box' && r.style !== 'pair') return refuse('Match type must be limited overs, box or pair.', 'style');
     // BUILD 3.1: any whole number of overs 1–50 (it was the format's chips).
     if (!isWhole(r.overs) || !isOfferedOvers(r.style as CricketStyle, r.overs)) {
-      return refuse(`Overs must be a whole number from ${OVERS_MIN} to ${OVERS_MAX}.`, 'overs');
+      return refuse(`Overs must be a whole number, ${OVERS_MIN} or more.`, 'overs'); // Stage 13 · CR3: no top
     }
     // BUILD 3.2: players a side, or null (the line-up decides).
     if (r.players !== null && (!isWhole(r.players) || r.players < PLAYERS_MIN || r.players > PLAYERS_MAX)) {
-      return refuse(`Players a side must be a whole number from ${PLAYERS_MIN} to ${PLAYERS_MAX}.`, 'players');
+      return refuse(`Players a side must be a whole number, ${PLAYERS_MIN} or more.`, 'players');
     }
     if (typeof r.lastManStands !== 'boolean') return refuse('Last man stands is on or off.', 'lastManStands');
     if (r.retireAt !== null && (!isWhole(r.retireAt) || r.retireAt < RETIRE_MIN || r.retireAt > RETIRE_MAX)) {
-      return refuse(`Retire at must be off, or a whole number of runs from ${RETIRE_MIN} to ${RETIRE_MAX}.`, 'retireAt');
+      return refuse(`Retire at must be off, or a whole number of runs, ${RETIRE_MIN} or more.`, 'retireAt');
     }
     // BUILD 3.5: off, or 1 to the innings' overs.
     if (r.bowlerOvers !== null && (!isWhole(r.bowlerOvers) || r.bowlerOvers < 1 || r.bowlerOvers > (r.overs as number))) {
@@ -686,12 +686,12 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     }
     // BUILD 3.6: a wide / no-ball is worth 0, 1 or 2.
     if (!isWhole(r.extraRuns) || r.extraRuns < EXTRA_RUNS_MIN || r.extraRuns > EXTRA_RUNS_MAX) {
-      return refuse(`A wide or no-ball must be worth ${EXTRA_RUNS_MIN}, 1 or ${EXTRA_RUNS_MAX} runs.`, 'extraRuns');
+      return refuse('A wide or no-ball is worth a whole number of runs, 0 or more.', 'extraRuns');
     }
     if (typeof r.rebowl !== 'boolean') return refuse('Re-bowl wides and no-balls is on or off.', 'rebowl');
     if (typeof r.freeHit !== 'boolean') return refuse('Free hit is on or off.', 'freeHit');
     if (r.inningsMinutes !== null && (!isWhole(r.inningsMinutes) || r.inningsMinutes < INNINGS_MINUTES_MIN || r.inningsMinutes > INNINGS_MINUTES_MAX)) {
-      return refuse(`An innings time cap must be off, or ${INNINGS_MINUTES_MIN} to ${INNINGS_MINUTES_MAX} minutes.`, 'inningsMinutes');
+      return refuse('An innings time cap must be off, or a whole number of minutes.', 'inningsMinutes');
     }
     if (r.powerplayOvers !== null && (!isWhole(r.powerplayOvers) || r.powerplayOvers < 1 || r.powerplayOvers > (r.overs as number))) {
       return refuse(`Powerplay overs must be off, or a whole number from 1 to ${String(r.overs)}.`, 'powerplayOvers');
@@ -701,22 +701,23 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (typeof r.noLbw !== 'boolean') return refuse('No LBW is on or off.', 'noLbw');
   }
   // BUILD 3.72: carrom — a game to 7–29, the queen worth 0–5.
-  if (key === 'carrom' && (!isWhole(r.target) || r.target < 7 || r.target > 29)) return refuse('Points to win a game must be 7 to 29.', 'target');
-  if (key === 'carrom' && (!isWhole(r.queenPoints) || r.queenPoints < 0 || r.queenPoints > 5)) return refuse('The queen is worth 0 to 5.', 'queenPoints');
+  // Stage 13 · CR3 (Dipak): no tops — the organiser's own numbers.
+  if (key === 'carrom' && (!isWhole(r.target) || r.target < 1)) return refuse('Points to win a game must be 1 or more.', 'target');
+  if (key === 'carrom' && (!isWhole(r.queenPoints) || r.queenPoints < 0)) return refuse('The queen is worth a whole number of points, 0 or more.', 'queenPoints');
   if (key === 'carrom' && typeof r.queenCutoff !== 'boolean') return refuse('The queen cut-off is on or off.', 'queenCutoff'); // BUILD 3.73
-  if (key === 'carrom' && r.boardCap !== null && (!isWhole(r.boardCap) || r.boardCap < 1 || r.boardCap > 12)) return refuse('Boards a game must be off, or 1 to 12.', 'boardCap'); // BUILD 3.74
+  if (key === 'carrom' && r.boardCap !== null && (!isWhole(r.boardCap) || r.boardCap < 1)) return refuse('Boards a game must be off, or 1 or more.', 'boardCap'); // BUILD 3.74 · Stage 13 · CR3: no top
   if (key === 'carrom' && r.carromMode !== 'board' && r.carromMode !== 'points') return refuse('Carrom is scored by boards or by points.', 'carromMode'); // BUILD 3.77
-  if (key === 'carrom' && r.queenValue !== 25 && r.queenValue !== 50) return refuse('In point carrom the queen is 25 or 50.', 'queenValue');
-  if (key === 'carrom' && r.gameMinutes !== null && (!isWhole(r.gameMinutes) || r.gameMinutes < 5 || r.gameMinutes > 60)) return refuse('A game’s time must be off, or 5 to 60 minutes.', 'gameMinutes'); // BUILD 3.76
+  if (key === 'carrom' && (!isWhole(r.queenValue) || r.queenValue < 0)) return refuse('In point carrom the queen is a whole number of points, 0 or more.', 'queenValue'); // Stage 13 · CR3: any value (25 and 50 are the usual)
+  if (key === 'carrom' && r.gameMinutes !== null && (!isWhole(r.gameMinutes) || r.gameMinutes < 1)) return refuse('A game’s time must be off, or a whole number of minutes.', 'gameMinutes'); // BUILD 3.76 · Stage 13 · CR3: no top
   // BUILD 3.59: tennis games a set, short set (4) to pro set (10).
-  if (key === 'tennis' && (!isWhole(r.gamesPerSet) || r.gamesPerSet < 4 || r.gamesPerSet > 10)) {
-    return refuse('Games a set must be 4 to 10.', 'gamesPerSet');
+  if (key === 'tennis' && (!isWhole(r.gamesPerSet) || r.gamesPerSet < 1)) { // Stage 13 · CR3: no top
+    return refuse('Games a set must be 1 or more.', 'gamesPerSet');
   }
   if (key === 'tennis' && typeof r.tiebreak !== 'boolean') return refuse('A tiebreak is on or off.', 'tiebreak'); // BUILD 3.60
-  if (key === 'tennis' && r.tiebreakTo !== 7 && r.tiebreakTo !== 10) return refuse('A tiebreak is to 7 or 10 points.', 'tiebreakTo'); // BUILD 3.61
+  if (key === 'tennis' && (!isWhole(r.tiebreakTo) || r.tiebreakTo < 1)) return refuse('A tiebreak is to a whole number of points (7 and 10 are the usual).', 'tiebreakTo'); // BUILD 3.61 · Stage 13 · CR3
   if (key === 'tennis' && typeof r.matchTiebreak !== 'boolean') return refuse('A match tiebreak is on or off.', 'matchTiebreak'); // BUILD 3.62
-  if (key === 'tennis' && r.timeLimitMinutes !== null && (!isWhole(r.timeLimitMinutes) || r.timeLimitMinutes < 10 || r.timeLimitMinutes > 180)) {
-    return refuse('A time limit must be off, or 10 to 180 minutes.', 'timeLimitMinutes'); // BUILD 3.66
+  if (key === 'tennis' && r.timeLimitMinutes !== null && (!isWhole(r.timeLimitMinutes) || r.timeLimitMinutes < 1)) {
+    return refuse('A time limit must be off, or a whole number of minutes.', 'timeLimitMinutes'); // BUILD 3.66 · Stage 13 · CR3: no top
   }
   if (key === 'tennis' && r.players !== null && r.players !== DOUBLES_PLAYERS) return refuse('Tennis players a side is 2 (doubles), or not set for singles.', 'players'); // BUILD 3.65
   if (key === 'tennis' && r.adScoring !== 'ad' && r.adScoring !== 'noad' && r.adScoring !== 'semiad') return refuse('Games are ad, no-ad or semi-ad.', 'adScoring'); // BUILD 3.63
@@ -726,7 +727,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     return refuse(`A tiebreak comes at 1-all to ${String(r.gamesPerSet)}-all.`, 'tiebreakAt');
   }
   if (key === 'tennis' && r.tiebreakAt !== null && r.tiebreak === false) return refuse('Set when the tiebreak comes only with tiebreaks on.', 'tiebreakAt');
-  if (key === 'tennis' && r.finalSetTiebreakTo !== null && r.finalSetTiebreakTo !== 7 && r.finalSetTiebreakTo !== 10) return refuse('A final-set tiebreak is to 7 or 10 points.', 'finalSetTiebreakTo');
+  if (key === 'tennis' && r.finalSetTiebreakTo !== null && (!isWhole(r.finalSetTiebreakTo) || r.finalSetTiebreakTo < 1)) return refuse('A final-set tiebreak is to a whole number of points (7 and 10 are the usual).', 'finalSetTiebreakTo'); // Stage 13 · CR3
   if (key === 'tennis' && r.finalSetTiebreakTo !== null && (r.matchTiebreak === true || r.tiebreak === false)) {
     return refuse(r.matchTiebreak === true ? 'With a match tiebreak there’s no final set to give its own tiebreak.' : 'A final-set tiebreak needs tiebreaks on.', 'finalSetTiebreakTo');
   }
@@ -761,52 +762,52 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // BUILD 3.16 / 3.26: players a side — football 3–11, hockey 4–11 (null = not set).
   const side = SIDE_LIMITS[key];
-  if (side && r.players !== null && (!isWhole(r.players) || r.players < side[0] || r.players > side[1])) {
-    return refuse(`Players a side must be a whole number from ${side[0]} to ${side[1]}.`, 'players');
+  if (side && r.players !== null && (!isWhole(r.players) || r.players < side[0])) { // Stage 13 · CR3: no top
+    return refuse(`Players a side must be a whole number, ${side[0]} or more.`, 'players');
   }
   // BUILD 3.17: a timed sport's periods, their length and (football) half-time.
   const timed = TIMED_LIMITS[key];
   if (timed) {
-    if (!isWhole(r.periods) || r.periods < timed.periods[0] || r.periods > timed.periods[1]) {
-      return refuse(`Periods must be a whole number from ${timed.periods[0]} to ${timed.periods[1]}.`, 'periods');
+    if (!isWhole(r.periods) || r.periods < timed.periods[0]) { // Stage 13 · CR3: no top
+      return refuse(`Periods must be a whole number, ${timed.periods[0]} or more.`, 'periods');
     }
-    if (r.periodMinutes !== null && (!isWhole(r.periodMinutes) || r.periodMinutes < timed.minutes[0] || r.periodMinutes > timed.minutes[1])) {
-      return refuse(`A period must be off, or ${timed.minutes[0]} to ${timed.minutes[1]} minutes.`, 'periodMinutes');
+    if (r.periodMinutes !== null && (!isWhole(r.periodMinutes) || r.periodMinutes < timed.minutes[0])) {
+      return refuse('A period must be off, or a whole number of minutes.', 'periodMinutes');
     }
-    if ('halfTimeMinutes' in stdMap && r.halfTimeMinutes !== null && (!isWhole(r.halfTimeMinutes) || r.halfTimeMinutes < 0 || r.halfTimeMinutes > HALF_TIME_MAX)) {
-      return refuse(`Half-time must be off, or 0 to ${HALF_TIME_MAX} minutes.`, 'halfTimeMinutes');
+    if ('halfTimeMinutes' in stdMap && r.halfTimeMinutes !== null && (!isWhole(r.halfTimeMinutes) || r.halfTimeMinutes < 0)) {
+      return refuse('Half-time must be off, or a whole number of minutes.', 'halfTimeMinutes');
     }
   }
   // BUILD 3.18: 3 or 5 penalties each, then sudden death.
-  if (key === 'football' && r.penaltyKicks !== 3 && r.penaltyKicks !== 5) {
-    return refuse('Penalty kicks must be 3 or 5 each.', 'penaltyKicks');
+  if (key === 'football' && (!isWhole(r.penaltyKicks) || r.penaltyKicks < 1)) { // Stage 13 · CR3: any number (3 and 5 are the usual)
+    return refuse('Penalty kicks must be a whole number, 1 or more each.', 'penaltyKicks');
   }
   // BUILD 3.23: two on/off flags, shown on the match (no effect on scoring).
   if (key === 'football' && typeof r.rollingSubs !== 'boolean') return refuse('Rolling subs is on or off.', 'rollingSubs');
   if (key === 'football' && typeof r.offside !== 'boolean') return refuse('Offside is on or off.', 'offside');
   // BUILD 3.35: foul out at 5 or 6.
-  if (key === 'basketball' && r.foulOut !== 5 && r.foulOut !== 6) return refuse('A player fouls out at 5 or 6.', 'foulOut');
+  if (key === 'basketball' && (!isWhole(r.foulOut) || r.foulOut < 1)) return refuse('A player fouls out at a whole number of fouls (5 and 6 are the usual).', 'foulOut'); // Stage 13 · CR3
   // BUILD 3.33: 1-2-3 (5v5) or 1-2 (3x3).
   if (key === 'basketball' && r.pointSet !== '123' && r.pointSet !== '12') return refuse('Points are 1-2-3 or 1-2.', 'pointSet');
   // BUILD 3.32: first to 7–50, or off.
-  if (key === 'basketball' && r.targetScore !== null && (!isWhole(r.targetScore) || r.targetScore < 7 || r.targetScore > 50)) {
-    return refuse('First to must be off, or 7 to 50 points.', 'targetScore');
+  if (key === 'basketball' && r.targetScore !== null && (!isWhole(r.targetScore) || r.targetScore < 1)) { // Stage 13 · CR3: no top
+    return refuse('First to must be off, or a whole number of points.', 'targetScore');
   }
   // BUILD 3.31: basketball overtime, 1–5 minutes.
-  if (key === 'basketball' && (!isWhole(r.overtimeMinutes) || r.overtimeMinutes < 1 || r.overtimeMinutes > 5)) {
-    return refuse('Overtime must be 1 to 5 minutes.', 'overtimeMinutes');
+  if (key === 'basketball' && (!isWhole(r.overtimeMinutes) || r.overtimeMinutes < 1)) { // Stage 13 · CR3: no top
+    return refuse('Overtime must be 1 minute or more.', 'overtimeMinutes');
   }
   // BUILD 3.29: a hockey yellow card suspends for 5–10 minutes.
-  if (key === 'hockey' && (!isWhole(r.yellowCardMinutes) || r.yellowCardMinutes < 5 || r.yellowCardMinutes > 10)) {
-    return refuse('A yellow card must suspend for 5 to 10 minutes.', 'yellowCardMinutes');
+  if (key === 'hockey' && (!isWhole(r.yellowCardMinutes) || r.yellowCardMinutes < 1)) { // Stage 13 · CR3: no top
+    return refuse('A yellow card suspends for a whole number of minutes.', 'yellowCardMinutes');
   }
   // BUILD 3.27: hockey's shoot-out takers, 1–5.
-  if (key === 'hockey' && (!isWhole(r.shootoutTakers) || r.shootoutTakers < 1 || r.shootoutTakers > 5)) {
-    return refuse('Shoot-out takers must be 1 to 5 each.', 'shootoutTakers');
+  if (key === 'hockey' && (!isWhole(r.shootoutTakers) || r.shootoutTakers < 1)) { // Stage 13 · CR3: no top
+    return refuse('Shoot-out takers must be 1 or more each.', 'shootoutTakers');
   }
   // BUILD 3.24: a sin bin of 2–15 minutes, or none.
-  if (key === 'football' && r.sinBinMinutes !== null && (!isWhole(r.sinBinMinutes) || r.sinBinMinutes < 2 || r.sinBinMinutes > 15)) {
-    return refuse('A sin bin must be off, or 2 to 15 minutes.', 'sinBinMinutes');
+  if (key === 'football' && r.sinBinMinutes !== null && (!isWhole(r.sinBinMinutes) || r.sinBinMinutes < 1)) { // Stage 13 · CR3: no top
+    return refuse('A sin bin must be off, or a whole number of minutes.', 'sinBinMinutes');
   }
   // Stage 8 · F1/F4: an organiser's substitutions limit and windows (optional; no app top), golden goal (F10), the fewest on the pitch (F15).
   if (key === 'football' && r.maxSubs != null && (!isWhole(r.maxSubs) || r.maxSubs < 0)) return refuse('Substitutions must be a whole number, or no limit.', 'maxSubs');
@@ -816,38 +817,39 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     return refuse('The fewest players on the pitch must be from 1 to the players a side.', 'minOnPitch');
   }
   // BUILD 3.21: a walkover goes down as 3–0 or 5–0.
-  if (key === 'football' && r.walkoverGoals !== 3 && r.walkoverGoals !== 5) return refuse('A walkover is 3–0 or 5–0.', 'walkoverGoals');
+  if (key === 'football' && (!isWhole(r.walkoverGoals) || r.walkoverGoals < 1)) return refuse('A walkover is a whole number of goals to 0 (3–0 and 5–0 are the usual).', 'walkoverGoals'); // Stage 13 · CR3
   // BUILD 3.20: whether a league / group match may end level.
   if (key === 'football' && typeof r.drawAllowed !== 'boolean') return refuse('Draws are allowed or not.', 'drawAllowed');
   // BUILD 3.19: extra time, 0 (none) to 15 minutes a half.
-  if (key === 'football' && (!isWhole(r.extraTimeMinutes) || r.extraTimeMinutes < 0 || r.extraTimeMinutes > EXTRA_TIME_MAX)) {
-    return refuse(`Extra time must be off, or up to ${EXTRA_TIME_MAX} minutes a half.`, 'extraTimeMinutes');
+  if (key === 'football' && (!isWhole(r.extraTimeMinutes) || r.extraTimeMinutes < 0)) { // Stage 13 · CR3: no top
+    return refuse('Extra time must be off, or a whole number of minutes a half.', 'extraTimeMinutes');
   }
   // BUILD 3.42: volleyball timeouts a set, 0–3.
-  if (key === 'volleyball' && (!isWhole(r.timeoutsPerSet) || r.timeoutsPerSet < 0 || r.timeoutsPerSet > 3)) {
-    return refuse('Timeouts must be 0 to 3 a set.', 'timeoutsPerSet');
+  if (key === 'volleyball' && (!isWhole(r.timeoutsPerSet) || r.timeoutsPerSet < 0)) { // Stage 13 · CR3: no top
+    return refuse('Timeouts a set must be a whole number, 0 or more.', 'timeoutsPerSet');
   }
   // BUILD 3.37: a rally sport's points to win a set.
   const rally = RALLY_LIMITS[key];
-  if (rally && (!isWhole(r.target) || r.target < rally.target[0] || r.target > rally.target[1])) {
-    return refuse(`Points to win a ${rally.unit ?? 'set'} must be ${rally.target[0]} to ${rally.target[1]}.`, 'target');
+  if (rally && (!isWhole(r.target) || r.target < 1)) { // Stage 13 · CR3: no top
+    return refuse(`Points to win a ${rally.unit ?? 'set'} must be 1 or more.`, 'target');
   }
   // BUILD 3.39: a cap — off, or the target to target + span, and never below
   // the deciding set's target (it couldn't be reached).
   if (rally?.capSpan != null && r.cap !== null) {
-    const hi = (r.target as number) + rally.capSpan;
+    // Stage 13 · CR3: no top — at least the target (and the deciding set's, which it must reach).
     const lo = Math.max(r.target as number, typeof r.finalTarget === 'number' ? r.finalTarget : 0);
-    if (!isWhole(r.cap) || r.cap < lo || r.cap > hi) {
-      return refuse(lo > hi ? 'A cap can’t fit this deciding set — turn the cap off.' : `The cap must be off, or ${lo} to ${hi}.`, 'cap');
+    if (!isWhole(r.cap) || r.cap < lo) {
+      return refuse(`The cap must be off, or ${lo} or more.`, 'cap');
     }
   }
   // BUILD 3.38: the deciding set's points (null = the same as the others).
-  if (rally?.finalTarget && r.finalTarget !== null && (!isWhole(r.finalTarget) || r.finalTarget < rally.finalTarget[0] || r.finalTarget > rally.finalTarget[1])) {
-    return refuse(`The deciding set must be ${rally.finalTarget[0]} to ${rally.finalTarget[1]} points.`, 'finalTarget');
+  if (rally?.finalTarget && r.finalTarget !== null && (!isWhole(r.finalTarget) || r.finalTarget < 1)) { // Stage 13 · CR3: no top
+    return refuse('The deciding set must be 1 point or more.', 'finalTarget');
   }
   if (MATCH_LENGTHS[key]) {
-    const offered = MATCH_LENGTHS[key]!.options;
-    if (!isWhole(r.bestOf) || !(offered as number[]).includes(r.bestOf)) return refuse(`Match length must be best of ${listOf(offered)}.`, 'bestOf');
+    // Stage 13 · CR3: best of any odd number (the chips are the usual ones); an even count can't always find a winner.
+    void listOf;
+    if (!isWhole(r.bestOf) || r.bestOf < 1 || r.bestOf % 2 === 0) return refuse('Match length must be best of an odd number (1, 3, 5, 7…).', 'bestOf');
   }
   if (key === 'chess') {
     // BUILD 3.67: any clock (the chips are presets). Stage 12 · CH6 (Dipak): no top — 1 minute or more, any increment.
@@ -924,23 +926,24 @@ export function badmintonCapFor(target: number): number | null {
 
 /** BUILD 3.17: the periods and period lengths a timed sport may set (others stay standard). */
 export const TIMED_LIMITS: Record<string, { periods: [number, number]; minutes: [number, number] }> = {
-  football: { periods: [1, 4], minutes: [5, 45] },
-  hockey: { periods: [1, 4], minutes: [5, 35] }, // BUILD 3.25
-  basketball: { periods: [1, 4], minutes: [3, 20] }, // BUILD 3.30 (length shown only — no clock)
+  // Stage 13 · CR3 (Dipak): the minimums only — no top on periods or minutes.
+  football: { periods: [1, Number.MAX_SAFE_INTEGER], minutes: [1, Number.MAX_SAFE_INTEGER] },
+  hockey: { periods: [1, Number.MAX_SAFE_INTEGER], minutes: [1, Number.MAX_SAFE_INTEGER] }, // BUILD 3.25
+  basketball: { periods: [1, Number.MAX_SAFE_INTEGER], minutes: [1, Number.MAX_SAFE_INTEGER] }, // BUILD 3.30 (length shown only — no clock)
 };
-export const HALF_TIME_MAX = 20;
+export const HALF_TIME_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3: no top
 /** BUILD 3.19: extra time's longest half. */
-export const EXTRA_TIME_MAX = 15;
+export const EXTRA_TIME_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3: no top
 
 /** BUILD 3.16: a football side, 3 (futsal-ish) to 11. */
-export const FOOTBALL_PLAYERS_MIN = 3;
-export const FOOTBALL_PLAYERS_MAX = 11;
+export const FOOTBALL_PLAYERS_MIN = 1; // Stage 13 · CR3: 1 a side or more
+export const FOOTBALL_PLAYERS_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3: no top
 /** BUILD 3.26: a hockey side, 4 (small-sided turf) to 11. */
-export const HOCKEY_PLAYERS_MIN = 4;
-export const HOCKEY_PLAYERS_MAX = 11;
+export const HOCKEY_PLAYERS_MIN = 1; // Stage 13 · CR3: 1 a side or more
+export const HOCKEY_PLAYERS_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3: no top
 /** BUILD 3.34: a basketball side, 1 (one-on-one) to 5. */
-export const BASKETBALL_PLAYERS_MIN = 1;
-export const BASKETBALL_PLAYERS_MAX = 5;
+export const BASKETBALL_PLAYERS_MIN = 1; // Stage 13 · CR3: 1 a side or more
+export const BASKETBALL_PLAYERS_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3: no top
 /** BUILD 3.29: a hockey green card's suspension (FIH: 2 minutes). */
 export const HOCKEY_GREEN_MINUTES = 2;
 
@@ -1050,10 +1053,11 @@ export function doublesLineupProblem(
 /** BUILD 3.28: FIH Hockey5s — 5 a side, two halves of 10 minutes. */
 export const HOCKEY5S = { players: 5, periods: 2, periodMinutes: 10 } as const;
 const SIDE_LIMITS: Record<string, [number, number]> = {
-  football: [FOOTBALL_PLAYERS_MIN, FOOTBALL_PLAYERS_MAX],
-  hockey: [HOCKEY_PLAYERS_MIN, HOCKEY_PLAYERS_MAX],
-  basketball: [BASKETBALL_PLAYERS_MIN, BASKETBALL_PLAYERS_MAX], // BUILD 3.34
-  volleyball: [2, 9], // BUILD 3.40: beach 2, indoor 6, 9-a-side
+  // Stage 13 · CR3 (Dipak): 1 a side or more — no top.
+  football: [1, Number.MAX_SAFE_INTEGER],
+  hockey: [1, Number.MAX_SAFE_INTEGER],
+  basketball: [1, Number.MAX_SAFE_INTEGER], // BUILD 3.34
+  volleyball: [1, Number.MAX_SAFE_INTEGER], // BUILD 3.40: beach 2, indoor 6, 9-a-side are the usual
 };
 
 /**

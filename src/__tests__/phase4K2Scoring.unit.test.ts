@@ -157,18 +157,23 @@ describe('K2-22 · a deduplicated event does not notify again (SC-133)', () => {
 describe('K2-39a · scoring inputs are range-checked (SC-228)', () => {
   const m = { id: MATCH, status: 'live', is_ranked: false };
   it.each([
-    ['period 2001', { event_type: 'score', period: 2001, payload: { team_side: 'A', value: 1 } }, 'period must be an integer between 0 and 2000'],
-    ['period 1.5', { event_type: 'score', period: 1.5, payload: { team_side: 'A', value: 1 } }, 'period must be an integer between 0 and 2000'],
-    ['clock -1', { event_type: 'score', clock_seconds: -1, payload: { team_side: 'A', value: 1 } }, 'clock_seconds must be an integer between 0 and 86400'],
-    ['clock 86401', { event_type: 'score', clock_seconds: 86401, payload: { team_side: 'A', value: 1 } }, 'clock_seconds must be an integer between 0 and 86400'],
+    // Stage 13 · CR3: period and clock have no top — 0 or more, whole.
+    ['period -1', { event_type: 'score', period: -1, payload: { team_side: 'A', value: 1 } }, 'period must be a whole number, 0 or more'],
+    ['period 1.5', { event_type: 'score', period: 1.5, payload: { team_side: 'A', value: 1 } }, 'period must be a whole number, 0 or more'],
+    ['clock -1', { event_type: 'score', clock_seconds: -1, payload: { team_side: 'A', value: 1 } }, 'clock_seconds must be a whole number, 0 or more'],
+    ['clock 1.5', { event_type: 'score', clock_seconds: 1.5, payload: { team_side: 'A', value: 1 } }, 'clock_seconds must be a whole number, 0 or more'],
     ['value 4', { event_type: 'score', payload: { team_side: 'A', value: 4 } }, 'value must be an integer between 1 and 3'],
     ['value -2', { event_type: 'score', payload: { team_side: 'A', value: -2 } }, 'value must be an integer between 1 and 3'],
-    ['runs 8', { event_type: 'ball', payload: { team_side: 'A', runs: 8 } }, 'runs must be an integer between 0 and 7'],
+    ['runs -1', { event_type: 'ball', payload: { team_side: 'A', runs: -1 } }, 'runs must be a whole number, 0 or more'],
+    ['runs 2.5', { event_type: 'ball', payload: { team_side: 'A', runs: 2.5 } }, 'runs must be a whole number, 0 or more'],
   ])('K2-39a (e2a1101): %s → 400', async (_n, ev, error) => {
     const out = await validateScoringEvent(MATCH, m, ev as any);
     expect(out).toEqual({ status: 400, body: { error } });
   });
   it('K2-39a (e2a1101): in-range values pass', async () => {
     expect(await validateScoringEvent(MATCH, m, { event_type: 'score', period: 2, clock_seconds: 600, payload: { team_side: 'B', value: 3 } })).toBeNull();
+    // Stage 13 · CR3: the old tops (period 2000, clock 86400, runs 7) and above pass.
+    expect(await validateScoringEvent(MATCH, m, { event_type: 'score', period: 2001, clock_seconds: 86401, payload: { team_side: 'B', value: 1 } })).toBeNull();
+    expect(await validateScoringEvent(MATCH, m, { event_type: 'ball', payload: { team_side: 'A', runs: 8 } })).toBeNull();
   });
 });

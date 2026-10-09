@@ -49,7 +49,7 @@ export function allOutWickets(players: number | null | undefined): number {
 
 /** BUILD 3.2: players a side a match can set (above 11: everyone in the squad bats). */
 export const PLAYERS_MIN = 2;
-export const PLAYERS_MAX = 15;
+export const PLAYERS_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3 (Dipak): no top
 
 /**
  * Per-side all-out. BUILD 3.2: a match that sets its players a side is all out
@@ -80,7 +80,7 @@ export function cricketFormatOf(format: string | null | undefined): CricketForma
 
 /** BUILD 3.1: overs are any whole number in this range; the options above are shortcuts. */
 export const OVERS_MIN = 1;
-export const OVERS_MAX = 50;
+export const OVERS_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3 (Dipak): no top
 
 /**
  * Can a match be played to `overs`? BUILD 3.1: any whole number 1–50 in every
@@ -188,8 +188,8 @@ export function isDismissal(wicketType: unknown): boolean {
 }
 
 /** BUILD 3.4: a retire-at-N match's range (off = null). */
-export const RETIRE_MIN = 10;
-export const RETIRE_MAX = 100;
+export const RETIRE_MIN = 1; // Stage 13 · CR3: any number of runs, 1 or more
+export const RETIRE_MAX = Number.MAX_SAFE_INTEGER;
 
 /** BUILD 3.5: the limit the form suggests for max overs per bowler — ⌈overs / 5⌉. */
 export function suggestedBowlerOvers(overs: number): number {
@@ -203,7 +203,7 @@ export function bowlerQuotaDone(bowlBalls: number | null | undefined, bowlerOver
 
 /** BUILD 3.6: a wide / no-ball's penalty runs — 0 to 2 (1 is the Laws' and the standard). */
 export const EXTRA_RUNS_MIN = 0;
-export const EXTRA_RUNS_MAX = 2;
+export const EXTRA_RUNS_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3: the organiser's own value
 
 /**
  * BUILD 3.6: the penalty a wide / no-ball carried. The app stores it on the
@@ -212,7 +212,8 @@ export const EXTRA_RUNS_MAX = 2;
  */
 export function extraPenaltyOf(payload: unknown): number {
   const n = (payload as { penalty?: unknown } | null | undefined)?.penalty;
-  return n === 0 || n === 1 || n === 2 ? n : 1;
+  // Stage 13 · CR3: any whole number of runs (no top); anything else is the Laws' 1.
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : 1;
 }
 
 /**
@@ -256,7 +257,7 @@ export function allowedOnFreeHit(wicketType: unknown): boolean {
  * runs, whole numbers that differ; a super over that ties is played again, and
  * the one that decided it is what's entered.
  */
-export const SUPER_OVER_MAX = 99;
+export const SUPER_OVER_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3: no top
 export function validSuperOver(a: unknown, b: unknown): boolean {
   const ok = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= SUPER_OVER_MAX;
   return ok(a) && ok(b) && a !== b;
@@ -270,8 +271,8 @@ export function superOverResultText(winnerName: string, so: { A: number; B: numb
 }
 
 /** BUILD 3.10: an innings time cap's range in minutes (off = null). Display and warning only. */
-export const INNINGS_MINUTES_MIN = 10;
-export const INNINGS_MINUTES_MAX = 240;
+export const INNINGS_MINUTES_MIN = 1; // Stage 13 · CR3: any time, 1 minute or more
+export const INNINGS_MINUTES_MAX = Number.MAX_SAFE_INTEGER;
 
 /**
  * BUILD 3.10 · how long `side`'s innings has run: from its first delivery to
@@ -352,13 +353,13 @@ export function powerplayState(
 
 /**
  * BUILD 3.14 · box cricket: hitting the roof costs the batting side runs (−5).
- * Stored on the ball as `penalty_runs` (a whole number −10..−1): the side's
+ * Stored on the ball as `penalty_runs` (a whole number, −1 or less): the side's
  * total takes it; the batter and the bowler don't. 0 on any other event.
  */
 export const ROOF_PENALTY = -5;
 export function penaltyRunsOf(payload: unknown): number {
   const n = (payload as { penalty_runs?: unknown } | null | undefined)?.penalty_runs;
-  return typeof n === 'number' && Number.isInteger(n) && n >= -10 && n <= -1 ? n : 0;
+  return typeof n === 'number' && Number.isInteger(n) && n <= -1 ? n : 0; // Stage 13 · CR3: any penalty
 }
 
 // ─── Cricket gap 5 (5 Oct 2026) · a score typed in, not ball by ball ────────
@@ -368,12 +369,12 @@ export function penaltyRunsOf(payload: unknown): number {
 // 3 balls). A chase stops once the target is passed, so the side batting
 // second can't have more than the target plus a last-ball no-ball six (7).
 
-export const TYPED_RUNS_MAX = 999;
+export const TYPED_RUNS_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3: no top
 
 /** Balls from o.b overs (12.3 → 75), or null when it isn't valid o.b. */
 export function typedOversToBalls(x: unknown): number | null {
   const s = typeof x === 'number' ? String(x) : typeof x === 'string' ? x.trim() : '';
-  if (!/^\d{1,2}(\.\d)?$/.test(s)) return null;
+  if (!/^\d{1,6}(\.\d)?$/.test(s)) return null; // Stage 13 · CR3: any overs (was 99.5)
   const [w, b = '0'] = s.split('.');
   const balls = Number(b);
   if (balls > 5) return null;
@@ -392,7 +393,7 @@ export function typedScoreRefusal(
   for (const [s, x] of sides) {
     const runs = Number(x.runs);
     if (x.runs === '' || x.runs == null || !Number.isInteger(runs) || runs < 0 || runs > TYPED_RUNS_MAX) {
-      return { error: `Runs must be a whole number from 0 to ${TYPED_RUNS_MAX}.`, field: `${s}.runs` };
+      return { error: 'Runs must be a whole number, 0 or more.', field: `${s}.runs` };
     }
     const w = Number(x.wickets);
     if (x.wickets === '' || x.wickets == null || !Number.isInteger(w) || w < 0 || w > opts.allOut[s]) {
@@ -404,12 +405,8 @@ export function typedScoreRefusal(
     if (balls === 0 && (runs > 0 || w > 0)) return { error: 'A side that scored runs or lost wickets faced at least one ball.', field: `${s}.overs` };
     if (opts.overs != null && balls > opts.overs * 6) return { error: `No side can bat more than the match's ${opts.overs} overs.`, field: `${s}.overs` };
   }
-  const first = opts.firstBatting === 'A' ? a : b;
-  const chase = opts.firstBatting === 'A' ? b : a;
-  const chaseSide = opts.firstBatting === 'A' ? 'B' : 'A';
-  if (Number(chase.runs) > Number(first.runs) + 7) {
-    return { error: `The chase stops once ${Number(first.runs) + 1} is reached, so the side batting second can't have more than ${Number(first.runs) + 7}.`, field: `${chaseSide}.runs` };
-  }
+  // Stage 13 · CR3: no top on the chase (was first innings + 7) — a ball's runs have no top
+  // (all-run overthrows, a wide worth the match's own number), so the last ball can pass the target by any amount.
   return null;
 }
 

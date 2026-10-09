@@ -6,5 +6,7 @@ test('bo5 offered and read back', () => {
   expect(isAcceptableMatchLength('pickleball', 'bo5')).toBe(true);
   expect(bestOfFor('pickleball', 'bo5')).toBe(5);
   expect(rulesRefusal('pickleball', { ...standardRules('pickleball'), bestOf: 5 })).toBeNull();
-  expect(isAcceptableMatchLength('pickleball', 'bo7')).toBe(false);
+  expect(isAcceptableMatchLength('pickleball', 'bo7')).toBe(true); // Stage 13 · CR3: any odd best-of
+  expect(bestOfFor('pickleball', 'bo7')).toBe(7);
+  expect(isAcceptableMatchLength('pickleball', 'bo4')).toBe(false);
 });

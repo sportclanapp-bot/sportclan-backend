@@ -11,8 +11,9 @@ test.each([[1, 4, 'Q1'], [5, 4, 'OT1'], [2, 2, 'H2'], [3, 2, 'OT1'], [3, 3, 'P3'
 test('nouns, rules, label', () => {
   expect([4, 2, 3, 1].map(periodsNounOf)).toEqual(['4 quarters', '2 halves', '3 periods', '1 period']);
   const b = (x: object) => rulesRefusal('basketball', { ...standardRules('basketball'), ...x });
-  for (const ok of [{ periods: 2 }, { periodMinutes: 3 }, { periodMinutes: 20 }]) expect(b(ok)).toBeNull();
-  expect(b({ periodMinutes: 21 })?.error).toBe('A period must be off, or 3 to 20 minutes.');
+  // Stage 13 · CR3: no tops — the old top (20 min) and above are fine.
+  for (const ok of [{ periods: 2 }, { periods: 5 }, { periodMinutes: 1 }, { periodMinutes: 3 }, { periodMinutes: 20 }, { periodMinutes: 21 }]) expect(b(ok)).toBeNull();
+  expect(b({ periodMinutes: 0 })?.error).toBe('A period must be off, or a whole number of minutes.');
   expect(b({ periods: 0 })?.field).toBe('periods');
   expect(timedRulesLabel('basketball', { ...standardRules('basketball'), periodMinutes: 10 })).toBe('4 × 10 min');
 });

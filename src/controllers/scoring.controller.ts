@@ -10,7 +10,7 @@ import { scorePush, quarterPush } from '../utils/scorePush';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
-import { isTerminalMatchStatus } from '../utils/validation';
+import { INT_MAX, isTerminalMatchStatus } from '../utils/validation';
 import { canOfficiateMatch } from '../utils/tournamentAuth';
 import { isSportInactive } from '../utils/sports';
 import { isKnownEventType } from '../utils/scoringEvents';
@@ -226,14 +226,15 @@ export async function validateScoringEvent(
   // corrupt a score (negative subtracts, huge inflates). Clean 400, no write.
   // Bounds by family: point/board `value` 1..3 (basketball 3-pointer, carrom
   // queen 3, rally 1); cricket `runs` 0..7 (dot ball .. six + overthrow buffer);
-  // `period`/set/ply 0..2000; `clock_seconds` 0..86400 (≤24h). team_side A|B.
+  // `period`/set/ply and `clock_seconds` 0 or more (Stage 13 · CR3: no tops —
+  // a chess clock can be any length; only the integer column's limit). team_side A|B.
   const outOfRange = (v: unknown, min: number, max: number): boolean =>
     v != null && (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max);
-  if (outOfRange(period, 0, 2000)) {
-    return refuse(400, { error: 'period must be an integer between 0 and 2000' });
+  if (outOfRange(period, 0, INT_MAX)) {
+    return refuse(400, { error: 'period must be a whole number, 0 or more' });
   }
-  if (outOfRange(clock_seconds, 0, 86400)) {
-    return refuse(400, { error: 'clock_seconds must be an integer between 0 and 86400' });
+  if (outOfRange(clock_seconds, 0, INT_MAX)) {
+    return refuse(400, { error: 'clock_seconds must be a whole number, 0 or more' });
   }
   if (payload && typeof payload === 'object') {
     if (payload.team_side != null && payload.team_side !== 'A' && payload.team_side !== 'B') {
@@ -249,8 +250,11 @@ export async function validateScoringEvent(
       if (payload.queen != null && typeof payload.queen !== 'boolean') {
         return refuse(400, { error: 'queen must be true or false' });
       }
-      // BUILD 3.72: a queen can be worth up to 5 (the home game); the score is recomputed anyway.
-      if (outOfRange(payload.value, 0, CARROM_MAX_PIECES + CARROM_QUEEN_MAX)) {
+      // BUILD 3.72: the score is recomputed anyway. Stage 13 · CR3: the queen is
+      // worth the match's own number (no top), so a board is at most 9 + that.
+      const boardRules = match.sport_id ? rulesOf('carrom', match) : null;
+      const queenWorth = Math.min(CARROM_QUEEN_MAX, Math.max(3, Number(boardRules?.queenPoints ?? 3)));
+      if (outOfRange(payload.value, 0, CARROM_MAX_PIECES + queenWorth)) {
         return refuse(400, { error: 'value is out of range for a board' });
       }
     } else if (payload.kind === 'coin') {
@@ -265,10 +269,10 @@ export async function validateScoringEvent(
     } else if (outOfRange(payload.value, 1, 3)) {
       return refuse(400, { error: 'value must be an integer between 1 and 3' });
     }
-    // BUILD 3.14: a roof penalty (box cricket) rides on a ball: −10..−1.
+    // BUILD 3.14: a roof penalty (box cricket) rides on a ball: −1 or less (Stage 13 · CR3: no bottom).
     if (payload.penalty_runs !== undefined) {
       if (event_type !== 'ball' || penaltyRunsOf(payload) === 0) {
-        return refuse(400, { error: 'penalty_runs is a whole number from -10 to -1, on a ball.', code: 'BAD_PENALTY_RUNS' });
+        return refuse(400, { error: 'penalty_runs is a whole number, -1 or less, on a ball.', code: 'BAD_PENALTY_RUNS' });
       }
       if (rulesOf('cricket', match).style !== 'box') {
         return refuse(400, { error: 'Roof penalties are for box cricket.', code: 'BAD_PENALTY_RUNS' });
@@ -276,9 +280,10 @@ export async function validateScoringEvent(
     }
     // BUILD 3.6: a wide / no-ball worth 2 makes a no-ball six 8.
     const wideOrNb = event_type === 'extra' && (payload.type === 'Wd' || payload.type === 'Nb');
-    const maxRuns = 7 + (wideOrNb ? Math.max(0, extraPenaltyOf(payload) - 1) : 0);
-    if (outOfRange(payload.runs, 0, maxRuns)) {
-      return refuse(400, { error: `runs must be an integer between 0 and ${maxRuns}` });
+    // Stage 13 · CR3 (Dipak): no top on runs off a ball (all-run overthrows);
+    // only the integer column's limit.
+    if (outOfRange(payload.runs, 0, INT_MAX)) {
+      return refuse(400, { error: 'runs must be a whole number, 0 or more' });
     }
     // BUILD 3.6: a wide / no-ball carries the match's penalty. An older app
     // sends none and adds 1 — right only where a wide is worth 1, so it can't
@@ -954,7 +959,9 @@ export function rollupTieSpec(
         const done = pc.gamesWon.A >= winsToWin(rr) ? 'A' : pc.gamesWon.B >= winsToWin(rr) ? 'B' : null;
         return { winner: done, sets: { A: pc.games.map((g) => g.A), B: pc.games.map((g) => g.B) }, games: pc.gamesWon, points: pc.points };
       }
-      const c = carromReplay(evs.filter((e) => e.event_type === 'score' && e.payload?.kind === 'board').map((e) => ({ winner: sideOf(e.payload || {}), piecesLeft: carromPieces(e.payload.pieces_left), queen: e.payload.queen === true })), carromOptsOf(rr));
+      // Stage 13 · CR5: a timed game's time call too (a typed one ends that way).
+      const c = carromReplay(evs.filter((e) => (e.event_type === 'score' && e.payload?.kind === 'board') || (!!rr.gameMinutes && e.event_type === 'note' && e.payload?.kind === 'buzzer'))
+        .map((e) => (e.event_type === 'note' ? { buzzer: true as const } : { winner: sideOf(e.payload || {}), piecesLeft: carromPieces(e.payload.pieces_left), queen: e.payload.queen === true })), carromOptsOf(rr));
       return { winner: c.winner ?? null, sets: { A: c.games.map((g) => g.A), B: c.games.map((g) => g.B) }, games: c.gamesWon, points: c.points };
     }
     if (slug === 'tennis') {
@@ -1864,7 +1871,16 @@ export async function typedScore(req: Request, res: Response) {
     const base = Date.now();
     const rows = [
       { match_id: id, event_type: 'note', payload: { kind: 'typed_score', text }, created_by: userId, created_at: new Date(base).toISOString() },
-      ...got.points.map((p, i) => ({ match_id: id, event_type: 'score', payload: { team_side: p.side, typed: true, ...(p.kind ? { kind: p.kind } : {}) }, created_by: userId, created_at: new Date(base + 1 + i).toISOString() })),
+      ...got.points.map((p, i) => ({
+        match_id: id,
+        // Stage 13 · CR5: a carrom board (pieces left, queen) as the pad sends it; time called as its note.
+        event_type: p.kind === 'buzzer' ? 'note' : 'score',
+        payload: p.kind === 'buzzer' ? { kind: 'buzzer', typed: true }
+          : p.kind === 'board' ? { kind: 'board', team_side: p.side, pieces_left: p.piecesLeft ?? 0, queen: p.queen === true, typed: true }
+          : { team_side: p.side, typed: true, ...(p.kind ? { kind: p.kind } : {}) },
+        created_by: userId,
+        created_at: new Date(base + 1 + i).toISOString(),
+      })),
     ];
     for (let i = 0; i < rows.length; i += 500) {
       const { error } = await supabase.from('match_events').insert(rows.slice(i, i + 500));

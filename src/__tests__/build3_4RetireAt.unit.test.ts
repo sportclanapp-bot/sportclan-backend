@@ -15,12 +15,13 @@ test('not a dismissal, and a known kind', () => {
   expect(isDismissal('retired_out')).toBe(true);
   expect(isKnownWicketType('retired_not_out')).toBe(true);
 });
-test('the limit: off, or whole 10–100', () => {
-  expect([RETIRE_MIN, RETIRE_MAX]).toEqual([10, 100]);
+test('the limit: off, or whole 1 or more (Stage 13 · CR3: no top)', () => {
+  expect([RETIRE_MIN, RETIRE_MAX]).toEqual([1, Number.MAX_SAFE_INTEGER]);
   const r = (retireAt: unknown) => rulesRefusal('cricket', { ...standardRules('cricket'), retireAt });
   expect(r(null)).toBeNull();
   expect(r(25)).toBeNull();
-  for (const bad of [5, 101, 25.5]) expect(r(bad)?.field).toBe('retireAt');
+  for (const ok of [1, 5, 100, 101, 500]) expect(r(ok)).toBeNull(); // Stage 13 · CR3: the old top and above are fine
+  for (const bad of [0, -1, 25.5]) expect(r(bad)?.error).toBe('Retire at must be off, or a whole number of runs, 1 or more.');
 });
 test('the scorecard says "retired not out" and brings them back if they bat again', () => {
   const sc = fs.readFileSync(path.join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');

@@ -63,6 +63,7 @@ jest.mock('../controllers/tournaments.controller', () => ({
 }));
 // eslint-disable-next-line import/first
 import { completeMatch } from '../controllers/matches.controller';
+import { typedScoreRefusal } from '../utils/cricketRules';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const MATCH = '22222222-2222-4222-8222-222222222222';
@@ -150,14 +151,16 @@ describe('a typed cricket score', () => {
   test('refusals name the field', async () => {
     setup();
     const bad = async (a: object, b: object, first = 'A') => (await call({ winner_team_id: TA, winner_side: 'A', score_summary: typed(a, b, first) })).body;
-    expect(await bad({ runs: 1000, wickets: 1, overs: '10' }, { runs: 1, wickets: 1, overs: '1' })).toMatchObject({ code: 'BAD_SCORE', field: 'A.runs' });
+    // Stage 13 · CR3: no top on runs (1000 is fine); below 0 or not whole is refused.
+    expect(await bad({ runs: -1, wickets: 1, overs: '10' }, { runs: 1, wickets: 1, overs: '1' })).toMatchObject({ code: 'BAD_SCORE', field: 'A.runs', error: 'Runs must be a whole number, 0 or more.' });
+    expect(await bad({ runs: 100.5, wickets: 1, overs: '10' }, { runs: 1, wickets: 1, overs: '1' })).toMatchObject({ code: 'BAD_SCORE', field: 'A.runs' });
     expect(await bad({ runs: 100, wickets: 11, overs: '10' }, { runs: 1, wickets: 1, overs: '1' })).toMatchObject({ field: 'A.wickets', error: 'Wickets must be a whole number from 0 to 10.' });
     expect(await bad({ runs: 100, wickets: 1, overs: '9.6' }, { runs: 1, wickets: 1, overs: '1' })).toMatchObject({ field: 'A.overs' });
     expect(await bad({ runs: 100, wickets: 1, overs: '10.1' }, { runs: 1, wickets: 1, overs: '1' })).toMatchObject({ field: 'A.overs', error: 'No side can bat more than the match\'s 10 overs.' });
     expect(await bad({ runs: 100, wickets: 1, overs: '10' }, { runs: 1, wickets: 1, overs: '1' }, 'C')).toMatchObject({ field: 'first_batting_side' });
-    expect((await call({ winner_team_id: TB, winner_side: 'B', score_summary: typed({ runs: 100, wickets: 1, overs: '10' }, { runs: 108, wickets: 1, overs: '8' }) })).body)
-      .toMatchObject({ field: 'B.runs', code: 'BAD_SCORE' });
     expect(writes()).toHaveLength(0);
+    // Stage 13 · CR3: no top on the chase (a ball's runs have no top) — 108 chasing 100 is a score.
+    expect(typedScoreRefusal({ runs: 100, wickets: 1, overs: '10' }, { runs: 108, wickets: 1, overs: '8' }, { overs: 10, allOut: { A: 10, B: 10 }, firstBatting: 'A' })).toBeNull();
   });
   test('not once a ball has been scored', async () => {
     events = [{ event_type: 'ball', payload: { team_side: 'A', runs: 1 } }];

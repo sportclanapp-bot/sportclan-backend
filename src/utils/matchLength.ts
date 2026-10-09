@@ -16,10 +16,11 @@
  * standard length, so old matches keep scoring exactly as they did.
  */
 
-export type BestOf = 1 | 3 | 5 | 7;
+/** Stage 13 · CR3 (Dipak: no tops): any odd number — the presets below are the usual ones. */
+export type BestOf = number;
 
 export interface MatchLengthRule {
-  /** The presets the create form offers, shortest first. */
+  /** The presets the create form offers, shortest first (any other odd number can be typed). */
   options: BestOf[];
   /** The standard length — and what a match without a preset plays. */
   standard: BestOf;
@@ -52,9 +53,10 @@ export function formatForBestOf(n: BestOf): string {
 export function bestOfFor(sport: string | null | undefined, format: string | null | undefined): BestOf | null {
   const rule = MATCH_LENGTHS[lengthKey(sport)];
   if (!rule) return null;
-  const m = /^bo([1357])$/.exec(String(format ?? '').trim());
-  const n = m ? (Number(m[1]) as BestOf) : null;
-  return n !== null && rule.options.includes(n) ? n : rule.standard;
+  const m = /^bo(\d+)$/.exec(String(format ?? '').trim());
+  const n = m ? Number(m[1]) : null;
+  // Stage 13 · CR3: any odd best-of (7, 9…), not only the presets.
+  return n !== null && n >= 1 && n % 2 === 1 ? n : rule.standard;
 }
 
 /** Games / sets needed to win a best-of-n match. */
@@ -63,16 +65,18 @@ export function winsNeeded(bestOf: number): number {
 }
 
 /**
- * Is this `format` acceptable at creation for this sport? A preset must be one
- * the sport offers; anything that is not a preset (an older app sends the sport
- * slug) is accepted and means the standard length.
+ * Is this `format` acceptable at creation for this sport? A best-of must be an
+ * odd number, 1 or more (Stage 13 · CR3: no top — not only the presets);
+ * anything that is not a best-of (an older app sends the sport slug) is
+ * accepted and means the standard length.
  */
 export function isAcceptableMatchLength(sport: string | null | undefined, format: string | null | undefined): boolean {
   const rule = MATCH_LENGTHS[lengthKey(sport)];
   if (!rule) return true;
   const m = /^bo(\d+)$/.exec(String(format ?? '').trim());
   if (!m) return true;
-  return rule.options.includes(Number(m[1]) as BestOf);
+  const n = Number(m[1]);
+  return n >= 1 && n % 2 === 1;
 }
 
 /** "1 game", "1 set", "Best of 3", "Best of 5 sets". */

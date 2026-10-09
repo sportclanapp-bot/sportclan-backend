@@ -586,11 +586,15 @@ export async function deleteMatchEvent(req: Request, res: Response) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-/** Caps for one innings line; a count must be a whole number from 0 to its cap. */
+/**
+ * One innings line's counts: whole numbers, 0 or more. Stage 13 · CR3 (Dipak):
+ * no tops — a side can have more than 11 players (so more than 10 wickets), and
+ * overs have no top; only what the integer column holds.
+ */
 const INNINGS_CAPS: Record<string, number> = {
-  runs: 500, balls_faced: 600, fours: 150, sixes: 150,
-  bowling_runs: 500, bowling_wickets: 10, bowling_maidens: 50,
-  catches: 10, runouts: 10, stumpings: 10,
+  runs: 2_147_483_647, balls_faced: 2_147_483_647, fours: 2_147_483_647, sixes: 2_147_483_647,
+  bowling_runs: 2_147_483_647, bowling_wickets: 2_147_483_647, bowling_maidens: 2_147_483_647,
+  catches: 2_147_483_647, runouts: 2_147_483_647, stumpings: 2_147_483_647,
 };
 /** Phase 3 B05-F15 · one innings-stats row's shape. Exported for tests. */
 export function inningsRowRefusal(rows: unknown[]): { error: string; code: string } | null {
@@ -603,12 +607,14 @@ export function inningsRowRefusal(rows: unknown[]): { error: string; code: strin
     for (const [k, cap] of Object.entries(INNINGS_CAPS)) {
       const v = s[k];
       if (v != null && (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > cap)) {
-        return { error: `${k} must be a whole number from 0 to ${cap}.`, code: 'BAD_STAT' };
+        void cap;
+        return { error: `${k} must be a whole number, 0 or more.`, code: 'BAD_STAT' };
       }
     }
     const o = s.bowling_overs;
-    if (o != null && (typeof o !== 'number' || !Number.isFinite(o) || o < 0 || o > 50)) {
-      return { error: 'bowling_overs must be from 0 to 50.', code: 'BAD_STAT' };
+    // Stage 13 · CR3: no top but the column's (numeric(4,1): up to 999.9 overs).
+    if (o != null && (typeof o !== 'number' || !Number.isFinite(o) || o < 0 || o > 999.9)) {
+      return { error: 'bowling_overs must be 0 or more.', code: 'BAD_STAT' };
     }
     if (s.dismissal_type != null && (typeof s.dismissal_type !== 'string' || s.dismissal_type.length > 30)) {
       return { error: 'dismissal_type must be short text.', code: 'BAD_STAT' };

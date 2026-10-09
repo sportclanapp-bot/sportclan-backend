@@ -82,8 +82,10 @@ describe('BUILD 4.8 · the score', () => {
   });
   test('checked per sport; presets pass', () => {
     expect(walkoverRefusal('cricket', 'straight')?.error).toBe('A cricket walkover has no score — the win’s points are the result.');
-    expect(walkoverRefusal('basketball', 'straight')?.error).toBe('A walkover’s score must be 1 to 99.');
-    expect(walkoverRefusal('basketball', 0)?.error).toBe('A walkover’s score must be 1 to 99.');
+    expect(walkoverRefusal('basketball', 'straight')?.error).toBe('A walkover’s score must be a whole number, 1 or more.');
+    expect(walkoverRefusal('basketball', 0)?.error).toBe('A walkover’s score must be a whole number, 1 or more.');
+    expect(walkoverRefusal('basketball', 2.5)?.error).toBe('A walkover’s score must be a whole number, 1 or more.');
+    for (const ok of [99, 100, 500]) expect(walkoverRefusal('basketball', ok)).toBeNull(); // Stage 13 · CR3: no top
     expect(walkoverRefusal('tabletennis', 3)?.error).toBe('A walkover here is a straight win or no score.');
     for (const s of ['cricket', 'football', 'hockey', 'basketball', 'volleyball', 'badminton', 'tabletennis', 'pickleball', 'tennis', 'chess', 'carrom']) {
       expect([s, walkoverRefusal(s, walkoverPresetFor(s))]).toEqual([s, null]);

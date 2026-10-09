@@ -17,10 +17,10 @@ test('team fouls reset each period; players count all game', () => {
   expect(foulTally(log, 6).players[0]?.out).toBe(false);
   expect(TEAM_FOUL_BONUS).toBe(5);
 });
-test('foul out at 5 or 6; standard 5; the label', () => {
+test('foul out at any whole number (5 and 6 the usual; Stage 13 · CR3); standard 5; the label', () => {
   expect(standardRules('basketball').foulOut).toBe(5);
-  expect(rulesRefusal('basketball', { ...standardRules('basketball'), foulOut: 6 })).toBeNull();
-  expect(rulesRefusal('basketball', { ...standardRules('basketball'), foulOut: 4 })?.error).toBe('A player fouls out at 5 or 6.');
+  for (const ok of [1, 4, 6, 7]) expect(rulesRefusal('basketball', { ...standardRules('basketball'), foulOut: ok })).toBeNull();
+  for (const bad of [0, -1, 5.5]) expect(rulesRefusal('basketball', { ...standardRules('basketball'), foulOut: bad })?.error).toBe('A player fouls out at a whole number of fouls (5 and 6 are the usual).');
   expect(timedRulesLabel('basketball', { ...standardRules('basketball'), foulOut: 6 })).toBe('foul out at 6');
 });
 test('the scorecard counts a player’s fouls; the timeline names them', () => {

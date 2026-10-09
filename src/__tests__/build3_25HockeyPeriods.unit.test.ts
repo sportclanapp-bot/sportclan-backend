@@ -6,10 +6,10 @@ import { rulesRefusal, standardRules, timedRulesLabel } from '../utils/matchRule
 import { sportCommentary } from '../utils/commentary';
 
 const hk = (x: object) => rulesRefusal('hockey', { ...standardRules('hockey'), ...x });
-test('periods 1–4, 5–35 min', () => {
-  for (const ok of [{ periods: 2 }, { periods: 1 }, { periodMinutes: 5 }, { periodMinutes: 35 }]) expect(hk(ok)).toBeNull();
-  expect(hk({ periods: 5 })?.field).toBe('periods');
-  expect(hk({ periodMinutes: 36 })?.error).toBe('A period must be off, or 5 to 35 minutes.');
+test('periods 1 or more, 1 minute or more (Stage 13 · CR3: no tops)', () => {
+  for (const ok of [{ periods: 2 }, { periods: 1 }, { periods: 5 }, { periodMinutes: 1 }, { periodMinutes: 5 }, { periodMinutes: 35 }, { periodMinutes: 36 }]) expect(hk(ok)).toBeNull();
+  expect(hk({ periods: 0 })?.field).toBe('periods');
+  expect(hk({ periodMinutes: 0 })?.error).toBe('A period must be off, or a whole number of minutes.');
   expect(timedRulesLabel('hockey', { ...standardRules('hockey'), periodMinutes: 15 })).toBe('4 × 15 min');
 });
 test('commentary', () => {

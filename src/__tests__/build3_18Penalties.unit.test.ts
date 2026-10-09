@@ -16,11 +16,14 @@ test('the words', () => {
   expect(shootoutProblem(5, 3, 3)).toBe('After 3 kicks each it’s sudden death, so it ends by one goal (e.g. 4–3).');
   expect(shootoutProblem(2, 2, 5)).toBe('A shootout can’t end level.');
 });
-test('football: 3 or 5, standard 5; the label says 3', () => {
+test('football: any whole number each (3 and 5 the usual; Stage 13 · CR3), standard 5; the label says 3', () => {
   expect(standardRules('football').penaltyKicks).toBe(5);
   expect(shootoutKicksOf(standardRules('football'))).toBe(5);
   expect(shootoutKicksOf({ penaltyKicks: 3 })).toBe(3);
   expect(shootoutKicksOf(standardRules('hockey'))).toBe(5);
-  expect(rulesRefusal('football', { ...standardRules('football'), penaltyKicks: 4 })?.error).toBe('Penalty kicks must be 3 or 5 each.');
+  for (const ok of [1, 4, 6, 10]) expect(rulesRefusal('football', { ...standardRules('football'), penaltyKicks: ok })).toBeNull();
+  expect(shootoutKicksOf({ penaltyKicks: 4 })).toBe(4);
+  expect(shootoutKicksOf({ penaltyKicks: 7 })).toBe(7);
+  for (const bad of [0, -1, 3.5]) expect(rulesRefusal('football', { ...standardRules('football'), penaltyKicks: bad })?.error).toBe('Penalty kicks must be a whole number, 1 or more each.');
   expect(timedRulesLabel('football', { ...standardRules('football'), penaltyKicks: 3 })).toBe('3 pens each');
 });

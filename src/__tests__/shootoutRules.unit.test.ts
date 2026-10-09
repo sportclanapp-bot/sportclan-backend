@@ -18,15 +18,16 @@ describe('shootoutRules', () => {
     expect(shootoutApplies('basketball', true)).toBe(false);
     expect(shootoutApplies('cricket', true)).toBe(false);
   });
-  test('a shootout score is two different whole numbers 0..30', () => {
+  test('a shootout score is two different whole numbers, 0 or more (Stage 13 · CR3: no top)', () => {
     expect(validShootout(4, 3)).toBe(true);
     expect(validShootout(0, 1)).toBe(true);
     expect(validShootout(3, 3)).toBe(false);
     expect(validShootout(-1, 2)).toBe(false);
-    expect(validShootout(31, 2)).toBe(false);
+    expect(validShootout(31, 2)).toBe(true);
+    expect(validShootout(100, 99)).toBe(true);
     expect(validShootout(2.5, 2)).toBe(false);
     expect(validShootout('4', 3)).toBe(false);
-    expect(SHOOTOUT_MAX).toBe(30);
+    expect(SHOOTOUT_MAX).toBe(Number.MAX_SAFE_INTEGER);
   });
   test('winner and result wording', () => {
     expect(shootoutWinner(4, 3)).toBe('A');

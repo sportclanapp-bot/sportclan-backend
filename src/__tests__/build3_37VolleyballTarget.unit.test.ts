@@ -5,10 +5,10 @@
 import { rulesRefusal, standardRules, setConfigOf, timedRulesLabel } from '../utils/matchRules';
 import { rollupSets } from '../controllers/scoring.controller';
 
-test('10–30; standard 25; the label says a change', () => {
+test('1 or more (Stage 13 · CR3: no top); standard 25; the label says a change', () => {
   const r = (target: unknown) => rulesRefusal('volleyball', { ...standardRules('volleyball'), target });
-  for (const ok of [10, 21, 30]) expect(r(ok)).toBeNull();
-  for (const bad of [9, 31, 20.5]) expect(r(bad)?.error).toBe('Points to win a set must be 10 to 30.');
+  for (const ok of [9, 10, 21, 30, 31, 50]) expect(r(ok)).toBeNull();
+  for (const bad of [0, -1, 20.5]) expect(r(bad)?.error).toBe('Points to win a set must be 1 or more.');
   expect(timedRulesLabel('volleyball', { ...standardRules('volleyball'), target: 21 })).toBe('sets to 21');
   expect(timedRulesLabel('volleyball', standardRules('volleyball'))).toBeNull();
   expect(rulesRefusal('badminton', { ...standardRules('badminton'), finalTarget: 11 })?.field).toBe('finalTarget'); // every target is open now (3.44–3.72); badminton's decider isn't

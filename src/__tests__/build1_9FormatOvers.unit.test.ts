@@ -119,13 +119,17 @@ describe('BUILD 1.9 · create', () => {
     expect(r.statusCode).toBeLessThan(300);
     expect(inserted()).toMatchObject({ format: 'T20', overs: 20 });
   });
-  it('T7 with no overs → 7 overs (BUILD 3.1: any 1–50); T51 → 400 BAD_OVERS', async () => {
+  it('T7 with no overs → 7 overs; T51 → 51 overs (Stage 13 · CR3: no top); T0 → 400 BAD_OVERS', async () => {
     mockNext = onCreate;
     const ok = await call(createMatch, { body: body({ format: 'T7' }) });
     expect(ok.statusCode).toBeLessThan(300);
     expect(inserted()).toMatchObject({ format: 'T7', overs: 7 });
     mockLog = [];
-    const r = await call(createMatch, { body: body({ format: 'T51' }) });
+    const big = await call(createMatch, { body: body({ format: 'T51' }) });
+    expect(big.statusCode).toBeLessThan(300);
+    expect(inserted()).toMatchObject({ format: 'T51', overs: 51 });
+    mockLog = [];
+    const r = await call(createMatch, { body: body({ format: 'T0' }) });
     expect([r.statusCode, r.body.code]).toEqual([400, 'BAD_OVERS']);
     expect(inserted()).toBeNull();
   });
@@ -149,11 +153,15 @@ describe('BUILD 1.9 · edit', () => {
     expect(r.statusCode).toBe(200);
     expect(writes()[0]!.join()).toContain('"overs":10');
   });
-  it('T51 on a match with no overs → 400 BAD_OVERS, nothing written (BUILD 3.1: T7 is fine now)', async () => {
+  it('T0 on a match with no overs → 400 BAD_OVERS, nothing written (BUILD 3.1: T7 is fine now; Stage 13 · CR3: so is T51)', async () => {
     mockNext = onMatch(matchRow({ format: null, overs: null }));
-    const r = await call(updateMatch, { body: { format: 'T51' } });
+    const r = await call(updateMatch, { body: { format: 'T0' } });
     expect([r.statusCode, r.body.code]).toEqual([400, 'BAD_OVERS']);
     expect(writes()).toHaveLength(0);
+    mockNext = onMatch(matchRow({ format: null, overs: null }));
+    const ok = await call(updateMatch, { body: { format: 'T51' } });
+    expect(ok.statusCode).toBe(200);
+    expect(writes()[0]!.join()).toContain('"overs":51');
   });
   it('T10 on a 20-over match is still a mismatch', async () => {
     mockNext = onMatch(matchRow());

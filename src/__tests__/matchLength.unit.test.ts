@@ -26,7 +26,10 @@ describe('matchLength', () => {
     expect(bestOfFor('badminton', 'bo3')).toBe(3);
     expect(bestOfFor('badminton', 'badminton')).toBe(3); // an older match: the slug
     expect(bestOfFor('badminton', null)).toBe(3);
-    expect(bestOfFor('badminton', 'bo7')).toBe(3); // not offered → standard (bo5 is, BUILD 3.46)
+    expect(bestOfFor('badminton', 'bo7')).toBe(7); // Stage 13 · CR3: any odd best-of, not only the presets
+    expect(bestOfFor('badminton', 'bo9')).toBe(9);
+    expect(bestOfFor('badminton', 'bo4')).toBe(3); // even → standard
+    expect(bestOfFor('badminton', 'bo0')).toBe(3);
     expect(bestOfFor('table-tennis', 'bo7')).toBe(7); // DB slug form
     expect(bestOfFor('tabletennis', undefined)).toBe(5);
     expect(bestOfFor('volleyball', 'bo3')).toBe(3);
@@ -37,13 +40,16 @@ describe('matchLength', () => {
     expect([1, 3, 5, 7].map(winsNeeded)).toEqual([1, 2, 3, 4]);
   });
 
-  test('creation accepts offered presets and non-presets, refuses the rest', () => {
+  test('creation accepts any odd best-of (Stage 13 · CR3) and non-presets, refuses the rest', () => {
     expect(isAcceptableMatchLength('badminton', 'bo1')).toBe(true);
     expect(isAcceptableMatchLength('badminton', 'badminton')).toBe(true);
     expect(isAcceptableMatchLength('badminton', null)).toBe(true);
-    expect(isAcceptableMatchLength('badminton', 'bo7')).toBe(false);
+    expect(isAcceptableMatchLength('badminton', 'bo7')).toBe(true); // Stage 13 · CR3: no top
+    expect(isAcceptableMatchLength('badminton', 'bo4')).toBe(false); // even: no sure winner
+    expect(isAcceptableMatchLength('badminton', 'bo0')).toBe(false);
     expect(isAcceptableMatchLength('volleyball', 'bo1')).toBe(true); // BUILD 3.36
-    expect(isAcceptableMatchLength('volleyball', 'bo7')).toBe(false);
+    expect(isAcceptableMatchLength('volleyball', 'bo7')).toBe(true);
+    expect(isAcceptableMatchLength('volleyball', 'bo6')).toBe(false);
     expect(isAcceptableMatchLength('cricket', 'bo3')).toBe(true); // not a best-of sport
   });
 

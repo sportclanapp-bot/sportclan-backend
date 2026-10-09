@@ -15,8 +15,8 @@ import { describeEvent } from '../utils/editLog';
 // eslint-disable-next-line import/first
 import { standardRules } from '../utils/matchRules';
 
-test('a roof penalty: whole −10..−1, else nothing', () => {
-  expect([penaltyRunsOf({ penalty_runs: -5 }), penaltyRunsOf({ penalty_runs: 5 }), penaltyRunsOf({ penalty_runs: -11 }), penaltyRunsOf({})]).toEqual([-5, 0, 0, 0]);
+test('a roof penalty: any whole number −1 or less (Stage 13 · CR3: no top), else nothing', () => {
+  expect([penaltyRunsOf({ penalty_runs: -5 }), penaltyRunsOf({ penalty_runs: 5 }), penaltyRunsOf({ penalty_runs: -11 }), penaltyRunsOf({ penalty_runs: -100 }), penaltyRunsOf({ penalty_runs: 0 }), penaltyRunsOf({ penalty_runs: -2.5 }), penaltyRunsOf({})]).toEqual([-5, 0, -11, -100, 0, 0, 0]);
   expect(powerplayState([{ event_type: 'ball', payload: { team_side: 'A', runs: 0, penalty_runs: -5 } }, { event_type: 'ball', payload: { team_side: 'A', runs: 6 } }], 'A', 1)?.runs).toBe(1);
 });
 test('roof out: a known kind, a dismissal, the bowler’s wicket, worded', () => {

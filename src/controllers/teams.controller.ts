@@ -337,8 +337,9 @@ export async function addTeamMember(req: Request, res: Response) {
     if (!isUuid(id)) return res.status(400).json({ error: 'Invalid team id' });
     if (!isUuid(user_id)) return res.status(400).json({ error: 'Invalid user_id' });
     // B07-F11: a text jersey number reached the integer column (500).
-    if (jersey_number != null && !(Number.isInteger(jersey_number) && jersey_number >= 0 && jersey_number <= 999)) {
-      return res.status(400).json({ error: 'Jersey number must be a whole number from 0 to 999.' });
+    // Stage 13 · CR3: no top — the integer column's limit only.
+    if (jersey_number != null && !(Number.isInteger(jersey_number) && jersey_number >= 0 && jersey_number <= 2_147_483_647)) {
+      return res.status(400).json({ error: 'Jersey number must be a whole number, 0 or more.' });
     }
     const { data: userRow } = await supabase.from('users').select('id').eq('id', user_id).maybeSingle();
     if (!userRow) return res.status(404).json({ error: 'User not found' });

@@ -6,8 +6,10 @@ const bd = (x: object) => rulesRefusal('badminton', { ...standardRules('badminto
 test('the range, in games', () => {
   for (const p of BADMINTON_PRESETS) expect(bd(p)).toBeNull();
   expect(bd({ target: 5, cap: null })).toBeNull();
-  expect(bd({ target: 4, cap: null })?.error).toBe('Points to win a game must be 5 to 30.');
-  expect(bd({ target: 15, cap: 31 })?.error).toBe('The cap must be off, or 15 to 30.');
+  // Stage 13 · CR3: no tops — below the old floor and above the old tops are fine.
+  for (const ok of [{ target: 4, cap: null }, { target: 31, cap: null }, { target: 15, cap: 31 }, { target: 15, cap: 99 }]) expect(bd(ok)).toBeNull();
+  expect(bd({ target: 0, cap: null })?.error).toBe('Points to win a game must be 1 or more.');
+  expect(bd({ target: 15, cap: 14 })?.error).toBe('The cap must be off, or 15 or more.');
   expect(timedRulesLabel('badminton', { ...standardRules('badminton'), target: 11, cap: null })).toBe('games to 11 · no cap');
   expect([badmintonCapFor(15), badmintonCapFor(21), badmintonCapFor(11)]).toEqual([21, 30, null]);
 });

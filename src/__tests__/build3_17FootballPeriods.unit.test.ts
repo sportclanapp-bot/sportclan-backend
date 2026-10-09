@@ -9,12 +9,13 @@ const fb = (x: object) => rulesRefusal('football', { ...standardRules('football'
 
 test('periods, length and half-time', () => {
   expect(standardRules('football')).toMatchObject({ periods: 2, periodMinutes: null, halfTimeMinutes: null });
-  for (const ok of [{ periods: 1 }, { periods: 4 }, { periodMinutes: 5 }, { periodMinutes: 45 }, { halfTimeMinutes: 0 }, { halfTimeMinutes: 20 }]) expect(fb(ok)).toBeNull();
-  expect(fb({ periods: 5 })?.field).toBe('periods');
-  expect(fb({ periods: 0 })?.field).toBe('periods');
-  expect(fb({ periodMinutes: 4 })?.error).toBe('A period must be off, or 5 to 45 minutes.');
-  expect(fb({ periodMinutes: 46 })?.field).toBe('periodMinutes');
-  expect(fb({ halfTimeMinutes: 21 })?.error).toBe('Half-time must be off, or 0 to 20 minutes.');
+  // Stage 13 · CR3: no tops — the old tops (4 periods, 45 min, half-time 20) and above are fine.
+  for (const ok of [{ periods: 1 }, { periods: 4 }, { periods: 5 }, { periodMinutes: 1 }, { periodMinutes: 4 }, { periodMinutes: 45 }, { periodMinutes: 46 }, { periodMinutes: 90 }, { halfTimeMinutes: 0 }, { halfTimeMinutes: 20 }, { halfTimeMinutes: 21 }]) expect(fb(ok)).toBeNull();
+  expect(fb({ periods: 0 })?.error).toBe('Periods must be a whole number, 1 or more.');
+  expect(fb({ periods: 2.5 })?.field).toBe('periods');
+  expect(fb({ periodMinutes: 0 })?.error).toBe('A period must be off, or a whole number of minutes.');
+  expect(fb({ periodMinutes: 12.5 })?.field).toBe('periodMinutes');
+  expect(fb({ halfTimeMinutes: -1 })?.error).toBe('Half-time must be off, or a whole number of minutes.');
 });
 test('hockey (3.25) and basketball (3.30) periods are open; half-time stays football’s', () => {
   expect(rulesRefusal('hockey', { ...standardRules('hockey'), periods: 2 })).toBeNull();

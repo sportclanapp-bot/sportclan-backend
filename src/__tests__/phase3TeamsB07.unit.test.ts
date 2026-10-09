@@ -95,10 +95,15 @@ describe('F11 · malformed input is a worded 400, not a 500', () => {
     const r = await call(joinTeamByCode, { body: { join_code } });
     expect([r.statusCode, r.body.error]).toEqual([400, 'join_code is required']);
   });
-  test.each(['abc', -1, 1000, 1.5])('jersey_number %j → 400', async (jersey_number) => {
+  test.each(['abc', -1, 1.5])('jersey_number %j → 400', async (jersey_number) => {
     const r = await call(addTeamMember, { params: { id: TEAM }, body: { user_id: D, jersey_number } });
     expect(r.statusCode).toBe(400);
+    expect(r.body.error).toBe('Jersey number must be a whole number, 0 or more.');
     expect(writes()).toHaveLength(0);
+  });
+  test.each([0, 1000])('jersey_number %j passes the number check (Stage 13 · CR3: no top)', async (jersey_number) => {
+    const r = await call(addTeamMember, { params: { id: TEAM }, body: { user_id: D, jersey_number } });
+    expect(r.body?.error).not.toBe('Jersey number must be a whole number, 0 or more.');
   });
   test('expense match_id "abc" → 400 "Invalid match."', async () => {
     mockNext = (q) => (q[0] === 'from:team_bans' ? { data: null } : { data: { id: 'm' } }); // a member, no ban

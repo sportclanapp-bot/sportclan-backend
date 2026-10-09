@@ -72,7 +72,7 @@ beforeEach(() => {
 describe('F1/F6 · validateScoringEvent', () => {
   const v = (ev: object, match: object = MATCH) => actual.validateScoringEvent(MID, match, ev);
   test.each([
-    ['runs 99', { event_type: 'ball', payload: { team_side: 'A', runs: 99 } }],
+    ['runs -1', { event_type: 'ball', payload: { team_side: 'A', runs: -1 } }], // Stage 13 · CR3: runs 99 is fine now (no top); below 0 is not
     ['an unknown type', { event_type: 'run', payload: { team_side: 'A', runs: 4 } }],
     ['side "Z"', { event_type: 'ball', payload: { team_side: 'Z', runs: 1 } }],
     ['a string payload', { event_type: 'ball', payload: 'hello' }],
@@ -85,6 +85,7 @@ describe('F1/F6 · validateScoringEvent', () => {
   });
   test.each([
     { event_type: 'ball', payload: { team_side: 'A', runs: 4 } },
+    { event_type: 'ball', payload: { team_side: 'A', runs: 99 } }, // Stage 13 · CR3: no top on runs off a ball
     { event_type: 'extra', payload: { team_side: 'A', type: 'Wd', runs: 1 } },
     { event_type: 'wicket', payload: { team_side: 'A', wicket_type: 'caught' } },
     { event_type: 'wicket', payload: { team_side: 'A', wicket_type: 'run_out' } },
@@ -116,7 +117,7 @@ describe('F1 · a signed handoff goes through the same checks', () => {
     return r;
   };
   test.each([
-    ['runs 99', { event_type: 'ball', payload: { team_side: 'A', runs: 99 } }],
+    ['runs -1', { event_type: 'ball', payload: { team_side: 'A', runs: -1 } }], // Stage 13 · CR3: runs 99 is fine now (no top); below 0 is not
     ['an unknown type', { event_type: 'run', payload: { team_side: 'A', runs: 4 } }],
     ['side "Z"', { event_type: 'ball', payload: { team_side: 'Z', runs: 1 } }],
   ])('%s → 400 HANDOFF_OP_INVALID and NOTHING applied, not even the good op before it', async (_n, bad) => {

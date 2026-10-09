@@ -17,7 +17,7 @@ export type ShootoutSide = 'A' | 'B';
 
 export const SHOOTOUT_SPORTS = ['football', 'hockey'] as const;
 /** A shootout score is a whole number of goals in this range. */
-export const SHOOTOUT_MAX = 30;
+export const SHOOTOUT_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3: no top
 
 const key = (s: string | null | undefined) => (s ?? '').toLowerCase().replace(/[-_\s]/g, '');
 
@@ -42,7 +42,7 @@ export function validShootout(a: unknown, b: unknown, kicks?: number | null): bo
 /** Why a shootout tally can't be, in the scorer's words — or null. */
 export function shootoutProblem(a: unknown, b: unknown, kicks?: number | null): string | null {
   const ok = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= SHOOTOUT_MAX;
-  if (!ok(a) || !ok(b)) return `A shootout score is two whole numbers from 0 to ${SHOOTOUT_MAX}.`;
+  if (!ok(a) || !ok(b)) return 'A shootout score is two whole numbers, 0 or more.';
   if (a === b) return 'A shootout can’t end level.';
   if (kicks && Math.max(a as number, b as number) > kicks && Math.abs((a as number) - (b as number)) !== 1) {
     return `After ${kicks} kicks each it’s sudden death, so it ends by one goal (e.g. ${kicks + 1}–${kicks}).`;
@@ -56,9 +56,11 @@ export function shootoutProblem(a: unknown, b: unknown, kicks?: number | null): 
  */
 export const SHOOTOUT_KICKS = [3, 5] as const;
 export function shootoutKicksOf(rules: { penaltyKicks?: number | null; shootoutTakers?: number | null } | null | undefined): number {
-  if (rules?.penaltyKicks === 3) return 3;
+  // Stage 13 · CR3: any number the organiser set (3 and 5 are the usual).
+  const k = rules?.penaltyKicks;
+  if (typeof k === 'number' && Number.isInteger(k) && k >= 1 && k !== 5) return k;
   const t = rules?.shootoutTakers;
-  return typeof t === 'number' && Number.isInteger(t) && t >= 1 && t <= 5 ? t : 5;
+  return typeof t === 'number' && Number.isInteger(t) && t >= 1 ? t : 5;
 }
 
 export function shootoutWinner(a: number, b: number): ShootoutSide {

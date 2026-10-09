@@ -87,16 +87,17 @@ export function tournamentDetailsRefusal(
       if (n > MONEY_MAX) return { error: `${k} can be at most ₹${MONEY_MAX.toLocaleString('en-IN')}.`, code: 'INVALID_AMOUNT' };
     }
   }
+  // Stage 13 · CR3 (Dipak): no app tops — only what the integer column holds.
   const ints: Array<[string, number, number]> = [
-    ['match_duration_minutes', 1, 1440],
-    ['buffer_minutes', 0, 1440],
-    ['ground_count', 1, 50],
+    ['match_duration_minutes', 1, 2_147_483_647],
+    ['buffer_minutes', 0, 2_147_483_647],
+    ['ground_count', 1, 2_147_483_647],
   ];
   for (const [k, min, max] of ints) {
     if (present(body[k])) {
       const n = Number(body[k]);
       if (typeof body[k] === 'boolean' || !Number.isInteger(n) || n < min || n > max) {
-        return { error: `${k} must be a whole number from ${min} to ${max}.`, code: 'INVALID_NUMBER' };
+        return { error: `${k} must be a whole number, ${min} or more.`, code: 'INVALID_NUMBER' };
       }
     }
   }
@@ -106,8 +107,8 @@ export function tournamentDetailsRefusal(
   return null;
 }
 
-/** BUILD 1.16: the most an entry fee or prize can be (₹1 crore) — well inside the int column. */
-export const MONEY_MAX = 10_000_000;
+/** BUILD 1.16: the most an entry fee or prize can be. Stage 13 · CR3: no app top — what the money column holds (numeric(10,2)). */
+export const MONEY_MAX = 99_999_999;
 
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 const minutesOf = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));

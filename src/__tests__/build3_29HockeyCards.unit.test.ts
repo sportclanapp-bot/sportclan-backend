@@ -4,10 +4,10 @@
  */
 import { cardSuspensions, rulesRefusal, standardRules, timedRulesLabel } from '../utils/matchRules';
 
-test('yellow 5–10; standard 5; the label says a change', () => {
+test('yellow 1 or more (Stage 13 · CR3: no top); standard 5; the label says a change', () => {
   expect(standardRules('hockey').yellowCardMinutes).toBe(5);
-  for (const ok of [5, 8, 10]) expect(rulesRefusal('hockey', { ...standardRules('hockey'), yellowCardMinutes: ok })).toBeNull();
-  for (const bad of [4, 11, 6.5]) expect(rulesRefusal('hockey', { ...standardRules('hockey'), yellowCardMinutes: bad })?.error).toBe('A yellow card must suspend for 5 to 10 minutes.');
+  for (const ok of [1, 4, 5, 8, 10, 11, 30]) expect(rulesRefusal('hockey', { ...standardRules('hockey'), yellowCardMinutes: ok })).toBeNull();
+  for (const bad of [0, -1, 6.5]) expect(rulesRefusal('hockey', { ...standardRules('hockey'), yellowCardMinutes: bad })?.error).toBe('A yellow card suspends for a whole number of minutes.');
   expect(timedRulesLabel('hockey', { ...standardRules('hockey'), yellowCardMinutes: 10 })).toBe('yellow 10 min');
 });
 test('what each card suspends for, per sport', () => {

@@ -27,8 +27,8 @@ type M = {
   round: number | null; umpire_id: string | null; scorer_id: string | null; voided_at: string | null; started_at?: string | null;
 };
 const M_COLS = 'id, tournament_id, team_a_id, team_b_id, team_a_name, team_b_name, scheduled_at, ground_label, status, called_at, called_by, round, umpire_id, scorer_id, voided_at';
-const LATE_MIN = 5;
-const LATE_MAX = 240;
+const LATE_MIN = 1; // Stage 13 · CR3: no top
+const LATE_MAX = 2_147_483_647;
 
 /** Courts, in order: the tournament's grounds (named or numbered), then any other label a fixture carries. */
 export function courtsOf(t: { ground_count?: number | null; ground_names?: string[] | null }, labels: Array<string | null>, sport?: string | null): string[] {
@@ -203,7 +203,7 @@ export async function runningLate(req: Request, res: Response) {
     if (!isUuid(id)) return res.status(404).json({ error: 'Tournament not found' });
     const minutes = Number(req.body?.minutes);
     if (!Number.isInteger(minutes) || minutes < LATE_MIN || minutes > LATE_MAX) {
-      return res.status(400).json({ error: `Running late by ${LATE_MIN} to ${LATE_MAX} minutes.`, code: 'BAD_MINUTES' });
+      return res.status(400).json({ error: 'Running late by a whole number of minutes.', code: 'BAD_MINUTES' });
     }
     const f = await loadFamily(id);
     if (!f.rootRow) return res.status(404).json({ error: 'Tournament not found' });

@@ -120,8 +120,11 @@ test('Running late: every match not started or called moves; everyone in them is
   expect(sent).toHaveLength(1);
   expect(sent[0]).toMatchObject({ type: 'tournament_updated', title: 'Running 30 min late' });
   expect(sent[0]!.body).toMatch(/the next is at 10:15\.$/);
-  expect((await run(runningLate, ORG, { id: P }, { minutes: 2 })).body.code).toBe('BAD_MINUTES');
+  // Stage 13 · CR3: any whole number of minutes, 1 or more (no top).
+  expect((await run(runningLate, ORG, { id: P }, { minutes: 0 })).body).toEqual({ error: 'Running late by a whole number of minutes.', code: 'BAD_MINUTES' });
+  expect((await run(runningLate, ORG, { id: P }, { minutes: 2.5 })).body.code).toBe('BAD_MINUTES');
   expect((await run(runningLate, 'u-ravi', { id: P }, { minutes: 30 })).statusCode).toBe(403);
+  expect((await run(runningLate, ORG, { id: MD }, { minutes: 241 })).body).toMatchObject({ minutes: 241 }); // above the old top of 240
 });
 
 test('courts: the named grounds, then any other label in use', () => {

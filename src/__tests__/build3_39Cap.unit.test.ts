@@ -4,10 +4,11 @@ import { rollupSets } from '../controllers/scoring.controller';
 
 const vb = (x: object) => rulesRefusal('volleyball', { ...standardRules('volleyball'), ...x });
 test('the range', () => {
-  for (const ok of [{ cap: null }, { cap: 25 }, { cap: 35 }, { target: 21, cap: 31 }]) expect(vb(ok)).toBeNull();
-  expect(vb({ cap: 24 })?.error).toBe('The cap must be off, or 25 to 35.');
-  expect(vb({ cap: 36 })?.field).toBe('cap');
-  expect(vb({ target: 10, finalTarget: 25, cap: 20 })?.error).toBe('A cap can’t fit this deciding set — turn the cap off.');
+  // Stage 13 · CR3: no top — the old top (target + 10) and above are fine.
+  for (const ok of [{ cap: null }, { cap: 25 }, { cap: 35 }, { cap: 36 }, { cap: 500 }, { target: 21, cap: 31 }]) expect(vb(ok)).toBeNull();
+  expect(vb({ cap: 24 })?.error).toBe('The cap must be off, or 25 or more.');
+  expect(vb({ cap: 25.5 })?.field).toBe('cap');
+  expect(vb({ target: 10, finalTarget: 25, cap: 20 })?.error).toBe('The cap must be off, or 25 or more.'); // never below the decider's target
   expect(vb({ target: 21, finalTarget: 25, cap: 28 })).toBeNull();
   expect(timedRulesLabel('volleyball', { ...standardRules('volleyball'), cap: 30 })).toBe('cap 30');
 });

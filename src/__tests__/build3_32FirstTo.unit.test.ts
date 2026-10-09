@@ -8,10 +8,10 @@ import { validateScoringEvent } from '../controllers/scoring.controller';
 // eslint-disable-next-line import/first
 import { rulesRefusal, standardRules, timedRulesLabel } from '../utils/matchRules';
 
-test('off or 7–50; the label', () => {
+test('off or 1 or more (Stage 13 · CR3: no top); the label', () => {
   const r = (targetScore: unknown) => rulesRefusal('basketball', { ...standardRules('basketball'), targetScore });
-  for (const ok of [null, 7, 21, 50]) expect(r(ok)).toBeNull();
-  for (const bad of [6, 51, 10.5]) expect(r(bad)?.error).toBe('First to must be off, or 7 to 50 points.');
+  for (const ok of [null, 1, 6, 7, 21, 50, 51, 500]) expect(r(ok)).toBeNull();
+  for (const bad of [0, -1, 10.5]) expect(r(bad)?.error).toBe('First to must be off, or a whole number of points.');
   expect(timedRulesLabel('basketball', { ...standardRules('basketball'), targetScore: 21 })).toBe('first to 21');
 });
 describe('the server', () => {

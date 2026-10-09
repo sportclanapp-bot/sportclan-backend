@@ -2,10 +2,11 @@
 import { rulesRefusal, standardRules, setConfigOf, timedRulesLabel } from '../utils/matchRules';
 import { rollupSets } from '../controllers/scoring.controller';
 
-test('10–25 or the same; the label says a change', () => {
+test('1 or more (Stage 13 · CR3: no top) or the same; the label says a change', () => {
   const r = (finalTarget: unknown) => rulesRefusal('volleyball', { ...standardRules('volleyball'), finalTarget });
-  for (const ok of [null, 10, 25]) expect(r(ok)).toBeNull();
-  for (const bad of [9, 26, 12.5]) expect(r(bad)?.error).toBe('The deciding set must be 10 to 25 points.');
+  for (const ok of [null, 1, 9, 10, 25]) expect(r(ok)).toBeNull();
+  expect(rulesRefusal('volleyball', { ...standardRules('volleyball'), finalTarget: 26, cap: null })).toBeNull(); // above the old top
+  for (const bad of [0, -1, 12.5]) expect(r(bad)?.error).toBe('The deciding set must be 1 point or more.');
   expect(timedRulesLabel('volleyball', { ...standardRules('volleyball'), finalTarget: 25 })).toBe('decider to 25');
   expect(timedRulesLabel('volleyball', { ...standardRules('volleyball'), bestOf: 3, target: 21, finalTarget: 15 })).toBe('sets to 21');
 });

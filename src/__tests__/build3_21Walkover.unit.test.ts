@@ -6,10 +6,10 @@ import { rulesRefusal, standardRules, walkoverGoalsOf, timedRulesLabel } from '.
 import { withWalkoverScore } from '../utils/walkoverScore';
 import { computeStats } from '../utils/standings';
 
-test('3–0 or 5–0; standard 3', () => {
+test('any whole number of goals to 0 (3–0 and 5–0 the usual; Stage 13 · CR3); standard 3', () => {
   expect(standardRules('football').walkoverGoals).toBe(3);
-  expect(rulesRefusal('football', { ...standardRules('football'), walkoverGoals: 5 })).toBeNull();
-  expect(rulesRefusal('football', { ...standardRules('football'), walkoverGoals: 4 })?.error).toBe('A walkover is 3–0 or 5–0.');
+  for (const ok of [1, 4, 5, 10]) expect(rulesRefusal('football', { ...standardRules('football'), walkoverGoals: ok })).toBeNull();
+  for (const bad of [0, -1, 3.5]) expect(rulesRefusal('football', { ...standardRules('football'), walkoverGoals: bad })?.error).toBe('A walkover is a whole number of goals to 0 (3–0 and 5–0 are the usual).');
   expect(walkoverGoalsOf('football', { v: 1, walkoverGoals: 5 })).toBe(5);
   expect(walkoverGoalsOf('football', { v: 1 })).toBe(3);
   expect(walkoverGoalsOf('hockey', standardRules('hockey'))).toBeNull();

@@ -75,7 +75,7 @@ export function pointsPresetFor(sport: string | null | undefined): PointsTemplat
   }
 }
 
-const POINT_MAX = 10;
+const POINT_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3 (Dipak): no top on points
 const isPoint = (x: unknown): x is number =>
   typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= POINT_MAX && Number.isInteger(x * 2);
 
@@ -84,13 +84,13 @@ export function pointsRefusal(sport: string | null | undefined, p: unknown): Ref
   if (typeof p !== 'object' || Array.isArray(p)) return refuse('The points template must be an object.');
   const t = p as Record<string, unknown>;
   for (const k of ['win', 'draw', 'loss'] as const) {
-    if (!isPoint(t[k])) return refuse(`Points for a ${k} must be 0 to ${POINT_MAX}, in halves.`);
+    if (!isPoint(t[k])) return refuse(`Points for a ${k} must be 0 or more, in halves.`);
   }
   const win = t.win as number, draw = t.draw as number, loss = t.loss as number;
   if (!(win > loss)) return refuse('A win has to be worth more than a loss.');
   if (draw < loss || draw > win) return refuse('A draw has to be worth between a loss and a win.');
   for (const k of ['noResult', 'walkoverWin', 'walkoverLoss'] as const) {
-    if (t[k] != null && !isPoint(t[k])) return refuse(`Points for a ${k === 'noResult' ? 'no result' : k === 'walkoverWin' ? 'walkover win' : 'walkover loss'} must be 0 to ${POINT_MAX}, in halves.`);
+    if (t[k] != null && !isPoint(t[k])) return refuse(`Points for a ${k === 'noResult' ? 'no result' : k === 'walkoverWin' ? 'walkover win' : 'walkover loss'} must be 0 or more, in halves.`);
   }
   if (t.noResult != null && (t.noResult as number) > win) return refuse('A no result can’t be worth more than a win.');
   if (t.walkoverLoss != null && (t.walkoverLoss as number) > loss) return refuse('A walkover loss can’t be worth more than a loss.');
@@ -186,7 +186,8 @@ export function tiebreaksFor(sport: string | null | undefined): TiebreakToken[] 
   const all: TiebreakToken[] = ['head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'h2h_score_ratio', 'h2h_points_diff', 'h2h_points_ratio', 'wins', 'played', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'points_diff_vs_next', 'points_won', 'points_pct', 'fair_play', 'buchholz', 'buchholz_cut1', 'buchholz_median', 'sonneborn_berger', 'koya', 'progressive', 'wins_black', 'games_black', 'aro'];
   const rally = key === 'badminton' || key === 'tabletennis' || key === 'volleyball' || key === 'pickleball';
   // Stage 9 · T4: every sport scored in sets of games or points — tennis's games, the rally sports' points.
-  const inSets = rally || key === 'tennis';
+  // Stage 13 · CR8: carrom's games too (ICF's "net score": the points over every game).
+  const inSets = rally || key === 'tennis' || key === 'carrom';
   return all.filter((t) => (t === 'nrr' ? key === 'cricket' : CHESS_TIEBREAKS.has(t) ? key === 'chess'
     : t === 'points_diff' || t === 'points_won' || t === 'points_pct' || t === 'h2h_points_diff' || t === 'h2h_points_ratio' || t === 'points_diff_vs_next' ? inSets
       : t === 'h2h_score_diff' || t === 'h2h_score_scored' || t === 'h2h_score_ratio' ? key !== 'chess'
@@ -215,7 +216,7 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
     case 'buchholz': return 'Buchholz';
     case 'sonneborn_berger': return 'Sonneborn-Berger';
     // Stage 9 · T4: tennis's next level down is games; the rally sports', points.
-    case 'points_diff': return key === 'tennis' ? 'Game difference' : 'Points difference';
+    case 'points_diff': return key === 'tennis' ? 'Game difference' : key === 'carrom' ? 'Net score (points difference)' : 'Points difference'; // Stage 13 · CR8
     case 'points_won': return key === 'tennis' ? 'Games won' : 'Points won';
     case 'points_pct': return key === 'tennis' ? 'Games won %' : 'Points won %';
     case 'played': return 'Matches played (more first)';
@@ -282,6 +283,8 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
     // every game, point difference between them, then points scored.
     // Stage 11 follow-up: and 15.B.4's 4th step, point difference against the next-placed team.
     case 'pickleball': out.push({ key: 'usap', label: 'USA Pickleball (head-to-head, points)', order: ['head_to_head', 'points_diff', 'h2h_points_diff', 'points_diff_vs_next', 'points_won'] }); break;
+    // Stage 13 · CR8: the ICF Swiss League — ties split on net score.
+    case 'carrom': out.push({ key: 'icf_swiss', label: 'ICF Swiss League (net score)', order: ['points_diff', 'head_to_head', 'wins'] }); break;
     case 'chess':
       out.push({ key: 'fide_rr', label: 'Sonneborn-Berger', order: ['sonneborn_berger', 'head_to_head', 'wins'] });
       out.push({ key: 'fide_swiss', label: 'Buchholz', order: ['buchholz', 'sonneborn_berger', 'wins'] });
@@ -302,6 +305,24 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
   return out.filter((p, i) => i === 0 || JSON.stringify(p.order) !== JSON.stringify(out[0]!.order));
 }
 
+
+/**
+ * Stage 13 · CR8 · a Swiss set up in one tap: the points, the tie-breaks and
+ * (where the sport has one) each game's rule, as the governing body runs it.
+ * - carrom: the ICF Swiss League (ICF Cup 2015, World Cup 2018) — one game a
+ *   round, 25 points, 8 boards or 45 minutes, whichever first; 2 a win, 1 a
+ *   draw, 0 a loss; ties on net score; men and women on one list (no category).
+ * - chess: an AICF open — 1 / ½ / 0, the AICF circulars' tie-breaks.
+ * The organiser can change any of it afterwards.
+ */
+export type SwissPreset = { key: string; label: string; hint: string; points: PointsTemplate; tiebreaks: TiebreakToken[]; scoring: string | null };
+export function swissPresetsFor(sport: string | null | undefined): SwissPreset[] {
+  const key = sportKeyOf(sport);
+  const tb = (k: string) => tiebreakPresetsFor(sport).find((p) => p.key === k)?.order ?? defaultTiebreaks(sport);
+  if (key === 'carrom') return [{ key: 'icf_swiss', label: 'ICF Swiss League', hint: 'One game a round: 25 points, 8 boards or 45 min, whichever first · 2 points a win · ties on net score', points: tpl(2, 1, 0), tiebreaks: tb('icf_swiss'), scoring: '1x25b8m45' }];
+  if (key === 'chess') return [{ key: 'aicf', label: 'AICF open', hint: '1 / ½ / 0 · Buchholz Cut-1, Buchholz, Sonneborn-Berger, direct encounter, wins, wins with Black', points: tpl(1, 0.5, 0, { walkoverLoss: 0 }), tiebreaks: tb('aicf'), scoring: null }];
+  return [];
+}
 
 /** Why a tie-break list can't be stored (null = fine). Points is implied first, so it's dropped, not refused. */
 export function tiebreakRefusal(sport: string | null | undefined, list: unknown): Refusal | null {
@@ -372,6 +393,13 @@ export type TournamentSettings = {
     rounds: number; paired?: number; check?: boolean; lateEntry?: 'zero' | 'half'; askUntil?: number;
     tpn?: string[]; requests?: Record<string, Record<string, 'half' | 'zero' | 'absent'>>;
     draft?: { round: number; pairs: Array<{ white: string; black: string }>; bye: string | null };
+    /**
+     * Stage 13 · CR9: after the last round the top `knockout` (2 or more) of the
+     * table play a knockout (seeded 1 v N…) whose final crowns the champion
+     * (a Polish international: 7 rounds, top 8 to the finals). `koDrawn` is the
+     * server's: the knockout has been drawn.
+     */
+    knockout?: number; koDrawn?: boolean;
   };
   /** Cricket gap 6 (5 Oct 2026) · the walkover rule, shown to teams: a team not ready this many minutes after its start time loses by walkover (5–60). */
   graceMinutes?: number;
@@ -439,8 +467,8 @@ export type PickedAward = { title: string; user_id?: string | null; name?: strin
 export type DisciplineRules = { yellowsForBan?: number | null; banMatches?: number; redBanMatches?: number; resetAfterGroups?: boolean };
 export const AWARD_TITLE_MAX = 60;
 
-export const GRACE_MINUTES: [number, number] = [5, 60];
-export const MIN_PLAYERS: [number, number] = [2, 15];
+export const GRACE_MINUTES: [number, number] = [1, Number.MAX_SAFE_INTEGER]; // Stage 13 · CR3: no top
+export const MIN_PLAYERS: [number, number] = [1, Number.MAX_SAFE_INTEGER]; // Stage 13 · CR3: no top
 
 /** Oct 2026 (Dipak): a Swiss has at least 2 rounds and at most one fewer than its players (no fixed top). */
 export const SWISS_MIN_ROUNDS = 2;
@@ -541,8 +569,8 @@ export function circularDates(start: string, g: { underAge?: number | null; minA
   return {};
 }
 
-/** Stage 9 · T12: a pair's combined age, 40 to 200. */
-export const PAIR_AGE_MIN: [number, number] = [40, 200];
+/** Stage 9 · T12: a pair's combined age, 1 or more (Stage 13 · CR3: no top). */
+export const PAIR_AGE_MIN: [number, number] = [1, Number.MAX_SAFE_INTEGER]; // Stage 13 · CR3: no top
 
 const isInt = (x: unknown, lo: number, hi: number) => typeof x === 'number' && Number.isInteger(x) && x >= lo && x <= hi;
 
@@ -554,13 +582,14 @@ export function categoryRefusal(c: unknown): Refusal | null {
   if (unknown) return refuse(`“${unknown}” isn’t part of a category.`);
   if (o.ageBasis != null && o.ageBasis !== 'year') return refuse('Ages are on the start date, or by birth year.');
   if (o.gender != null && !['men', 'women', 'mixed'].includes(o.gender as string)) return refuse('A category is men’s, women’s, mixed or open.');
-  if (o.underAge != null && !isInt(o.underAge, 6, 25)) return refuse('An under-age limit is 6 to 25.');
-  if (o.minAge != null && !isInt(o.minAge, 30, 80)) return refuse('A minimum age is 30 to 80.');
+  // Stage 13 · CR3 (Dipak): no tops on ages or ratings.
+  if (o.underAge != null && !isInt(o.underAge, 1, Number.MAX_SAFE_INTEGER)) return refuse('An under-age limit is a whole number of years.');
+  if (o.minAge != null && !isInt(o.minAge, 1, Number.MAX_SAFE_INTEGER)) return refuse('A minimum age is a whole number of years.');
   if (o.underAge != null && o.minAge != null) return refuse('A category is an under-age limit or a minimum age, not both.');
-  if (o.maxRating != null && !isInt(o.maxRating, 100, 3000)) return refuse('A rating limit is 100 to 3000.');
-  if (o.minRating != null && !isInt(o.minRating, 100, 3000)) return refuse('A rating limit is 100 to 3000.');
+  if (o.maxRating != null && !isInt(o.maxRating, 0, Number.MAX_SAFE_INTEGER)) return refuse('A rating limit is a whole number.');
+  if (o.minRating != null && !isInt(o.minRating, 0, Number.MAX_SAFE_INTEGER)) return refuse('A rating limit is a whole number.');
   if (o.maxRating != null && o.minRating != null && (o.minRating as number) > (o.maxRating as number)) return refuse('The lowest rating can’t be above the highest.');
-  if (o.pairAgeMin != null && !isInt(o.pairAgeMin, PAIR_AGE_MIN[0], PAIR_AGE_MIN[1])) return refuse(`A pair’s combined age is ${PAIR_AGE_MIN[0]} to ${PAIR_AGE_MIN[1]}.`); // Stage 9 · T12
+  if (o.pairAgeMin != null && !isInt(o.pairAgeMin, PAIR_AGE_MIN[0], PAIR_AGE_MIN[1])) return refuse('A pair’s combined age is a whole number of years.'); // Stage 9 · T12
   if (o.amateurOnly != null && typeof o.amateurOnly !== 'boolean') return refuse('Amateurs only is on or off.');
   // Stage 12 · CH10.
   if (o.bornFrom != null && !isIsoDate(o.bornFrom)) return refuse('“Born on or after” is a date (YYYY-MM-DD).');
@@ -688,7 +717,7 @@ export const CLUB_MAX = 60;
 
 export type EntryMode = 'approval' | 'open';
 
-export const REST_MAX = 240;
+export const REST_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3: no top
 
 // ── 4.8 · walkover score ─────────────────────────────────────────────────────
 
@@ -696,7 +725,7 @@ export const REST_MAX = 240;
 export const WALKOVER_NUMBER_SPORTS = new Set(['football', 'hockey', 'basketball']);
 /** Cricket has no walkover score — the win's points are the result. */
 export const walkoverScoreOffered = (sport: string | null | undefined): boolean => sportKeyOf(sport) !== 'cricket';
-export const WALKOVER_MAX = 99;
+export const WALKOVER_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3: no top
 
 /** The usual walkover for a new tournament: basketball 20–0 (FIBA), table tennis / volleyball / chess a straight win (ITTF 3–0, FIVB 3–0, a forfeit 1–0). Football keeps its match rules (3–0 / 5–0). */
 export function walkoverPresetFor(sport: string | null | undefined): number | 'straight' | null {
@@ -712,7 +741,7 @@ export function walkoverRefusal(sport: string | null | undefined, w: unknown): R
   const key = sportKeyOf(sport);
   if (!walkoverScoreOffered(key)) return refuse('A cricket walkover has no score — the win’s points are the result.');
   if (WALKOVER_NUMBER_SPORTS.has(key)) {
-    if (!(typeof w === 'number' && Number.isInteger(w) && w >= 1 && w <= WALKOVER_MAX)) return refuse(`A walkover’s score must be 1 to ${WALKOVER_MAX}.`);
+    if (!(typeof w === 'number' && Number.isInteger(w) && w >= 1 && w <= WALKOVER_MAX)) return refuse('A walkover’s score must be a whole number, 1 or more.');
     return null;
   }
   if (w !== 'straight') return refuse('A walkover here is a straight win or no score.');
@@ -766,18 +795,18 @@ export function settingsRefusal(sport: string | null | undefined, format: string
   }
   if (o.seeding != null && !SEEDING_MODES.includes(o.seeding as SeedingMode)) return refuse('Seeding is registration order, a random draw or manual seeds.');
   if (o.restMinutes != null && !(typeof o.restMinutes === 'number' && Number.isInteger(o.restMinutes) && o.restMinutes >= 0 && o.restMinutes <= REST_MAX)) {
-    return refuse(`Rest between a team’s matches must be 0 to ${REST_MAX} minutes.`);
+    return refuse('Rest between a team’s matches must be a whole number of minutes.');
   }
   if (o.entry != null && o.entry !== 'approval' && o.entry !== 'open') return refuse('Entry is open or by approval.');
   const whole = (v: unknown, [lo, hi]: [number, number]) => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
   // 0 clears a rule (an edit), like the rest.
-  if (o.graceMinutes != null && o.graceMinutes !== 0 && !whole(o.graceMinutes, GRACE_MINUTES)) return refuse(`The grace time must be ${GRACE_MINUTES[0]} to ${GRACE_MINUTES[1]} minutes.`);
+  if (o.graceMinutes != null && o.graceMinutes !== 0 && !whole(o.graceMinutes, GRACE_MINUTES)) return refuse('The grace time must be a whole number of minutes.');
   if (o.tieFallback != null && o.tieFallback !== 'seed' && o.tieFallback !== 'boundaries' && o.tieFallback !== 'toss') return refuse('A tied knockout goes to the higher seed, more boundaries or a toss.');
   if (o.withdrawnResults != null && o.withdrawnResults !== 'delete' && o.withdrawnResults !== 'keep') return refuse('A withdrawn player’s group results are deleted or kept.');
   // Stage 8 · F7 / F8 / F5 and best runners-up: validated here, no app-imposed counts.
   const stage8 = stage8Refusal(format, o);
   if (stage8) return stage8;
-  if (o.minPlayers != null && o.minPlayers !== 0 && !whole(o.minPlayers, MIN_PLAYERS)) return refuse(`The fewest players a team can play with must be ${MIN_PLAYERS[0]} to ${MIN_PLAYERS[1]}.`);
+  if (o.minPlayers != null && o.minPlayers !== 0 && !whole(o.minPlayers, MIN_PLAYERS)) return refuse('The fewest players a team can play with must be a whole number, 1 or more.');
   if (o.swiss != null) {
     if (format !== 'swiss') return refuse('Swiss rounds are for a Swiss tournament.');
     const r = (o.swiss as { rounds?: unknown }).rounds;
@@ -789,6 +818,9 @@ export function settingsRefusal(sport: string | null | undefined, format: string
     if (sw.check != null && typeof sw.check !== 'boolean') return refuse('Checking pairings before publishing is on or off.');
     if (sw.lateEntry != null && sw.lateEntry !== 'zero' && sw.lateEntry !== 'half') return refuse('A late entrant’s missed rounds score nothing or half a point.');
     if (sw.askUntil != null && (typeof sw.askUntil !== 'number' || !Number.isInteger(sw.askUntil) || sw.askUntil < 0 || (typeof r === 'number' && sw.askUntil > r))) return refuse('Players can ask for byes up to a round of this Swiss (0: they can’t ask).');
+    // Stage 13 · CR9: the top N go on to a knockout — 2 or more (no top; fewer entrants: all of them).
+    const ko = (o.swiss as { knockout?: unknown }).knockout;
+    if (ko != null && ko !== 0 && (typeof ko !== 'number' || !Number.isInteger(ko) || ko < 2)) return refuse('The knockout after the Swiss takes 2 or more from the table.');
   }
   const catBad = categoryRefusal(o.category);
   if (catBad) return catBad;
@@ -806,7 +838,9 @@ export function settingsRefusal(sport: string | null | undefined, format: string
   }
   if (o.thirdPlace != null) {
     if (typeof o.thirdPlace !== 'boolean') return refuse('A third-place match is on or off.');
-    if (o.thirdPlace && format !== 'knockout' && format !== 'groups_knockout') return refuse('A third-place match is for a knockout.');
+    // Stage 13 · CR9: and the knockout after a Swiss.
+    const swissKo = format === 'swiss' && Number((o.swiss as { knockout?: unknown } | undefined)?.knockout ?? 0) >= 2;
+    if (o.thirdPlace && format !== 'knockout' && format !== 'groups_knockout' && !swissKo) return refuse('A third-place match is for a knockout.');
   }
   const woBad = walkoverRefusal(sport, o.walkoverScore);
   if (woBad) return woBad;
@@ -849,6 +883,8 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
         ...(s.swiss.check === true ? { check: true } : {}),
         ...(s.swiss.lateEntry === 'half' ? { lateEntry: 'half' as const } : {}),
         ...(typeof s.swiss.askUntil === 'number' ? { askUntil: s.swiss.askUntil } : {}),
+        // Stage 13 · CR9: the top N to a knockout — fixed once it's drawn.
+        ...(cur?.koDrawn ? { knockout: cur.knockout, koDrawn: true } : typeof s.swiss.knockout === 'number' && s.swiss.knockout >= 2 ? { knockout: s.swiss.knockout } : {}),
         ...(cur?.tpn ? { tpn: cur.tpn } : {}), ...(cur?.requests ? { requests: cur.requests } : {}), ...(cur?.draft ? { draft: cur.draft } : {}),
       };
     }

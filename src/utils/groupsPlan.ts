@@ -77,11 +77,13 @@ export function planGroups(entries: GroupEntry[], cfg: GroupsConfig = {}): Group
   }
   const count = Math.max(groupCount(teams, cfg), named.length);
   const labels = [...named];
-  for (let c = 0; labels.length < count && c < 26; c++) {
-    const l = String.fromCharCode(65 + c);
+  // Stage 13 · CR3 (Dipak): no top on groups — after Z come AA, AB … (as a spreadsheet's columns).
+  const nameOf = (n: number): string => { let s = ''; let x = n + 1; while (x > 0) { const r = (x - 1) % 26; s = String.fromCharCode(65 + r) + s; x = Math.floor((x - 1) / 26); } return s; };
+  for (let c = 0; labels.length < count; c++) {
+    const l = nameOf(c);
     if (!labels.includes(l)) labels.push(l);
   }
-  labels.sort();
+  labels.sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0));
   const groups = labels.map((label) => ({ label, ids: [] as string[] }));
   const byLabel = new Map(groups.map((g) => [g.label, g]));
   for (const e of entries) {

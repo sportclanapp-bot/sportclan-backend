@@ -23,6 +23,12 @@ jest.mock('../utils/supabase', () => {
       update: (p: Row) => { patch = p; return q; },
       eq: (c: string, v: unknown) => { filters.push((r) => r[c] === v); return q; },
       is: (c: string, v: null) => { filters.push((r) => (r[c] ?? null) === v); return q; },
+      // Stage 13 · CR9: a PostgREST or() of col.eq.x / col.neq.x / col.is.null terms.
+      or: (expr: string) => {
+        const terms = expr.split(',').map((t) => { const [c, op, ...v] = t.split('.'); return { c: c!, op, v: v.join('.') }; });
+        filters.push((r) => terms.some(({ c, op, v }) => (op === 'is' && v === 'null' ? (r[c] ?? null) === null : op === 'eq' ? r[c] === v : op === 'neq' ? (r[c] ?? null) !== null && r[c] !== v : false)));
+        return q;
+      },
       not: (c: string, _op: string, v: null) => { filters.push((r) => (r[c] ?? null) !== v); return q; },
       in: (c: string, v: unknown[]) => { filters.push((r) => v.includes(r[c])); return q; },
       order: () => q,

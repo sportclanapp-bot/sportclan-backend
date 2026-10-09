@@ -17,7 +17,8 @@ test('a pair’s combined age: on the start date, or by birth year', () => {
 });
 
 test('stored, labelled, refused', () => {
-  expect(categoryRefusal({ pairAgeMin: 30 })?.error).toBe('A pair’s combined age is 40 to 200.');
+  for (const ok of [1, 30, 200, 201]) expect(categoryRefusal({ pairAgeMin: ok })).toBeNull(); // Stage 13 · CR3: no top
+  for (const bad of [0, -1, 90.5]) expect(categoryRefusal({ pairAgeMin: bad })?.error).toBe('A pair’s combined age is a whole number of years.');
   expect(categoryRefusal({ amateurOnly: 'yes' })?.error).toBe('Amateurs only is on or off.');
   expect(storedCategory({ pairAgeMin: 110, amateurOnly: true, ageBasis: 'year' })).toEqual({ pairAgeMin: 110, amateurOnly: true, ageBasis: 'year' });
   expect(storedCategory({ amateurOnly: false })).toBeNull();

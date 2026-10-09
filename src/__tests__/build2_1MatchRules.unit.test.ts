@@ -125,7 +125,7 @@ describe('BUILD 2.1 · create', () => {
   });
   it('rules outside what’s offered → 400 BAD_RULES naming the field (2.2 validator), nothing inserted', async () => {
     mockNext = onCreate;
-    const r = await call(createMatch, { body: body({ rules: { v: 1, overs: 51 } }) });
+    const r = await call(createMatch, { body: body({ rules: { v: 1, overs: 0 } }) }); // Stage 13 · CR3: 51 is fine now; 0 isn't
     expect([r.statusCode, r.body.code, r.body.field]).toEqual([400, 'BAD_RULES', 'overs']);
     const r2 = await call(createMatch, { body: body({ rules: 'T20' }) });
     expect([r2.statusCode, r2.body.code]).toEqual([400, 'BAD_RULES']);

@@ -136,8 +136,10 @@ describe('BUILD 4.1 · the template is checked', () => {
     [{ win: 3, draw: 1, loss: 0, noResult: null }, null],
     [{ win: 3, draw: 1, loss: 3 }, 'A win has to be worth more than a loss.'],
     [{ win: 3, draw: 4, loss: 0 }, 'A draw has to be worth between a loss and a win.'],
-    [{ win: 11, draw: 1, loss: 0 }, 'Points for a win must be 0 to 10, in halves.'],
-    [{ win: 3, draw: 1.3, loss: 0 }, 'Points for a draw must be 0 to 10, in halves.'],
+    [{ win: 11, draw: 1, loss: 0 }, null], // Stage 13 · CR3: no top on points
+    [{ win: 100, draw: 50, loss: 0 }, null],
+    [{ win: -1, draw: 1, loss: 0 }, 'Points for a win must be 0 or more, in halves.'],
+    [{ win: 3, draw: 1.3, loss: 0 }, 'Points for a draw must be 0 or more, in halves.'],
     [{ win: 3, draw: 1, loss: 0, noResult: 4 }, 'A no result can’t be worth more than a win.'],
     [{ win: 2, draw: 1.5, loss: 1, walkoverLoss: 2 }, 'A walkover loss can’t be worth more than a loss.'],
   ])('%j → %p', (p, err) => {

@@ -143,7 +143,7 @@ export function formatRefusal(
   if (sportSlug !== 'cricket') return null;
   const f = format.trim().toLowerCase();
   if (f === 'box' || f === 'pair' || f === 'cricket') return null; // 'cricket': an older app sent the slug
-  const m = /^t(\d{1,3})$/.exec(f);
+  const m = /^t(\d{1,9})$/.exec(f); // Stage 13 · CR3: any overs (T1000…)
   if (!m) return { status: 400, error: 'That cricket format isn’t offered.', code: 'BAD_FORMAT' };
   if (overs != null && Number(m[1]) !== Number(overs)) {
     return { status: 400, error: 'The format and the overs don’t match.', code: 'FORMAT_OVERS_MISMATCH' };
@@ -159,7 +159,7 @@ export function formatRefusal(
  * refused). Null for box / pair / anything else.
  */
 export function oversFromFormat(format: unknown): number | null {
-  const m = typeof format === 'string' ? /^t(\d{1,3})$/i.exec(format.trim()) : null;
+  const m = typeof format === 'string' ? /^t(\d{1,9})$/i.exec(format.trim()) : null; // Stage 13 · CR3: any overs (T200…)
   return m ? Number(m[1]) : null;
 }
 
@@ -418,7 +418,7 @@ export async function createMatch(req: Request, res: Response) {
       ? (overs ?? oversFromFormat(format) ?? (styleNow !== 'limited' ? CRICKET_OVERS[styleNow].standard : null))
       : null;
     if (isCricketMatch && cricketOvers != null && !isOfferedOvers(cricketFormatOf(format), Number(cricketOvers))) {
-      return res.status(400).json({ error: 'Overs must be a whole number from 1 to 50.', code: 'BAD_OVERS' });
+      return res.status(400).json({ error: 'Overs must be a whole number, 1 or more.', code: 'BAD_OVERS' });
     }
     const storedOvers = cricketOvers != null ? Number(cricketOvers) : null;
     const storedFormat = storedBestOf !== null ? formatForBestOf(storedBestOf) : format || null;
@@ -1988,7 +1988,7 @@ export async function updateFieldRefusal(
     if (slug !== 'cricket') {
       if ('overs' in update && update.overs != null) return bad('Only cricket has overs.', 'BAD_OVERS');
     } else if (overs != null && !isOfferedOvers(cricketFormatOf(format), Number(overs))) {
-      return bad('Overs must be a whole number from 1 to 50.', 'BAD_OVERS');
+      return bad('Overs must be a whole number, 1 or more.', 'BAD_OVERS'); // Stage 13 · CR3: no top
     }
     if ('format' in update && !isAcceptableMatchLength(slug, update.format)) {
       return bad('That match length isn’t offered for this sport.', 'BAD_MATCH_LENGTH');
@@ -2181,12 +2181,12 @@ export function participantRowRefusal(rows: unknown[]): { error: string; code: s
     const p = (raw ?? {}) as { user_id?: unknown; jersey_number?: unknown; role?: unknown; batting_order?: unknown };
     if (!isUuid(p.user_id)) return { error: 'That player could not be found.', code: 'BAD_PLAYER' };
     const j = p.jersey_number;
-    if (j != null && (typeof j !== 'number' || !Number.isInteger(j) || j < 0 || j > 999)) {
-      return { error: 'A jersey number is a whole number from 0 to 999.', code: 'BAD_JERSEY' };
+    if (j != null && (typeof j !== 'number' || !Number.isInteger(j) || j < 0 || j > 2_147_483_647)) { // Stage 13 · CR3: no top
+      return { error: 'A jersey number is a whole number, 0 or more.', code: 'BAD_JERSEY' };
     }
     const b = p.batting_order;
-    if (b != null && (typeof b !== 'number' || !Number.isInteger(b) || b < 1 || b > 99)) {
-      return { error: 'A batting order is a whole number from 1 to 99.', code: 'BAD_BATTING_ORDER' };
+    if (b != null && (typeof b !== 'number' || !Number.isInteger(b) || b < 1 || b > 2_147_483_647)) { // Stage 13 · CR3: no top
+      return { error: 'A batting order is a whole number, 1 or more.', code: 'BAD_BATTING_ORDER' };
     }
     if (p.role != null && (typeof p.role !== 'string' || p.role.trim().length > PARTICIPANT_ROLE_MAX)) {
       return { error: `A role is ${PARTICIPANT_ROLE_MAX} characters or fewer.`, code: 'BAD_ROLE' };

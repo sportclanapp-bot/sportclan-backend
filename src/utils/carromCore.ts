@@ -25,8 +25,8 @@ export const CARROM_QUEEN_POINTS = 3;
 /** The queen scores only while the winner's game score is below this. */
 export const CARROM_QUEEN_LIMIT = 22;
 export const CARROM_MAX_PIECES = 9;
-/** BUILD 3.72: the most a queen can be worth (the home game's 5). */
-export const CARROM_QUEEN_MAX = 5;
+/** BUILD 3.72: the most a queen can be worth. Stage 13 · CR3 (Dipak): no top — the match's own number. */
+export const CARROM_QUEEN_MAX = Number.MAX_SAFE_INTEGER;
 
 /**
  * BUILD 3.72+ · a match's own carrom rules (matchRules.carromOptsOf). Anything
@@ -35,9 +35,9 @@ export const CARROM_QUEEN_MAX = 5;
  */
 export interface CarromOpts {
   gamesToWin: number;
-  /** Points to win a game, 7–29. */
+  /** Points to win a game, 1 or more (Stage 13 · CR3: no top). */
   target?: number;
-  /** The queen's worth, 0–5 (3 official, 5 in the home game). */
+  /** The queen's worth, 0 or more (3 official, 5 in the home game). */
   queenPoints?: number;
   /** The queen counts only while the winner is below target − queen (true, official), or always (false). */
   queenCutoff?: boolean;

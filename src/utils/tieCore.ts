@@ -107,7 +107,7 @@ export function tieSpecProblem(spec: unknown): string | null {
     keys.add(x.key);
     if (typeof x.label !== 'string' || !x.label.trim() || x.label.trim().length > TIE_LABEL_MAX) return `A match’s name is 1 to ${TIE_LABEL_MAX} characters.`;
     if (x.players !== 1 && x.players !== 2) return `${x.label.trim()} is singles or doubles.`;
-    if (x.pairAgeMin != null && (!isWhole(x.pairAgeMin) || x.pairAgeMin < 40 || x.pairAgeMin > 200 || x.players !== 2)) return `${x.label.trim()}: a pair’s combined age is 40 to 200, for doubles.`;
+    if (x.pairAgeMin != null && (!isWhole(x.pairAgeMin) || x.pairAgeMin < 1 || x.players !== 2)) return `${x.label.trim()}: a pair’s combined age is a whole number of years, for doubles.`; // Stage 13 · CR3: no top
     // Stage 10 · TT1: positions — both sides or neither, one a player, different within the match.
     const hasA = x.a != null; const hasB = x.b != null;
     if (hasA !== hasB) return `${x.label.trim()}: give positions for both sides, or neither.`;

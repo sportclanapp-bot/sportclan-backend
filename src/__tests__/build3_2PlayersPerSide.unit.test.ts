@@ -118,11 +118,12 @@ describe('BUILD 3.2 · all out from players a side', () => {
     expect(allOutBySide(lineup(6, 11))).toEqual({ A: 5, B: 10 });
     expect(allOutBySide(lineup(6, 11), null)).toEqual({ A: 5, B: 10 });
   });
-  test('the validator: whole 2–15 or null', () => {
+  test('the validator: whole 2 or more (Stage 13 · CR3: no top) or null', () => {
     const r = (players: unknown) => rulesRefusal('cricket', { ...standardRules('cricket'), players });
     expect(r(6)).toBeNull();
     expect(r(null)).toBeNull();
-    for (const bad of [1, 16, 6.5, '6']) expect(r(bad)?.error).toBe('Players a side must be a whole number from 2 to 15.');
+    for (const ok of [2, 15, 16, 20]) expect(r(ok)).toBeNull();
+    for (const bad of [1, 0, 6.5, '6']) expect(r(bad)?.error).toBe('Players a side must be a whole number, 2 or more.');
   });
 });
 

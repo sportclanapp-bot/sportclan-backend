@@ -54,7 +54,8 @@ const t = (area: string, official: string, assistants: AssistantRole[], venue: s
 
 /** Cricket's words: every screen's words before Stage 8, and the default. */
 // Stage 14 · VB10: each sport's scorers and reserve officials too (ICC's fourth umpire; FIFA's reserve assistant;
-// FIH's judge and reserve umpire; FIBA's table; FIVB's scorers, challenge and reserve referees; BWF's reserve umpire).
+// FIH's judge and reserve umpire; FIBA's table; FIVB's assistant scorer, challenge and reserve referees; BWF's reserve umpire —
+// the match's scorer is every fixture's own, beside the referee).
 const CRICKET = t('Ground', 'Umpire', [{ key: 'umpire_2', label: 'Second umpire' }, { key: 'third_umpire', label: 'Third umpire' }, { key: 'fourth_umpire', label: 'Fourth umpire' }],
   'e.g. MCA Ground', 'e.g. Mumbai T20 Cup 2026', 'e.g. MCA Pitch 1, Turf A', 'Match referee', null);
 
@@ -68,9 +69,9 @@ const TERMS: Record<string, SportTerms> = {
   ], 'e.g. Hindu Gymkhana Turf', 'e.g. Bandra Sunday League 2026', 'e.g. Turf A, Turf B', 'Match commissioner', null),
   hockey: t('Pitch', 'Umpire', [{ key: 'umpire_2', label: 'Second umpire' }, { key: 'technical_officer', label: 'Technical officer' }, { key: 'judge', label: 'Judge (timekeeper)' }, { key: 'reserve_umpire', label: 'Reserve umpire' }],
     'e.g. Municipal Hockey Stadium', 'e.g. Pune Hockey Cup 2026', 'e.g. Pitch 1, Pitch 2', 'Technical delegate', null),
-  basketball: t('Court', 'Referee', [{ key: 'umpire_1', label: 'Umpire 1' }, { key: 'umpire_2', label: 'Umpire 2' }, { key: 'table_official', label: 'Table official' }, { key: 'scorer', label: 'Scorer' }, { key: 'assistant_scorer', label: 'Assistant scorer' }, { key: 'timer', label: 'Timer' }, { key: 'shot_clock_operator', label: 'Shot clock operator' }],
+  basketball: t('Court', 'Referee', [{ key: 'umpire_1', label: 'Umpire 1' }, { key: 'umpire_2', label: 'Umpire 2' }, { key: 'table_official', label: 'Table official' }, { key: 'assistant_scorer', label: 'Assistant scorer' }, { key: 'timer', label: 'Timer' }, { key: 'shot_clock_operator', label: 'Shot clock operator' }],
     'e.g. City Indoor Stadium', 'e.g. Delhi 3x3 Cup 2026', 'e.g. Court 1, Court 2', 'Commissioner', null),
-  volleyball: t('Court', 'Referee', [{ key: 'second_referee', label: 'Second referee' }, { key: 'line_judge', label: 'Line judge' }, { key: 'scorer', label: 'Scorer' }, { key: 'assistant_scorer', label: 'Assistant scorer' }, { key: 'challenge_referee', label: 'Challenge referee' }, { key: 'reserve_referee', label: 'Reserve referee' }],
+  volleyball: t('Court', 'Referee', [{ key: 'second_referee', label: 'Second referee' }, { key: 'line_judge', label: 'Line judge' }, { key: 'assistant_scorer', label: 'Assistant scorer' }, { key: 'challenge_referee', label: 'Challenge referee' }, { key: 'reserve_referee', label: 'Reserve referee' }],
     'e.g. City Indoor Stadium', 'e.g. Goa Beach Volleyball Cup 2026', 'e.g. Court 1, Court 2', 'Referee delegate', null),
   badminton: t('Court', 'Umpire', [{ key: 'service_judge', label: 'Service judge' }, { key: 'line_judge', label: 'Line judge' }, { key: 'reserve_umpire', label: 'Reserve umpire' }],
     'e.g. City Indoor Stadium', 'e.g. Pune Badminton Open 2026', 'e.g. Court 1, Court 2'),

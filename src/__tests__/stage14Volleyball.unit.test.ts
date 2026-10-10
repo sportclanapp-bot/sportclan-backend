@@ -99,8 +99,8 @@ describe('the timeline', () => {
 
 describe('VB10 · each sport’s extra officials', () => {
   it('scorers and reserves', () => {
-    expect(termsFor('volleyball').assistants.map((a) => a.label)).toEqual(['Second referee', 'Line judge', 'Scorer', 'Assistant scorer', 'Challenge referee', 'Reserve referee']);
-    expect(termsFor('basketball').assistants.map((a) => a.key)).toEqual(expect.arrayContaining(['scorer', 'assistant_scorer', 'timer', 'shot_clock_operator']));
+    expect(termsFor('volleyball').assistants.map((a) => a.label)).toEqual(['Second referee', 'Line judge', 'Assistant scorer', 'Challenge referee', 'Reserve referee']);
+    expect(termsFor('basketball').assistants.map((a) => a.key)).toEqual(expect.arrayContaining(['assistant_scorer', 'timer', 'shot_clock_operator']));
     expect(termsFor('hockey').assistants.map((a) => a.key)).toEqual(expect.arrayContaining(['judge', 'reserve_umpire']));
     expect(termsFor('cricket').assistants.map((a) => a.key)).toContain('fourth_umpire');
     expect(termsFor('football').assistants.map((a) => a.key)).toContain('reserve_assistant_referee');

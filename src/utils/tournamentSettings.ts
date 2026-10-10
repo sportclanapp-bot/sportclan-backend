@@ -138,7 +138,10 @@ export type TiebreakToken =
   | 'points_diff_vs_next'
   // Stage 12 · CH1 · FIDE C.07 (2026), chess: Buchholz Cut-1 and Median-1, wins with Black,
   // games with Black, progressive score, average rating of opponents; CH9 · Koya (round robin).
-  | 'buchholz_cut1' | 'buchholz_median' | 'wins_black' | 'games_black' | 'progressive' | 'aro' | 'koya';
+  | 'buchholz_cut1' | 'buchholz_median' | 'wins_black' | 'games_black' | 'progressive' | 'aro' | 'koya'
+  // Stage 14 · VB5 · FIVB: rally points won ÷ lost over every match; and the table's points placed by the
+  // order itself (FIVB ranks on matches won first, then match points).
+  | 'points_ratio' | 'match_points';
 
 const ALIASES: Record<string, TiebreakToken> = {
   head_to_head: 'head_to_head', h2h: 'head_to_head', head2head: 'head_to_head', headtohead: 'head_to_head',
@@ -170,6 +173,8 @@ const ALIASES: Record<string, TiebreakToken> = {
   wins_black: 'wins_black', bwg: 'wins_black', wins_with_black: 'wins_black', games_black: 'games_black', bpg: 'games_black', games_with_black: 'games_black',
   progressive: 'progressive', ps: 'progressive', progressive_score: 'progressive', cumulative: 'progressive',
   aro: 'aro', average_rating_opponents: 'aro', avg_opp_rating: 'aro', koya: 'koya', ks: 'koya', koya_system: 'koya',
+  // Stage 14 · VB5.
+  points_ratio: 'points_ratio', point_ratio: 'points_ratio', rally_points_ratio: 'points_ratio', match_points: 'match_points',
 };
 
 /** Stage 12 · CH1 / CH9: the tie-breaks only chess has. */
@@ -183,13 +188,13 @@ export function tiebreakToken(x: unknown): TiebreakToken | null {
 /** The tie-breaks this sport can use (run rate is cricket's; Buchholz and Sonneborn-Berger chess's). */
 export function tiebreaksFor(sport: string | null | undefined): TiebreakToken[] {
   const key = sportKeyOf(sport);
-  const all: TiebreakToken[] = ['head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'h2h_score_ratio', 'h2h_points_diff', 'h2h_points_ratio', 'wins', 'played', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'points_diff_vs_next', 'points_won', 'points_pct', 'fair_play', 'buchholz', 'buchholz_cut1', 'buchholz_median', 'sonneborn_berger', 'koya', 'progressive', 'wins_black', 'games_black', 'aro'];
+  const all: TiebreakToken[] = ['match_points', 'head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'h2h_score_ratio', 'h2h_points_diff', 'h2h_points_ratio', 'wins', 'played', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'points_ratio', 'points_diff_vs_next', 'points_won', 'points_pct', 'fair_play', 'buchholz', 'buchholz_cut1', 'buchholz_median', 'sonneborn_berger', 'koya', 'progressive', 'wins_black', 'games_black', 'aro'];
   const rally = key === 'badminton' || key === 'tabletennis' || key === 'volleyball' || key === 'pickleball';
   // Stage 9 · T4: every sport scored in sets of games or points — tennis's games, the rally sports' points.
   // Stage 13 · CR8: carrom's games too (ICF's "net score": the points over every game).
   const inSets = rally || key === 'tennis' || key === 'carrom';
   return all.filter((t) => (t === 'nrr' ? key === 'cricket' : CHESS_TIEBREAKS.has(t) ? key === 'chess'
-    : t === 'points_diff' || t === 'points_won' || t === 'points_pct' || t === 'h2h_points_diff' || t === 'h2h_points_ratio' || t === 'points_diff_vs_next' ? inSets
+    : t === 'points_diff' || t === 'points_ratio' || t === 'points_won' || t === 'points_pct' || t === 'h2h_points_diff' || t === 'h2h_points_ratio' || t === 'points_diff_vs_next' ? inSets
       : t === 'h2h_score_diff' || t === 'h2h_score_scored' || t === 'h2h_score_ratio' ? key !== 'chess'
       : t === 'played' ? key === 'tennis'
         : t === 'games_diff' ? key === 'badminton' || key === 'tabletennis' : t === 'fair_play' ? key === 'football' || key === 'hockey' : true));
@@ -238,6 +243,9 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
     case 'progressive': return 'Progressive score';
     case 'aro': return 'Average rating of opponents';
     case 'koya': return 'Koya';
+    // Stage 14 · VB5.
+    case 'points_ratio': return key === 'tennis' ? 'Game ratio' : 'Points ratio';
+    case 'match_points': return key === 'chess' ? 'Match points' : 'Match points (the table’s points)';
   }
 }
 
@@ -246,6 +254,9 @@ export function defaultTiebreaks(sport: string | null | undefined): TiebreakToke
   const key = sportKeyOf(sport);
   return (['head_to_head', 'nrr', 'score_diff', 'score_scored'] as TiebreakToken[]).filter((t) => t !== 'nrr' || key === 'cricket');
 }
+
+/** Stage 14 · VB5 · the FIVB-style ratios for any rally sport's pools: matches won, match points, games ratio, points ratio, then between them. */
+const RATIOS_PRESET: { key: string; label: string; order: TiebreakToken[] } = { key: 'ratios', label: 'Ratios (wins, match points, games ratio, points ratio)', order: ['wins', 'match_points', 'score_ratio', 'points_ratio', 'head_to_head'] };
 
 /** The sport's recognised orders, offered as presets on the form. The first is the default. */
 export function tiebreakPresetsFor(sport: string | null | undefined, tie = false): Array<{ key: string; label: string; order: TiebreakToken[] }> {
@@ -262,9 +273,13 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
       out.push({ key: 'uefa', label: 'UEFA (goals between them first)', order: ['head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'score_diff', 'score_scored'] });
       break;
     case 'hockey': out.push({ key: 'fih', label: 'FIH (wins first)', order: ['wins', 'score_diff', 'score_scored', 'head_to_head'] }); break;
-    case 'volleyball': out.push({ key: 'fivb', label: 'FIVB (wins, set ratio)', order: ['wins', 'score_ratio', 'head_to_head'] }); break;
+    case 'volleyball':
+      out.push({ key: 'fivb', label: 'FIVB (wins, set ratio)', order: ['wins', 'score_ratio', 'head_to_head'] });
+      // Stage 14 · VB5 · FIVB pools (Club World Championship, VNL): matches won, match points, set ratio, points ratio, then between them.
+      out.push({ key: 'fivb_full', label: 'FIVB full (wins, match points, set ratio, points ratio)', order: ['wins', 'match_points', 'score_ratio', 'points_ratio', 'head_to_head'] });
+      break;
     // Stage 10 · TT4: ITTF — among the tied only: matches, games ratio, points ratio, then lots.
-    case 'tabletennis': out.push({ key: 'ittf', label: 'ITTF (among the tied: matches, games, points)', order: ['head_to_head', 'h2h_score_ratio', 'h2h_points_ratio'] }); break;
+    case 'tabletennis': out.push({ key: 'ittf', label: 'ITTF (among the tied: matches, games, points)', order: ['head_to_head', 'h2h_score_ratio', 'h2h_points_ratio'] }, RATIOS_PRESET); break; // Stage 14 · VB5
     // Badminton gap 10: BWF GCR — matches won (the points), head-to-head, games difference, points difference.
     case 'badminton':
       out.push({ key: 'bwf', label: 'BWF (head-to-head, games, points)', order: ['head_to_head', 'score_diff', 'points_diff'] });
@@ -272,6 +287,7 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
       out.push({ key: 'between', label: 'Among the tied only (games, points)', order: ['head_to_head', 'h2h_score_diff', 'h2h_points_diff'] });
       // 7.16: a team event — ties won (the points), head-to-head, rubbers, games, points.
       if (tie) out.push({ key: 'bwf_team', label: 'BWF team (rubbers, games, points)', order: ['head_to_head', 'score_diff', 'games_diff', 'points_diff'] });
+      out.push(RATIOS_PRESET); // Stage 14 · VB5
       break;
     // Stage 9 · T4: ATP Finals — wins, then matches played, head-to-head, sets %, games %;
     // and the Maharashtra inter-club way — total games won.
@@ -282,7 +298,7 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
     // Stage 11 · PB7: USA Pickleball 15.B.4 — head-to-head, point difference over
     // every game, point difference between them, then points scored.
     // Stage 11 follow-up: and 15.B.4's 4th step, point difference against the next-placed team.
-    case 'pickleball': out.push({ key: 'usap', label: 'USA Pickleball (head-to-head, points)', order: ['head_to_head', 'points_diff', 'h2h_points_diff', 'points_diff_vs_next', 'points_won'] }); break;
+    case 'pickleball': out.push({ key: 'usap', label: 'USA Pickleball (head-to-head, points)', order: ['head_to_head', 'points_diff', 'h2h_points_diff', 'points_diff_vs_next', 'points_won'] }, RATIOS_PRESET); break; // Stage 14 · VB5
     // Stage 13 · CR8: the ICF Swiss League — ties split on net score.
     case 'carrom': out.push({ key: 'icf_swiss', label: 'ICF Swiss League (net score)', order: ['points_diff', 'head_to_head', 'wins'] }); break;
     case 'chess':
@@ -538,6 +554,12 @@ export type Category = {
    */
   amateurOnly?: boolean | null;
   /**
+   * Stage 14 · VB11 · co-ed play: at least this many women on court / on the
+   * pitch (a team's starters), checked on each match's line-up. Any team sport;
+   * not a men's or women's event.
+   */
+  minWomen?: number | null;
+  /**
    * Stage 12 · CH10 · the circulars' own words: "born on or after 1 Jan 2017"
    * (an under-age group) and "born on or before 31 Dec 1970" (veterans), as
    * 'YYYY-MM-DD'. When set, the date decides (the under-age / minimum age stays
@@ -578,7 +600,7 @@ export function categoryRefusal(c: unknown): Refusal | null {
   if (c === undefined || c === null) return null;
   if (typeof c !== 'object' || Array.isArray(c)) return refuse('A category must be an object.');
   const o = c as Record<string, unknown>;
-  const unknown = Object.keys(o).find((k) => !['gender', 'underAge', 'minAge', 'maxRating', 'minRating', 'ageBasis', 'pairAgeMin', 'amateurOnly', 'bornFrom', 'bornTo'].includes(k));
+  const unknown = Object.keys(o).find((k) => !['gender', 'underAge', 'minAge', 'maxRating', 'minRating', 'ageBasis', 'pairAgeMin', 'amateurOnly', 'bornFrom', 'bornTo', 'minWomen'].includes(k));
   if (unknown) return refuse(`“${unknown}” isn’t part of a category.`);
   if (o.ageBasis != null && o.ageBasis !== 'year') return refuse('Ages are on the start date, or by birth year.');
   if (o.gender != null && !['men', 'women', 'mixed'].includes(o.gender as string)) return refuse('A category is men’s, women’s, mixed or open.');
@@ -591,6 +613,9 @@ export function categoryRefusal(c: unknown): Refusal | null {
   if (o.maxRating != null && o.minRating != null && (o.minRating as number) > (o.maxRating as number)) return refuse('The lowest rating can’t be above the highest.');
   if (o.pairAgeMin != null && !isInt(o.pairAgeMin, PAIR_AGE_MIN[0], PAIR_AGE_MIN[1])) return refuse('A pair’s combined age is a whole number of years.'); // Stage 9 · T12
   if (o.amateurOnly != null && typeof o.amateurOnly !== 'boolean') return refuse('Amateurs only is on or off.');
+  // Stage 14 · VB11: women on court — a whole number, 1 or more (no top); not in a men's or women's event.
+  if (o.minWomen != null && !isInt(o.minWomen, 1, Number.MAX_SAFE_INTEGER)) return refuse('Women on court is a whole number, 1 or more.');
+  if (o.minWomen != null && (o.gender === 'men' || o.gender === 'women')) return refuse('Women on court is for an open or mixed event.');
   // Stage 12 · CH10.
   if (o.bornFrom != null && !isIsoDate(o.bornFrom)) return refuse('“Born on or after” is a date (YYYY-MM-DD).');
   if (o.bornTo != null && !isIsoDate(o.bornTo)) return refuse('“Born on or before” is a date (YYYY-MM-DD).');
@@ -602,7 +627,7 @@ export function categoryRefusal(c: unknown): Refusal | null {
 export function storedCategory(c: Record<string, any> | null | undefined): Category | null {
   if (!c) return null;
   const out: Category = {};
-  for (const k of ['gender', 'underAge', 'minAge', 'maxRating', 'minRating', 'pairAgeMin'] as const) if (c[k] != null) (out as Record<string, unknown>)[k] = c[k];
+  for (const k of ['gender', 'underAge', 'minAge', 'maxRating', 'minRating', 'pairAgeMin', 'minWomen'] as const) if (c[k] != null) (out as Record<string, unknown>)[k] = c[k]; // Stage 14 · VB11: minWomen
   if (c.amateurOnly === true) out.amateurOnly = true; // Stage 9 · T12
   if (c.bornFrom) out.bornFrom = c.bornFrom; // Stage 12 · CH10
   if (c.bornTo) out.bornTo = c.bornTo;
@@ -627,6 +652,7 @@ export function categoryLabel(c: Category | null | undefined): string | null {
   // Stage 9 · T12.
   if (c.pairAgeMin != null) parts.push(`Pairs ${c.pairAgeMin}+ combined${c.ageBasis === 'year' && c.underAge == null && c.minAge == null ? ' (by birth year)' : ''}`);
   if (c.amateurOnly) parts.push('Amateurs only');
+  if (c.minWomen != null) parts.push(`At least ${c.minWomen} ${c.minWomen === 1 ? 'woman' : 'women'} on court`); // Stage 14 · VB11
   return parts.length ? parts.join(' · ') : null;
 }
 
@@ -650,6 +676,18 @@ export function ageInYear(dob: string, on: Date): number | null {
 
 /** "Tara’s", "Kings’" — as the app's possessive(); this file takes no imports. */
 const poss = (n: string) => n + (/s$/i.test(n.trim()) ? '’' : '’s');
+
+/**
+ * Stage 14 · VB11 · why a side's starters break the women-on-court rule, or
+ * null. A player whose profile doesn't give a gender isn't counted as a woman.
+ */
+export function womenOnCourtProblem(c: Category | null | undefined, starters: Array<{ gender?: string | null }>, teamName: string): string | null {
+  if (!c?.minWomen || starters.length === 0) return null;
+  const women = starters.filter((p) => p.gender === 'female').length;
+  if (women >= c.minWomen) return null;
+  const unknown = starters.filter((p) => p.gender !== 'male' && p.gender !== 'female').length;
+  return `${teamName} have ${women} ${women === 1 ? 'woman' : 'women'} starting — this event needs at least ${c.minWomen} on court.${unknown ? ` ${unknown === 1 ? 'One profile doesn’t' : `${unknown} profiles don’t`} list a gender, so ${unknown === 1 ? 'it isn’t' : 'they aren’t'} counted.` : ''}`;
+}
 
 /** Why this team's players don't fit the category (naming one), or null. */
 export function categoryProblem(c: Category | null | undefined, players: CategoryPlayer[], on: Date): string | null {

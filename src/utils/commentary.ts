@@ -1,4 +1,4 @@
-import { conductWords, ladderStepDef } from './matchRules';
+import { BASKETBALL_STATS, conductWords, ladderStepDef, pointHowFor } from './matchRules';
 /**
  * Timeline lines for football, hockey and basketball events (2026-09-26, after
  * MATCH_CREATE_TEST_5). The timeline printed these raw — `card {"kind":"red",
@@ -78,10 +78,36 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   }
   // Stage 8 · F4: assists and substitutions on the timeline.
   if (goalSport && eventType === 'assist') return `🅰️ Assist — ${player ? `${player} (${team})` : team}`;
-  if (goalSport && eventType === 'sub') {
+  // Stage 14 · VB2: basketball and volleyball subs too, and an injury (exceptional) substitution.
+  if ((goalSport || ctx.sport === 'basketball' || ctx.sport === 'volleyball') && eventType === 'sub') {
     const off = typeof p.off_name === 'string' && p.off_name.trim() ? p.off_name.trim() : null;
-    if (off && player) return `🔁 ${team}: ${player} on for ${off}`;
-    return `🔁 Substitution — ${team}${off ? `: ${off} off` : player ? `: ${player} on` : ''}`;
+    const icon = p.injury === true ? '🩹 Injury sub' : '🔁';
+    if (off && player) return p.injury === true ? `${icon} — ${team}: ${player} on for ${off}` : `${icon} ${team}: ${player} on for ${off}`;
+    return `${p.injury === true ? icon : '🔁 Substitution'} — ${team}${off ? `: ${off} off` : player ? `: ${player} on` : ''}`;
+  }
+  // Stage 14 · VB1 / VB7 / VB12 · volleyball's court: a set's line-up, the libero, a Super Point, a positional fault, a Super Serve.
+  if (ctx.sport === 'volleyball' && eventType === 'note' && p.kind === 'rotation') {
+    const names = (Array.isArray(p.slots) ? p.slots : []).map((x: any, i: number) => `${['I', 'II', 'III', 'IV', 'V', 'VI'][i] ?? i + 1} ${String(x?.name ?? '?')}`);
+    const libs = (Array.isArray(p.liberos) ? p.liberos : []).map((x: any) => String(x?.name ?? '?'));
+    return `📋 ${team} line-up${typeof p.set === 'number' ? ` for set ${p.set}` : ''}: ${names.join(', ')}${libs.length ? ` · libero${libs.length === 1 ? '' : 's'} ${libs.join(', ')}` : ''}`;
+  }
+  if (ctx.sport === 'volleyball' && eventType === 'note' && p.kind === 'libero') {
+    if (p.out === true || p.back === true) return `🔄 Libero off — ${team}`;
+    return `🔄 Libero ${String(p.libero?.name ?? '')} in for ${String(p.replaced?.name ?? '')} — ${team}`;
+  }
+  if (ctx.sport === 'volleyball' && eventType === 'note' && p.kind === 'super_point') return `⚡ Super Point called — ${team}`;
+  if (ctx.sport === 'volleyball' && eventType === 'score' && p.kind === 'fault') return `🔢 Positional fault by ${other} — point to ${team}`;
+  if (ctx.sport === 'volleyball' && eventType === 'score' && p.super_serve === true) return `🎯 Super Serve — an ace by ${player ? `${player} (${team})` : team}, +2`;
+  // Stage 14 · VB8: how a rally point was won, when the scorer said.
+  if (eventType === 'score' && p.kind === 'point' && (typeof p.how === 'string' || p.super_point === true)) {
+    const how = pointHowFor(ctx.sport).find((h) => h.key === p.how);
+    const why = how ? (how.error ? ` — ${other} error` : ` — ${how.label.toLowerCase()}${player ? ` by ${player}` : ''}`) : player ? ` — ${player}` : '';
+    return `${p.super_point === true ? '⚡ Super Point won — ' : ''}Point to ${team}${p.super_point === true ? ' (+2)' : ''}${why}`;
+  }
+  // Stage 14 · VB8: basketball's rebounds, steals and blocks.
+  if (ctx.sport === 'basketball' && eventType === 'note' && p.kind === 'stat') {
+    const st = BASKETBALL_STATS.find((x) => x.key === p.stat);
+    if (st) return `🏀 ${st.board.replace(/s$/, '')} — ${player ? `${player} (${team})` : team}`;
   }
   // Stage 8 · F10: the clock stopped and restarted, and the added time shown.
   if (goalSport && eventType === 'note' && p.kind === 'clock_pause') return '⏸ Clock stopped';

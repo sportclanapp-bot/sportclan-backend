@@ -21,7 +21,7 @@ import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointC
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber } from '../utils/cricketRules';
 import { typedChessBoards, typedMatchPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
-import { DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
+import { BASKETBALL_STATS, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
 import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { trumpsFor } from '../utils/tieTrumps';
 import { sideOutReplay } from '../utils/pickleballCore';
@@ -388,6 +388,30 @@ export async function validateScoringEvent(
       return refuse(400, { error: payload.kind === 'point_off' ? 'A point off isn’t a penalty in this match.' : 'Forfeiting a game isn’t a penalty in this match.', code: 'BAD_NOTE' });
     }
     if (payload.team_side !== 'A' && payload.team_side !== 'B') return refuse(400, { error: 'Say whose penalty it is.', code: 'BAD_NOTE' });
+  }
+  // Stage 14 · VB1 / VB7 / VB12 / VB8: volleyball's court notes and its PVL extras, basketball's stats.
+  if ((event_type === 'note' && payload && ['rotation', 'libero', 'super_point', 'stat'].includes(payload.kind))
+    || (event_type === 'score' && payload && (payload.kind === 'fault' || payload.super_serve === true || payload.super_point === true || Number(payload.value ?? 1) > 1))) {
+    const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    const r = rulesOf(slug, match);
+    const vbNote = event_type === 'note' && payload.kind !== 'stat';
+    if (vbNote && slug !== 'volleyball') return refuse(400, { error: 'Line-ups, liberos and Super Points are volleyball’s.', code: 'BAD_NOTE' });
+    if (payload.kind === 'stat' && (slug !== 'basketball' || !BASKETBALL_STATS.some((x) => x.key === payload.stat))) return refuse(400, { error: 'That stat isn’t kept here.', code: 'BAD_NOTE' });
+    if (vbNote && payload.team_side !== 'A' && payload.team_side !== 'B') return refuse(400, { error: 'Say which team.', code: 'BAD_NOTE' });
+    if (payload.kind === 'rotation' && (!Array.isArray(payload.slots) || payload.slots.some((x: any) => !x || typeof x.name !== 'string' || !x.name.trim()))) {
+      return refuse(400, { error: 'A line-up is a list of players by name.', code: 'BAD_NOTE' });
+    }
+    if (payload.kind === 'super_point' && !r.superPoint) return refuse(400, { error: 'This match has no Super Point.', code: 'BAD_NOTE' });
+    if (slug === 'volleyball' && event_type === 'score') {
+      // A rally is 1; 2 only for a Super Point won or a Super Serve, when the match plays them.
+      const v = Number(payload.value ?? 1);
+      if (payload.kind === 'fault' && v !== 1 && !(v === 2 && r.superPoint)) return refuse(400, { error: 'A fault is a point.', code: 'BAD_POINTS' });
+      if (payload.super_serve === true && (!r.superServe || v !== 2)) return refuse(400, { error: 'This match has no Super Serve.', code: 'BAD_POINTS' });
+      if (payload.super_point === true && (!r.superPoint || v !== 2)) return refuse(400, { error: 'This match has no Super Point.', code: 'BAD_POINTS' });
+      if (v > 1 && payload.super_serve !== true && payload.super_point !== true && payload.kind !== 'fault') return refuse(400, { error: 'A volleyball rally is worth 1.', code: 'BAD_POINTS' });
+    } else if (payload.kind === 'fault' || payload.super_serve === true || payload.super_point === true) {
+      if (event_type === 'score') return refuse(400, { error: 'That’s volleyball’s.', code: 'BAD_POINTS' });
+    }
   }
   // Stage 12 · CH8: the chess arbiter's time — added to a clock, or to the
   // opponent of an illegal move or a wrong draw claim. Chess only; whole seconds.
@@ -1220,8 +1244,9 @@ export interface GoalPlayerLine {
   /** 2026-09-26: cards credited to this player (the pad asks who got it; optional). */
   yellow_cards?: number; red_cards?: number; green_cards?: number;
 }
-export interface PointPlayerLine { side: 'A' | 'B'; name?: string; points: number; assists: number; /** BUILD 3.35: only once they've fouled. */ fouls?: number }
-export interface RallyPlayerLine { side: 'A' | 'B'; name?: string; points: number }
+export interface PointPlayerLine { side: 'A' | 'B'; name?: string; points: number; assists: number; /** BUILD 3.35: only once they've fouled. */ fouls?: number; /** Stage 14 · VB8: rebounds / steals / blocks, once they have one. */ rebounds?: number; steals?: number; blocks?: number }
+/** Stage 14 · VB8: `how_<key>` — the points a player won each way (attack, block, ace…), when the scorer said. */
+export interface RallyPlayerLine { side: 'A' | 'B'; name?: string; points: number; [how: `how_${string}`]: number | undefined }
 export type PlayerLine = CricketPlayerLine | GoalPlayerLine | PointPlayerLine | RallyPlayerLine;
 
 const sideOfPayload = (p: any): 'A' | 'B' => (p?.team_side === 'B' ? 'B' : 'A');
@@ -1292,6 +1317,13 @@ export function aggregatePointPlayers(events: { event_type: string; payload: any
       const line = (players[id] ??= { side: sideOfPayload(p), points: 0, assists: 0 });
       if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
       line.fouls = (line.fouls ?? 0) + 1;
+    } else if (e.event_type === 'note' && p.kind === 'stat') {
+      // Stage 14 · VB8: basketball's rebounds, steals and blocks.
+      const f = p.stat === 'rebound' ? 'rebounds' : p.stat === 'steal' ? 'steals' : p.stat === 'block' ? 'blocks' : null;
+      if (!f) continue;
+      const line = (players[id] ??= { side: sideOfPayload(p), points: 0, assists: 0 });
+      if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
+      line[f] = (line[f] ?? 0) + 1;
     }
   }
   return players;
@@ -1310,6 +1342,9 @@ export function aggregateRallyPlayers(events: { event_type: string; payload: any
     const line = (players[id] ??= { side: sideOfPayload(p), points: 0 });
     if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
     line.points += Number(p.value ?? 1);
+    // Stage 14 · VB8: how it was won (attack, block, ace…), counted per player.
+    if (typeof p.how === 'string' && /^[a-z_]{1,20}$/.test(p.how)) line[`how_${p.how}`] = (line[`how_${p.how}`] ?? 0) + 1;
+    else if (p.super_serve === true || (p.kind === 'ace' && e.event_type === 'score')) line.how_ace = (line.how_ace ?? 0) + 1;
   }
   return players;
 }

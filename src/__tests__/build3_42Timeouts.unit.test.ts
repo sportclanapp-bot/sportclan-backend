@@ -13,7 +13,7 @@ test('0 or more a set (Stage 13 · CR3: no top), standard 2, labelled when not 2
   for (const bad of [-1, 1.5]) expect(rulesRefusal('volleyball', { ...std, timeoutsPerSet: bad })?.error).toBe('Timeouts a set must be a whole number, 0 or more.');
   expect(rulesRefusal('badminton', { ...standardRules('badminton'), timeoutsPerSet: 2 })).not.toBeNull();
   expect(timedRulesLabel('volleyball', { ...std, timeoutsPerSet: 0 })).toBe('no timeouts');
-  expect(timedRulesLabel('volleyball', { ...std, ...BEACH_VOLLEYBALL })).toBe('2-a-side · sets to 21 · 1 timeout a set');
+  expect(timedRulesLabel('volleyball', { ...std, ...BEACH_VOLLEYBALL })).toBe('2-a-side · sets to 21 · 1 timeout a set · courts every 7 (5 in the decider) · no subs · no libero'); // Stage 14 · VB4
 });
 
 test('the timeline names the side (it read "Timeout called by team")', () => {

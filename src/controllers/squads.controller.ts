@@ -17,7 +17,7 @@ import { supabase } from '../utils/supabase';
 import { isUuid } from '../utils/uuid';
 import { allRows, selectAllIn } from '../utils/selectAll';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
-import { settingsOf, storedSettings, type SquadRules } from '../utils/tournamentSettings';
+import { settingsOf, storedSettings, womenOnCourtProblem, type SquadRules } from '../utils/tournamentSettings';
 import { possessive } from '../utils/possessive';
 import { disciplineRecords, bannedFrom, openBans, type DMatch, type DCard } from '../utils/discipline';
 
@@ -303,6 +303,20 @@ export async function teamSheetProblem(
     for (const side of ['A', 'B'] as const) {
       const starters = [...merged.values()].filter((c) => c.team_side === side && c.role !== 'sub').length;
       if (starters > playersASide) return { error: `${sideName[side]} have ${starters} starting — it’s ${playersASide} a side. Mark the rest as subs.`, code: 'TOO_MANY_STARTERS' };
+    }
+  }
+  // Stage 14 · VB11: a co-ed event's women on court — each side's starters (not marked 'sub'), by their profiles.
+  const t = await loadT(match.tournament_id);
+  const cat = t ? settingsOf(t as { settings?: unknown }).category : null;
+  if (cat?.minWomen) {
+    const merged = new Map(current.map((c) => [c.user_id, c]));
+    for (const p of incoming) merged.set(p.user_id, { user_id: p.user_id, team_side: p.team_side, role: p.role ?? null });
+    for (const side of ['A', 'B'] as const) {
+      const ids = [...merged.values()].filter((c) => c.team_side === side && c.role !== 'sub').map((c) => c.user_id);
+      if (!ids.length) continue;
+      const users = await selectAllIn(ids, (c, f, to) => supabase.from('users').select('id, gender').in('id', c).order('id').range(f, to));
+      const why = womenOnCourtProblem(cat, ((users ?? []) as Array<{ gender?: string | null }>), sideName[side]);
+      if (why) return { error: why, code: 'TOO_FEW_WOMEN' };
     }
   }
   return null;

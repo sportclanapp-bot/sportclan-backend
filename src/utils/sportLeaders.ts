@@ -11,6 +11,8 @@
  * credits; a guest is one player by name within their team, as on cricket's
  * boards) and the score. A team tie (rubbers) counts in none of the game boards.
  */
+import { BASKETBALL_STATS, pointHowFor } from './matchRules'; // Stage 14 · VB8
+
 export const BOARD_ROWS = 5;
 
 export type BoardRow = {
@@ -149,18 +151,28 @@ export function sportBoards(
     ];
   }
   if (k === 'basketball') {
-    const p = playerTallies(matches, ['points', 'assists'], accounts);
+    const p = playerTallies(matches, ['points', 'assists', 'rebounds', 'steals', 'blocks'], accounts);
     return [
       topPlayers(p, 'points', 'Top scorers', 'point', 'points', teamNames, (t) => t.s.points ?? 0, played),
       topPlayers(p, 'assists', 'Assists', 'assist', 'assists', teamNames, (t) => t.s.assists ?? 0, played),
+      // Stage 14 · VB8: basketball's own box-score stats, once anyone has one.
+      ...BASKETBALL_STATS.map((st) => topPlayers(p, `${st.key}s`, st.board, st.board.toLowerCase().replace(/s$/, ''), st.board.toLowerCase(), teamNames, (t) => t.s[`${st.key}s`] ?? 0, played)).filter((b) => b.rows.length > 0),
     ];
   }
   const teams = teamTallies(matches);
   const wins = topTeams(teams, 'wins', 'Most wins', 'win', 'wins', teamNames, (t) => t.won, record, false, (a, b) => a.lost - b.lost);
   if (RALLY.has(k)) {
     const word = k === 'volleyball' ? ['set', 'sets'] : ['game', 'games'];
+    // Stage 14 · VB8: player boards from the points credited — the best scorers and each way of winning one (when said).
+    const hows = pointHowFor(k).filter((h) => !h.error);
+    const p = playerTallies(matches, ['points', ...hows.map((h) => `how_${h.key}`)], accounts);
+    const playerBoards = [
+      topPlayers(p, 'points', k === 'volleyball' ? 'Top scorers' : 'Points won', 'point', 'points', teamNames, (t) => t.s.points ?? 0, played),
+      ...hows.map((h) => topPlayers(p, `how_${h.key}`, h.board ?? h.label, h.key === 'ace' ? 'ace' : 'point', h.key === 'ace' ? 'aces' : 'points', teamNames, (t) => t.s[`how_${h.key}`] ?? 0, played)),
+    ].filter((b) => b.rows.length > 0);
     return [
       wins,
+      ...playerBoards,
       topTeams(teams, 'games', k === 'volleyball' ? 'Sets won' : 'Games won', word[0]!, word[1]!, teamNames, (t) => t.games, (t) => `${t.games}–${t.gamesLost}`, false, (a, b) => a.gamesLost - b.gamesLost),
       topTeams(teams, 'points_diff', 'Points difference', 'point', 'points', teamNames, (t) => t.pf - t.pa, (t) => `${t.pf}–${t.pa}`, true),
     ];

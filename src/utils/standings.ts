@@ -310,7 +310,7 @@ export function computeStats(
   return table;
 }
 
-type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play' | 'points_won' | 'points_pct' | 'played'
+type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play' | 'points_won' | 'points_pct' | 'played' | 'points_ratio'
   // Stage 12 · CH1 · FIDE C.07 (2026): Buchholz Cut-1 and Median-1, wins with Black, games with Black, progressive score, average rating of opponents; CH9 · Koya.
   | 'buchholz_cut1' | 'buchholz_median' | 'wins_black' | 'games_black' | 'progressive' | 'aro' | 'koya'
   // Stage 10 · TT4: counted only in the matches between the tied teams.
@@ -365,6 +365,8 @@ const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'fair_play' |
   score_ratio: (s) => (s.conceded > 0 ? s.scored / s.conceded : s.scored > 0 ? 1e9 : 0),
   // Badminton gap 10: BWF's points difference — rally points won minus lost.
   points_diff: (s) => s.rallyDiff,
+  // Stage 14 · VB5: rally points won ÷ lost over every match (FIVB's "points ratio").
+  points_ratio: (s) => (s.rallyAgainst > 0 ? s.rallyFor / s.rallyAgainst : s.rallyFor > 0 ? 1e9 : 0),
   // Badminton 7.16: games difference over every rubber of a team tie.
   games_diff: (s) => s.gamesDiff,
   // Stage 9 · T4: tennis's games (the rally sports' points) won, and their
@@ -434,6 +436,8 @@ function mapRule(token: string): Criterion | null {
   if (t === 'koya' || t === 'ks' || t === 'koya_system') return 'koya';
   if (t === 'sonneborn_berger' || t === 'sb' || t === 'sonneborn-berger') return 'sonneborn_berger';
   if (t === 'points_diff' || t === 'point_difference' || t === 'rally_points_diff' || t === 'points_difference') return 'points_diff'; // badminton gap 10
+  if (t === 'points_ratio' || t === 'point_ratio' || t === 'rally_points_ratio') return 'points_ratio'; // Stage 14 · VB5
+  if (t === 'match_points') return 'points'; // Stage 14 · VB5: the table's points, where the order puts them (FIVB: after matches won)
   if (t === 'games_diff' || t === 'games_difference' || t === 'game_difference') return 'games_diff'; // badminton 7.16
   if (t === 'fair_play' || t === 'fairplay' || t === 'fair_play_points' || t === 'discipline') return 'fair_play'; // Stage 8 · F8
   // Stage 9 · T4.
@@ -461,7 +465,8 @@ export function buildOrder(tiebreakerRules?: any[]): Criterion[] {
     ? (tiebreakerRules.map((x) => mapRule(x)).filter(Boolean) as Criterion[])
     : [];
   const tiebreaks = configured.length ? configured : DEFAULT_TIEBREAKS;
-  const order: Criterion[] = ['points', ...tiebreaks];
+  // Stage 14 · VB5: points come first unless the order places them itself (FIVB: matches won, then match points).
+  const order: Criterion[] = tiebreaks.includes('points') ? [...tiebreaks] : ['points', ...tiebreaks];
   return order.filter((v, i) => order.indexOf(v) === i);
 }
 
@@ -677,6 +682,7 @@ export function bestPlacedAcrossGroups(
     if (c === 'fair_play') return extra.fairPlay?.get(id) ?? 0;
     if (c === 'head_to_head' || isChessCriterion(c) || c === 'score_rate' || isBetween(c) || c === 'points_diff_vs_next') return null; // TT4: teams from different groups never met · CH1: nor the chess ones
     if (c === 'score_ratio') return GLOBAL_CRITERION.score_ratio(stats.get(id) ?? ({} as TeamStat));
+    if (c === 'points_ratio') return GLOBAL_CRITERION.points_ratio(stats.get(id) ?? ({ rallyFor: 0, rallyAgainst: 0 } as TeamStat)); // Stage 14 · VB5: a ratio is already per game
     // Stage 9 · T4: a share is already per game; matches played can't compare groups of different sizes.
     if (c === 'points_pct') return GLOBAL_CRITERION.points_pct(stats.get(id) ?? ({ rallyFor: 0, rallyAgainst: 0 } as TeamStat));
     if (c === 'played') return null;

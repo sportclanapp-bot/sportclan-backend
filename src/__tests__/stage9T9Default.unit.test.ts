@@ -169,6 +169,8 @@ test('the timeline says the violation and its penalty', () => {
 
 test('volleyball says misconduct and a disqualification, and its own offences (device pass)', () => {
   const ctx = { sport: 'volleyball', teamA: 'Spikers', teamB: 'Blockers', period: 1, move: 0, clockSeconds: null, regulation: 5, periodMinutes: null } as never;
-  expect(sportCommentary('note', { kind: 'violation', team_side: 'B', offence: 'abuse', penalty: 'default' }, ctx)).toBe('⚠️ Misconduct — Blockers · ball or equipment abuse · disqualification');
+  expect(sportCommentary('note', { kind: 'violation', team_side: 'B', offence: 'abuse', penalty: 'default' }, ctx)).toBe('⚠️ Misconduct — Blockers · ball or equipment abuse · team default'); // Stage 14 · VB3: an older ladder's last step is the team's default
+  expect(sportCommentary('note', { kind: 'violation', team_side: 'B', offence: 'conduct', penalty: 'dq', player_name: 'Ravi' }, ctx)).toBe('⚠️ Misconduct — Ravi (Blockers) · unsportsmanlike conduct · disqualification');
+  expect(sportCommentary('note', { kind: 'violation', team_side: 'B', offence: 'time', penalty: 'delay_warning' }, ctx)).toBe('⚠️ Misconduct — Blockers · delay · delay warning');
   expect(conductWords('pickleball').outPast).toBe('forfeited');
 });

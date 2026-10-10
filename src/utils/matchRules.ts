@@ -179,6 +179,32 @@ export interface MatchRules {
   incrementFromMove?: number | null;
   secondPeriodMoves?: number | null;
   secondPeriodMinutes?: number | null;
+  /**
+   * Stage 14 · VB2 · substitutions on the pad, any team sport: `maxSubs` counted
+   * per match, per set (volleyball, FIVB 15.6: 6) or per period; who may come
+   * back on — 'free' (rolling: basketball, hockey), 'same_spot' (FIVB: a starter
+   * once a set, only for their own substitute; a substitute once, only for that
+   * starter) or 'none'. An injury (exceptional) substitution never counts.
+   */
+  subsPer?: 'match' | 'set' | 'period';
+  reentry?: 'free' | 'same_spot' | 'none';
+  /** Stage 14 · VB7: volleyball liberos a team may name (FIVB 19: up to 2; the beach none); null = no limit. */
+  liberos?: number | null;
+  /**
+   * Stage 14 · VB4 · change courts every N points (beach: 7) and every M in the
+   * deciding set (beach: 5); null = the indoor rule (only at 8 in the deciding
+   * set). A 2-a-side match without them plays the beach rule (courtSwitchOf).
+   */
+  sideSwitchEvery?: number | null;
+  decidingSwitchEvery?: number | null;
+  /**
+   * Stage 14 · VB12 · the Prime Volleyball League's extras: a Super Point (once a
+   * set a team calls it, before it reaches `superPointBefore` — the next rally
+   * is worth 2 to whoever wins it) and a Super Serve (an ace is worth 2).
+   */
+  superPoint?: boolean;
+  superPointBefore?: number | null;
+  superServe?: boolean;
 }
 
 /**
@@ -193,12 +219,13 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   badminton: { players: null, bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.47: players 2 = doubles; 3.49 rubbers; Stage 11 · PB9 timed
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.54 rubbers; Stage 11 · PB9 timed
   pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally', penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.58: side-out; players 2 = doubles; Stage 11 · PB9 timed
-  volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // Stage 11 · PB9 timed
+  // Stage 14 · VB2 / VB4 / VB7 / VB12: 6 subs a set back to the same spot, 2 liberos, the indoor court change, no PVL extras.
+  volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point', maxSubs: 6, subsPer: 'set', reentry: 'same_spot', liberos: 2, sideSwitchEvery: null, decidingSwitchEvery: null, superPoint: false, superPointBefore: 11, superServe: false }, // Stage 11 · PB9 timed
   tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null, tiebreakAt: null, finalSetTiebreakTo: null, noLet: false, ballChange: false, penaltyLadder: null, tie: null }, // BUILD 3.59–3.66; Stage 9 · T2, T10, T9, T3 (players 2 = doubles)
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50, tie: null, penaltyLadder: null }, // BUILD 3.72–3.77 · Stage 12 · CH5: team events
-  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null },
-  hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true },
-  basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false },
+  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null, subsPer: 'match', reentry: 'free' }, // Stage 14 · VB2: as before — a count a match, no re-entry check
+  hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true, maxSubs: null, subsPer: 'match', reentry: 'free' }, // Stage 14 · VB2: rolling subs (FIH)
+  basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false, maxSubs: null, subsPer: 'match', reentry: 'free' }, // Stage 14 · VB2: unlimited (FIBA)
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true, tie: null, penaltyLadder: null, delaySeconds: null, incrementFromMove: null, secondPeriodMoves: null, secondPeriodMinutes: null }, // Stage 12 · CH5: team matches · CH6: the rest of the clock
 };
 
@@ -339,7 +366,7 @@ export const CONDUCT_LADDERS: Readonly<Record<string, string>> = {
   badminton: 'warning,point,default', // BWF: yellow, red (a fault), black (disqualified)
   tabletennis: 'warning,point,point2,default', // ITTF: yellow, yellow-red 1 point, 2 points, the referee
   pickleball: 'verbal,warning,foul,forfeit_game,default', // Stage 11 · PB6: USA Pickleball Sec. 22 (was warning, point, forfeit)
-  volleyball: 'warning,point,default', // FIVB: warning, penalty, disqualification
+  volleyball: 'warning,point,expel,dq', // FIVB 21.3 (Stage 14 · VB3): warning, penalty, expulsion (the set), disqualification (the match) — the team plays on
   chess: 'warning,time,default', // Stage 12 · CH8 · FIDE 12.9: a warning, time to the opponent, the game lost
   carrom: 'warning,board,default', // Stage 13 · CR7 · ICF Laws 51, 91, 126, 143: a warning, the board lost, the match lost
 };
@@ -358,7 +385,9 @@ export type LadderEffect = 'none' | 'points' | 'point_off' | 'game' | 'forfeit_g
   // Stage 12 · CH8 · chess: time to the opponent's clock (2 minutes in a standard game, 1 in rapid / blitz).
   | 'time'
   // Stage 13 · CR7 · carrom: the board to the opponent, counted by the pieces and queen still on it (Law 91).
-  | 'board';
+  | 'board'
+  // Stage 14 · VB3 · one player out and the team plays on: for the rest of the set, or of the match.
+  | 'expel_set' | 'player_out';
 export type LadderStepDef = { label: string; effect: LadderEffect; n?: number };
 const step = (label: string, effect: LadderEffect, n?: number): LadderStepDef => (n != null ? { label, effect, n } : { label, effect });
 /** Stage 11 · PB6: every step a sport's ladder may use, in that sport's words. */
@@ -370,10 +399,28 @@ export const CONDUCT_STEPS: Readonly<Record<string, Readonly<Record<string, Ladd
     verbal: step('verbal warning', 'none'), warning: step('technical warning', 'none'), foul: step('technical foul', 'point_off'),
     point: step('point penalty', 'points', 1), forfeit_game: step('game forfeit', 'forfeit_game'), default: step('match forfeit', 'match'),
   },
-  volleyball: { warning: step('warning', 'none'), point: step('penalty', 'points', 1), default: step('disqualification', 'match') },
+  // Stage 14 · VB3 · FIVB 21: a disqualified player leaves the match and the team plays on ('dq'); a team that
+  // can't go on is defaulted ('default', kept for older ladders). Delays have their own track (CONDUCT_DELAY).
+  volleyball: {
+    warning: step('warning', 'none'), point: step('penalty', 'points', 1), expel: step('expulsion', 'expel_set'), dq: step('disqualification', 'player_out'),
+    default: step('team default', 'match'), delay_warning: step('delay warning', 'none'), delay_penalty: step('delay penalty', 'points', 1),
+  },
   chess: { warning: step('warning', 'none'), time: step('time to the opponent', 'time'), default: step('game lost', 'match') }, // Stage 12 · CH8
   carrom: { warning: step('warning', 'none'), board: step('board lost', 'board'), default: step('match lost', 'match') }, // Stage 13 · CR7
 };
+/**
+ * Stage 14 · VB3 · a sport's separate ladder for delays (FIVB 16.2: the first a
+ * delay warning, every later one a delay penalty — for the whole match), used
+ * for the 'time' offence; other offences don't count delays, nor delays them.
+ */
+export const CONDUCT_DELAY: Readonly<Record<string, string>> = { volleyball: 'delay_warning,delay_penalty' };
+/** The steps a delay takes in this sport, or null when delays share the misconduct ladder. */
+export function delayLadder(sport: string | null | undefined): LadderStep[] | null {
+  const d = CONDUCT_DELAY[lengthKey(sport)];
+  return d ? d.split(',') : null;
+}
+/** Stage 14 · VB3: the effects that put one player out while the team plays on. */
+export const PLAYER_OUT_EFFECTS: ReadonlySet<string> = new Set(['expel_set', 'player_out']);
 /** A step's definition in this sport (an unknown one reads as a warning). */
 export function ladderStepDef(sport: string | null | undefined, stepKey: string): LadderStepDef {
   return CONDUCT_STEPS[lengthKey(sport)]?.[stepKey] ?? step('warning', 'none');
@@ -388,7 +435,7 @@ export const LADDER_CHOICES: Readonly<Record<string, ReadonlyArray<readonly [str
   badminton: [['warning,default', 'Warning, then disqualification']],
   tabletennis: [['warning,point,default', 'Warning, point, disqualification'], ['warning,default', 'Warning, then disqualification']],
   pickleball: [['warning,foul,default', 'Warning, technical foul, forfeit'], ['warning,point,default', 'Warning, point, forfeit'], ['warning,default', 'Warning, then forfeit']], // Stage 11 · PB6
-  volleyball: [['warning,default', 'Warning, then disqualification']],
+  volleyball: [['warning,point,default', 'Warning, penalty, team default'], ['warning,default', 'Warning, then team default'], ['warning,expel,dq', 'Warning, expulsion, disqualification']], // Stage 14 · VB3
   chess: [['warning,default', 'Warning, then the game lost'], ['default', 'The game lost straight away']], // Stage 12 · CH8
   carrom: [['warning,default', 'Warning, then the match lost'], ['board,default', 'The board lost, then the match']], // Stage 13 · CR7
 };
@@ -406,6 +453,7 @@ export function conductWords(sport: string | null | undefined): ConductWords {
   if (key === 'pickleball') return { title: 'misconduct', out: 'forfeit', outPast: 'forfeited', short: 'forfeit' };
   if (key === 'chess') return { title: 'misconduct', out: 'loss', outPast: 'lost', short: 'lost' }; // Stage 12 · CH8
   if (key === 'carrom') return { title: 'misconduct', out: 'loss', outPast: 'lost the match', short: 'match lost' }; // Stage 13 · CR7
+  if (key === 'volleyball') return { title: 'misconduct', out: 'default', outPast: 'defaulted', short: 'def.' }; // Stage 14 · VB3: a disqualification is one player's; the team's is a default
   return { title: 'misconduct', out: 'disqualification', outPast: 'disqualified', short: 'DQ' };
 }
 export function ladderProblem(key: string, ladder: unknown): string | null {
@@ -639,6 +687,8 @@ const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', noLbw: 'No LBW', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
   finalTarget: 'Deciding game target', winBy2: 'Win by 2', allGames: 'Every game played', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', timedLevel: 'Level at time', tiebreakAt: 'Tiebreak at', finalSetTiebreakTo: 'Final-set tiebreak', noLet: 'Lets', ballChange: 'New balls', penaltyLadder: 'Code violations', tie: 'Team tie', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game', gameMinutes: 'Minutes a game', carromMode: 'Carrom game', queenValue: 'Queen (point carrom)',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
+  // Stage 14.
+  maxSubs: 'Substitutions', subsPer: 'Substitutions counted', reentry: 'Coming back on', liberos: 'Liberos', sideSwitchEvery: 'Change courts every', decidingSwitchEvery: 'Change courts in the deciding set every', superPoint: 'Super Point', superPointBefore: 'Super Point before', superServe: 'Super Serve',
 };
 
 const isWhole = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n);
@@ -828,6 +878,21 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'volleyball' && (!isWhole(r.timeoutsPerSet) || r.timeoutsPerSet < 0)) { // Stage 13 · CR3: no top
     return refuse('Timeouts a set must be a whole number, 0 or more.', 'timeoutsPerSet');
   }
+  // Stage 14 · VB2: the organiser's substitutions (optional; no app top), counted a match / set / period, and who comes back.
+  if (SUB_PAD_SPORTS.has(key) && key !== 'football' && r.maxSubs != null && (!isWhole(r.maxSubs) || r.maxSubs < 0)) return refuse('Substitutions must be a whole number, or no limit.', 'maxSubs');
+  if (SUB_PAD_SPORTS.has(key) && r.subsPer != null && !['match', 'set', 'period'].includes(r.subsPer as string)) return refuse('Substitutions are counted a match, a set or a period.', 'subsPer');
+  if (SUB_PAD_SPORTS.has(key) && r.subsPer === 'set' && key !== 'volleyball') return refuse('Only volleyball is played in sets.', 'subsPer');
+  if (SUB_PAD_SPORTS.has(key) && r.subsPer === 'period' && key === 'volleyball') return refuse('Volleyball counts substitutions a set or a match.', 'subsPer');
+  if (SUB_PAD_SPORTS.has(key) && r.reentry != null && !['free', 'same_spot', 'none'].includes(r.reentry as string)) return refuse('Coming back on is free, to the same spot, or not at all.', 'reentry');
+  // Stage 14 · VB7 / VB4 / VB12 · volleyball: liberos, court changes, the PVL extras.
+  if (key === 'volleyball') {
+    if (r.liberos != null && (!isWhole(r.liberos) || r.liberos < 0)) return refuse('Liberos must be a whole number, or no limit.', 'liberos');
+    if (r.sideSwitchEvery != null && (!isWhole(r.sideSwitchEvery) || r.sideSwitchEvery < 1)) return refuse('Change courts every 1 point or more, or off.', 'sideSwitchEvery');
+    if (r.decidingSwitchEvery != null && (!isWhole(r.decidingSwitchEvery) || r.decidingSwitchEvery < 1)) return refuse('Change courts in the deciding set every 1 point or more, or off.', 'decidingSwitchEvery');
+    if (typeof r.superPoint !== 'boolean') return refuse('Super Point is on or off.', 'superPoint');
+    if (typeof r.superServe !== 'boolean') return refuse('Super Serve is on or off.', 'superServe');
+    if (r.superPointBefore != null && (!isWhole(r.superPointBefore) || r.superPointBefore < 1)) return refuse('A Super Point is called before a team reaches 1 point or more, or any time.', 'superPointBefore');
+  }
   // BUILD 3.37: a rally sport's points to win a set.
   const rally = RALLY_LIMITS[key];
   if (rally && (!isWhole(r.target) || r.target < 1)) { // Stage 13 · CR3: no top
@@ -888,7 +953,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'noLbw', 'bestOf', 'baseMinutes', 'incrementSeconds', 'delaySeconds', 'incrementFromMove', 'secondPeriodMoves', 'secondPeriodMinutes',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(RALLY_TIMED.has(key) ? ['timeLimitMinutes', 'timedLevel'] : []), ...(key === 'tabletennis' ? ['winBy2'] : []), ...(key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' ? ['allGames'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...((TIE_SPORTS as readonly string[]).includes(key) ? ['tie'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet', 'liberos', 'sideSwitchEvery', 'decidingSwitchEvery', 'superPoint', 'superPointBefore', 'superServe'] : []), ...(SUB_PAD_SPORTS.has(key) ? ['maxSubs', 'subsPer', 'reentry'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(RALLY_TIMED.has(key) ? ['timeLimitMinutes', 'timedLevel'] : []), ...(key === 'tabletennis' ? ['winBy2'] : []), ...(key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' ? ['allGames'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...((TIE_SPORTS as readonly string[]).includes(key) ? ['tie'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -1024,7 +1089,47 @@ export function footballPresetOf(r: Partial<MatchRules> | null | undefined): str
 }
 
 /** BUILD 3.41: beach volleyball — 2 a side, sets to 21, a deciding set to 15, best of 3. */
-export const BEACH_VOLLEYBALL = { players: 2, target: 21, finalTarget: 15, bestOf: 3, timeoutsPerSet: 1 } as const; // BUILD 3.42: one timeout a set on the beach
+export const BEACH_VOLLEYBALL = { players: 2, target: 21, finalTarget: 15, bestOf: 3, timeoutsPerSet: 1, sideSwitchEvery: 7, decidingSwitchEvery: 5, maxSubs: 0, liberos: 0 } as const; // BUILD 3.42: one timeout a set on the beach · Stage 14 · VB4: courts every 7 (5 in set 3), no subs, no libero
+
+/**
+ * Stage 14 · VB4 · when a volleyball match changes courts: every N points (and
+ * every M in the deciding set), or — null — the indoor rule (at 8 in the
+ * deciding set only). A 2-a-side match that doesn't say plays the beach rule
+ * (FIVB Beach 18.2: every 7, every 5 in set 3): the beach preset used to keep
+ * the indoor change at 8 (the bug fixed here).
+ */
+export function courtSwitchOf(rules: Partial<MatchRules> | null | undefined): { every: number; deciding: number } | null {
+  if (!rules) return null;
+  if (rules.sideSwitchEvery != null) return { every: rules.sideSwitchEvery, deciding: rules.decidingSwitchEvery ?? rules.sideSwitchEvery };
+  if (rules.players === 2) return { every: 7, deciding: rules.decidingSwitchEvery ?? 5 };
+  return null;
+}
+
+/**
+ * Stage 14 · VB8 · how a point was won, per sport (asked with "who?", never
+ * required). Each is a leaderboard of its own; an opponent's error credits nobody.
+ */
+export type PointHow = { key: string; label: string; board?: string; error?: boolean };
+export const POINT_HOW: Readonly<Record<string, ReadonlyArray<PointHow>>> = {
+  volleyball: [{ key: 'attack', label: 'Attack', board: 'Attack points' }, { key: 'block', label: 'Block', board: 'Block points' }, { key: 'ace', label: 'Ace', board: 'Aces' }, { key: 'error', label: 'Opponent error', error: true }],
+  badminton: [{ key: 'smash', label: 'Smash', board: 'Smash winners' }, { key: 'winner', label: 'Other winner', board: 'Winners' }, { key: 'error', label: 'Opponent error', error: true }],
+  tabletennis: [{ key: 'serve', label: 'Serve', board: 'Serve points' }, { key: 'winner', label: 'Winner', board: 'Winners' }, { key: 'error', label: 'Opponent error', error: true }],
+  pickleball: [{ key: 'ace', label: 'Ace', board: 'Aces' }, { key: 'winner', label: 'Winner', board: 'Winners' }, { key: 'error', label: 'Opponent error', error: true }],
+};
+export function pointHowFor(sport: string | null | undefined): ReadonlyArray<PointHow> {
+  return POINT_HOW[lengthKey(sport)] ?? [];
+}
+
+/**
+ * Stage 14 · VB8 · basketball's own player stats beyond points, assists and
+ * fouls (FIBA box score): each is a pad button that asks who, and a leaderboard.
+ */
+export const BASKETBALL_STATS: ReadonlyArray<{ key: string; label: string; board: string }> = [
+  { key: 'rebound', label: 'REB', board: 'Rebounds' }, { key: 'steal', label: 'STL', board: 'Steals' }, { key: 'block', label: 'BLK', board: 'Blocks' },
+];
+
+/** Stage 14 · VB2: the sports whose pad has a SUB button and keeps their own substitution rules. */
+export const SUB_PAD_SPORTS: ReadonlySet<string> = new Set(['football', 'hockey', 'basketball', 'volleyball']);
 
 /** BUILD 3.47: doubles is exactly two a side. */
 export const DOUBLES_PLAYERS = 2;
@@ -1048,6 +1153,15 @@ export function doublesLineupProblem(
     if (phase === 'start' && n === 1) return `Doubles is two a side — ${names[side]} needs a partner in the line-up.`;
   }
   return null;
+}
+
+/** Stage 14 · VB2: a match's substitutions in words when they aren't the sport's standard ("4 subs a set", "no subs"). */
+function subsWords(rules: Partial<MatchRules>, std: Partial<MatchRules>): string | null {
+  if (rules.maxSubs === std.maxSubs && rules.subsPer === std.subsPer && rules.reentry === std.reentry) return null;
+  if (rules.maxSubs === 0) return 'no subs';
+  const n = rules.maxSubs == null ? 'unlimited subs' : `${rules.maxSubs} sub${rules.maxSubs === 1 ? '' : 's'}${rules.subsPer === 'set' ? ' a set' : rules.subsPer === 'period' ? ' a period' : ''}`;
+  const back = rules.reentry !== std.reentry ? (rules.reentry === 'same_spot' ? ', back to the same spot' : rules.reentry === 'none' ? ', no coming back on' : ', rolling') : '';
+  return `${n}${back}`;
 }
 
 /** BUILD 3.28: FIH Hockey5s — 5 a side, two halves of 10 minutes. */
@@ -1090,6 +1204,16 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     if (rules.timeLimitMinutes) parts.push(`timed · ${rules.timeLimitMinutes} min${rules.timedLevel === 'draw' ? ' · level stays level' : ''}`); // Stage 11 · PB9
     if (rules.timeoutsPerSet != null && rules.timeoutsPerSet !== std.timeoutsPerSet) parts.push(rules.timeoutsPerSet === 0 ? 'no timeouts' : `${rules.timeoutsPerSet} timeout${rules.timeoutsPerSet === 1 ? '' : 's'} a set`); // BUILD 3.42
     if (rules.finalTarget !== undefined && rules.finalTarget !== std.finalTarget && (rules.bestOf ?? 3) > 1) parts.push(rules.finalTarget == null ? 'decider the same' : `decider to ${rules.finalTarget}`); // BUILD 3.38 (Stage 11 follow-up: a one-set match has no decider to mention)
+    // Stage 14 · VB2 / VB4 / VB7 / VB12: volleyball's own, when not the standard.
+    if (key === 'volleyball') {
+      const sw = courtSwitchOf(rules);
+      if (sw) parts.push(`courts every ${sw.every}${sw.deciding !== sw.every ? ` (${sw.deciding} in the decider)` : ''}`);
+      const subs = subsWords(rules, std);
+      if (subs) parts.push(subs);
+      if (rules.liberos !== undefined && rules.liberos !== std.liberos) parts.push(rules.liberos === 0 ? 'no libero' : rules.liberos == null ? 'any liberos' : `${rules.liberos} libero${rules.liberos === 1 ? '' : 's'}`);
+      if (rules.superPoint) parts.push(`Super Point${rules.superPointBefore != null ? ` before ${rules.superPointBefore}` : ''}`);
+      if (rules.superServe) parts.push('Super Serve (an ace is 2)');
+    }
     return parts.length ? parts.join(' · ') : null;
   }
   // BUILD 3.72+: carrom — said when it isn't the official game.
@@ -1135,6 +1259,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (key === 'hockey' && rules.yellowCardMinutes != null && rules.yellowCardMinutes !== 5) parts.push(`yellow ${rules.yellowCardMinutes} min`); // BUILD 3.29
   if (key === 'basketball' && rules.overtimeMinutes != null && rules.overtimeMinutes !== 5) parts.push(`OT ${rules.overtimeMinutes} min`); // BUILD 3.31
   if (key === 'basketball' && rules.targetScore) parts.push(`first to ${rules.targetScore}`); // BUILD 3.32
+  if (key === 'basketball' || key === 'hockey') { const subs = subsWords(rules, SPORT_RULES[key] as Partial<MatchRules>); if (subs) parts.push(subs); } // Stage 14 · VB2
   if (key === 'basketball' && rules.pointSet === '12') parts.push('1s and 2s'); // BUILD 3.33
   if (key === 'basketball' && rules.foulOut === 6) parts.push('foul out at 6'); // BUILD 3.35 (5 left unsaid)
   if (rules.penaltyKicks === 3) parts.push('3 pens each');

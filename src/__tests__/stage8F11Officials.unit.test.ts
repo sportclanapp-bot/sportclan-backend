@@ -77,10 +77,10 @@ test('the organiser names a football match’s assistant referees; replacing one
   const r = await run(setMatchAssistants, ORG, { id: M }, { assignments: [{ role: 'assistant_referee_1', user_id: AR1 }, { role: 'fourth_official', user_id: AR2 }] });
   expect(r.statusCode).toBe(200);
   expect(r.body.official).toBe('Referee');
-  expect(r.body.roles.map((x: any) => [x.label, x.user?.id ?? null])).toEqual([['Assistant referee 1', AR1], ['Assistant referee 2', null], ['Fourth official', AR2]]);
+  expect(r.body.roles.map((x: any) => [x.label, x.user?.id ?? null])).toEqual([['Assistant referee 1', AR1], ['Assistant referee 2', null], ['Fourth official', AR2], ['Reserve assistant referee', null]]); // Stage 14 · VB10
   expect(sent.map((s) => s.title)).toEqual(['You’re assistant referee 1', 'You’re fourth official']);
   const r2 = await run(setMatchAssistants, ORG, { id: M }, { assignments: [{ role: 'assistant_referee_1', user_id: AR2 }, { role: 'fourth_official', user_id: null }] });
-  expect(r2.body.roles.map((x: any) => x.user?.id ?? null)).toEqual([AR2, null, null]);
+  expect(r2.body.roles.map((x: any) => x.user?.id ?? null)).toEqual([AR2, null, null, null]);
   const rows = db.t('match_officials');
   expect(rows).toHaveLength(3); // never deleted
   expect(rows.filter((x) => !x.removed_at).map((x) => [x.role, x.user_id])).toEqual([['assistant_referee_1', AR2]]);

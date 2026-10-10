@@ -401,7 +401,7 @@ export function typedSeriesPoints(
     const o = (x ?? {}) as { a?: unknown; b?: unknown };
     if (!Number.isInteger(o.a) || !Number.isInteger(o.b) || (o.a as number) < 0 || (o.b as number) < 0) return no(`Game ${i + 1}: each side scored a whole number, 0 or more.`);
     const a = o.a as number; const b = o.b as number;
-    if (k === 'basketball' && a === b) return no(`Game ${i + 1}: a basketball game can’t end level.`);
+    if (a === b) return no(`Game ${i + 1}: a series game has a winner — give the score after ${k === 'basketball' ? 'overtime' : 'extra time (a shoot-out’s winner gets one more)'}.`);
     for (const [side, n] of [['A', a], ['B', b]] as const) {
       if (k === 'basketball') { if (n > 0) events.push({ event_type: 'score', payload: { team_side: side, kind: 'typed', value: n, typed: true } }); }
       else for (let j = 0; j < n; j++) events.push({ event_type: 'score', payload: { team_side: side, kind: 'goal', value: 1, typed: true } });

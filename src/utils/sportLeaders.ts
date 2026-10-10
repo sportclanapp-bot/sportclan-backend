@@ -168,7 +168,7 @@ export function sportBoards(
       topPlayers(p, 'rebounds', 'Rebounds', 'rebound', 'rebounds', teamNames, (t) => t.s.rebounds ?? 0, (t) => (t.s.oreb || t.s.dreb ? `${t.s.oreb ?? 0} off · ${t.s.dreb ?? 0} def` : played(t))),
       topPlayers(p, 'steals', 'Steals', 'steal', 'steals', teamNames, (t) => t.s.steals ?? 0, played),
       topPlayers(p, 'blocks', 'Blocks', 'block', 'blocks', teamNames, (t) => t.s.blocks ?? 0, played),
-      topPlayers(boxKept ? p : [], 'efficiency', 'Efficiency', 'point', 'points', teamNames, eff, played),
+      topPlayers(boxKept ? p : [], 'efficiency', 'Efficiency', 'eff', 'eff', teamNames, eff, played),
       // Shooting: the share made, its attempts beside it (any attempt ranks — no app minimum).
       topPlayers(shooters('fgm', 'fga'), 'fg_pct', 'Field goal %', '%', '%', teamNames, (t) => pct(t.s.fgm ?? 0, t.s.fga ?? 0), (t) => `${t.s.fgm ?? 0}/${t.s.fga ?? 0}`),
       topPlayers(shooters('tpm', 'tpa'), 'tp_pct', '3-point %', '%', '%', teamNames, (t) => pct(t.s.tpm ?? 0, t.s.tpa ?? 0), (t) => `${t.s.tpm ?? 0}/${t.s.tpa ?? 0}`),

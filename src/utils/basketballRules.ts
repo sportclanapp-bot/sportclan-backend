@@ -125,15 +125,19 @@ export function foulTally(
       continue;
     }
     team[side] += kind === 'flagrant' && opts.flagrantTeamFouls ? opts.flagrantTeamFouls : 1;
-    if (typeof p.player_id !== 'string' || !p.player_id) continue;
-    const line = byId.get(p.player_id) ?? { id: p.player_id, name: typeof p.player_name === 'string' && p.player_name ? p.player_name : 'Player', side, fouls: 0, out: false, ej: 0 };
+    // Stage 15: a typed-in player (a name, no account) is counted by name — they foul out and are ejected too.
+    // A guest's id (guest:…) is made on the phone that typed them, so a guest is counted by name as well.
+    const named = typeof p.player_name === 'string' && p.player_name.trim() ? `name:${side}:${p.player_name.trim().toLowerCase()}` : null;
+    const key = typeof p.player_id === 'string' && p.player_id && !p.player_id.startsWith('guest:') ? p.player_id : named;
+    if (!key) continue;
+    const line = byId.get(key) ?? { id: key, name: typeof p.player_name === 'string' && p.player_name ? p.player_name : 'Player', side, fouls: 0, out: false, ej: 0 };
     line.fouls += 1;
     line.out = line.out || line.fouls >= foulOut;
     if (kind === 'flagrant' || (kind === 'technical' && counts === 'tech_flagrant')) line.ej += 1;
     if (!line.ejected && kind === 'disqualifying') { line.ejected = true; line.why = 'a disqualifying foul'; }
     if (!line.ejected && line.ej >= after) { line.ejected = true; line.why = counts === 'flagrant' ? `${after} flagrant fouls` : `${after} technical or flagrant fouls`; }
     if (line.ejected) line.out = true;
-    byId.set(p.player_id, line);
+    byId.set(key, line);
   }
   return { period, team, players: [...byId.values()].map(({ ej: _ej, ...x }) => x), coach };
 }

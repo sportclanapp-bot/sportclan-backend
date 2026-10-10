@@ -1768,7 +1768,10 @@ export async function recomputeSummary(
         return { key: `G${x.game}`, label: `Game ${x.game}`, winner: x.winner ?? 'draw', A: x.winner === 'A' ? 1 : 0, B: x.winner === 'B' ? 1 : 0, runsA: a.runs, wicketsA: a.wickets, runsB: b.runs, wicketsB: b.wickets };
       });
       summary.rubber = crSeries.current;
-    } else if (slug === 'cricket') { delete summary.tie; delete summary.rubbers; delete summary.rubber; }
+      // Who bats first in the game in play (game 2 on: the scorer's choice at the last game's end; game 1: the toss).
+      const sf = crSeries.current > 1 ? crSeries.ends[crSeries.current - 2]?.nextFirst ?? null : null;
+      if (sf) { summary.series_first = sf; if (!cricketFirstBat) summary.first_batting_side = sf; } else delete summary.series_first;
+    } else if (slug === 'cricket') { delete summary.tie; delete summary.rubbers; delete summary.rubber; delete summary.series_first; }
   }
   if (slug === 'chess' && !tieSummary) { // Stage 12 · CH5: a team match's summary is its tie's
     summary.result = chessResult ?? 'No result yet';

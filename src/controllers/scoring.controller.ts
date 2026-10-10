@@ -20,8 +20,9 @@ import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber } from '../utils/cricketRules';
-import { typedChessBoards, typedMatchPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
-import { BASKETBALL_STATS, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
+import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
+import { FOUL_KINDS } from '../utils/basketballRules';
+import { BASKETBALL_STAT_KEYS, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
 import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { trumpsFor } from '../utils/tieTrumps';
 import { sideOutReplay } from '../utils/pickleballCore';
@@ -389,6 +390,22 @@ export async function validateScoringEvent(
     }
     if (payload.team_side !== 'A' && payload.team_side !== 'B') return refuse(400, { error: 'Say whose penalty it is.', code: 'BAD_NOTE' });
   }
+  // Stage 15 · BB2: a basketball foul's kind is one FIBA has.
+  if (event_type === 'foul' && payload && payload.kind != null && !FOUL_KINDS.some((k) => k.key === payload.kind)) {
+    return refuse(400, { error: 'That isn’t a kind of foul.', code: 'BAD_FOUL' });
+  }
+  // Stage 15 · BB6 / BB9: a series game's end, the possession arrow.
+  if (event_type === 'note' && payload && (payload.kind === 'game_end' || payload.kind === 'arrow' || payload.kind === 'arrow_flip')) {
+    const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    if (payload.kind === 'game_end' && !tieSpecOf(slug, rulesOf(slug, match))?.series) return refuse(400, { error: 'A game ends that way only in a series.', code: 'BAD_NOTE' });
+    // A series game is won: a level one plays on (overtime, or the next goal) — it would count for nobody.
+    if (payload.kind === 'game_end') {
+      const ss = (match.score_summary ?? {}) as { A?: { points?: unknown }; B?: { points?: unknown } };
+      if (Number(ss.A?.points ?? 0) === Number(ss.B?.points ?? 0)) return refuse(400, { error: 'The game is level — play on until one side leads (overtime, or the next goal).', code: 'GAME_LEVEL' });
+    }
+    if (payload.kind !== 'game_end' && slug !== 'basketball') return refuse(400, { error: 'The possession arrow is basketball’s.', code: 'BAD_NOTE' });
+    if (payload.kind === 'arrow' && payload.team_side !== 'A' && payload.team_side !== 'B') return refuse(400, { error: 'Say which team.', code: 'BAD_NOTE' });
+  }
   // Stage 14 · VB1 / VB7 / VB12 / VB8: volleyball's court notes and its PVL extras, basketball's stats.
   if ((event_type === 'note' && payload && ['rotation', 'libero', 'super_point', 'stat'].includes(payload.kind))
     || (event_type === 'score' && payload && (payload.kind === 'fault' || payload.super_serve === true || payload.super_point === true || Number(payload.value ?? 1) > 1))) {
@@ -396,7 +413,8 @@ export async function validateScoringEvent(
     const r = rulesOf(slug, match);
     const vbNote = event_type === 'note' && payload.kind !== 'stat';
     if (vbNote && slug !== 'volleyball') return refuse(400, { error: 'Line-ups, liberos and Super Points are volleyball’s.', code: 'BAD_NOTE' });
-    if (payload.kind === 'stat' && (slug !== 'basketball' || !BASKETBALL_STATS.some((x) => x.key === payload.stat))) return refuse(400, { error: 'That stat isn’t kept here.', code: 'BAD_NOTE' });
+    if (payload.kind === 'stat' && (slug !== 'basketball' || !BASKETBALL_STAT_KEYS.has(String(payload.stat)))) return refuse(400, { error: 'That stat isn’t kept here.', code: 'BAD_NOTE' });
+    if (payload.kind === 'stat' && payload.stat === 'miss' && !['ft', '2', '3'].includes(String(payload.shot))) return refuse(400, { error: 'A missed shot is a free throw, a 2 or a 3.', code: 'BAD_NOTE' });
     if (vbNote && payload.team_side !== 'A' && payload.team_side !== 'B') return refuse(400, { error: 'Say which team.', code: 'BAD_NOTE' });
     if (payload.kind === 'rotation' && (!Array.isArray(payload.slots) || payload.slots.some((x: any) => !x || typeof x.name !== 'string' || !x.name.trim()))) {
       return refuse(400, { error: 'A line-up is a list of players by name.', code: 'BAD_NOTE' });
@@ -969,6 +987,21 @@ export function rollupTieSpec(
   type Read = { winner: 'A' | 'B' | 'draw' | null; sets: { A: number[]; B: number[] }; games: { A: number; B: number }; points: { A: number; B: number } };
   const read = (evs: { event_type: string; payload: any }[], r: TieRubber): Read => {
     const rr = rulesFor(r);
+    // Stage 15 · BB6: a game of a series in a timed team sport — its score; it ends on END GAME (or a basketball target).
+    if (slug === 'football' || slug === 'hockey' || slug === 'basketball') {
+      let a = 0; let b = 0; let ended = false;
+      for (const e of evs) {
+        const p: any = e.payload || {};
+        if (e.event_type === 'score') {
+          const v = slug === 'basketball' ? Number(p.value ?? 0) : p.kind === 'goal' || p.kind === 'own_goal' ? 1 : 0;
+          const to = p.kind === 'own_goal' ? (sideOf(p) === 'A' ? 'B' : 'A') : sideOf(p);
+          if (to === 'A') a += v; else b += v;
+        } else if (e.event_type === 'note' && p.kind === 'game_end') ended = true;
+      }
+      const target = slug === 'basketball' ? rr.targetScore ?? null : null;
+      const done = ended || (target != null && (a >= target || b >= target));
+      return { winner: done ? (a === b ? 'draw' : a > b ? 'A' : 'B') : null, sets: { A: [a], B: [b] }, games: { A: 0, B: 0 }, points: { A: a, B: b } };
+    }
     // Stage 12 · CH5: a board of a team chess match — its result, by its colours, worth the board's points.
     if (slug === 'chess') {
       let w: 'white' | 'black' | 'draw' | undefined;
@@ -1249,7 +1282,16 @@ export interface GoalPlayerLine {
   /** 2026-09-26: cards credited to this player (the pad asks who got it; optional). */
   yellow_cards?: number; red_cards?: number; green_cards?: number;
 }
-export interface PointPlayerLine { side: 'A' | 'B'; name?: string; points: number; assists: number; /** BUILD 3.35: only once they've fouled. */ fouls?: number; /** Stage 14 · VB8: rebounds / steals / blocks, once they have one. */ rebounds?: number; steals?: number; blocks?: number }
+export interface PointPlayerLine {
+  side: 'A' | 'B'; name?: string; points: number; assists: number; /** BUILD 3.35: only once they've fouled. */ fouls?: number;
+  /** Stage 14 · VB8: rebounds / steals / blocks, once they have one. */ rebounds?: number; steals?: number; blocks?: number;
+  /**
+   * Stage 15 · BB8 · the box score, once there's one: offensive / defensive
+   * rebounds (both in `rebounds` too), turnovers, and shots made / attempted —
+   * field goals (2s and 3s; 3x3's 1s and 2s), threes (5x5), free throws (5x5).
+   */
+  oreb?: number; dreb?: number; turnovers?: number; fgm?: number; fga?: number; tpm?: number; tpa?: number; ftm?: number; fta?: number;
+}
 /** Stage 14 · VB8: `how_<key>` — the points a player won each way (attack, block, ace…), when the scorer said. */
 export interface RallyPlayerLine { side: 'A' | 'B'; name?: string; points: number; [how: `how_${string}`]: number | undefined }
 export type PlayerLine = CricketPlayerLine | GoalPlayerLine | PointPlayerLine | RallyPlayerLine;
@@ -1303,7 +1345,7 @@ export function aggregateGoalPlayers(events: { event_type: string; payload: any 
 }
 
 // Point sports (basketball): points (payload.value) + assists per scorer.
-export function aggregatePointPlayers(events: { event_type: string; payload: any }[]): Record<string, PointPlayerLine> {
+export function aggregatePointPlayers(events: { event_type: string; payload: any }[], threeByThree = false): Record<string, PointPlayerLine> {
   const players: Record<string, PointPlayerLine> = {};
   for (const e of events) {
     const p = e.payload ?? {};
@@ -1313,6 +1355,13 @@ export function aggregatePointPlayers(events: { event_type: string; payload: any
       const line = (players[id] ??= { side: sideOfPayload(p), points: 0, assists: 0 });
       if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
       line.points += Number(p.value ?? 0);
+      // Stage 15 · BB8: a made shot, by its kind ('1pt' a free throw in 5x5; in 3x3 a 1 is a field goal — `threeByThree`).
+      const v = Number(p.value ?? 0);
+      if (e.event_type === 'score' && /^[123]pt$/.test(String(p.kind ?? ''))) {
+        const ft = v === 1 && !threeByThree;
+        if (ft) { line.ftm = (line.ftm ?? 0) + 1; line.fta = (line.fta ?? 0) + 1; }
+        else { line.fgm = (line.fgm ?? 0) + 1; line.fga = (line.fga ?? 0) + 1; if (v === 3) { line.tpm = (line.tpm ?? 0) + 1; line.tpa = (line.tpa ?? 0) + 1; } }
+      }
     } else if (e.event_type === 'assist') {
       const line = (players[id] ??= { side: sideOfPayload(p), points: 0, assists: 0 });
       if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
@@ -1323,12 +1372,16 @@ export function aggregatePointPlayers(events: { event_type: string; payload: any
       if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
       line.fouls = (line.fouls ?? 0) + 1;
     } else if (e.event_type === 'note' && p.kind === 'stat') {
-      // Stage 14 · VB8: basketball's rebounds, steals and blocks.
-      const f = p.stat === 'rebound' ? 'rebounds' : p.stat === 'steal' ? 'steals' : p.stat === 'block' ? 'blocks' : null;
-      if (!f) continue;
+      // Stage 14 · VB8: basketball's rebounds, steals and blocks. Stage 15 · BB8: the box score.
       const line = (players[id] ??= { side: sideOfPayload(p), points: 0, assists: 0 });
       if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
-      line[f] = (line[f] ?? 0) + 1;
+      const inc = (k: 'rebounds' | 'steals' | 'blocks' | 'oreb' | 'dreb' | 'turnovers' | 'fga' | 'tpa' | 'fta') => { line[k] = (line[k] ?? 0) + 1; };
+      if (p.stat === 'rebound') inc('rebounds');
+      else if (p.stat === 'oreb' || p.stat === 'dreb') { inc(p.stat); inc('rebounds'); }
+      else if (p.stat === 'steal') inc('steals');
+      else if (p.stat === 'block') inc('blocks');
+      else if (p.stat === 'turnover') inc('turnovers');
+      else if (p.stat === 'miss') { if (p.shot === 'ft') inc('fta'); else { inc('fga'); if (p.shot === '3') inc('tpa'); } }
     }
   }
   return players;
@@ -1358,11 +1411,11 @@ export function aggregateRallyPlayers(events: { event_type: string; payload: any
 // goes through the EXISTING, verified aggregateCricketPlayers unchanged (its
 // output is byte-identical). Chess has no scoring events → empty map (MVP is
 // decided by winner side). `slug` must be the normalised form.
-export function aggregatePlayers(slug: string, events: { event_type: string; payload: any }[]): Record<string, PlayerLine> {
+export function aggregatePlayers(slug: string, events: { event_type: string; payload: any }[], rules?: { pointSet?: string | null } | null): Record<string, PlayerLine> {
   // Cricket gap 9: a super over's balls don't count in anyone's figures.
   if (slug === 'cricket') return aggregateCricketPlayers(mainEvents(events));
   if (slug === 'football' || slug === 'hockey') return aggregateGoalPlayers(events);
-  if (slug === 'basketball') return aggregatePointPlayers(events);
+  if (slug === 'basketball') return aggregatePointPlayers(events, rules?.pointSet === '12'); // Stage 15 · BB8: 3x3's 1s are field goals
   return aggregateRallyPlayers(events);
 }
 
@@ -1475,6 +1528,15 @@ export async function recomputeSummary(
     for (const s of ['A', 'B'] as const) {
       if ((sides[s] as { wickets?: number }).wickets! >= allOut[s]) Object.assign(sides[s], { all_out: true });
     }
+  } else if ((slug === 'football' || slug === 'hockey' || slug === 'basketball') && tieSpecOf(slug, rulesOf(slug, match))?.series) {
+    // Stage 15 · BB6: a best-of-N series — each game read by its score; a game ends on END GAME (or a basketball target).
+    const rules = rulesOf(slug, match);
+    const t = rollupTieSpec(slug, rules, tieSpecOf(slug, rules)!, events, sideOf);
+    A.score = t.scoreA; B.score = t.scoreB;
+    A.sets = t.setsA; B.sets = t.setsB;
+    A.points = t.curA; B.points = t.curB;
+    tieRubbers = { rubber: t.rubber, results: t.results };
+    tieSummary = t.tie;
   } else if (slug === 'football' || slug === 'hockey') {
     for (const e of events) {
       const p: any = e.payload || {};
@@ -1691,7 +1753,20 @@ export async function recomputeSummary(
   // the original aggregateCricketPlayers (byte-identical); other families get
   // goals/points/rally-points. Side totals (A/B) above are untouched, so results
   // and the A7-002 results surface don't change.
-  summary.players = aggregatePlayers(slug, events as any[]);
+  summary.players = aggregatePlayers(slug, events as any[], rulesOf(slug, match)); // Stage 15 · BB8: 3x3's 1s
+  // Stage 15 · BB4: each period's score — quarters, halves (not a series: its games are its line).
+  if ((slug === 'basketball' || slug === 'football' || slug === 'hockey') && !tieRubbers) {
+    const per: Array<{ A: number; B: number }> = [{ A: 0, B: 0 }];
+    for (const e of events) {
+      const p: any = e.payload || {};
+      if (e.event_type === 'period_change') { per.push({ A: 0, B: 0 }); continue; }
+      if (e.event_type !== 'score') continue;
+      const v = slug === 'basketball' ? Number(p.value ?? 0) : p.kind === 'goal' || p.kind === 'own_goal' ? 1 : 0;
+      const to = p.kind === 'own_goal' ? (sideOf(p) === 'A' ? 'B' : 'A') : sideOf(p);
+      per[per.length - 1]![to] += v;
+    }
+    summary.periods = per;
+  }
   if (carromBoardsPlayed !== null) summary.boards_played = carromBoardsPlayed;
   if (carromSlams) summary.slams = carromSlams; // Stage 13 · CR6
   if (tieRubbers) { summary.rubber = tieRubbers.rubber; summary.rubbers = tieRubbers.results; } // BUILD 3.49
@@ -1903,6 +1978,29 @@ export async function typedScore(req: Request, res: Response) {
       const summary = await recomputeSummary(id, { persist: true });
       const winner = got.winner === 'A' || got.winner === 'B' ? got.winner : null;
       return res.json({ ok: true, winner_side: winner, winner_team_id: winner ? (winner === 'A' ? m.team_a_id : m.team_b_id) : null, draw: got.winner === 'draw', text: words, summary });
+    }
+    // Stage 15 · BB4 / BB6: basketball, football, hockey — period by period, or a series game by game.
+    if (typedPeriodSport(slug)) {
+      const { count: scored } = await supabase.from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id).in('event_type', ['score', 'period_change']);
+      if (scored) return res.status(409).json({ error: 'This match has play on the pad — finish it there, or undo it first.', code: 'SCORED_ON_PAD' });
+      const prules = rulesOf(slug, m as never) as MatchRules;
+      const pspec = tieSpecOf(slug, prules);
+      const body = (req.body ?? {}) as { periods?: unknown; games?: unknown };
+      const got = pspec?.series ? typedSeriesPoints(slug, pspec, body.games) : typedPeriodPoints(slug, prules, body.periods);
+      if (got.problem) return res.status(400).json({ error: got.problem, code: 'BAD_TYPED_SCORE' });
+      const base = Date.now();
+      const rows = [
+        { match_id: id, event_type: 'note', payload: { kind: 'typed_score', text: got.text }, created_by: userId, created_at: new Date(base).toISOString() },
+        ...got.events.map((e, i) => ({ match_id: id, event_type: e.event_type, payload: e.payload, created_by: userId, created_at: new Date(base + 1 + i).toISOString() })),
+      ];
+      for (let i = 0; i < rows.length; i += 500) {
+        const { error } = await supabase.from('match_events').insert(rows.slice(i, i + 500));
+        if (error) return res.status(500).json({ error: 'The result wasn’t saved. Try again.' });
+      }
+      await promoteToLive(id, m);
+      const summary = await recomputeSummary(id, { persist: true });
+      const winner = got.winner;
+      return res.json({ ok: true, winner_side: winner, winner_team_id: winner ? (winner === 'A' ? m.team_a_id : m.team_b_id) : null, draw: 'draw' in got ? got.draw : false, text: got.text, summary });
     }
     if (!typedScoreSport(slug)) return res.status(400).json({ error: 'Typed scores are for the sports scored in games or sets.', code: 'NOT_TYPED_SPORT' });
     const { count } = await supabase.from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id).eq('event_type', 'score');

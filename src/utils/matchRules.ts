@@ -16,7 +16,7 @@
  * A match stored before this (rules = null) plays exactly as it did: its rules
  * are read back from `format` / `overs` by rulesFromLegacy.
  */
-import { TIE_SPORTS, tieNeed as tieNeedOf, tieSpecProblem, tieWeighted, type TieSpec } from './tieCore';
+import { SERIES_SPORTS, TIE_SPORTS, tieNeed as tieNeedOf, tieSpecProblem, tieWeighted, type TieSpec } from './tieCore';
 import { MATCH_LENGTHS, bestOfFor, lengthKey } from './matchLength';
 import { OVERS_MIN, PLAYERS_MIN, PLAYERS_MAX, RETIRE_MIN, RETIRE_MAX, EXTRA_RUNS_MIN, EXTRA_RUNS_MAX, INNINGS_MINUTES_MIN, INNINGS_MINUTES_MAX, isOfferedOvers } from './cricketRules';
 
@@ -211,6 +211,51 @@ export interface MatchRules {
    * tournament's events say it on their category instead.
    */
   minWomen?: number | null;
+  /**
+   * Stage 15 · BB1 · basketball's time-outs as data; null = the game's standard
+   * (5x5: FIBA 2 in the first half, 3 in the second — at most 2 in the last
+   * 2 minutes — and 1 an overtime; 3x3: 1 a game, carried into overtime).
+   */
+  timeouts?: TimeoutRules | null;
+  /** Stage 15 · BB3 · the team foul the penalty starts at (FIBA 5x5: the 5th; 3x3: the 7th); null = by the game. */
+  teamFoulBonus?: number | null;
+  /** Stage 15 · BB3 · 3x3: from this team foul, 2 free throws and the ball (the 10th); null = none. */
+  teamFoulPossessionAt?: number | null;
+  /** Stage 15 · BB3 · 3x3: overtime is won by the first to this many points (2); null = by the game (5x5 plays the clock). */
+  overtimeTo?: number | null;
+  /**
+   * Stage 15 · BB2 · ejections (FIBA 2026): a player is out after this many
+   * Category 1 technicals and flagrant fouls together (2) — 3x3 counts only
+   * unsportsmanlike (flagrant) fouls; a head coach after this many coach "C"
+   * technicals (2), or bench "B" ones (3, or 3 that include a "C").
+   */
+  ejectAfter?: number;
+  ejectCounts?: 'tech_flagrant' | 'flagrant';
+  coachEjectC?: number;
+  coachEjectB?: number;
+}
+
+/** Stage 15 · BB1 · a team's time-outs (each optional; null = not counted that way). */
+export type TimeoutRules = {
+  firstHalf?: number | null; secondHalf?: number | null; perPeriod?: number | null; perGame?: number | null;
+  perOvertime?: number | null; lateMinutes?: number | null; lateMax?: number | null; carry?: boolean;
+};
+/** Stage 15 · BB1 / BB3 · FIBA's time-outs: 5x5 and 3x3. */
+export const FIBA_TIMEOUTS: TimeoutRules = { firstHalf: 2, secondHalf: 3, perOvertime: 1, lateMinutes: 2, lateMax: 2 };
+export const FIBA_3X3_TIMEOUTS: TimeoutRules = { perGame: 1, carry: true };
+/** Stage 15 · BB3 · FIBA 3x3: 3 a side, 1s and 2s, 10 minutes or 21, overtime first to 2, the bonus from the 7th foul (the 10th gives the ball), one time-out. */
+export const BASKETBALL_3X3 = { players: 3, pointSet: '12' as const, targetScore: 21, periods: 1, periodMinutes: 10, overtimeTo: 2, teamFoulBonus: 7, teamFoulPossessionAt: 10, timeouts: FIBA_3X3_TIMEOUTS, ejectCounts: 'flagrant' as const };
+const is3x3 = (r: Partial<MatchRules>) => r.pointSet === '12';
+/** Stage 15 · the bonus team foul — the rules', else 3x3's 7th or 5x5's 5th (a 3x3 match from before showed the 5th: the bug fixed here). */
+export function teamFoulBonusOf(r: Partial<MatchRules> | null | undefined): number { return r?.teamFoulBonus ?? (r && is3x3(r) ? 7 : 5); }
+export function teamFoulPossessionOf(r: Partial<MatchRules> | null | undefined): number | null { return r?.teamFoulPossessionAt ?? (r && is3x3(r) ? 10 : null); }
+/** Stage 15 · BB3: overtime to N points (3x3's 2), or null — the clock decides. */
+export function overtimeToOf(r: Partial<MatchRules> | null | undefined): number | null { return r?.overtimeTo ?? (r && is3x3(r) ? 2 : null); }
+/** Stage 15 · BB1: the time-outs a basketball match plays. */
+export function timeoutRulesOf(r: Partial<MatchRules> | null | undefined): TimeoutRules { return r?.timeouts ?? (r && is3x3(r) ? FIBA_3X3_TIMEOUTS : FIBA_TIMEOUTS); }
+/** Stage 15 · BB2: what ejects (3x3: flagrants only). */
+export function ejectRulesOf(r: Partial<MatchRules> | null | undefined): { after: number; counts: 'tech_flagrant' | 'flagrant'; coachC: number; coachB: number } {
+  return { after: r?.ejectAfter ?? 2, counts: r?.ejectCounts ?? (r && is3x3(r) ? 'flagrant' : 'tech_flagrant'), coachC: r?.coachEjectC ?? 2, coachB: r?.coachEjectB ?? 3 };
 }
 
 /**
@@ -226,12 +271,12 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.54 rubbers; Stage 11 · PB9 timed
   pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally', penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.58: side-out; players 2 = doubles; Stage 11 · PB9 timed
   // Stage 14 · VB2 / VB4 / VB7 / VB12: 6 subs a set back to the same spot, 2 liberos, the indoor court change, no PVL extras.
-  volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point', maxSubs: 6, subsPer: 'set', reentry: 'same_spot', liberos: 2, sideSwitchEvery: null, decidingSwitchEvery: null, superPoint: false, superPointBefore: 11, superServe: false, minWomen: null }, // Stage 11 · PB9 timed
+  volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point', maxSubs: 6, subsPer: 'set', reentry: 'same_spot', liberos: 2, sideSwitchEvery: null, decidingSwitchEvery: null, superPoint: false, superPointBefore: 11, superServe: false, minWomen: null, tie: null }, // Stage 15 · BB6: a series // Stage 11 · PB9 timed
   tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null, tiebreakAt: null, finalSetTiebreakTo: null, noLet: false, ballChange: false, penaltyLadder: null, tie: null }, // BUILD 3.59–3.66; Stage 9 · T2, T10, T9, T3 (players 2 = doubles)
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50, tie: null, penaltyLadder: null }, // BUILD 3.72–3.77 · Stage 12 · CH5: team events
-  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null, subsPer: 'match', reentry: 'free' }, // Stage 14 · VB2: as before — a count a match, no re-entry check
-  hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true, maxSubs: null, subsPer: 'match', reentry: 'free' }, // Stage 14 · VB2: rolling subs (FIH)
-  basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false, maxSubs: null, subsPer: 'match', reentry: 'free' }, // Stage 14 · VB2: unlimited (FIBA)
+  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null, subsPer: 'match', reentry: 'free', tie: null }, // Stage 15 · BB6: a series // Stage 14 · VB2: as before — a count a match, no re-entry check
+  hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true, maxSubs: null, subsPer: 'match', reentry: 'free', tie: null }, // Stage 14 · VB2: rolling subs (FIH) · Stage 15 · BB6: a series
+  basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false, maxSubs: null, subsPer: 'match', reentry: 'free', timeouts: null, teamFoulBonus: null, teamFoulPossessionAt: null, overtimeTo: null, ejectAfter: 2, ejectCounts: 'tech_flagrant', coachEjectC: 2, coachEjectB: 3, tie: null }, // Stage 14 · VB2: unlimited (FIBA) · Stage 15: time-outs, the bonus, 3x3's overtime, ejections (null = by the game); a series (tie)
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true, tie: null, penaltyLadder: null, delaySeconds: null, incrementFromMove: null, secondPeriodMoves: null, secondPeriodMinutes: null }, // Stage 12 · CH5: team matches · CH6: the rest of the clock
 };
 
@@ -693,6 +738,8 @@ const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', noLbw: 'No LBW', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
   finalTarget: 'Deciding game target', winBy2: 'Win by 2', allGames: 'Every game played', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', timedLevel: 'Level at time', tiebreakAt: 'Tiebreak at', finalSetTiebreakTo: 'Final-set tiebreak', noLet: 'Lets', ballChange: 'New balls', penaltyLadder: 'Code violations', tie: 'Team tie', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game', gameMinutes: 'Minutes a game', carromMode: 'Carrom game', queenValue: 'Queen (point carrom)',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
+  // Stage 15.
+  timeouts: 'Time-outs', teamFoulBonus: 'Bonus from team foul', teamFoulPossessionAt: 'Free throws and the ball from team foul', overtimeTo: 'Overtime to', ejectAfter: 'Ejection after', ejectCounts: 'Ejections count', coachEjectC: 'Coach ejection (C)', coachEjectB: 'Coach ejection (B)',
   // Stage 14.
   maxSubs: 'Substitutions', subsPer: 'Substitutions counted', reentry: 'Coming back on', liberos: 'Liberos', sideSwitchEvery: 'Change courts every', decidingSwitchEvery: 'Change courts in the deciding set every', superPoint: 'Super Point', superPointBefore: 'Super Point before', superServe: 'Super Serve', minWomen: 'Women on court',
 };
@@ -845,6 +892,24 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'basketball' && (!isWhole(r.foulOut) || r.foulOut < 1)) return refuse('A player fouls out at a whole number of fouls (5 and 6 are the usual).', 'foulOut'); // Stage 13 · CR3
   // BUILD 3.33: 1-2-3 (5v5) or 1-2 (3x3).
   if (key === 'basketball' && r.pointSet !== '123' && r.pointSet !== '12') return refuse('Points are 1-2-3 or 1-2.', 'pointSet');
+  // Stage 15 · BB1 / BB2 / BB3: time-outs, the bonus, overtime to N, ejections — the organiser's numbers, no top.
+  if (key === 'basketball') {
+    const whole0 = (x: unknown) => x == null || (isWhole(x) && x >= 0);
+    const t = r.timeouts as TimeoutRules | null;
+    if (t != null) {
+      if (typeof t !== 'object' || Array.isArray(t)) return refuse('Time-outs are a set of numbers.', 'timeouts');
+      const unknownKey = Object.keys(t).find((k) => !['firstHalf', 'secondHalf', 'perPeriod', 'perGame', 'perOvertime', 'lateMinutes', 'lateMax', 'carry'].includes(k));
+      if (unknownKey) return refuse(`“${unknownKey}” isn’t a time-out rule.`, 'timeouts');
+      if (!['firstHalf', 'secondHalf', 'perPeriod', 'perGame', 'perOvertime', 'lateMinutes', 'lateMax'].every((k) => whole0((t as Record<string, unknown>)[k]))) return refuse('Time-outs are whole numbers, 0 or more.', 'timeouts');
+      if (t.carry != null && typeof t.carry !== 'boolean') return refuse('Carrying time-outs over is on or off.', 'timeouts');
+    }
+    if (r.teamFoulBonus != null && (!isWhole(r.teamFoulBonus) || r.teamFoulBonus < 1)) return refuse('The bonus starts at a team foul, 1 or more.', 'teamFoulBonus');
+    if (r.teamFoulPossessionAt != null && (!isWhole(r.teamFoulPossessionAt) || r.teamFoulPossessionAt < 1)) return refuse('Free throws and the ball start at a team foul, 1 or more.', 'teamFoulPossessionAt');
+    if (r.overtimeTo != null && (!isWhole(r.overtimeTo) || r.overtimeTo < 1)) return refuse('Overtime is first to 1 point or more.', 'overtimeTo');
+    if (!isWhole(r.ejectAfter) || (r.ejectAfter as number) < 1) return refuse('A player is out after 1 or more technicals or flagrants.', 'ejectAfter');
+    if (r.ejectCounts !== 'tech_flagrant' && r.ejectCounts !== 'flagrant') return refuse('Ejections count technicals and flagrants, or flagrants only.', 'ejectCounts');
+    if (!isWhole(r.coachEjectC) || (r.coachEjectC as number) < 1 || !isWhole(r.coachEjectB) || (r.coachEjectB as number) < 1) return refuse('A coach is out after 1 or more technicals.', 'coachEjectC');
+  }
   // BUILD 3.32: first to 7–50, or off.
   if (key === 'basketball' && r.targetScore !== null && (!isWhole(r.targetScore) || r.targetScore < 1)) { // Stage 13 · CR3: no top
     return refuse('First to must be off, or a whole number of points.', 'targetScore');
@@ -934,6 +999,12 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (r.secondPeriodMinutes != null && (!isWhole(r.secondPeriodMinutes) || r.secondPeriodMinutes < 1)) return refuse('A second period adds 1 minute or more.', 'secondPeriodMinutes');
   }
   // Stage 9 · T3: a team tie of the organiser's own matches.
+  // Stage 15 · BB6: a team sport's tie is a best-of-N series and nothing else.
+  if ((SERIES_SPORTS as readonly string[]).includes(key) && r.tie != null) {
+    const bad = tieSpecProblem(r.tie);
+    if (bad) return refuse(bad, 'tie');
+    if ((r.tie as TieSpec).series !== true) return refuse('A team game’s knockout tie is a series of games.', 'tie');
+  }
   if ((TIE_SPORTS as readonly string[]).includes(key) && r.tie !== null && r.tie !== undefined) {
     const bad = tieSpecProblem(r.tie);
     if (bad) return refuse(bad, 'tie');
@@ -960,7 +1031,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'noLbw', 'bestOf', 'baseMinutes', 'incrementSeconds', 'delaySeconds', 'incrementFromMove', 'secondPeriodMoves', 'secondPeriodMinutes',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet', 'liberos', 'sideSwitchEvery', 'decidingSwitchEvery', 'superPoint', 'superPointBefore', 'superServe', 'minWomen'] : []), ...(SUB_PAD_SPORTS.has(key) ? ['maxSubs', 'subsPer', 'reentry'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(RALLY_TIMED.has(key) ? ['timeLimitMinutes', 'timedLevel'] : []), ...(key === 'tabletennis' ? ['winBy2'] : []), ...(key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' ? ['allGames'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...((TIE_SPORTS as readonly string[]).includes(key) ? ['tie'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet', 'liberos', 'sideSwitchEvery', 'decidingSwitchEvery', 'superPoint', 'superPointBefore', 'superServe', 'minWomen'] : []), ...(SUB_PAD_SPORTS.has(key) ? ['maxSubs', 'subsPer', 'reentry'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(RALLY_TIMED.has(key) ? ['timeLimitMinutes', 'timedLevel'] : []), ...(key === 'tabletennis' ? ['winBy2'] : []), ...(key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' ? ['allGames'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...((TIE_SPORTS as readonly string[]).includes(key) || (SERIES_SPORTS as readonly string[]).includes(key) ? ['tie'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut', 'timeouts', 'teamFoulBonus', 'teamFoulPossessionAt', 'overtimeTo', 'ejectAfter', 'ejectCounts', 'coachEjectC', 'coachEjectB'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -1132,8 +1203,12 @@ export function pointHowFor(sport: string | null | undefined): ReadonlyArray<Poi
  * fouls (FIBA box score): each is a pad button that asks who, and a leaderboard.
  */
 export const BASKETBALL_STATS: ReadonlyArray<{ key: string; label: string; board: string }> = [
-  { key: 'rebound', label: 'REB', board: 'Rebounds' }, { key: 'steal', label: 'STL', board: 'Steals' }, { key: 'block', label: 'BLK', board: 'Blocks' },
+  // Stage 15 · BB8: the box score — offensive and defensive rebounds, steals, blocks, turnovers.
+  { key: 'oreb', label: 'OREB', board: 'Offensive rebounds' }, { key: 'dreb', label: 'DREB', board: 'Defensive rebounds' },
+  { key: 'steal', label: 'STL', board: 'Steals' }, { key: 'block', label: 'BLK', board: 'Blocks' }, { key: 'turnover', label: 'TO', board: 'Turnovers' },
 ];
+/** Stage 15 · BB8: every stat a basketball note may carry — the pad's, Stage 14's plain rebound, and a missed shot. */
+export const BASKETBALL_STAT_KEYS: ReadonlySet<string> = new Set([...BASKETBALL_STATS.map((s) => s.key), 'rebound', 'miss']);
 
 /** Stage 14 · VB2: the sports whose pad has a SUB button and keeps their own substitution rules. */
 export const SUB_PAD_SPORTS: ReadonlySet<string> = new Set(['football', 'hockey', 'basketball', 'volleyball']);
@@ -1189,7 +1264,8 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   const key = lengthKey(sport);
   const parts: string[] = [];
   // Stage 9 · T3: the organiser's own tie, any tie sport.
-  if (rules.tie && !tieSpecProblem(rules.tie)) {
+  if (rules.tie && !tieSpecProblem(rules.tie) && rules.tie.series) parts.push(`best of ${rules.tie.rubbers.length} games`); // Stage 15 · BB6
+  else if (rules.tie && !tieSpecProblem(rules.tie)) {
     const n = rules.tie.rubbers.length;
     parts.push(`team tie · ${n} ${n === 1 ? 'match' : 'matches'} · ${rules.tie.win === 'first' ? `first to ${tieNeedOf(rules.tie)}` : rules.tie.win === 'all' ? (tieWeighted(rules.tie) ? 'most matches by worth' : 'most matches') /* Stage 11 follow-up: a match worth more, or a trump */ : `most ${key === 'tennis' ? 'games' : 'points'}`}`);
     // Stage 11 · PB3: a deciding match when level; a match worth more.
@@ -1269,7 +1345,19 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (key === 'basketball' && rules.targetScore) parts.push(`first to ${rules.targetScore}`); // BUILD 3.32
   if (key === 'basketball' || key === 'hockey') { const subs = subsWords(rules, SPORT_RULES[key] as Partial<MatchRules>); if (subs) parts.push(subs); } // Stage 14 · VB2
   if (key === 'basketball' && rules.pointSet === '12') parts.push('1s and 2s'); // BUILD 3.33
-  if (key === 'basketball' && rules.foulOut === 6) parts.push('foul out at 6'); // BUILD 3.35 (5 left unsaid)
+  if (key === 'basketball' && rules.foulOut != null && rules.foulOut !== 5) parts.push(`foul out at ${rules.foulOut}`); // BUILD 3.35 (5 left unsaid)
+  // Stage 15 · BB1 / BB2 / BB3: time-outs, the bonus, 3x3's overtime and ejections — said when not the standard.
+  if (key === 'basketball') {
+    const to = rules.timeouts;
+    const std = rules.pointSet === '12' ? FIBA_3X3_TIMEOUTS : FIBA_TIMEOUTS;
+    if (to && JSON.stringify({ ...std, ...to }) !== JSON.stringify(std)) {
+      const w = (n: number | null | undefined) => `${Number(n ?? 0)} ${Number(n ?? 0) === 1 ? 'time-out' : 'time-outs'}`;
+      parts.push(to.perGame != null ? `${w(to.perGame)} a game` : to.perPeriod != null ? `${w(to.perPeriod)} a period` : `time-outs ${to.firstHalf ?? 2} + ${to.secondHalf ?? 3}${to.lateMax != null ? ` (at most ${to.lateMax} in the last ${to.lateMinutes ?? 2} min)` : ''}, ${to.perOvertime ?? 1} each overtime`);
+    }
+    if (rules.overtimeTo != null && !(rules.pointSet === '12' && rules.overtimeTo === 2)) parts.push(`overtime first to ${rules.overtimeTo}`);
+    if (rules.teamFoulBonus != null && rules.teamFoulBonus !== (rules.pointSet === '12' ? 7 : 5)) parts.push(`bonus from team foul ${rules.teamFoulBonus}`);
+    if (rules.ejectAfter != null && rules.ejectAfter !== 2) parts.push(`out after ${rules.ejectAfter} technicals or flagrants`);
+  }
   if (rules.penaltyKicks === 3) parts.push('3 pens each');
   return parts.length ? parts.join(' · ') : null;
 }

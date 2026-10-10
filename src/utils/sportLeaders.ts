@@ -11,7 +11,7 @@
  * credits; a guest is one player by name within their team, as on cricket's
  * boards) and the score. A team tie (rubbers) counts in none of the game boards.
  */
-import { BASKETBALL_STATS, pointHowFor } from './matchRules'; // Stage 14 · VB8
+import { pointHowFor } from './matchRules'; // Stage 14 · VB8
 
 export const BOARD_ROWS = 5;
 
@@ -151,13 +151,30 @@ export function sportBoards(
     ];
   }
   if (k === 'basketball') {
-    const p = playerTallies(matches, ['points', 'assists', 'rebounds', 'steals', 'blocks'], accounts);
+    const p = playerTallies(matches, ['points', 'assists', 'rebounds', 'steals', 'blocks', 'oreb', 'dreb', 'turnovers', 'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta'], accounts);
+    const pct = (m: number, a: number) => (a > 0 ? Math.round((1000 * m) / a) / 10 : 0);
+    // Stage 15 · BB8: FIBA's efficiency — points + rebounds + assists + steals + blocks − missed shots − turnovers.
+    const eff = (t: PTally) => (t.s.points ?? 0) + (t.s.rebounds ?? 0) + (t.s.assists ?? 0) + (t.s.steals ?? 0) + (t.s.blocks ?? 0)
+      - ((t.s.fga ?? 0) - (t.s.fgm ?? 0)) - ((t.s.fta ?? 0) - (t.s.ftm ?? 0)) - (t.s.turnovers ?? 0);
+    // A share made means something only once misses are kept: each shooting board waits for its first miss.
+    const kept = (m: string, a: string) => p.some((t) => (t.s[a] ?? 0) > (t.s[m] ?? 0));
+    const shooters = (m: string, a: string) => (kept(m, a) ? p.filter((t) => (t.s[a] ?? 0) > 0) : []);
+    // Efficiency, once the box score is kept (a rebound, steal, block, turnover or miss) — else it's the points again.
+    const boxKept = p.some((t) => (t.s.rebounds ?? 0) + (t.s.steals ?? 0) + (t.s.blocks ?? 0) + (t.s.turnovers ?? 0) > 0) || kept('fgm', 'fga') || kept('ftm', 'fta');
     return [
       topPlayers(p, 'points', 'Top scorers', 'point', 'points', teamNames, (t) => t.s.points ?? 0, played),
       topPlayers(p, 'assists', 'Assists', 'assist', 'assists', teamNames, (t) => t.s.assists ?? 0, played),
-      // Stage 14 · VB8: basketball's own box-score stats, once anyone has one.
-      ...BASKETBALL_STATS.map((st) => topPlayers(p, `${st.key}s`, st.board, st.board.toLowerCase().replace(/s$/, ''), st.board.toLowerCase(), teamNames, (t) => t.s[`${st.key}s`] ?? 0, played)).filter((b) => b.rows.length > 0),
-    ];
+      // Stage 14 · VB8 / Stage 15 · BB8: the box score, once anyone has one.
+      topPlayers(p, 'rebounds', 'Rebounds', 'rebound', 'rebounds', teamNames, (t) => t.s.rebounds ?? 0, (t) => (t.s.oreb || t.s.dreb ? `${t.s.oreb ?? 0} off · ${t.s.dreb ?? 0} def` : played(t))),
+      topPlayers(p, 'steals', 'Steals', 'steal', 'steals', teamNames, (t) => t.s.steals ?? 0, played),
+      topPlayers(p, 'blocks', 'Blocks', 'block', 'blocks', teamNames, (t) => t.s.blocks ?? 0, played),
+      topPlayers(boxKept ? p : [], 'efficiency', 'Efficiency', 'point', 'points', teamNames, eff, played),
+      // Shooting: the share made, its attempts beside it (any attempt ranks — no app minimum).
+      topPlayers(shooters('fgm', 'fga'), 'fg_pct', 'Field goal %', '%', '%', teamNames, (t) => pct(t.s.fgm ?? 0, t.s.fga ?? 0), (t) => `${t.s.fgm ?? 0}/${t.s.fga ?? 0}`),
+      topPlayers(shooters('tpm', 'tpa'), 'tp_pct', '3-point %', '%', '%', teamNames, (t) => pct(t.s.tpm ?? 0, t.s.tpa ?? 0), (t) => `${t.s.tpm ?? 0}/${t.s.tpa ?? 0}`),
+      topPlayers(shooters('ftm', 'fta'), 'ft_pct', 'Free throw %', '%', '%', teamNames, (t) => pct(t.s.ftm ?? 0, t.s.fta ?? 0), (t) => `${t.s.ftm ?? 0}/${t.s.fta ?? 0}`),
+      topPlayers(p, 'turnovers', 'Turnovers', 'turnover', 'turnovers', teamNames, (t) => t.s.turnovers ?? 0, played),
+    ].filter((b, i) => i < 2 || b.rows.length > 0);
   }
   const teams = teamTallies(matches);
   const wins = topTeams(teams, 'wins', 'Most wins', 'win', 'wins', teamNames, (t) => t.won, record, false, (a, b) => a.lost - b.lost);

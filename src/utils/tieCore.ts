@@ -83,6 +83,12 @@ export type TieSpec = {
   level?: 'draw';
   /** Stage 12 · CH5 · boards in a fixed order: a team's line-up keeps the order of its squad list. */
   boardOrder?: boolean;
+  /**
+   * Stage 15 · BB6 · a best-of-N knockout series (basketball, football, hockey,
+   * volleyball): each "match" is a full game between the same two teams, with
+   * the match's own line-up (no per-game orders); first to win a majority.
+   */
+  series?: boolean;
   /** Runtime only (never stored in the rules): each side's pick, from matches.tie_trumps. */
   trumps?: Partial<Record<TieSide, string | null>> | null;
 };
@@ -90,6 +96,16 @@ export type TieSpec = {
 // Stage 12 · CH5: chess (team matches on boards) and carrom (team events in a fixed order) too.
 export const TIE_SPORTS = ['badminton', 'tennis', 'tabletennis', 'pickleball', 'chess', 'carrom'] as const;
 export const TIE_LABEL_MAX = 30;
+/** Stage 15 · BB6: the team sports whose knockout tie can be a best-of-N series (cricket scores on its own screen — not yet). */
+export const SERIES_SPORTS = ['football', 'volleyball', 'basketball', 'hockey'] as const;
+/** Stage 15 · BB6 · a best-of-N series: games G1…GN, first to a majority (the organiser's N, odd, no top). */
+export function seriesSpec(n: number): TieSpec {
+  return { rubbers: Array.from({ length: n }, (_, i) => ({ key: `G${i + 1}`, label: `Game ${i + 1}`, players: 1 as const })), win: 'first', series: true };
+}
+/** Stage 15 · BB6: a series' length, or null when the tie isn't a series. */
+export function seriesLength(spec: Pick<TieSpec, 'series' | 'rubbers'> | null | undefined): number | null {
+  return spec?.series ? spec.rubbers.length : null;
+}
 
 const isWhole = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n);
 
@@ -152,6 +168,10 @@ export function tieSpecProblem(spec: unknown): string | null {
   if (s.level != null && s.level !== 'draw') return 'Level is a draw, or decided as the tie says.';
   if (s.level === 'draw' && s.win !== 'games') return 'A level match stays a draw when the match goes to most game points.';
   if (s.boardOrder != null && typeof s.boardOrder !== 'boolean') return 'A fixed board order is on or off.';
+  // Stage 15 · BB6: a series is first to a majority of its games, nothing else.
+  if (s.series != null && typeof s.series !== 'boolean') return 'A series is on or off.';
+  if (s.series === true && (s.win !== 'first' || s.trump === true || (s.rubbers as TieRubber[]).some((r) => r.decider || (r.value ?? 1) !== 1))) return 'A series is the first to win a majority of its games.';
+  if (s.series === true && (s.rubbers as TieRubber[]).length % 2 === 0) return 'A series is an odd number of games (best of 3, 5, 7…), so one side wins it.';
   return null;
 }
 

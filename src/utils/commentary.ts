@@ -1,4 +1,5 @@
 import { BASKETBALL_STATS, conductWords, ladderStepDef, pointHowFor } from './matchRules';
+import { FOUL_KINDS } from './basketballRules';
 /**
  * Timeline lines for football, hockey and basketball events (2026-09-26, after
  * MATCH_CREATE_TEST_5). The timeline printed these raw — `card {"kind":"red",
@@ -108,6 +109,7 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (ctx.sport === 'basketball' && eventType === 'note' && p.kind === 'stat') {
     const st = BASKETBALL_STATS.find((x) => x.key === p.stat);
     if (st) return `🏀 ${st.board.replace(/s$/, '')} — ${player ? `${player} (${team})` : team}`;
+    if (p.stat === 'rebound') return `🏀 Rebound — ${player ? `${player} (${team})` : team}`; // Stage 14's plain rebound
   }
   // Stage 8 · F10: the clock stopped and restarted, and the added time shown.
   if (goalSport && eventType === 'note' && p.kind === 'clock_pause') return '⏸ Clock stopped';
@@ -163,9 +165,23 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (eventType === 'note' && p.kind === 'warmup') return '⏱ Warm-up';
   if (eventType === 'note' && p.kind === 'medical_timeout') return `🩺 Medical time-out — ${team}`;
   // BUILD 3.42: a volleyball timeout names the side (it read "Timeout called by team").
-  if (eventType === 'timeout') return `⏸ Timeout — ${team}`;
-  // BUILD 3.35: a basketball foul names who (it read "Foul by Team A").
-  if (ctx.sport === 'basketball' && eventType === 'foul') return `✋ Foul — ${player ? `${player} (${team})` : team}`;
+  if (eventType === 'timeout') return ctx.sport === 'basketball' ? `⏸ Time-out — ${team}` : `⏸ Timeout — ${team}`; // Stage 15 · BB1: FIBA's word
+  // BUILD 3.35: a basketball foul names who (it read "Foul by Team A"). Stage 15 · BB2: and its kind.
+  if (ctx.sport === 'basketball' && eventType === 'foul') {
+    const k = FOUL_KINDS.find((x) => x.key === p.kind);
+    if (k && k.key !== 'personal') return `⚠️ ${k.label} foul — ${k.coach ? `${team} ${k.key === 'coach' ? 'head coach' : 'bench'}` : player ? `${player} (${team})` : team}`;
+    return `✋ Foul — ${player ? `${player} (${team})` : team}`;
+  }
+  // Stage 15 · BB9 / BB6 / BB8 · basketball's arrow, a series game's end, a missed shot.
+  if (ctx.sport === 'basketball' && eventType === 'note' && p.kind === 'arrow') return `▶ Possession arrow — ${team}`;
+  if (ctx.sport === 'basketball' && eventType === 'note' && p.kind === 'arrow_flip') return '⇄ Possession arrow flipped';
+  if (eventType === 'note' && p.kind === 'game_end') return '🏁 End of the game';
+  if (ctx.sport === 'basketball' && eventType === 'note' && p.kind === 'stat' && p.stat === 'miss') return `⭕ Missed ${p.shot === 'ft' ? 'free throw' : p.shot === '3' ? '3-pointer' : '2-pointer'} — ${player ? `${player} (${team})` : team}`;
+  // Stage 15 · BB2 (cross-sport): a card for a coach or team official.
+  if ((ctx.sport === 'football' || ctx.sport === 'hockey') && eventType === 'note' && p.kind === 'official_card') {
+    const c = p.colour === 'red' ? '🟥 Red card' : p.colour === 'green' ? '🟩 Green card' : '🟨 Yellow card';
+    return `${c} — ${team} team official${p.colour === 'red' ? ' (sent from the bench)' : ''}`;
+  }
   // Chess: "Move  — game in progress" (no number was ever sent) and a raw
   // result object with a player id in it.
   if (ctx.sport === 'chess' && eventType === 'move') {

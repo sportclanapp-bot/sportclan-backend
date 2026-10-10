@@ -69,7 +69,7 @@ describe('VB8 · how a point was won, and basketball’s stats', () => {
     expect(players.u1).toMatchObject({ points: 2, rebounds: 2, steals: 1 });
     expect(players.u1!.blocks).toBeUndefined();
     const titles = sportBoards('basketball', [{ id: 'm1', team_a_id: 'T', team_b_id: 'U', winner_team_id: 'T', score_summary: { players } as never }], { T: 'Kings', U: 'Hawks' }).map((b) => b.title);
-    expect(titles).toEqual(['Top scorers', 'Assists', 'Rebounds', 'Steals']);
+    expect(titles).toEqual(['Top scorers', 'Assists', 'Rebounds', 'Steals', 'Efficiency']); // Stage 15 · BB8: efficiency once the box score is kept
   });
 });
 

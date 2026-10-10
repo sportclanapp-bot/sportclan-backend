@@ -60,6 +60,12 @@ export type TeamStat = {
   gamesFor: number;
   gamesAgainst: number;
   gamesDiff: number;
+  /**
+   * Stage 15 · BB5 · FIBA 3x3 D.1: points scored, each game capped at 21, over
+   * the games that count — a forfeit win is left out; a forfeit loss counts as 0.
+   */
+  cappedFor: number;
+  cappedGames: number;
 };
 
 /**
@@ -233,7 +239,7 @@ export function computeStats(
   for (const id of teamIds) {
     table.set(id, {
       id, played: 0, won: 0, drawn: 0, lost: 0, points: 0, scored: 0, conceded: 0, diff: 0, noResult: 0,
-      runsScored: 0, oversFaced: 0, runsConceded: 0, oversBowled: 0, nrr: null, rallyFor: 0, rallyAgainst: 0, rallyDiff: 0, gamesFor: 0, gamesAgainst: 0, gamesDiff: 0,
+      runsScored: 0, oversFaced: 0, runsConceded: 0, oversBowled: 0, nrr: null, rallyFor: 0, rallyAgainst: 0, rallyDiff: 0, gamesFor: 0, gamesAgainst: 0, gamesDiff: 0, cappedFor: 0, cappedGames: 0,
     });
   }
   for (const m of matches) {
@@ -283,6 +289,14 @@ export function computeStats(
     const gw = gamesWonOf(m); // badminton 7.16
     ra.gamesFor += gw.a; ra.gamesAgainst += gw.b;
     rb.gamesFor += gw.b; rb.gamesAgainst += gw.a;
+    // Stage 15 · BB5: 3x3's capped average — a forfeit's winner leaves it out, its loser counts 0.
+    if (isWalkover(m)) {
+      const loser = m.winner_team_id === a ? rb : m.winner_team_id === b ? ra : null;
+      if (loser) loser.cappedGames += 1;
+    } else {
+      ra.cappedFor += Math.min(sa, 21); ra.cappedGames += 1;
+      rb.cappedFor += Math.min(sb, 21); rb.cappedGames += 1;
+    }
     if (m.winner_team_id === a || m.winner_team_id === b) {
       const [w, l] = m.winner_team_id === a ? [ra, rb] : [rb, ra];
       const [wp, lp] = resultPoints(m, pts, m.winner_team_id === a ? sa : sb, m.winner_team_id === a ? sb : sa);
@@ -310,7 +324,7 @@ export function computeStats(
   return table;
 }
 
-type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play' | 'points_won' | 'points_pct' | 'played' | 'points_ratio'
+type Criterion = 'points' | 'wins' | 'score_diff' | 'score_scored' | 'head_to_head' | 'score_rate' | 'score_ratio' | 'buchholz' | 'sonneborn_berger' | 'points_diff' | 'games_diff' | 'fair_play' | 'points_won' | 'points_pct' | 'played' | 'points_ratio' | 'win_ratio' | 'avg_points_capped'
   // Stage 12 · CH1 · FIDE C.07 (2026): Buchholz Cut-1 and Median-1, wins with Black, games with Black, progressive score, average rating of opponents; CH9 · Koya.
   | 'buchholz_cut1' | 'buchholz_median' | 'wins_black' | 'games_black' | 'progressive' | 'aro' | 'koya'
   // Stage 10 · TT4: counted only in the matches between the tied teams.
@@ -367,6 +381,9 @@ const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'fair_play' |
   points_diff: (s) => s.rallyDiff,
   // Stage 14 · VB5: rally points won ÷ lost over every match (FIVB's "points ratio").
   points_ratio: (s) => (s.rallyAgainst > 0 ? s.rallyFor / s.rallyAgainst : s.rallyFor > 0 ? 1e9 : 0),
+  // Stage 15 · BB5 · FIBA 3x3 D.1: wins as a share of games played; the capped points average.
+  win_ratio: (s) => (s.played > 0 ? s.won / s.played : 0),
+  avg_points_capped: (s) => (s.cappedGames > 0 ? s.cappedFor / s.cappedGames : 0),
   // Badminton 7.16: games difference over every rubber of a team tie.
   games_diff: (s) => s.gamesDiff,
   // Stage 9 · T4: tennis's games (the rally sports' points) won, and their
@@ -437,7 +454,9 @@ function mapRule(token: string): Criterion | null {
   if (t === 'sonneborn_berger' || t === 'sb' || t === 'sonneborn-berger') return 'sonneborn_berger';
   if (t === 'points_diff' || t === 'point_difference' || t === 'rally_points_diff' || t === 'points_difference') return 'points_diff'; // badminton gap 10
   if (t === 'points_ratio' || t === 'point_ratio' || t === 'rally_points_ratio') return 'points_ratio'; // Stage 14 · VB5
-  if (t === 'match_points') return 'points'; // Stage 14 · VB5: the table's points, where the order puts them (FIVB: after matches won)
+  if (t === 'match_points') return 'points';
+  if (t === 'win_ratio' || t === 'win_pct') return 'win_ratio'; // Stage 15 · BB5
+  if (t === 'avg_points_capped' || t === 'points_average') return 'avg_points_capped'; // Stage 14 · VB5: the table's points, where the order puts them (FIVB: after matches won)
   if (t === 'games_diff' || t === 'games_difference' || t === 'game_difference') return 'games_diff'; // badminton 7.16
   if (t === 'fair_play' || t === 'fairplay' || t === 'fair_play_points' || t === 'discipline') return 'fair_play'; // Stage 8 · F8
   // Stage 9 · T4.
@@ -683,6 +702,7 @@ export function bestPlacedAcrossGroups(
     if (c === 'head_to_head' || isChessCriterion(c) || c === 'score_rate' || isBetween(c) || c === 'points_diff_vs_next') return null; // TT4: teams from different groups never met · CH1: nor the chess ones
     if (c === 'score_ratio') return GLOBAL_CRITERION.score_ratio(stats.get(id) ?? ({} as TeamStat));
     if (c === 'points_ratio') return GLOBAL_CRITERION.points_ratio(stats.get(id) ?? ({ rallyFor: 0, rallyAgainst: 0 } as TeamStat)); // Stage 14 · VB5: a ratio is already per game
+    if (c === 'win_ratio' || c === 'avg_points_capped') return GLOBAL_CRITERION[c](stats.get(id) ?? ({} as TeamStat)); // Stage 15 · BB5: already per game
     // Stage 9 · T4: a share is already per game; matches played can't compare groups of different sizes.
     if (c === 'points_pct') return GLOBAL_CRITERION.points_pct(stats.get(id) ?? ({ rallyFor: 0, rallyAgainst: 0 } as TeamStat));
     if (c === 'played') return null;

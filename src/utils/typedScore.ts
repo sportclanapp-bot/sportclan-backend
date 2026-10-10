@@ -330,3 +330,86 @@ export function typedChessBoards(spec: TieSpec, boards: unknown): { problem: str
   if (hasDeciders && !o.finished) return { problem: 'Still level: give the next play-off game.', results: [], winner: null };
   return { problem: null, results, winner: o.decided, units: { A: rr.reduce((t, r) => t + r.units.A, 0), B: rr.reduce((t, r) => t + r.units.B, 0) } };
 }
+
+// ── Stage 15 · BB4 · a timed team sport typed period by period ──────────────
+//
+// Basketball's quarters (and overtimes), hockey's quarters, football's halves
+// (and extra time) from the score sheet: each period's score, in order. The
+// events are what the pad would leave: each period's score for each side, then
+// a period change. A series (BB6) is typed game by game: each game's final.
+
+/** Stage 15 · BB4: the sports typed by period. */
+export const TYPED_PERIOD_SPORTS = ['football', 'basketball', 'hockey'] as const;
+export const typedPeriodSport = (s: string | null | undefined): boolean => (TYPED_PERIOD_SPORTS as readonly string[]).includes(String(s ?? '').toLowerCase().replace(/[-_\s]/g, ''));
+export type TypedPeriodEvent = { event_type: 'score' | 'period_change' | 'note'; payload: Record<string, unknown> };
+/** "Q1", "H2", "P3", "OT1", "ET1" — a period's name on the sheet. */
+export function periodWord(sport: string, i: number, regulation: number): string {
+  const k = String(sport).toLowerCase();
+  if (i >= regulation) return k === 'football' ? `ET${i - regulation + 1}` : `OT${i - regulation + 1}`;
+  return regulation === 4 ? `Q${i + 1}` : regulation === 2 ? `H${i + 1}` : `P${i + 1}`;
+}
+export function typedPeriodPoints(
+  sport: string | null | undefined, rules: Partial<MatchRules> | null | undefined, periods: unknown,
+): { problem: string | null; events: TypedPeriodEvent[]; winner: TypedSide | null; draw: boolean; text: string } {
+  const k = String(sport ?? '').toLowerCase().replace(/[-_\s]/g, '');
+  const no = (problem: string) => ({ problem, events: [], winner: null, draw: false, text: '' });
+  if (!typedPeriodSport(k)) return no('Typed periods are for basketball, football and hockey.');
+  const r = { ...standardRules(k), ...(rules ?? {}) } as MatchRules;
+  const regulation = r.periods ?? (k === 'football' ? 2 : 4);
+  if (!Array.isArray(periods) || periods.length === 0) return no('Give each period’s score.');
+  const ps: Array<{ a: number; b: number }> = [];
+  for (const [i, x] of (periods as unknown[]).entries()) {
+    const o = (x ?? {}) as { a?: unknown; b?: unknown };
+    if (!Number.isInteger(o.a) || !Number.isInteger(o.b) || (o.a as number) < 0 || (o.b as number) < 0) return no(`${periodWord(k, i, regulation)}: each side scored a whole number, 0 or more.`);
+    ps.push({ a: o.a as number, b: o.b as number });
+  }
+  if (ps.length < regulation) return no(`Give all ${regulation} ${regulation === 4 ? 'quarters' : regulation === 2 ? 'halves' : 'periods'} (0-0 for one without a score).`);
+  // Overtime / extra time only after regulation ended level, and each overtime only while still level (basketball).
+  let a = 0; let b = 0;
+  for (const [i, p] of ps.entries()) {
+    if (i >= regulation && a !== b) return no(`${periodWord(k, i, regulation)} isn’t played — the score wasn’t level.`);
+    if (k === 'basketball' && i > regulation && a !== b) return no(`${periodWord(k, i, regulation)} isn’t played — the last overtime settled it.`);
+    a += p.a; b += p.b;
+  }
+  const level = a === b;
+  if (level && k === 'basketball') return no('A basketball game can’t end level — add the overtime.');
+  if (level && r.drawAllowed === false) return no('This match can’t end level — a level knockout goes to penalties: score them on the pad.');
+  const events: TypedPeriodEvent[] = [];
+  ps.forEach((p, i) => {
+    if (i > 0) events.push({ event_type: 'period_change', payload: { kind: k === 'basketball' ? 'quarter' : regulation === 2 ? 'halftime' : 'period', typed: true } });
+    for (const [side, n] of [['A', p.a], ['B', p.b]] as const) {
+      if (k === 'basketball') { if (n > 0) events.push({ event_type: 'score', payload: { team_side: side, kind: 'typed', value: n, typed: true } }); }
+      else for (let j = 0; j < n; j++) events.push({ event_type: 'score', payload: { team_side: side, kind: 'goal', value: 1, typed: true } });
+    }
+  });
+  return { problem: null, events, winner: level ? null : a > b ? 'A' : 'B', draw: level, text: `${a}-${b} (${ps.map((p, i) => `${periodWord(k, i, regulation)} ${p.a}-${p.b}`).join(', ')})` };
+}
+
+/** Stage 15 · BB6 · a series typed game by game (each game's final score), first to a majority. */
+export function typedSeriesPoints(
+  sport: string | null | undefined, spec: TieSpec, games: unknown,
+): { problem: string | null; events: TypedPeriodEvent[]; winner: TypedSide | null; text: string } {
+  const k = String(sport ?? '').toLowerCase().replace(/[-_\s]/g, '');
+  const no = (problem: string) => ({ problem, events: [], winner: null, text: '' });
+  if (!Array.isArray(games) || games.length === 0) return no('Give each game’s score.');
+  const need = Math.floor(spec.rubbers.length / 2) + 1;
+  let wa = 0; let wb = 0;
+  const events: TypedPeriodEvent[] = [];
+  const parts: string[] = [];
+  for (const [i, x] of (games as unknown[]).entries()) {
+    if (wa >= need || wb >= need) return no(`Game ${i + 1} isn’t played — the series was already won.`);
+    const o = (x ?? {}) as { a?: unknown; b?: unknown };
+    if (!Number.isInteger(o.a) || !Number.isInteger(o.b) || (o.a as number) < 0 || (o.b as number) < 0) return no(`Game ${i + 1}: each side scored a whole number, 0 or more.`);
+    const a = o.a as number; const b = o.b as number;
+    if (k === 'basketball' && a === b) return no(`Game ${i + 1}: a basketball game can’t end level.`);
+    for (const [side, n] of [['A', a], ['B', b]] as const) {
+      if (k === 'basketball') { if (n > 0) events.push({ event_type: 'score', payload: { team_side: side, kind: 'typed', value: n, typed: true } }); }
+      else for (let j = 0; j < n; j++) events.push({ event_type: 'score', payload: { team_side: side, kind: 'goal', value: 1, typed: true } });
+    }
+    events.push({ event_type: 'note', payload: { kind: 'game_end', typed: true } });
+    if (a > b) wa += 1; else if (b > a) wb += 1;
+    parts.push(`G${i + 1} ${a}-${b}`);
+  }
+  if (wa < need && wb < need) return no(`Nobody has won ${need} games yet.`);
+  return { problem: null, events, winner: wa >= need ? 'A' : 'B', text: `${wa}-${wb} (${parts.join(', ')})` };
+}

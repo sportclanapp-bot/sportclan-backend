@@ -141,7 +141,9 @@ export type TiebreakToken =
   | 'buchholz_cut1' | 'buchholz_median' | 'wins_black' | 'games_black' | 'progressive' | 'aro' | 'koya'
   // Stage 14 · VB5 · FIVB: rally points won ÷ lost over every match; and the table's points placed by the
   // order itself (FIVB ranks on matches won first, then match points).
-  | 'points_ratio' | 'match_points';
+  | 'points_ratio' | 'match_points'
+  // Stage 15 · BB5 · FIBA 3x3 D.1: win ratio (games played can differ) and the average points scored (each game capped at 21; forfeits out).
+  | 'win_ratio' | 'avg_points_capped';
 
 const ALIASES: Record<string, TiebreakToken> = {
   head_to_head: 'head_to_head', h2h: 'head_to_head', head2head: 'head_to_head', headtohead: 'head_to_head',
@@ -175,6 +177,7 @@ const ALIASES: Record<string, TiebreakToken> = {
   aro: 'aro', average_rating_opponents: 'aro', avg_opp_rating: 'aro', koya: 'koya', ks: 'koya', koya_system: 'koya',
   // Stage 14 · VB5.
   points_ratio: 'points_ratio', point_ratio: 'points_ratio', rally_points_ratio: 'points_ratio', match_points: 'match_points',
+  win_ratio: 'win_ratio', win_pct: 'win_ratio', avg_points_capped: 'avg_points_capped', points_average: 'avg_points_capped', // Stage 15 · BB5
 };
 
 /** Stage 12 · CH1 / CH9: the tie-breaks only chess has. */
@@ -188,7 +191,7 @@ export function tiebreakToken(x: unknown): TiebreakToken | null {
 /** The tie-breaks this sport can use (run rate is cricket's; Buchholz and Sonneborn-Berger chess's). */
 export function tiebreaksFor(sport: string | null | undefined): TiebreakToken[] {
   const key = sportKeyOf(sport);
-  const all: TiebreakToken[] = ['match_points', 'head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'h2h_score_ratio', 'h2h_points_diff', 'h2h_points_ratio', 'wins', 'played', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'points_ratio', 'points_diff_vs_next', 'points_won', 'points_pct', 'fair_play', 'buchholz', 'buchholz_cut1', 'buchholz_median', 'sonneborn_berger', 'koya', 'progressive', 'wins_black', 'games_black', 'aro'];
+  const all: TiebreakToken[] = ['match_points', 'head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'h2h_score_ratio', 'h2h_points_diff', 'h2h_points_ratio', 'wins', 'played', 'nrr', 'score_diff', 'score_scored', 'score_ratio', 'games_diff', 'points_diff', 'points_ratio', 'points_diff_vs_next', 'points_won', 'points_pct', 'win_ratio', 'avg_points_capped', 'fair_play', 'buchholz', 'buchholz_cut1', 'buchholz_median', 'sonneborn_berger', 'koya', 'progressive', 'wins_black', 'games_black', 'aro'];
   const rally = key === 'badminton' || key === 'tabletennis' || key === 'volleyball' || key === 'pickleball';
   // Stage 9 · T4: every sport scored in sets of games or points — tennis's games, the rally sports' points.
   // Stage 13 · CR8: carrom's games too (ICF's "net score": the points over every game).
@@ -196,6 +199,7 @@ export function tiebreaksFor(sport: string | null | undefined): TiebreakToken[] 
   return all.filter((t) => (t === 'nrr' ? key === 'cricket' : CHESS_TIEBREAKS.has(t) ? key === 'chess'
     : t === 'points_diff' || t === 'points_ratio' || t === 'points_won' || t === 'points_pct' || t === 'h2h_points_diff' || t === 'h2h_points_ratio' || t === 'points_diff_vs_next' ? inSets
       : t === 'h2h_score_diff' || t === 'h2h_score_scored' || t === 'h2h_score_ratio' ? key !== 'chess'
+      : t === 'avg_points_capped' ? key === 'basketball' // Stage 15 · BB5: 3x3's
       : t === 'played' ? key === 'tennis'
         : t === 'games_diff' ? key === 'badminton' || key === 'tabletennis' : t === 'fair_play' ? key === 'football' || key === 'hockey' : true));
 }
@@ -246,6 +250,8 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
     // Stage 14 · VB5.
     case 'points_ratio': return key === 'tennis' ? 'Game ratio' : 'Points ratio';
     case 'match_points': return key === 'chess' ? 'Match points' : 'Match points (the table’s points)';
+    case 'win_ratio': return 'Win ratio';
+    case 'avg_points_capped': return 'Average points scored (each game up to 21; forfeits left out)';
   }
 }
 
@@ -273,6 +279,12 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
       out.push({ key: 'uefa', label: 'UEFA (goals between them first)', order: ['head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'score_diff', 'score_scored'] });
       break;
     case 'hockey': out.push({ key: 'fih', label: 'FIH (wins first)', order: ['wins', 'score_diff', 'score_scored', 'head_to_head'] }); break;
+    // Stage 15 · BB5 · FIBA D.1 exactly: head-to-head, then difference and points between the tied, then overall — the
+    // tied are ranked again from the top whenever one is separated; and FIBA 3x3's D.1 (win ratio, head-to-head, capped average).
+    case 'basketball':
+      out.push({ key: 'fiba_d1', label: 'FIBA D.1 (between the tied, then overall)', order: ['head_to_head', 'h2h_score_diff', 'h2h_score_scored', 'score_diff', 'score_scored'] });
+      out.push({ key: 'fiba_3x3', label: 'FIBA 3x3 (win ratio, head-to-head, average points)', order: ['win_ratio', 'head_to_head', 'avg_points_capped'] });
+      break;
     case 'volleyball':
       out.push({ key: 'fivb', label: 'FIVB (wins, set ratio)', order: ['wins', 'score_ratio', 'head_to_head'] });
       // Stage 14 · VB5 · FIVB pools (Club World Championship, VNL): matches won, match points, set ratio, points ratio, then between them.

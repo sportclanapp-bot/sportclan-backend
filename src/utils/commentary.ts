@@ -233,5 +233,21 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     const what = p.kind === 'ft' ? 'Free throw' : p.kind === '1pt' && ctx.threeByThree === true ? '1 inside the arc' : v === 1 ? 'Free throw' : `${v}-pointer`;
     return `🏀 ${what} — ${team}${player ? ` (${player})` : ''}`;
   }
+  // 2.15.0 pass: clock and arbiter notes every timed sport sends — they showed as raw "note {…}" lines.
+  if (eventType === 'note') {
+    const secs = Number(p.seconds ?? 0) || 0;
+    const dur = (n: number) => { const a = Math.abs(n); return a % 60 === 0 && a >= 60 ? `${a / 60} min` : `${a} s`; };
+    const named = p.side === 'B' ? ctx.teamB : ctx.teamA;
+    const opp = p.side === 'B' ? ctx.teamA : ctx.teamB;
+    if (p.kind === 'kickoff') return ctx.sport === 'basketball' ? (ctx.period > 0 ? '⏱ Clock started' : '⏱ Tip-off') : ctx.sport === 'chess' ? '⏱ Clocks started' : '⏱ Clock started';
+    if (p.kind === 'clock_pause') return '⏸ Clock stopped';
+    if (p.kind === 'clock_resume') return '▶ Clock restarted';
+    if (p.kind === 'clock_adjust' && secs) return `⏱ Clock corrected ${secs > 0 ? '+' : '−'}${dur(secs)}`;
+    if (p.kind === 'buzzer') return '⏰ Time’s up';
+    if (p.kind === 'serve_order') return `🏸 Serving order set — player ${p.server === 2 ? 2 : 1} serves to player ${p.receiver === 2 ? 2 : 1}`;
+    if (p.kind === 'add_time' && secs) return `⏱ ${named}: +${dur(secs)} from the arbiter`;
+    if (p.kind === 'illegal_move') return `♟️ Illegal move — ${named}${p.board ? ` (board ${String(p.board).replace(/^B/, '')})` : ''}${secs ? ` · ${dur(secs)} to ${opp}` : ''}`;
+    if (p.kind === 'wrong_claim') return `♟️ Wrong draw claim — ${named}${secs ? ` · ${dur(secs)} to ${opp}` : ''}`;
+  }
   return null;
 }

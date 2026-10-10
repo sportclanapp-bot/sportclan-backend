@@ -42,9 +42,13 @@ export async function myScheduledMatches(userId: string): Promise<any[]> {
   const teamIds = Array.from(new Set((teamsRes.data ?? []).map((r: { team_id: string }) => r.team_id)));
 
   const base = () => supabase.from('matches').select('*').eq('status', 'scheduled').is('voided_at', null);
-  const ors = [`created_by.eq.${userId}`];
-  if (teamIds.length) ors.push(`team_a_id.in.(${teamIds.join(',')})`, `team_b_id.in.(${teamIds.join(',')})`);
-  const reads = [base().or(ors.join(','))];
+  // Stage 16 (found on the device pass): someone in 200+ teams made one URL too long for
+  // the database proxy, and the call failed; the teams go 100 at a time, like the match ids.
+  const reads = [base().eq('created_by', userId)];
+  for (let i = 0; i < teamIds.length; i += 100) {
+    const ids = teamIds.slice(i, i + 100).join(',');
+    reads.push(base().or(`team_a_id.in.(${ids}),team_b_id.in.(${ids})`));
+  }
   for (let i = 0; i < partIds.length; i += 200) reads.push(base().in('id', partIds.slice(i, i + 200)));
   const results = await Promise.all(reads);
   const failed = results.find((r) => r.error);

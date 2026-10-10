@@ -40,11 +40,22 @@ export type PointsTemplate = {
   walkoverWin: number | null;
   walkoverLoss: number | null;
   sets: { straight: [number, number]; decider: [number, number] } | null;
+  /**
+   * Stage 16 · HK1: a level league match decided by a tie-break — a shoot-out
+   * (football, hockey) or a super over (cricket): the winner's and the loser's
+   * points. null = scored like any win / loss (as before; every tournament made
+   * before this keeps that). FIH Pro League: 2 and 1.
+   */
+  shootoutWin?: number | null;
+  shootoutLoss?: number | null;
 };
 
 const tpl = (win: number, draw: number, loss: number, extra: Partial<PointsTemplate> = {}): PointsTemplate => ({
   win, draw, loss, noResult: null, walkoverWin: null, walkoverLoss: null, sets: null, ...extra,
 });
+
+/** Stage 16 · HK1: the sports whose level league match can be decided by a tie-break (a shoot-out; cricket's super over). */
+export const SHOOTOUT_POINT_SPORTS: ReadonlySet<string> = new Set(['cricket', 'football', 'hockey']);
 
 /** Stage 11 · PB3: the team-tie sports, whose ties can score a win in the deciding match apart (MLP: 3 / 2 / 1 / 0). */
 export const TIE_POINT_SPORTS: ReadonlySet<string> = new Set(['badminton', 'tennis', 'tabletennis', 'pickleball', 'carrom']); // Stage 12 · CH5: carrom team events too
@@ -71,6 +82,8 @@ export function pointsPresetFor(sport: string | null | undefined): PointsTemplat
     case 'tabletennis': return tpl(2, 1.5, 1, { walkoverLoss: 0 });
     case 'badminton': case 'tennis': case 'pickleball': case 'carrom': return tpl(1, 0.5, 0);
     case 'chess': return tpl(1, 0.5, 0, { walkoverLoss: 0 });
+    // Stage 16 · HK1: FIH's 3 / 2 / 1 / 0 — a shoot-out win 2, a shoot-out loss 1 (new tournaments; older ones keep theirs).
+    case 'hockey': return tpl(3, 1, 0, { shootoutWin: 2, shootoutLoss: 1 });
     default: return tpl(3, 1, 0);
   }
 }
@@ -95,6 +108,17 @@ export function pointsRefusal(sport: string | null | undefined, p: unknown): Ref
   if (t.noResult != null && (t.noResult as number) > win) return refuse('A no result can’t be worth more than a win.');
   if (t.walkoverLoss != null && (t.walkoverLoss as number) > loss) return refuse('A walkover loss can’t be worth more than a loss.');
   if (t.walkoverWin != null && (t.walkoverWin as number) > win) return refuse('A walkover win can’t be worth more than a win.');
+  // Stage 16 · HK1: a tie-break's points (a shoot-out, a super over) — between a loss and a win, the winner's at least the loser's.
+  if (t.shootoutWin != null || t.shootoutLoss != null) {
+    const what = sportKeyOf(sport) === 'cricket' ? 'super-over' : 'shoot-out';
+    if (!SHOOTOUT_POINT_SPORTS.has(sportKeyOf(sport))) return refuse('Points for a shoot-out are for football, hockey and cricket (a super over).');
+    for (const k of ['shootoutWin', 'shootoutLoss'] as const) {
+      if (t[k] != null && !isPoint(t[k])) return refuse(`Points for a ${what} ${k === 'shootoutWin' ? 'win' : 'loss'} must be 0 or more, in halves.`);
+    }
+    if (t.shootoutWin != null && (t.shootoutWin as number) > win) return refuse(`A ${what} win can’t be worth more than a win.`);
+    if (t.shootoutLoss != null && (t.shootoutLoss as number) < loss) return refuse(`A ${what} loss can’t be worth less than a loss.`);
+    if ((t.shootoutWin ?? win) as number < ((t.shootoutLoss ?? loss) as number)) return refuse(`A ${what} win has to be worth at least a ${what} loss.`);
+  }
   if (t.sets != null) {
     // Stage 11 · PB3: and team ties — a tie won in its deciding match (MLP 3/2/1/0).
     if (sportKeyOf(sport) !== 'volleyball' && !TIE_POINT_SPORTS.has(sportKeyOf(sport))) return refuse('Points by set score are for volleyball, and by the deciding match for team ties.');
@@ -116,6 +140,9 @@ export function storedPoints(p: Record<string, any>): PointsTemplate {
     walkoverWin: p.walkoverWin ?? null,
     walkoverLoss: p.walkoverLoss ?? null,
     sets: p.sets ? { straight: [p.sets.straight[0], p.sets.straight[1]], decider: [p.sets.decider[0], p.sets.decider[1]] } : null,
+    // Stage 16 · HK1: kept only when set (every other template stays as it was).
+    ...(p.shootoutWin != null ? { shootoutWin: p.shootoutWin } : {}),
+    ...(p.shootoutLoss != null ? { shootoutLoss: p.shootoutLoss } : {}),
   };
 }
 

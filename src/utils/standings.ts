@@ -96,6 +96,9 @@ export type PointsModel = {
   walkoverWin?: number | null;
   walkoverLoss?: number | null;
   sets?: { straight: [number, number]; decider: [number, number] } | null;
+  /** Stage 16 · HK1: a level match decided by a shoot-out / super over — winner's and loser's points (null = as a win / loss). */
+  shootoutWin?: number | null;
+  shootoutLoss?: number | null;
 };
 export const DEFAULT_POINTS: PointsModel = { win: 3, draw: 1, loss: 0 };
 export const CHESS_POINTS: PointsModel = { win: 1, draw: 0.5, loss: 0 };
@@ -229,7 +232,24 @@ function isWalkover(m: GMatch): boolean {
  * template scores a win that went the distance (the loser one set short of the
  * winner) apart from a straight one.
  */
+/**
+ * Stage 16 · HK1: a match that ended level and was decided by a tie-break — a
+ * shoot-out (football, hockey), a super over or its fallback (cricket), a chess
+ * tie-break game. (A series' games are its own; the series isn't one of these.)
+ */
+export function decidedByTieBreak(m: GMatch): boolean {
+  const ss: any = m.score_summary ?? {};
+  if (ss.tie?.series) return false;
+  if (ss.shootout || ss.super_over || ss.tie_decided_by || ss.chess_tiebreak) return true;
+  const sos = Array.isArray(ss.super_overs) ? ss.super_overs : [];
+  return sos.length > 0 && !!sos[sos.length - 1]?.winner;
+}
+
 function resultPoints(m: GMatch, pts: PointsModel, winnerScore: number, loserScore: number): [number, number] {
+  // Stage 16 · HK1: the organiser's points for a tie-break win / loss (blank = as a win / loss, as before).
+  if ((pts.shootoutWin != null || pts.shootoutLoss != null) && !isWalkover(m) && decidedByTieBreak(m)) {
+    return [pts.shootoutWin ?? pts.win, pts.shootoutLoss ?? pts.loss];
+  }
   if (isWalkover(m)) {
     const straight = pts.sets?.straight;
     return [pts.walkoverWin ?? straight?.[0] ?? pts.win, pts.walkoverLoss ?? straight?.[1] ?? pts.loss];

@@ -92,6 +92,13 @@ export interface MatchRules {
   minOnPitch?: number | null;
   /** BUILD 3.27: hockey's shoot-out takers each before sudden death (1–5). */
   shootoutTakers?: number;
+  /**
+   * Stage 16 · HK7 · who may take the sudden-death kicks: true = the same takers
+   * as the first round (FIH: the same five), false = anyone eligible, but nobody
+   * twice until every eligible team-mate has taken one (IFAB). null = the sport's
+   * own (hockey true, football false). A sent-off player never takes one.
+   */
+  shootoutSameTakers?: boolean | null;
   /** BUILD 3.29: hockey's yellow-card suspension, 5–10 minutes (a green is always 2). */
   yellowCardMinutes?: number;
   /** BUILD 3.31: basketball's overtime length in minutes, 1–5 (display only). */
@@ -274,8 +281,8 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point', maxSubs: 6, subsPer: 'set', reentry: 'same_spot', liberos: 2, sideSwitchEvery: null, decidingSwitchEvery: null, superPoint: false, superPointBefore: 11, superServe: false, minWomen: null, tie: null }, // Stage 15 · BB6: a series // Stage 11 · PB9 timed
   tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null, tiebreakAt: null, finalSetTiebreakTo: null, noLet: false, ballChange: false, penaltyLadder: null, tie: null }, // BUILD 3.59–3.66; Stage 9 · T2, T10, T9, T3 (players 2 = doubles)
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50, tie: null, penaltyLadder: null }, // BUILD 3.72–3.77 · Stage 12 · CH5: team events
-  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null, subsPer: 'match', reentry: 'free', tie: null }, // Stage 15 · BB6: a series // Stage 14 · VB2: as before — a count a match, no re-entry check
-  hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true, maxSubs: null, subsPer: 'match', reentry: 'free', tie: null }, // Stage 14 · VB2: rolling subs (FIH) · Stage 15 · BB6: a series
+  football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null, subsPer: 'match', reentry: 'free', tie: null, shootoutSameTakers: null }, // Stage 15 · BB6: a series // Stage 14 · VB2: as before — a count a match, no re-entry check
+  hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true, maxSubs: null, subsPer: 'match', reentry: 'free', tie: null, shootoutSameTakers: null }, // Stage 14 · VB2: rolling subs (FIH) · Stage 15 · BB6: a series
   basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false, maxSubs: null, subsPer: 'match', reentry: 'free', timeouts: null, teamFoulBonus: null, teamFoulPossessionAt: null, overtimeTo: null, ejectAfter: 2, ejectCounts: 'tech_flagrant', coachEjectC: 2, coachEjectB: 3, tie: null }, // Stage 14 · VB2: unlimited (FIBA) · Stage 15: time-outs, the bonus, 3x3's overtime, ejections (null = by the game); a series (tie)
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true, tie: null, penaltyLadder: null, delaySeconds: null, incrementFromMove: null, secondPeriodMoves: null, secondPeriodMinutes: null }, // Stage 12 · CH5: team matches · CH6: the rest of the clock
 };
@@ -922,6 +929,8 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'hockey' && (!isWhole(r.yellowCardMinutes) || r.yellowCardMinutes < 1)) { // Stage 13 · CR3: no top
     return refuse('A yellow card suspends for a whole number of minutes.', 'yellowCardMinutes');
   }
+  // Stage 16 · HK7: who takes the sudden-death kicks — on, off, or the sport's own (blank).
+  if ((key === 'hockey' || key === 'football') && r.shootoutSameTakers != null && typeof r.shootoutSameTakers !== 'boolean') return refuse('Who takes the sudden-death kicks is on, off, or the sport’s own.', 'shootoutSameTakers');
   // BUILD 3.27: hockey's shoot-out takers, 1–5.
   if (key === 'hockey' && (!isWhole(r.shootoutTakers) || r.shootoutTakers < 1)) { // Stage 13 · CR3: no top
     return refuse('Shoot-out takers must be 1 or more each.', 'shootoutTakers');
@@ -1031,7 +1040,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'noLbw', 'bestOf', 'baseMinutes', 'incrementSeconds', 'delaySeconds', 'incrementFromMove', 'secondPeriodMoves', 'secondPeriodMinutes',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet', 'liberos', 'sideSwitchEvery', 'decidingSwitchEvery', 'superPoint', 'superPointBefore', 'superServe', 'minWomen'] : []), ...(SUB_PAD_SPORTS.has(key) ? ['maxSubs', 'subsPer', 'reentry'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(RALLY_TIMED.has(key) ? ['timeLimitMinutes', 'timedLevel'] : []), ...(key === 'tabletennis' ? ['winBy2'] : []), ...(key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' ? ['allGames'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...((TIE_SPORTS as readonly string[]).includes(key) || (SERIES_SPORTS as readonly string[]).includes(key) ? ['tie'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut', 'timeouts', 'teamFoulBonus', 'teamFoulPossessionAt', 'overtimeTo', 'ejectAfter', 'ejectCounts', 'coachEjectC', 'coachEjectB'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet', 'liberos', 'sideSwitchEvery', 'decidingSwitchEvery', 'superPoint', 'superPointBefore', 'superServe', 'minWomen'] : []), ...(SUB_PAD_SPORTS.has(key) ? ['maxSubs', 'subsPer', 'reentry'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(RALLY_TIMED.has(key) ? ['timeLimitMinutes', 'timedLevel'] : []), ...(key === 'tabletennis' ? ['winBy2'] : []), ...(key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' ? ['allGames'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...((TIE_SPORTS as readonly string[]).includes(key) || (SERIES_SPORTS as readonly string[]).includes(key) ? ['tie'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes', 'shootoutSameTakers'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut', 'timeouts', 'teamFoulBonus', 'teamFoulPossessionAt', 'overtimeTo', 'ejectAfter', 'ejectCounts', 'coachEjectC', 'coachEjectB'] : []), ...(key === 'football' ? ['shootoutSameTakers', 'penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -1199,6 +1208,22 @@ export function pointHowFor(sport: string | null | undefined): ReadonlyArray<Poi
 }
 
 /**
+ * Stage 16 · HK2 · how a goal was scored, on the "who scored?" sheet
+ * (optional): hockey's field goal / penalty corner / penalty stroke (Hockey5s
+ * has no penalty corners); football's open play / free kick / penalty. A
+ * penalty (stroke) from its own button carries its "how" already.
+ */
+export const GOAL_HOW: Readonly<Record<string, ReadonlyArray<PointHow>>> = {
+  hockey: [{ key: 'field', label: 'Field goal' }, { key: 'pc', label: 'Penalty corner', board: 'Penalty-corner goals' }, { key: 'stroke', label: 'Penalty stroke', board: 'Penalty-stroke goals' }],
+  football: [{ key: 'open', label: 'Open play' }, { key: 'free_kick', label: 'Free kick', board: 'Free-kick goals' }, { key: 'penalty', label: 'Penalty', board: 'Penalty goals' }],
+};
+export function goalHowFor(sport: string | null | undefined, players?: number | null): ReadonlyArray<PointHow> {
+  const k = lengthKey(sport);
+  const all = GOAL_HOW[k] ?? [];
+  return k === 'hockey' && players === 5 ? all.filter((h) => h.key !== 'pc') : all;
+}
+
+/**
  * Stage 14 · VB8 · basketball's own player stats beyond points, assists and
  * fouls (FIBA box score): each is a pad button that asks who, and a leaderboard.
  */
@@ -1248,6 +1273,8 @@ function subsWords(rules: Partial<MatchRules>, std: Partial<MatchRules>): string
 
 /** BUILD 3.28: FIH Hockey5s — 5 a side, two halves of 10 minutes. */
 export const HOCKEY5S = { players: 5, periods: 2, periodMinutes: 10 } as const;
+/** Stage 16 · HK8 · FIH indoor hockey in one tap: 6 a side (5 and a goalkeeper), 4 quarters of 10 minutes, on a sideboarded court. */
+export const HOCKEY_INDOOR = { players: 6, periods: 4, periodMinutes: 10 } as const;
 const SIDE_LIMITS: Record<string, [number, number]> = {
   // Stage 13 · CR3 (Dipak): 1 a side or more — no top.
   football: [1, Number.MAX_SAFE_INTEGER],
@@ -1409,4 +1436,39 @@ export function tournamentRulesRefusal(sport: string | null | undefined, rules: 
     if (bad) return { ...bad, error: `${labels[k]}: ${bad.error}` };
   }
   return null;
+}
+
+/** Stage 16 · HK7: the sudden-death takers rule for a match (the rules', else the sport's own). */
+export function shootoutSameTakersOf(sport: string | null | undefined, rules: Partial<MatchRules> | null | undefined): boolean {
+  return rules?.shootoutSameTakers ?? (lengthKey(sport) === 'hockey');
+}
+
+/**
+ * Stage 16 · HK7 · who can't take the next kick for a side: a sent-off player
+ * never; in the first round, nobody twice; in sudden death, the same takers
+ * (FIH) or nobody twice until all eligible have taken one (IFAB).
+ * `eligible` = the side's players (line-up and typed-in), by id.
+ */
+export function shootoutBlocked(
+  events: ReadonlyArray<{ event_type: string; payload?: unknown }>, side: 'A' | 'B', eligible: readonly string[], perSide: number, same: boolean,
+): string[] {
+  const red = new Set<string>();
+  const kicks: string[] = [];
+  let sideKicks = 0;
+  for (const e of events) {
+    const p = (e.payload ?? {}) as { team_side?: unknown; kind?: unknown; player_id?: unknown };
+    if ((p.team_side === 'B' ? 'B' : 'A') !== side) continue;
+    if (e.event_type === 'card' && p.kind === 'red' && typeof p.player_id === 'string') red.add(p.player_id);
+    if (e.event_type === 'note' && p.kind === 'shootout_kick') { sideKicks += 1; if (typeof p.player_id === 'string') kicks.push(p.player_id); }
+  }
+  const ok = eligible.filter((id) => !red.has(id));
+  let allowed: Set<string>;
+  if (sideKicks < perSide) allowed = new Set(ok.filter((id) => !kicks.includes(id)));
+  else if (same) { const first = new Set(kicks.slice(0, perSide)); allowed = new Set(ok.filter((id) => first.size === 0 || first.has(id))); }
+  else {
+    const count = (id: string) => kicks.filter((k) => k === id).length;
+    const min = Math.min(...ok.map(count));
+    allowed = new Set(ok.filter((id) => count(id) === min));
+  }
+  return eligible.filter((id) => !allowed.has(id));
 }

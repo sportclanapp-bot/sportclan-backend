@@ -23,7 +23,7 @@ import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHi
 import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { FOUL_KINDS } from '../utils/basketballRules';
 import { gameShootout, shootoutKicksOf, shootoutProblem } from '../utils/shootoutRules'; // Stage 15 follow-up
-import { BASKETBALL_STAT_KEYS, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
+import { BASKETBALL_STAT_KEYS, goalHowFor, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
 import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { trumpsFor } from '../utils/tieTrumps';
 import { sideOutReplay } from '../utils/pickleballCore';
@@ -424,6 +424,20 @@ export async function validateScoringEvent(
     }
     if (payload.kind !== 'game_end' && slug !== 'basketball') return refuse(400, { error: 'The possession arrow is basketball’s.', code: 'BAD_NOTE' });
     if (payload.kind === 'arrow' && payload.team_side !== 'A' && payload.team_side !== 'B') return refuse(400, { error: 'Say which team.', code: 'BAD_NOTE' });
+  }
+  // Stage 16 · HK4: a card's own length is a whole number of minutes.
+  if (event_type === 'card' && payload && payload.minutes != null && !(Number.isInteger(payload.minutes) && payload.minutes > 0)) {
+    return refuse(400, { error: 'A card’s length is a whole number of minutes.', code: 'BAD_CARD' });
+  }
+  // Stage 16 · HK2: how a goal was scored is one the sport has.
+  if (event_type === 'score' && payload && payload.how != null && payload.kind === 'goal') {
+    const slugG = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    if (!goalHowFor(slugG).some((h) => h.key === payload.how)) return refuse(400, { error: 'That isn’t a way a goal is scored here.', code: 'BAD_GOAL_HOW' });
+  }
+  // Stage 16 · HK7: a sent-off player can't take a shoot-out kick.
+  if (event_type === 'note' && payload && payload.kind === 'shootout_kick' && typeof payload.player_id === 'string') {
+    const { data: reds } = await supabase.from('match_events').select('id').eq('match_id', match.id).eq('event_type', 'card').eq('payload->>kind', 'red').eq('payload->>player_id', payload.player_id).limit(1);
+    if ((reds ?? []).length) return refuse(400, { error: 'A player sent off can’t take a shoot-out kick.', code: 'SHOOTOUT_SENT_OFF' });
   }
   // Stage 15 follow-up: a series game's shoot-out tally (football, hockey) — kept apart from the goals.
   if (event_type === 'note' && payload && payload.kind === 'shootout') {
@@ -1317,6 +1331,11 @@ export interface GoalPlayerLine {
   side: 'A' | 'B'; name?: string; goals: number; assists: number;
   /** 2026-09-26: cards credited to this player (the pad asks who got it; optional). */
   yellow_cards?: number; red_cards?: number; green_cards?: number;
+  /**
+   * Stage 16 · HK2: goals by how, once there's one — hockey's penalty corner /
+   * stroke, football's penalty / free kick — and the spot kicks missed.
+   */
+  pc_goals?: number; stroke_goals?: number; pen_goals?: number; fk_goals?: number; pens_missed?: number; strokes_missed?: number;
 }
 export interface PointPlayerLine {
   side: 'A' | 'B'; name?: string; points: number; assists: number; /** BUILD 3.35: only once they've fouled. */ fouls?: number;
@@ -1370,10 +1389,17 @@ export function aggregateGoalPlayers(events: { event_type: string; payload: any 
     const isGoal = e.event_type === 'score' && p.kind === 'goal';
     const isAssist = e.event_type === 'assist';
     const card = e.event_type === 'card' && (p.kind === 'yellow' || p.kind === 'red' || p.kind === 'green') ? (p.kind as 'yellow' | 'red' | 'green') : null;
-    if (!isGoal && !isAssist && !card) continue;
+    // Stage 16 · HK2: a missed penalty (football) or penalty stroke (hockey), credited to who took it.
+    const missed = e.event_type === 'note' && (p.kind === 'pen_missed' || (p.kind === 'pen_stroke' && p.scored === false)) ? (p.kind === 'pen_missed' ? 'pens_missed' : 'strokes_missed') : null;
+    if (!isGoal && !isAssist && !card && !missed) continue;
     const line = (players[id] ??= { side: sideOfPayload(p), goals: 0, assists: 0 });
     if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
-    if (isGoal) line.goals += 1;
+    if (missed) { line[missed] = (line[missed] ?? 0) + 1; continue; }
+    if (isGoal) {
+      line.goals += 1;
+      const how = p.how === 'pc' ? 'pc_goals' : p.how === 'stroke' ? 'stroke_goals' : p.how === 'penalty' || p.penalty === true ? 'pen_goals' : p.how === 'free_kick' ? 'fk_goals' : null;
+      if (how) line[how] = (line[how] ?? 0) + 1;
+    }
     if (isAssist) line.assists += 1;
     if (card) line[`${card}_cards`] = (line[`${card}_cards`] ?? 0) + 1;
   }
@@ -1812,6 +1838,24 @@ export async function recomputeSummary(
   // goals/points/rally-points. Side totals (A/B) above are untouched, so results
   // and the A7-002 results surface don't change.
   summary.players = aggregatePlayers(slug, events as any[], rulesOf(slug, match)); // Stage 15 · BB8: 3x3's 1s
+  // Stage 16 · HK2: set pieces per team — hockey's penalty corners (and their goals) and strokes; football's penalties.
+  if (slug === 'hockey' || slug === 'football') {
+    const sp = { A: { pc: 0, pc_goals: 0, strokes: 0, stroke_goals: 0, pens: 0, pen_goals: 0 }, B: { pc: 0, pc_goals: 0, strokes: 0, stroke_goals: 0, pens: 0, pen_goals: 0 } };
+    for (const e of events) {
+      const p: any = e.payload || {};
+      const sd = sideOf(p);
+      if (e.event_type === 'note' && p.kind === 'pen_corner') sp[sd].pc += 1;
+      else if (e.event_type === 'note' && p.kind === 'pen_stroke' && p.scored === false) sp[sd].strokes += 1;
+      else if (e.event_type === 'note' && p.kind === 'pen_missed') sp[sd].pens += 1;
+      else if (e.event_type === 'score' && p.kind === 'goal') {
+        if (p.how === 'pc') sp[sd].pc_goals += 1;
+        else if (p.how === 'stroke') { sp[sd].strokes += 1; sp[sd].stroke_goals += 1; }
+        else if (p.how === 'penalty' || p.penalty === true) { sp[sd].pens += 1; sp[sd].pen_goals += 1; }
+      }
+    }
+    if (sp.A.pc + sp.B.pc + sp.A.strokes + sp.B.strokes + sp.A.pens + sp.B.pens + sp.A.pc_goals + sp.B.pc_goals > 0) summary.set_pieces = sp;
+    else delete summary.set_pieces;
+  }
   // Stage 15 · BB4: each period's score — quarters, halves (not a series: its games are its line).
   if ((slug === 'basketball' || slug === 'football' || slug === 'hockey') && !tieRubbers) {
     const per: Array<{ A: number; B: number }> = [{ A: 0, B: 0 }];

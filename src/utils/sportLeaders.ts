@@ -30,6 +30,8 @@ export interface SportLeaderMatch {
     players?: Record<string, Record<string, unknown>> | null; rubbers?: unknown; walkover?: unknown;
     /** Stage 9 · T11: tennis — each set's tiebreak, and the serve stats per side. */
     set_tiebreaks?: Array<{ A: number; B: number } | null> | null;
+    /** Stage 16 · HK2: set pieces per team (hockey PCs, strokes; football penalties). */
+    set_pieces?: Partial<Record<"A" | "B", { pc?: number; pc_goals?: number }>> | null;
     serve?: Partial<Record<'A' | 'B', { aces?: unknown; double_faults?: unknown }>> | null;
   } | null;
 }
@@ -78,11 +80,11 @@ function topPlayers(
   return { stat, title, one, many, kind: 'player', rows };
 }
 
-type TTally = { team_id: string; played: number; won: number; lost: number; drawn: number; games: number; gamesLost: number; pf: number; pa: number; cleanSheets: number; tbWon: number; tbLost: number; aces: number };
+type TTally = { team_id: string; played: number; won: number; lost: number; drawn: number; games: number; gamesLost: number; pf: number; pa: number; cleanSheets: number; tbWon: number; tbLost: number; aces: number; pc: number; pcGoals: number };
 
 function teamTallies(matches: SportLeaderMatch[]): TTally[] {
   const out = new Map<string, TTally>();
-  const t = (id: string) => { let x = out.get(id); if (!x) { x = { team_id: id, played: 0, won: 0, lost: 0, drawn: 0, games: 0, gamesLost: 0, pf: 0, pa: 0, cleanSheets: 0, tbWon: 0, tbLost: 0, aces: 0 }; out.set(id, x); } return x; };
+  const t = (id: string) => { let x = out.get(id); if (!x) { x = { team_id: id, played: 0, won: 0, lost: 0, drawn: 0, games: 0, gamesLost: 0, pf: 0, pa: 0, cleanSheets: 0, tbWon: 0, tbLost: 0, aces: 0, pc: 0, pcGoals: 0 }; out.set(id, x); } return x; };
   for (const m of matches) {
     const ids: Array<[string | null, 'A' | 'B']> = [[m.team_a_id, 'A'], [m.team_b_id, 'B']];
     const tie = m.score_summary?.rubbers != null;
@@ -111,6 +113,8 @@ function teamTallies(matches: SportLeaderMatch[]): TTally[] {
       const goalsOf = (x: 'A' | 'B') => { const v = m.score_summary?.[x]?.score ?? m.score_summary?.[x]?.value; return typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null; };
       const conceded = goalsOf(other);
       if (conceded === 0 && goalsOf(side) != null) me.cleanSheets += 1;
+      // Stage 16 · HK2: hockey's penalty corners won and scored from.
+      me.pc += n(Number(m.score_summary?.set_pieces?.[side]?.pc ?? 0)); me.pcGoals += n(Number(m.score_summary?.set_pieces?.[side]?.pc_goals ?? 0));
     }
   }
   return [...out.values()];
@@ -139,12 +143,25 @@ export function sportBoards(
   const played = (t: { matches: Set<string> }) => pl(t.matches.size, 'match', 'matches');
   const record = (t: TTally) => `${t.won}W–${t.lost}L${t.drawn ? `–${t.drawn}D` : ''}`;
   if (k === 'football' || k === 'hockey') {
-    const p = playerTallies(matches, ['goals', 'assists', 'yellow_cards', 'red_cards', 'green_cards'], accounts);
+    const p = playerTallies(matches, ['goals', 'assists', 'yellow_cards', 'red_cards', 'green_cards', 'pc_goals', 'stroke_goals', 'pen_goals', 'fk_goals', 'pens_missed', 'strokes_missed'], accounts);
     const teams = teamTallies(matches);
     const cards = (t: PTally) => 3 * (t.s.red_cards ?? 0) + (t.s.yellow_cards ?? 0) + (t.s.green_cards ?? 0);
+    const pctOf = (made: number, of: number) => (of > 0 ? Math.round((1000 * made) / of) / 10 : 0);
+    // Stage 16 · HK2: goals by how, once there's one — hockey's penalty corners and strokes, football's penalties and free kicks.
+    const setPieceBoards = (k === 'hockey'
+      ? [
+        topPlayers(p, 'pc_goals', 'Penalty-corner goals', 'goal', 'goals', teamNames, (t) => t.s.pc_goals ?? 0, played),
+        topPlayers(p, 'stroke_goals', 'Penalty-stroke goals', 'goal', 'goals', teamNames, (t) => t.s.stroke_goals ?? 0, (t) => `${t.s.stroke_goals ?? 0}/${(t.s.stroke_goals ?? 0) + (t.s.strokes_missed ?? 0)} strokes`),
+        topTeams(teams.filter((t) => t.pc > 0), 'pc_conversion', 'Penalty-corner conversion', '%', '%', teamNames, (t) => pctOf(t.pcGoals, t.pc), (t) => `${t.pcGoals}/${t.pc} corners`),
+      ]
+      : [
+        topPlayers(p, 'pen_goals', 'Penalty goals', 'goal', 'goals', teamNames, (t) => t.s.pen_goals ?? 0, (t) => `${t.s.pen_goals ?? 0}/${(t.s.pen_goals ?? 0) + (t.s.pens_missed ?? 0)} taken`),
+        topPlayers(p, 'fk_goals', 'Free-kick goals', 'goal', 'goals', teamNames, (t) => t.s.fk_goals ?? 0, played),
+      ]).filter((b) => b.rows.length > 0);
     return [
       topPlayers(p, 'goals', 'Top scorers', 'goal', 'goals', teamNames, (t) => t.s.goals ?? 0, played),
       topPlayers(p, 'assists', 'Assists', 'assist', 'assists', teamNames, (t) => t.s.assists ?? 0, played),
+      ...setPieceBoards,
       topPlayers(p, 'cards', 'Cards', 'point', 'points', teamNames, cards,
         (t) => [t.s.yellow_cards ? `🟨 ${t.s.yellow_cards}` : null, t.s.green_cards ? `🟩 ${t.s.green_cards}` : null, t.s.red_cards ? `🟥 ${t.s.red_cards}` : null].filter(Boolean).join(' · ')),
       topTeams(teams, 'clean_sheets', 'Clean sheets', 'clean sheet', 'clean sheets', teamNames, (t) => t.cleanSheets, (t) => pl(t.played, 'match', 'matches')),

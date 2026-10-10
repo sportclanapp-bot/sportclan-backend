@@ -71,16 +71,21 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     if (p.kind === 'own_goal') return `🙈 Own goal by ${team} — goal to ${other}`;
     const ball = ctx.sport === 'hockey' ? '🥅' : '⚽';
     // Stage 8 · F4: a goal from the spot says so.
-    return `${ball} GOAL! ${team}${player ? ` — ${player}` : ''}${p.penalty ? ' (penalty)' : ''}`;
+    // Stage 16 · HK2: and how it was scored, when the scorer said.
+    const how = p.how === 'pc' ? ' (penalty corner)' : p.how === 'stroke' ? ' (penalty stroke)' : p.how === 'free_kick' ? ' (free kick)' : p.how === 'field' ? ' (field goal)' : p.penalty || p.how === 'penalty' ? ' (penalty)' : '';
+    return `${ball} GOAL! ${team}${player ? ` — ${player}` : ''}${how}`;
   }
   if (goalSport && eventType === 'card') {
     const kind = CARD[p.kind as keyof typeof CARD] ?? 'Card';
     // Stage 8 · F4: the red that follows a second yellow.
     if (p.kind === 'red' && p.second_yellow) return `🟨🟥 Second yellow, sent off — ${player ? `${player} (${team})` : team}`;
-    return `${kind} — ${player ? `${player} (${team})` : team}`;
+    // Stage 16 · HK4: a card's own length, and the captain's card for too many players.
+    const mins = Number.isFinite(Number(p.minutes)) && Number(p.minutes) > 0 ? ` · ${Number(p.minutes)} min` : '';
+    if (p.captain === true) return `${kind} to the captain — ${player ? `${player} (${team})` : team} · too many players on the field${mins}`;
+    return `${kind} — ${player ? `${player} (${team})` : team}${mins}`;
   }
   // Stage 8 · F4: assists and substitutions on the timeline.
-  if (goalSport && eventType === 'assist') return `🅰️ Assist — ${player ? `${player} (${team})` : team}`;
+  if ((goalSport || ctx.sport === 'basketball') && eventType === 'assist') return `🅰️ Assist — ${player ? `${player} (${team})` : team}`;
   // Stage 14 · VB2: basketball and volleyball subs too, and an injury (exceptional) substitution.
   if ((goalSport || ctx.sport === 'basketball' || ctx.sport === 'volleyball') && eventType === 'sub') {
     const off = typeof p.off_name === 'string' && p.off_name.trim() ? p.off_name.trim() : null;
@@ -137,7 +142,11 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     const last = count;
     return ctx.period <= last ? `End of Q${ctx.period}` : `End of OT${ctx.period - last}`;
   }
-  if (goalSport && eventType === 'note' && p.kind === 'pen_corner') return `🏑 Penalty corner — ${team}`;
+  if (goalSport && eventType === 'note' && p.kind === 'pen_corner') return `🏑 Penalty corner — ${team}${p.at_hooter === true ? ' (at the hooter: it’s played before the quarter ends)' : ''}`;
+  // Stage 16 · HK2 / HK6: a penalty corner over with no goal; a missed penalty stroke / penalty.
+  if (goalSport && eventType === 'note' && p.kind === 'pc_over') return '🏑 Penalty corner over — no goal';
+  if (goalSport && eventType === 'note' && p.kind === 'pen_stroke' && p.scored === false) return `🎯 Penalty stroke missed — ${player ? `${player} (${team})` : team}`;
+  if (goalSport && eventType === 'note' && p.kind === 'pen_missed') return `🎯 Penalty missed — ${player ? `${player} (${team})` : team}`;
   if (goalSport && eventType === 'note' && p.kind === 'kickoff') return '⏱ Kick-off'; // BUILD 3.22
   // BUILD 3.78: a carrom foul — a piece due from that side.
   if (ctx.sport === 'carrom' && eventType === 'foul') return `🚫 Foul — ${team} (a piece due)`;

@@ -190,6 +190,22 @@ export function inningsOf(m: GMatch): { a: SideRuns; b: SideRuns } {
     return { runs, overs };
   };
 
+  // Stage 15 follow-up: a cricket best-of-N series — every game's runs and overs, not only the last game's
+  // (an all-out side is charged the full overs of that game, as for any match).
+  const games: any[] | null = ss?.tie?.series === true && Array.isArray(ss.rubbers) && ss.rubbers.some((g: any) => g?.ballsA != null) ? ss.rubbers : null;
+  if (games) {
+    const sum = (side: 'A' | 'B'): SideRuns => {
+      let runs = 0; let overs = 0; let known = false;
+      for (const g of games) {
+        const balls = Number(g?.[`balls${side}`]);
+        runs += Number(g?.[`runs${side}`] ?? 0) || 0;
+        if (allotted != null && g?.[`allOut${side}`] === true) { overs += allotted; known = true; }
+        else if (Number.isFinite(balls)) { overs += balls / 6; known = true; }
+      }
+      return { runs, overs: known ? overs : null };
+    };
+    return { a: sum('A'), b: sum('B') };
+  }
   return {
     a: sideOf(ss.team_a_score, ss.team_a_overs, ss?.A),
     b: sideOf(ss.team_b_score, ss.team_b_overs, ss?.B),

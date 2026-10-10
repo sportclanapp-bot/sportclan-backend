@@ -1765,7 +1765,9 @@ export async function recomputeSummary(
       summary.rubbers = crSeries.ends.map((x) => {
         const g = mainEvents(cricketGameEvents(events, x.game));
         const a = sideTotals(g, 'A', out2.A); const b = sideTotals(g, 'B', out2.B);
-        return { key: `G${x.game}`, label: `Game ${x.game}`, winner: x.winner ?? 'draw', A: x.winner === 'A' ? 1 : 0, B: x.winner === 'B' ? 1 : 0, runsA: a.runs, wicketsA: a.wickets, runsB: b.runs, wicketsB: b.wickets };
+        return { key: `G${x.game}`, label: `Game ${x.game}`, winner: x.winner ?? 'draw', A: x.winner === 'A' ? 1 : 0, B: x.winner === 'B' ? 1 : 0, runsA: a.runs, wicketsA: a.wickets, runsB: b.runs, wicketsB: b.wickets,
+          // Stage 15 follow-up: each game's balls and all out, for the table's net run rate over the whole series.
+          ballsA: a.balls, ballsB: b.balls, allOutA: a.wickets >= out2.A, allOutB: b.wickets >= out2.B };
       });
       summary.rubber = crSeries.current;
       // Who bats first in the game in play (game 2 on: the scorer's choice at the last game's end; game 1: the toss).

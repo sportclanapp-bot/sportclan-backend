@@ -41,7 +41,8 @@ describe('which matches count as yours', () => {
   it('line-up, either team roster, or created by you', () => {
     expect(s).toMatch(/from\('match_participants'\)\.select\('match_id'\)\.eq\('user_id', userId\)/);
     expect(s).toMatch(/from\('team_members'\)\.select\('team_id'\)\.eq\('user_id', userId\)/);
-    expect(s).toMatch(/created_by\.eq\.\$\{userId\}/);
+    expect(s).toMatch(/\.eq\('created_by', userId\)/);
+    expect(s).toMatch(/teamIds\.slice\(i, i \+ 100\)/); // Stage 16: 100 teams a read (a long URL failed)
     expect(s).toMatch(/team_a_id\.in\.\(/);
     expect(s).toMatch(/team_b_id\.in\.\(/);
   });

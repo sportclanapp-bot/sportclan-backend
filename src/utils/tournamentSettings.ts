@@ -390,6 +390,13 @@ export type TournamentSettings = {
    * consolation draw beside it (the back draw's final loser is third).
    */
   doubleElim?: boolean;
+  /**
+   * Stage 14 follow-up · VB11 · a player's gender marked for this event by
+   * their captain or the organiser, when their profile doesn't say (women on
+   * court). Written only by POST /matches/:id/gender-mark; the profile's own
+   * gender always wins. The player is asked to add it to their profile.
+   */
+  genderMarks?: Record<string, 'male' | 'female'>;
   /** 4.13 · keep entries from the same club / state apart in the draw (the entry's club label). */
   separateClubs?: boolean;
   /** 4.14 · who may play: gender, an age limit on the start date, a rating band in the sport. Absent = open. */
@@ -817,7 +824,7 @@ export function settingsOf(t: { settings?: unknown } | null | undefined): Tourna
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist', 'qualifying', 'consolation', 'ladder', 'box', 'directSeeds', 'doubleElim']);
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist', 'qualifying', 'consolation', 'ladder', 'box', 'directSeeds', 'doubleElim', 'genderMarks']); // Stage 14 follow-up: genderMarks (kept as stored; written by its own endpoint)
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {

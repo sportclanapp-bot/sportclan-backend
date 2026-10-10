@@ -205,6 +205,12 @@ export interface MatchRules {
   superPoint?: boolean;
   superPointBefore?: number | null;
   superServe?: boolean;
+  /**
+   * Stage 14 follow-up · VB11 · a casual co-ed volleyball match: at least this
+   * many women in each set's line-up (typed names say woman / man). A
+   * tournament's events say it on their category instead.
+   */
+  minWomen?: number | null;
 }
 
 /**
@@ -220,7 +226,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.54 rubbers; Stage 11 · PB9 timed
   pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally', penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.58: side-out; players 2 = doubles; Stage 11 · PB9 timed
   // Stage 14 · VB2 / VB4 / VB7 / VB12: 6 subs a set back to the same spot, 2 liberos, the indoor court change, no PVL extras.
-  volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point', maxSubs: 6, subsPer: 'set', reentry: 'same_spot', liberos: 2, sideSwitchEvery: null, decidingSwitchEvery: null, superPoint: false, superPointBefore: 11, superServe: false }, // Stage 11 · PB9 timed
+  volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point', maxSubs: 6, subsPer: 'set', reentry: 'same_spot', liberos: 2, sideSwitchEvery: null, decidingSwitchEvery: null, superPoint: false, superPointBefore: 11, superServe: false, minWomen: null }, // Stage 11 · PB9 timed
   tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null, tiebreakAt: null, finalSetTiebreakTo: null, noLet: false, ballChange: false, penaltyLadder: null, tie: null }, // BUILD 3.59–3.66; Stage 9 · T2, T10, T9, T3 (players 2 = doubles)
   carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50, tie: null, penaltyLadder: null }, // BUILD 3.72–3.77 · Stage 12 · CH5: team events
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null, subsPer: 'match', reentry: 'free' }, // Stage 14 · VB2: as before — a count a match, no re-entry check
@@ -688,7 +694,7 @@ const FIELD_NAMES: Record<string, string> = {
   finalTarget: 'Deciding game target', winBy2: 'Win by 2', allGames: 'Every game played', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', timedLevel: 'Level at time', tiebreakAt: 'Tiebreak at', finalSetTiebreakTo: 'Final-set tiebreak', noLet: 'Lets', ballChange: 'New balls', penaltyLadder: 'Code violations', tie: 'Team tie', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game', gameMinutes: 'Minutes a game', carromMode: 'Carrom game', queenValue: 'Queen (point carrom)',
   drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
   // Stage 14.
-  maxSubs: 'Substitutions', subsPer: 'Substitutions counted', reentry: 'Coming back on', liberos: 'Liberos', sideSwitchEvery: 'Change courts every', decidingSwitchEvery: 'Change courts in the deciding set every', superPoint: 'Super Point', superPointBefore: 'Super Point before', superServe: 'Super Serve',
+  maxSubs: 'Substitutions', subsPer: 'Substitutions counted', reentry: 'Coming back on', liberos: 'Liberos', sideSwitchEvery: 'Change courts every', decidingSwitchEvery: 'Change courts in the deciding set every', superPoint: 'Super Point', superPointBefore: 'Super Point before', superServe: 'Super Serve', minWomen: 'Women on court',
 };
 
 const isWhole = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n);
@@ -892,6 +898,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     if (typeof r.superPoint !== 'boolean') return refuse('Super Point is on or off.', 'superPoint');
     if (typeof r.superServe !== 'boolean') return refuse('Super Serve is on or off.', 'superServe');
     if (r.superPointBefore != null && (!isWhole(r.superPointBefore) || r.superPointBefore < 1)) return refuse('A Super Point is called before a team reaches 1 point or more, or any time.', 'superPointBefore');
+    if (r.minWomen != null && (!isWhole(r.minWomen) || r.minWomen < 1)) return refuse('Women on court is a whole number, 1 or more, or off.', 'minWomen');
   }
   // BUILD 3.37: a rally sport's points to win a set.
   const rally = RALLY_LIMITS[key];
@@ -953,7 +960,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   }
   // Everything else is fixed at the sport's standard for now.
   const open = new Set(['style', 'overs', 'players', 'lastManStands', 'retireAt', 'bowlerOvers', 'extraRuns', 'rebowl', 'freeHit', 'inningsMinutes', 'powerplayOvers', 'oneTipOneHand', 'sixAndOut', 'noLbw', 'bestOf', 'baseMinutes', 'incrementSeconds', 'delaySeconds', 'incrementFromMove', 'secondPeriodMoves', 'secondPeriodMinutes',
-    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet', 'liberos', 'sideSwitchEvery', 'decidingSwitchEvery', 'superPoint', 'superPointBefore', 'superServe'] : []), ...(SUB_PAD_SPORTS.has(key) ? ['maxSubs', 'subsPer', 'reentry'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(RALLY_TIMED.has(key) ? ['timeLimitMinutes', 'timedLevel'] : []), ...(key === 'tabletennis' ? ['winBy2'] : []), ...(key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' ? ['allGames'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...((TIE_SPORTS as readonly string[]).includes(key) ? ['tie'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
+    ...(timed ? ['periods', 'periodMinutes', 'halfTimeMinutes'] : []), ...(key === 'volleyball' ? ['timeoutsPerSet', 'liberos', 'sideSwitchEvery', 'decidingSwitchEvery', 'superPoint', 'superPointBefore', 'superServe', 'minWomen'] : []), ...(SUB_PAD_SPORTS.has(key) ? ['maxSubs', 'subsPer', 'reentry'] : []), ...(key === 'badminton' || key === 'tabletennis' ? ['rubbers'] : []), ...(key === 'pickleball' ? ['winBy2', 'scoring'] : []), ...(RALLY_TIMED.has(key) ? ['timeLimitMinutes', 'timedLevel'] : []), ...(key === 'tabletennis' ? ['winBy2'] : []), ...(key === 'badminton' || key === 'tabletennis' || key === 'pickleball' || key === 'volleyball' ? ['allGames'] : []), ...(key === 'carrom' ? ['target', 'queenPoints', 'queenCutoff', 'boardCap', 'gameMinutes', 'carromMode', 'queenValue'] : []), ...(key === 'tennis' ? ['gamesPerSet', 'tiebreak', 'tiebreakTo', 'matchTiebreak', 'adScoring', 'timeLimitMinutes', 'tiebreakAt', 'finalSetTiebreakTo', 'noLet', 'ballChange'] : []), ...(CONDUCT_LADDERS[key] ? ['penaltyLadder'] : []), ...((TIE_SPORTS as readonly string[]).includes(key) ? ['tie'] : []), ...(rally ? ['target', ...(rally.finalTarget ? ['finalTarget'] : []), ...(rally.capSpan != null ? ['cap'] : [])] : []), ...(key === 'hockey' ? ['shootoutTakers', 'yellowCardMinutes'] : []), ...(key === 'basketball' ? ['overtimeMinutes', 'targetScore', 'pointSet', 'foulOut'] : []), ...(key === 'football' ? ['penaltyKicks', 'extraTimeMinutes', 'drawAllowed', 'walkoverGoals', 'rollingSubs', 'offside', 'sinBinMinutes', 'maxSubs', 'subWindows', 'goldenGoal', 'minOnPitch'] : [])]);
   for (const k of Object.keys(stdMap)) {
     if (open.has(k)) continue;
     if (r[k] !== stdMap[k]) return refuse(`${FIELD_NAMES[k] ?? k} can’t be changed for this sport yet.`, k);
@@ -1213,6 +1220,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
       if (rules.liberos !== undefined && rules.liberos !== std.liberos) parts.push(rules.liberos === 0 ? 'no libero' : rules.liberos == null ? 'any liberos' : `${rules.liberos} libero${rules.liberos === 1 ? '' : 's'}`);
       if (rules.superPoint) parts.push(`Super Point${rules.superPointBefore != null ? ` before ${rules.superPointBefore}` : ''}`);
       if (rules.superServe) parts.push('Super Serve (an ace is 2)');
+      if (rules.minWomen) parts.push(`at least ${rules.minWomen} ${rules.minWomen === 1 ? 'woman' : 'women'} on court`);
     }
     return parts.length ? parts.join(' · ') : null;
   }

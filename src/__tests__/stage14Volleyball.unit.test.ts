@@ -139,3 +139,21 @@ describe('VB2 / VB4 / VB12 · the new rules', () => {
     expect(timedRulesLabel('hockey', { ...standardRules('hockey'), maxSubs: 4 })).toBe('4 subs');
   });
 });
+
+describe('VB11 follow-up · marks and a casual co-ed rule', () => {
+  it('genderMarks is a known setting (kept as stored); a casual volleyball match can ask for women on court', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { settingsRefusal, settingsOf } = require('../utils/tournamentSettings') as typeof import('../utils/tournamentSettings');
+    expect(settingsRefusal('volleyball', 'knockout', { v: 1, genderMarks: { u1: 'female' } })).toBeNull();
+    expect(settingsOf({ settings: { v: 1, genderMarks: { u1: 'female' } } }).genderMarks).toEqual({ u1: 'female' });
+    expect(rulesRefusal('volleyball', { minWomen: 2 })).toBeNull();
+    expect(rulesRefusal('volleyball', { minWomen: 0 })?.field).toBe('minWomen');
+    expect(rulesRefusal('football', { minWomen: 2 })?.field).toBe('minWomen');
+  });
+  it('a mark counts as the gender when the profile doesn’t say', () => {
+    const c = { gender: 'mixed' as const, minWomen: 2 };
+    const marks: Record<string, 'male' | 'female'> = { u3: 'female' };
+    const rows = [{ id: 'u1', gender: 'female' }, { id: 'u2', gender: 'male' }, { id: 'u3', gender: null }].map((u) => ({ ...u, gender: u.gender ?? marks[u.id] ?? null }));
+    expect(womenOnCourtProblem(c, rows, 'Kings')).toBeNull();
+  });
+});

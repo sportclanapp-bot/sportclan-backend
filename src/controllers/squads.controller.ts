@@ -19,6 +19,7 @@ import { allRows, selectAllIn } from '../utils/selectAll';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { settingsOf, storedSettings, womenOnCourtProblem, type SquadRules } from '../utils/tournamentSettings';
 import { possessive } from '../utils/possessive';
+import { notifyUser } from '../utils/notify';
 import { disciplineRecords, bannedFrom, openBans, type DMatch, type DCard } from '../utils/discipline';
 
 const NAME_MAX = 60; const NOTE_MAX = 200;
@@ -314,10 +315,97 @@ export async function teamSheetProblem(
     for (const side of ['A', 'B'] as const) {
       const ids = [...merged.values()].filter((c) => c.team_side === side && c.role !== 'sub').map((c) => c.user_id);
       if (!ids.length) continue;
-      const users = await selectAllIn(ids, (c, f, to) => supabase.from('users').select('id, gender').in('id', c).order('id').range(f, to));
-      const why = womenOnCourtProblem(cat, ((users ?? []) as Array<{ gender?: string | null }>), sideName[side]);
-      if (why) return { error: why, code: 'TOO_FEW_WOMEN' };
+      const users = await selectAllIn(ids, (c, f, to) => supabase.from('users').select('id, name, username, gender').in('id', c).order('id').range(f, to));
+      // Stage 14 follow-up: a gender the captain or organiser marked for this event stands in for a profile that doesn't say.
+      const marks = settingsOf(t as { settings?: unknown }).genderMarks ?? {};
+      const rows = ((users ?? []) as Array<{ id: string; name?: string | null; username?: string | null; gender?: string | null }>).map((u) => ({ ...u, gender: u.gender === 'male' || u.gender === 'female' ? u.gender : marks[u.id] ?? null }));
+      const why = womenOnCourtProblem(cat, rows, sideName[side]);
+      if (why) {
+        const unknown = rows.filter((u) => !u.gender).map((u) => ({ user_id: u.id, name: u.name || u.username || 'A player', team_side: side }));
+        return { error: why, code: 'TOO_FEW_WOMEN', ...(unknown.length ? { unknown } : {}) } as { error: string; code: string };
+      }
     }
   }
   return null;
+}
+
+
+/**
+ * Stage 14 follow-up · VB11 · women on court for a co-ed event's match:
+ *   GET  /matches/:id/women-on-court → { min_women, genders: { userId: 'male' | 'female' | null }, marked: [userId] }
+ *        (the line-up's players, by profile — or this event's mark when the profile doesn't say)
+ *   POST /matches/:id/gender-mark { user_id, gender: 'male' | 'female' }
+ *        the organiser, or a captain of the player's team, marks a player whose
+ *        profile has no gender, for this event only; the player is asked to add
+ *        it to their profile. A profile's own gender always wins.
+ */
+async function coedEvent(matchId: string): Promise<{ m: { id: string; tournament_id: string; team_a_id: string | null; team_b_id: string | null }; t: T; minWomen: number | null } | null> {
+  if (!isUuid(matchId)) return null;
+  const { data: m } = await supabase.from('matches').select('id, tournament_id, team_a_id, team_b_id').eq('id', matchId).maybeSingle();
+  const mm = m as { id: string; tournament_id: string | null; team_a_id: string | null; team_b_id: string | null } | null;
+  if (!mm?.tournament_id) return null;
+  const t = await loadT(mm.tournament_id);
+  if (!t) return null;
+  return { m: mm as { id: string; tournament_id: string; team_a_id: string | null; team_b_id: string | null }, t, minWomen: settingsOf(t as { settings?: unknown }).category?.minWomen ?? null };
+}
+
+export async function getWomenOnCourt(req: Request, res: Response) {
+  if (!req.userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const ev = await coedEvent(String(req.params.id));
+    if (!ev || !ev.minWomen) return res.json({ min_women: null, genders: {}, marked: [] });
+    const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', ev.m.id);
+    const ids = ((parts ?? []) as Array<{ user_id: string }>).map((p) => p.user_id);
+    const users = ids.length ? await selectAllIn(ids, (c, f, to) => supabase.from('users').select('id, gender').in('id', c).order('id').range(f, to)) : [];
+    const marks = settingsOf(ev.t as { settings?: unknown }).genderMarks ?? {};
+    const genders: Record<string, 'male' | 'female' | null> = {};
+    const marked: string[] = [];
+    for (const u of (users ?? []) as Array<{ id: string; gender?: string | null }>) {
+      if (u.gender === 'male' || u.gender === 'female') genders[u.id] = u.gender;
+      else { genders[u.id] = marks[u.id] ?? null; if (marks[u.id]) marked.push(u.id); }
+    }
+    return res.json({ min_women: ev.minWomen, genders, marked });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function markGender(req: Request, res: Response) {
+  const me = req.userId;
+  if (!me) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { user_id: uid, gender } = (req.body ?? {}) as { user_id?: unknown; gender?: unknown };
+    if (typeof uid !== 'string' || !isUuid(uid)) return res.status(400).json({ error: 'Say which player.', code: 'BAD_PLAYER' });
+    if (gender !== 'male' && gender !== 'female') return res.status(400).json({ error: 'A player is marked as a woman or a man.', code: 'BAD_GENDER' });
+    const ev = await coedEvent(String(req.params.id));
+    if (!ev || !ev.minWomen) return res.status(400).json({ error: 'This match has no women-on-court rule.', code: 'NOT_COED' });
+    // The player's team in this match, and whether the caller may speak for it.
+    const teams = [ev.m.team_a_id, ev.m.team_b_id].filter((x): x is string => !!x);
+    const { data: mem } = await supabase.from('team_members').select('team_id').eq('user_id', uid).in('team_id', teams.length ? teams : ['00000000-0000-0000-0000-000000000000']).limit(1);
+    const team = ((mem ?? []) as Array<{ team_id: string }>)[0]?.team_id ?? null;
+    if (!team) return res.status(400).json({ error: 'That player isn’t on either team.', code: 'NOT_ON_TEAM' });
+    const may = (await isTournamentOrganiser(ev.t.id, me)) || (await isCaptain(team, me));
+    if (!may) return res.status(403).json({ error: 'Only the organiser or the team’s captain can mark this.', code: 'FORBIDDEN' });
+    const { data: u } = await supabase.from('users').select('id, name, username, gender').eq('id', uid).maybeSingle();
+    const user = u as { id: string; name?: string | null; username?: string | null; gender?: string | null } | null;
+    if (!user) return res.status(404).json({ error: 'Player not found' });
+    if (user.gender === 'male' || user.gender === 'female') return res.status(409).json({ error: `${user.name || 'Their'} profile already says — that’s what counts.`, code: 'PROFILE_SAYS' });
+    const settings = settingsOf(ev.t as { settings?: unknown });
+    const marks = { ...(settings.genderMarks ?? {}), [uid]: gender as 'male' | 'female' };
+    const { error } = await supabase.from('tournaments').update({ settings: { ...settings, v: 1, genderMarks: marks } }).eq('id', ev.t.id);
+    if (error) return res.status(500).json({ error: 'Could not save that.' });
+    const { data: tn } = await supabase.from('tournaments').select('name').eq('id', ev.t.id).maybeSingle();
+    const { data: who } = await supabase.from('users').select('name, username').eq('id', me).maybeSingle();
+    const byName = (who as { name?: string | null; username?: string | null } | null)?.name || 'Your captain';
+    try {
+      await notifyUser({
+        userId: uid, type: 'gender_marked', title: 'Add your gender to your profile',
+        body: `${byName} marked you as a ${gender === 'female' ? 'woman' : 'man'} for ${(tn as { name?: string } | null)?.name ?? 'an event'}, so the line-up could be checked. Please add it to your profile — that’s what counts.`,
+        data: { screen: 'EditProfile', tournamentId: ev.t.id },
+      });
+    } catch { /* best-effort */ }
+    return res.json({ ok: true, user_id: uid, gender });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
 }

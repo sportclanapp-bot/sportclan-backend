@@ -1,6 +1,6 @@
 import { typedScore } from '../controllers/scoring.controller';
 import { Router } from 'express';
-import { getBannedForMatch } from '../controllers/squads.controller';
+import { getBannedForMatch, getWomenOnCourt, markGender } from '../controllers/squads.controller';
 import { decideMatch } from '../controllers/matchDecision.controller';
 import { getMatchAssistants, setMatchAssistants, setOfficialReport } from '../controllers/matchOfficials.controller';
 import { callToCourt, uncallMatch } from '../controllers/courtBoard.controller';
@@ -96,6 +96,9 @@ router.get('/:id/chat', authenticateToken, getMatchChat);
 router.post('/:id/participants', authenticateToken, addParticipants);
 router.get('/:id/tie-lineup', authenticateToken, getTieLineup); // badminton 7.16
 router.put('/:id/tie-lineup', authenticateToken, setTieLineup);
+// Stage 14 follow-up · VB11: women on court — the players' genders for a co-ed event, and a captain's / organiser's mark.
+router.get('/:id/women-on-court', authenticateToken, getWomenOnCourt);
+router.post('/:id/gender-mark', authenticateToken, markGender);
 router.put('/:id/tie-toss', authenticateToken, setTieToss); // Stage 10 · TT1b
 // Stage 10 · TT3: a paper-scored match typed in.
 router.post('/:id/typed-score', authenticateToken, typedScore);

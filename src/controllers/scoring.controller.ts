@@ -402,6 +402,11 @@ export async function validateScoringEvent(
       return refuse(400, { error: 'A line-up is a list of players by name.', code: 'BAD_NOTE' });
     }
     if (payload.kind === 'super_point' && !r.superPoint) return refuse(400, { error: 'This match has no Super Point.', code: 'BAD_NOTE' });
+    // Stage 14 follow-up · VB11: a casual co-ed match — each set's line-up has its women (typed names say).
+    if (payload.kind === 'rotation' && r.minWomen && Array.isArray(payload.slots)) {
+      const women = payload.slots.filter((x: any) => x?.gender === 'female').length;
+      if (women < r.minWomen) return refuse(400, { error: `This match needs at least ${r.minWomen} ${r.minWomen === 1 ? 'woman' : 'women'} on court — the line-up has ${women}.`, code: 'TOO_FEW_WOMEN' });
+    }
     if (slug === 'volleyball' && event_type === 'score') {
       // A rally is 1; 2 only for a Super Point won or a Super Serve, when the match plays them.
       const v = Number(payload.value ?? 1);

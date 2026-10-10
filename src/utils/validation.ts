@@ -26,7 +26,7 @@ export const LIMITS = {
   // is 99999999.99. The old ceiling of 100_000_000 was ABOVE that, so the one
   // value the guard let through at its own boundary overflowed the column and
   // 500'd. The ceiling must be the column's limit, not a round number near it.
-  expenseMaxAmount: 99_999_999.99,
+  expenseMaxAmount: 90_000_000_000_000, // Stage 13 follow-up: numeric(20,2) (migration 141); paise stay exact in JavaScript
   expenseTitleMax: 120,
   // SC-367: venue is free text on the match. It had NO cap at all — a 600-char
   // "venue" saved happily and then had to be rendered on cards built for a
@@ -56,7 +56,13 @@ export const ARRAY_LIMITS = {
  * number from `min` up to what an int column can hold (2,147,483,647) — the
  * storage's limit, not a product one.
  */
-export const INT_MAX = 2_147_483_647;
+/**
+ * The largest count the server takes. Stage 13 follow-up: the columns are bigint
+ * now (migration 141), so it's the largest whole number JavaScript holds exactly.
+ */
+export const INT_MAX = Number.MAX_SAFE_INTEGER;
+/** An integer column's own limit (match_events.period / clock_seconds stay integer). */
+export const PG_INT_MAX = 2_147_483_647;
 export function isCount(v: unknown, min = 1): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= INT_MAX;
 }

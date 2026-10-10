@@ -10,7 +10,7 @@ import { scorePush, quarterPush } from '../utils/scorePush';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
-import { INT_MAX, isTerminalMatchStatus } from '../utils/validation';
+import { INT_MAX, PG_INT_MAX, isTerminalMatchStatus } from '../utils/validation';
 import { canOfficiateMatch } from '../utils/tournamentAuth';
 import { isSportInactive } from '../utils/sports';
 import { isKnownEventType } from '../utils/scoringEvents';
@@ -230,10 +230,10 @@ export async function validateScoringEvent(
   // a chess clock can be any length; only the integer column's limit). team_side A|B.
   const outOfRange = (v: unknown, min: number, max: number): boolean =>
     v != null && (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max);
-  if (outOfRange(period, 0, INT_MAX)) {
+  if (outOfRange(period, 0, PG_INT_MAX)) {
     return refuse(400, { error: 'period must be a whole number, 0 or more' });
   }
-  if (outOfRange(clock_seconds, 0, INT_MAX)) {
+  if (outOfRange(clock_seconds, 0, PG_INT_MAX)) {
     return refuse(400, { error: 'clock_seconds must be a whole number, 0 or more' });
   }
   if (payload && typeof payload === 'object') {

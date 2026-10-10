@@ -176,7 +176,7 @@ describe('SC-396 · client limits mirror the server', () => {
   // The FE mirror must not drift from the BE source of truth.
   const FE_MIRROR = {
     // Oct 2026 (Dipak): no tournament size cap — only the minimum is mirrored.
-    tournamentMinTeams: 2, expenseMaxAmount: 99_999_999.99,
+    tournamentMinTeams: 2, expenseMaxAmount: 90_000_000_000_000,
     expenseTitleMax: 120, venueMax: 120, postTextMax: 500, bioMax: 500,
     teamNameMax: 60, tournamentNameMax: 120, descriptionMax: 2000,
     groupNameMax: 60, urlMax: 2048,

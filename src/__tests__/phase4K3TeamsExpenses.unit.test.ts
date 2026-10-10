@@ -133,11 +133,11 @@ describe('SC-360 · who can delete', () => {
 
 describe('SC-360 · validation', () => {
   beforeEach(() => { mockNext = (q) => (memberQ(q) && q.some((c) => c.includes(`"user_id","${ME}"`)) ? { data: { id: 'm' } } : { data: null }); });
-  it('K3-8d (916879b): the max amount is what NUMERIC(10,2) can hold', () => {
-    expect(LIMITS.expenseMaxAmount).toBe(99_999_999.99);
+  it('K3-8d (916879b): the max amount is what the column holds — numeric(20,2) since migration 141, paise exact in JavaScript', () => {
+    expect(LIMITS.expenseMaxAmount).toBe(90_000_000_000_000);
   });
   it.each([
-    [{ title: 'Ground', amount: 100_000_000 }],
+    [{ title: 'Ground', amount: 90_000_000_000_001 }],
     [{ title: 'Ground', amount: 0.004 }],
     [{ title: 'Ground', amount: 100, category: 'kit' }],
     [{ title: '   ', amount: 100 }],

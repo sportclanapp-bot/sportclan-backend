@@ -60,13 +60,12 @@ describe('BUILD 1.16 · whole rupees', () => {
   test.each([
     [{ entry_fee: 12.5 }, 'entry_fee must be whole rupees.'],
     [{ prize_pool: '99.99' }, 'prize_pool must be whole rupees.'],
-    // Stage 13 · CR3: no app top — only what the money column (numeric(10,2)) holds.
-    [{ entry_fee: MONEY_MAX + 1 }, 'entry_fee can be at most ₹9,99,99,999.'],
-    [{ prize_pool: 3e9 }, 'prize_pool can be at most ₹9,99,99,999.'],
+    // Stage 13 follow-up: no top — bigint columns (migration 141): the largest exact number.
+    [{ entry_fee: MONEY_MAX + 2 }, `entry_fee can be at most ₹${MONEY_MAX.toLocaleString('en-IN')}.`],
   ])('%j → %s', (body, error) => {
     expect(tournamentDetailsRefusal(body)).toEqual({ error, code: 'INVALID_AMOUNT' });
   });
-  test.each([[{ entry_fee: 0 }], [{ entry_fee: '150' }], [{ prize_pool: MONEY_MAX }], [{ entry_fee: 10_000_001 }], [{ prize_pool: 50_000_000 }]])('%j → ok', (body) => {
+  test.each([[{ entry_fee: 0 }], [{ entry_fee: '150' }], [{ prize_pool: MONEY_MAX }], [{ entry_fee: 10_000_001 }], [{ prize_pool: 50_000_000 }], [{ prize_pool: 3e9 }], [{ entry_fee: 999_999_999_999_999 }]])('%j → ok', (body) => {
     expect(tournamentDetailsRefusal(body)).toBeNull();
   });
   test('create with a fee of 12.5 → 400, nothing inserted', async () => {

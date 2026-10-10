@@ -176,7 +176,7 @@ describe('K1-41d / K1-44 · the 5xx backstop', () => {
 
 describe('K1-42 (0520757) · SC-38/39 money and profile bounds', () => {
   const member = (q: Q) => (q[0] === 'from:team_members' ? { data: { id: 'm' } } : { data: null });
-  it.each([-5, 0, 1_000_000_000])('K1-42 (0520757): expense amount %p → 400, nothing inserted', async (amount) => {
+  it.each([-5, 0, 90_000_000_000_001])('K1-42 (0520757): expense amount %p → 400, nothing inserted', async (amount) => {
     mockNext = member;
     const r = await call(addExpense, { params: { id: X }, body: { title: 'Balls', amount, category: 'equipment' } });
     expect(r.statusCode).toBe(400);

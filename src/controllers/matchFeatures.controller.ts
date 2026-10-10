@@ -592,9 +592,9 @@ export async function deleteMatchEvent(req: Request, res: Response) {
  * overs have no top; only what the integer column holds.
  */
 const INNINGS_CAPS: Record<string, number> = {
-  runs: 2_147_483_647, balls_faced: 2_147_483_647, fours: 2_147_483_647, sixes: 2_147_483_647,
-  bowling_runs: 2_147_483_647, bowling_wickets: 2_147_483_647, bowling_maidens: 2_147_483_647,
-  catches: 2_147_483_647, runouts: 2_147_483_647, stumpings: 2_147_483_647,
+  runs: Number.MAX_SAFE_INTEGER, balls_faced: Number.MAX_SAFE_INTEGER, fours: Number.MAX_SAFE_INTEGER, sixes: Number.MAX_SAFE_INTEGER,
+  bowling_runs: Number.MAX_SAFE_INTEGER, bowling_wickets: Number.MAX_SAFE_INTEGER, bowling_maidens: Number.MAX_SAFE_INTEGER,
+  catches: Number.MAX_SAFE_INTEGER, runouts: Number.MAX_SAFE_INTEGER, stumpings: Number.MAX_SAFE_INTEGER,
 };
 /** Phase 3 B05-F15 · one innings-stats row's shape. Exported for tests. */
 export function inningsRowRefusal(rows: unknown[]): { error: string; code: string } | null {

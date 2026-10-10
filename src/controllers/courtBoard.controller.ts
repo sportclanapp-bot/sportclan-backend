@@ -28,7 +28,7 @@ type M = {
 };
 const M_COLS = 'id, tournament_id, team_a_id, team_b_id, team_a_name, team_b_name, scheduled_at, ground_label, status, called_at, called_by, round, umpire_id, scorer_id, voided_at';
 const LATE_MIN = 1; // Stage 13 · CR3: no top
-const LATE_MAX = 2_147_483_647;
+const LATE_MAX = Number.MAX_SAFE_INTEGER;
 
 /** Courts, in order: the tournament's grounds (named or numbered), then any other label a fixture carries. */
 export function courtsOf(t: { ground_count?: number | null; ground_names?: string[] | null }, labels: Array<string | null>, sport?: string | null): string[] {

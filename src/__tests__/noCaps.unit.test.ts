@@ -30,12 +30,13 @@ import { isCount, LIMITS, ARRAY_LIMITS } from '../utils/validation';
 // eslint-disable-next-line import/first
 import { allRows, selectAllIn } from '../utils/selectAll';
 
-test('counts: any size from the minimum up — only the int column’s limit', () => {
+test('counts: any size from the minimum up — bigint columns (migration 141)', () => {
   expect(isCount(512, 2)).toBe(true);
   expect(isCount(100_000, 2)).toBe(true);
   expect(isCount(1, 2)).toBe(false);
   expect(isCount(2.5, 2)).toBe(false);
-  expect(isCount(3_000_000_000, 2)).toBe(false);
+  expect(isCount(3_000_000_000, 2)).toBe(true);
+  expect(isCount(Number.MAX_SAFE_INTEGER + 2, 2)).toBe(false);
   expect('tournamentMaxTeams' in LIMITS).toBe(false);
   expect('participants' in ARRAY_LIMITS).toBe(false);
 });

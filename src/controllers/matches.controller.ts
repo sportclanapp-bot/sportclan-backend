@@ -143,7 +143,7 @@ export function formatRefusal(
   if (sportSlug !== 'cricket') return null;
   const f = format.trim().toLowerCase();
   if (f === 'box' || f === 'pair' || f === 'cricket') return null; // 'cricket': an older app sent the slug
-  const m = /^t(\d{1,9})$/.exec(f); // Stage 13 · CR3: any overs (T1000…)
+  const m = /^t(\d{1,15})$/.exec(f); // Stage 13 · CR3: any overs (T1000…)
   if (!m) return { status: 400, error: 'That cricket format isn’t offered.', code: 'BAD_FORMAT' };
   if (overs != null && Number(m[1]) !== Number(overs)) {
     return { status: 400, error: 'The format and the overs don’t match.', code: 'FORMAT_OVERS_MISMATCH' };
@@ -159,7 +159,7 @@ export function formatRefusal(
  * refused). Null for box / pair / anything else.
  */
 export function oversFromFormat(format: unknown): number | null {
-  const m = typeof format === 'string' ? /^t(\d{1,9})$/i.exec(format.trim()) : null; // Stage 13 · CR3: any overs (T200…)
+  const m = typeof format === 'string' ? /^t(\d{1,15})$/i.exec(format.trim()) : null; // Stage 13 · CR3: any overs (T200…)
   return m ? Number(m[1]) : null;
 }
 
@@ -2181,11 +2181,11 @@ export function participantRowRefusal(rows: unknown[]): { error: string; code: s
     const p = (raw ?? {}) as { user_id?: unknown; jersey_number?: unknown; role?: unknown; batting_order?: unknown };
     if (!isUuid(p.user_id)) return { error: 'That player could not be found.', code: 'BAD_PLAYER' };
     const j = p.jersey_number;
-    if (j != null && (typeof j !== 'number' || !Number.isInteger(j) || j < 0 || j > 2_147_483_647)) { // Stage 13 · CR3: no top
+    if (j != null && (typeof j !== 'number' || !Number.isInteger(j) || j < 0 || j > Number.MAX_SAFE_INTEGER)) { // Stage 13 · CR3: no top
       return { error: 'A jersey number is a whole number, 0 or more.', code: 'BAD_JERSEY' };
     }
     const b = p.batting_order;
-    if (b != null && (typeof b !== 'number' || !Number.isInteger(b) || b < 1 || b > 2_147_483_647)) { // Stage 13 · CR3: no top
+    if (b != null && (typeof b !== 'number' || !Number.isInteger(b) || b < 1 || b > Number.MAX_SAFE_INTEGER)) { // Stage 13 · CR3: no top
       return { error: 'A batting order is a whole number, 1 or more.', code: 'BAD_BATTING_ORDER' };
     }
     if (p.role != null && (typeof p.role !== 'string' || p.role.trim().length > PARTICIPANT_ROLE_MAX)) {

@@ -24,8 +24,8 @@ export function scheduleRefusal(body: Record<string, unknown>, cur: Record<strin
     return refuse('The day ends after it starts.', 'daily_end_time');
   }
   // Stage 13 · CR3 (Dipak): no tops — what the integer column holds.
-  if (has('match_duration_minutes') && !isInt(body.match_duration_minutes, 1, 2_147_483_647)) return refuse('A match is 1 minute or more.', 'match_duration_minutes');
-  if (has('buffer_minutes') && !isInt(body.buffer_minutes, 0, 2_147_483_647)) return refuse('The gap between matches is a whole number of minutes.', 'buffer_minutes');
+  if (has('match_duration_minutes') && !isInt(body.match_duration_minutes, 1, Number.MAX_SAFE_INTEGER)) return refuse('A match is 1 minute or more.', 'match_duration_minutes');
+  if (has('buffer_minutes') && !isInt(body.buffer_minutes, 0, Number.MAX_SAFE_INTEGER)) return refuse('The gap between matches is a whole number of minutes.', 'buffer_minutes');
   // Oct 2026: no cap on courts — at least one.
   if (has('ground_count') && !isCount(body.ground_count, 1)) return refuse('At least one court or ground.', 'ground_count');
   if ('ground_names' in body && body.ground_names !== null) {

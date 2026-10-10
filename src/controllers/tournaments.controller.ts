@@ -451,6 +451,10 @@ async function eventRowsFor(
     }
     rows.push({
       ...built.row,
+      // Stage 13 follow-up (found testing a team event beside a singles one): rows go in one
+      // insert, where a key one row leaves out is null for it — so a team event's entry kind
+      // (left out as the column default) became null and the insert failed. Always written.
+      entry_kind: (built.row as { entry_kind?: string }).entry_kind ?? 'team',
       sport_metadata: parent.sport_metadata ?? {},
       parent_id: parent.id,
       event_label: label,

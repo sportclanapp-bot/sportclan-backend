@@ -89,9 +89,9 @@ export function tournamentDetailsRefusal(
   }
   // Stage 13 · CR3 (Dipak): no app tops — only what the integer column holds.
   const ints: Array<[string, number, number]> = [
-    ['match_duration_minutes', 1, 2_147_483_647],
-    ['buffer_minutes', 0, 2_147_483_647],
-    ['ground_count', 1, 2_147_483_647],
+    ['match_duration_minutes', 1, Number.MAX_SAFE_INTEGER],
+    ['buffer_minutes', 0, Number.MAX_SAFE_INTEGER],
+    ['ground_count', 1, Number.MAX_SAFE_INTEGER],
   ];
   for (const [k, min, max] of ints) {
     if (present(body[k])) {
@@ -107,8 +107,8 @@ export function tournamentDetailsRefusal(
   return null;
 }
 
-/** BUILD 1.16: the most an entry fee or prize can be. Stage 13 · CR3: no app top — what the money column holds (numeric(10,2)). */
-export const MONEY_MAX = 99_999_999;
+/** BUILD 1.16: the most an entry fee or prize can be. Stage 13 · CR3 / follow-up: no top — the columns are bigint (migration 141); the largest whole number JavaScript holds exactly. */
+export const MONEY_MAX = 999_999_999_999_999; // 15 digits, as the app
 
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 const minutesOf = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));

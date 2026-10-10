@@ -1610,6 +1610,7 @@ export async function getCommentary(req: Request, res: Response) {
         sport: slug, teamA, teamB, period: periods - 1, move: moves, clockSeconds: (ev as any).clock_seconds ?? null,
         regulation: rulesOf(slug, match).periods ?? null, // BUILD 3.17: the match's own periods
         periodMinutes: rulesOf(slug, match).periodMinutes ?? null, // BUILD 3.22: the timeline minute
+        threeByThree: slug === 'basketball' && rulesOf(slug, match).pointSet === '12', // Stage 15 follow-up
       });
       if (sportLine) {
         commentary = sportLine;
@@ -2908,6 +2909,18 @@ export async function completeMatch(req: Request, res: Response) {
           code: 'WINNER_NOT_LEADER',
         });
       }
+      // Stage 15 follow-up: a best-of-N series (any sport) ends once a side has won it, and that side is the winner.
+      const seriesTie = tieSpecOf(normSportSlug(sportRow?.slug), rulesOf(normSportSlug(sportRow?.slug), match))?.series ? (canonical as { tie?: { decided?: unknown; rubbersA?: number; rubbersB?: number } } | null)?.tie : null;
+      if (seriesTie && submittedSummary?.score_only !== true) {
+        const played = Number(seriesTie.rubbersA ?? 0) + Number(seriesTie.rubbersB ?? 0);
+        if (played > 0 && seriesTie.decided !== 'A' && seriesTie.decided !== 'B') {
+          return res.status(409).json({ error: 'The series isn’t decided yet — play the next game.', code: 'SERIES_NOT_DECIDED' });
+        }
+        if ((seriesTie.decided === 'A' || seriesTie.decided === 'B') && winnerSide && winnerSide !== seriesTie.decided) {
+          const n = seriesTie.decided === 'A' ? match.team_a_name : match.team_b_name;
+          return res.status(409).json({ error: `The series says ${n ?? `Team ${seriesTie.decided}`} won it.`, code: 'WINNER_NOT_LEADER' });
+        }
+      }
     }
     timer.mark('reads');
     if (match.status === 'completed') {
@@ -3121,6 +3134,10 @@ export async function completeMatch(req: Request, res: Response) {
     // written in both shapes: flat (what a typed result always used) and nested
     // A / B with wickets and all_out, so NRR's all-out rule and "won by N
     // wickets" read it like a scored innings.
+    const cricketSeriesMatch = normSportSlug(sportRow?.slug) === 'cricket' && !!tieSpecOf('cricket', rulesOf('cricket', match))?.series; // Stage 15 follow-up
+    if (!walkover && submittedSummary?.score_only === true && cricketSeriesMatch) {
+      return res.status(400).json({ error: 'A series is scored game by game on the pad.', code: 'SERIES_TYPED' });
+    }
     if (!walkover && submittedSummary?.score_only === true && normSportSlug(sportRow?.slug) === 'cricket') {
       const { count: scoredEvents } = await supabase
         .from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id);
@@ -3193,7 +3210,7 @@ export async function completeMatch(req: Request, res: Response) {
     // match, so the DLS target does not overrule it (a "decide by DLS" end does
     // come through here and must agree with the target).
     const unfinishedEnd = req.body?.unfinished as UnfinishedEnd | undefined;
-    if (!walkover && unfinishedEnd !== 'award' && normSportSlug(sportRow?.slug) === 'cricket' && (canonical?.dls_applied || (match.score_summary as any)?.dls_applied)) {
+    if (!walkover && unfinishedEnd !== 'award' && normSportSlug(sportRow?.slug) === 'cricket' && !cricketSeriesMatch && (canonical?.dls_applied || (match.score_summary as any)?.dls_applied)) {
       const cs: any = { ...(match.score_summary as object ?? {}), ...(canonical ?? {}) };
       const d = dlsWinner({
         aScore: Number(cs?.A?.runs ?? 0),
@@ -3220,7 +3237,7 @@ export async function completeMatch(req: Request, res: Response) {
     // (cricketRules.cricketStage). A result posted with its own score (the
     // tournament desk) and walkovers are exempt.
     let awarded = false;
-    if (!walkover && !submittedSummary && normSportSlug(sportRow?.slug) === 'cricket') {
+    if (!walkover && !submittedSummary && normSportSlug(sportRow?.slug) === 'cricket' && !cricketSeriesMatch) {
       const cs: any = { ...(match.score_summary as object ?? {}), ...(canonical ?? {}) };
       const facts = (x: any) => ({ runs: Number(x?.runs ?? 0), wickets: Number(x?.wickets ?? 0), balls: Number(x?.balls ?? 0), declared: x?.declared === true });
       const a = facts(cs?.A);
@@ -3582,7 +3599,14 @@ export async function completeMatch(req: Request, res: Response) {
       });
 
       ss.result = resultText;
-      ss.winner_side = derivedSide;
+      // Stage 15 follow-up: a series reads by its games — "Kings won the series 2–1".
+      const sTie = (ss as { tie?: { series?: boolean; rubbersA?: number; rubbersB?: number } }).tie;
+      const seriesSide = cricketSeriesMatch && sTie ? explicitWinner ?? derivedSide : null;
+      if (seriesSide) {
+        const w = seriesSide === 'A' ? aName : bName;
+        ss.result = `${w} won the series ${Math.max(sTie!.rubbersA ?? 0, sTie!.rubbersB ?? 0)}–${Math.min(sTie!.rubbersA ?? 0, sTie!.rubbersB ?? 0)}`;
+      }
+      ss.winner_side = seriesSide ?? derivedSide;
       resultForNotice = resultText;
       // A2: "Lions won 2–2 (4–3 pens)", and the shootout kept with the score.
       if (shootoutScore && derivedSide) {

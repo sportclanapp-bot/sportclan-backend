@@ -16,7 +16,7 @@ const body = src.slice(start, src.indexOf('\nexport ', start + 10));
 describe('completeMatch · an unfinished cricket match', () => {
   const rule = body.slice(body.indexOf('let awarded = false;'), body.indexOf('// F-17: a chess game ends with a result.'));
   test('is judged by the shared stage rule, only once play has started', () => {
-    expect(rule).toContain("if (!walkover && !submittedSummary && normSportSlug(sportRow?.slug) === 'cricket')");
+    expect(rule).toContain("if (!walkover && !submittedSummary && normSportSlug(sportRow?.slug) === 'cricket' && !cricketSeriesMatch)");
     expect(rule).toContain('if (a.balls + b.balls + a.runs + b.runs + a.wickets + b.wickets > 0)');
     expect(rule).toContain('const stage = cricketStage({');
     expect(rule).toContain('chaseAllOut: allOut[firstSide === \'A\' ? \'B\' : \'A\']');
@@ -29,7 +29,7 @@ describe('completeMatch · an unfinished cricket match', () => {
     expect(rule).toContain("code: 'AWARD_WRONG_SIDE'");
   });
   test('an award is not overruled by the DLS check, and reads "X won (awarded)"', () => {
-    expect(body).toContain("if (!walkover && unfinishedEnd !== 'award' && normSportSlug(sportRow?.slug) === 'cricket' && (canonical?.dls_applied");
+    expect(body).toContain("if (!walkover && unfinishedEnd !== 'award' && normSportSlug(sportRow?.slug) === 'cricket' && !cricketSeriesMatch && (canonical?.dls_applied");
     expect(body).toContain('ss.result = `${derivedSide === \'A\' ? aName : bName} won (awarded)`;');
     expect(body).toContain('ss.awarded = true;');
   });

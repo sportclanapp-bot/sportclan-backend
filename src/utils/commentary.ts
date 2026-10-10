@@ -19,6 +19,8 @@ export interface CommentaryContext {
   periodMinutes?: number | null;
   /** BUILD 3.17: the match's regulation periods, when known (football 1–4). */
   regulation?: number | null;
+  /** Stage 15 follow-up: a 3x3 game (its 1 is a shot inside the arc; free throws have their own kind). */
+  threeByThree?: boolean;
   /** Chess: moves so far, including this one. */
   move?: number;
   /** Chess: the mover's clock after the move, in seconds. */
@@ -176,7 +178,12 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (ctx.sport === 'basketball' && eventType === 'note' && p.kind === 'arrow') return `▶ Possession arrow — ${team}`;
   if (ctx.sport === 'basketball' && eventType === 'note' && p.kind === 'arrow_flip') return '⇄ Possession arrow flipped';
   if (eventType === 'note' && p.kind === 'game_end') return '🏁 End of the game';
-  if (ctx.sport === 'basketball' && eventType === 'note' && p.kind === 'stat' && p.stat === 'miss') return `⭕ Missed ${p.shot === 'ft' ? 'free throw' : p.shot === '3' ? '3-pointer' : '2-pointer'} — ${player ? `${player} (${team})` : team}`;
+  // Stage 15 follow-up: a series game's shoot-out, apart from its goals.
+  if (eventType === 'note' && p.kind === 'shootout' && Number.isInteger(p.A) && Number.isInteger(p.B)) {
+    const w = p.A > p.B ? ctx.teamA : ctx.teamB;
+    return `🥅 ${ctx.sport === 'hockey' ? 'Shoot-out' : 'Penalties'} — ${w} won ${Math.max(p.A, p.B)}–${Math.min(p.A, p.B)}`;
+  }
+  if (ctx.sport === 'basketball' && eventType === 'note' && p.kind === 'stat' && p.stat === 'miss') return `⭕ Missed ${p.shot === 'ft' ? 'free throw' : p.shot === '3' ? (ctx.threeByThree ? 'shot beyond the arc' : '3-pointer') : (ctx.threeByThree ? 'shot inside the arc' : '2-pointer')} — ${player ? `${player} (${team})` : team}`;
   // Stage 15 · BB2 (cross-sport): a card for a coach or team official.
   if ((ctx.sport === 'football' || ctx.sport === 'hockey') && eventType === 'note' && p.kind === 'official_card') {
     const c = p.colour === 'red' ? '🟥 Red card' : p.colour === 'green' ? '🟩 Green card' : '🟨 Yellow card';
@@ -213,7 +220,9 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   }
   if (ctx.sport === 'basketball' && eventType === 'score') {
     const v = Number(p.value ?? 0);
-    return `🏀 ${v === 1 ? 'Free throw' : `${v}-pointer`} — ${team}${player ? ` (${player})` : ''}`;
+    // Stage 15 follow-up: 3x3's free throw has its own kind; a 3x3 '1pt' is a shot inside the arc.
+    const what = p.kind === 'ft' ? 'Free throw' : p.kind === '1pt' && ctx.threeByThree === true ? '1 inside the arc' : v === 1 ? 'Free throw' : `${v}-pointer`;
+    return `🏀 ${what} — ${team}${player ? ` (${player})` : ''}`;
   }
   return null;
 }

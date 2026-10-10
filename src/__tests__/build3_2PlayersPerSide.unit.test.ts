@@ -138,6 +138,6 @@ describe('BUILD 3.2 · stored whole', () => {
     mockNext = onMatch(matchRow({ format: 'box', overs: 6, rules: { v: 1, style: 'box', overs: 6, players: 6, drawAllowed: true } }));
     const r = await call(updateMatch, { body: { format: 'box', overs: 8 } });
     expect(r.statusCode).toBe(200);
-    expect(writes()[0]!.join()).toContain('"rules":{"v":1,"style":"box","overs":8,"players":6,"lastManStands":false,"retireAt":null,"bowlerOvers":null,"extraRuns":1,"rebowl":true,"freeHit":false,"inningsMinutes":null,"powerplayOvers":null,"oneTipOneHand":false,"sixAndOut":false,"noLbw":false,"drawAllowed":true}');
+    expect(writes()[0]!.join()).toContain('"rules":{"v":1,"style":"box","overs":8,"players":6,"lastManStands":false,"retireAt":null,"bowlerOvers":null,"extraRuns":1,"rebowl":true,"freeHit":false,"inningsMinutes":null,"powerplayOvers":null,"oneTipOneHand":false,"sixAndOut":false,"noLbw":false,"drawAllowed":true,"tie":null}');
   });
 });

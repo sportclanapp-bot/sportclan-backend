@@ -80,3 +80,39 @@ export function shootoutResultText(args: {
   const word = key(args.sport) === 'hockey' ? 'shootout' : 'pens';
   return `${args.winnerName} won ${goals.A}–${goals.B} (${hi}–${lo} ${word})`;
 }
+
+/**
+ * Stage 15 follow-up · a series game's shoot-out (football, hockey), kept apart
+ * from its goals: the typed tally (a note { kind: 'shootout', A, B }) or the
+ * pad's kicks (notes { kind: 'shootout_kick', team_side, scored }). With
+ * `perSide`, kicks count only once decided (one side can't be caught in the
+ * first N each, or level kicks in sudden death); without it, the goals so far
+ * decide (a game already ended). Null when there's none, or it isn't decided.
+ */
+export function gameShootout(
+  events: ReadonlyArray<{ event_type: string; payload?: unknown }>, perSide: number | null = null,
+): { A: number; B: number; winner: ShootoutSide } | null {
+  const notes = events.filter((e) => e.event_type === 'note').map((e) => (e.payload ?? {}) as { kind?: unknown; A?: unknown; B?: unknown; team_side?: unknown; scored?: unknown });
+  const typed = [...notes].reverse().find((p) => p.kind === 'shootout');
+  if (typed) {
+    const A = Number(typed.A); const B = Number(typed.B);
+    return Number.isInteger(A) && Number.isInteger(B) && A !== B ? { A, B, winner: shootoutWinner(A, B) } : null;
+  }
+  const kicks = notes.filter((p) => p.kind === 'shootout_kick').map((p) => ({ side: (p.team_side === 'B' ? 'B' : 'A') as ShootoutSide, scored: p.scored === true }));
+  if (!kicks.length) return null;
+  const goals = { A: 0, B: 0 }; const taken = { A: 0, B: 0 };
+  for (const k of kicks) { taken[k.side] += 1; if (k.scored) goals[k.side] += 1; }
+  if (goals.A === goals.B) return null;
+  if (perSide != null) {
+    const sudden = taken.A >= perSide && taken.B >= perSide;
+    const leftA = perSide - Math.min(taken.A, perSide); const leftB = perSide - Math.min(taken.B, perSide);
+    const decided = sudden ? taken.A === taken.B : goals.A > goals.B + leftB || goals.B > goals.A + leftA;
+    if (!decided) return null;
+  }
+  return { A: goals.A, B: goals.B, winner: shootoutWinner(goals.A, goals.B) };
+}
+
+/** "1–1 (4–3 pens)" / hockey "(4–3 shootout)": a game's goals, then its shoot-out. */
+export function scoreWithShootout(sport: string | null | undefined, a: number, b: number, so: { A: number; B: number } | null | undefined, dash = '–'): string {
+  return `${a}${dash}${b}${so ? ` (${so.A}${dash}${so.B} ${key(sport) === 'hockey' ? 'shootout' : 'pens'})` : ''}`;
+}

@@ -520,3 +520,39 @@ export function tieFallbackText(winnerName: string, how: TieFallback, b?: { w: n
   if (how === 'toss') return `${winnerName} won the toss`;
   return `${winnerName} went through as the higher seed`;
 }
+
+// ─── Stage 15 follow-up · a best-of-N cricket series (the BB6 / CH7 series engine) ───
+//
+// One fixture, several full matches. Each game's deliveries carry `game: n`
+// (untagged = game 1); a game ends with a note { kind: 'game_end', game: n,
+// winner: 'A' | 'B' | null, next_first?: 'A' | 'B' } — the winner from its
+// result (a super over, an award), and who bats first in the next game.
+
+/** The game a cricket event belongs to (1 when untagged). */
+export function cricketGameOf(payload: unknown): number {
+  const n = (payload as P | null | undefined)?.game;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 ? n : 1;
+}
+
+export type CricketGameEnd = { game: number; winner: 'A' | 'B' | null; nextFirst: 'A' | 'B' | null };
+
+/** The series so far: each finished game, games won, the game in play, and the winner once a side has a majority of `games`. */
+export function cricketSeries(events: readonly Ev[], games: number): {
+  ends: CricketGameEnd[]; wonA: number; wonB: number; current: number; decided: 'A' | 'B' | null; need: number;
+} {
+  const ends: CricketGameEnd[] = [];
+  for (const e of events) {
+    const p = (e.payload ?? {}) as P;
+    if (e.event_type !== 'note' || p.kind !== 'game_end') continue;
+    ends.push({ game: ends.length + 1, winner: p.winner === 'A' || p.winner === 'B' ? p.winner : null, nextFirst: p.next_first === 'A' || p.next_first === 'B' ? p.next_first : null });
+  }
+  const need = Math.floor(games / 2) + 1;
+  const wonA = ends.filter((x) => x.winner === 'A').length; const wonB = ends.filter((x) => x.winner === 'B').length;
+  const decided = wonA >= need ? 'A' : wonB >= need ? 'B' : null;
+  return { ends, wonA, wonB, current: decided ? ends.length : Math.min(games, ends.length + 1), decided, need };
+}
+
+/** One game's events (its deliveries and its super overs), without the game-end notes. */
+export function cricketGameEvents<T extends Ev>(events: readonly T[], game: number): T[] {
+  return events.filter((e) => cricketGameOf(e.payload) === game && !(e.event_type === 'note' && (e.payload as P | null | undefined)?.kind === 'game_end'));
+}

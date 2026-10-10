@@ -96,8 +96,8 @@ export type TieSpec = {
 // Stage 12 · CH5: chess (team matches on boards) and carrom (team events in a fixed order) too.
 export const TIE_SPORTS = ['badminton', 'tennis', 'tabletennis', 'pickleball', 'chess', 'carrom'] as const;
 export const TIE_LABEL_MAX = 30;
-/** Stage 15 · BB6: the team sports whose knockout tie can be a best-of-N series (cricket scores on its own screen — not yet). */
-export const SERIES_SPORTS = ['football', 'volleyball', 'basketball', 'hockey'] as const;
+/** Stage 15 · BB6: the team sports whose knockout tie can be a best-of-N series. */
+export const SERIES_SPORTS = ['cricket', 'football', 'volleyball', 'basketball', 'hockey'] as const; // Stage 15 follow-up: cricket too (each game a full match, on its own pad)
 /** Stage 15 · BB6 · a best-of-N series: games G1…GN, first to a majority (the organiser's N, odd, no top). */
 export function seriesSpec(n: number): TieSpec {
   return { rubbers: Array.from({ length: n }, (_, i) => ({ key: `G${i + 1}`, label: `Game ${i + 1}`, players: 1 as const })), win: 'first', series: true };

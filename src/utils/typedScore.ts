@@ -26,6 +26,7 @@ import { emptyTennis, tennisPoint, type TennisScore } from './tennisCore';
 import { sideOutRally, sideOutStart, type SideOutOpts } from './pickleballCore';
 import { boardPointsFor, boardWhite, tieOutcome, type RubberResult, type TieSpec } from './tieCore';
 import { carromReplay, type CarromItem, type CarromOpts } from './carromCore';
+import { scoreWithShootout, shootoutProblem, shootoutWinner } from './shootoutRules';
 
 export type TypedSide = 'A' | 'B';
 /** One game (rally sports) or set (tennis): each side's score; a tennis set won 7-6 also gives its tiebreak points. */
@@ -398,17 +399,22 @@ export function typedSeriesPoints(
   const parts: string[] = [];
   for (const [i, x] of (games as unknown[]).entries()) {
     if (wa >= need || wb >= need) return no(`Game ${i + 1} isn’t played — the series was already won.`);
-    const o = (x ?? {}) as { a?: unknown; b?: unknown };
+    const o = (x ?? {}) as { a?: unknown; b?: unknown; pa?: unknown; pb?: unknown };
     if (!Number.isInteger(o.a) || !Number.isInteger(o.b) || (o.a as number) < 0 || (o.b as number) < 0) return no(`Game ${i + 1}: each side scored a whole number, 0 or more.`);
     const a = o.a as number; const b = o.b as number;
-    if (a === b) return no(`Game ${i + 1}: a series game has a winner — give the score after ${k === 'basketball' ? 'overtime' : 'extra time (a shoot-out’s winner gets one more)'}.`);
+    // Stage 15 follow-up: a level football / hockey game is decided on penalties, kept apart from its goals ("1–1 (4–3 pens)").
+    const pens = a === b && (k === 'football' || k === 'hockey') && o.pa != null && o.pb != null ? { A: Number(o.pa), B: Number(o.pb) } : null;
+    if (a === b && !pens) return no(`Game ${i + 1}: a series game has a winner — ${k === 'basketball' ? 'give the score after overtime' : `give the ${k === 'hockey' ? 'shoot-out' : 'penalties'} too`}.`);
+    if (pens) { const sp = shootoutProblem(pens.A, pens.B); if (sp) return no(`Game ${i + 1}: ${sp}`); }
     for (const [side, n] of [['A', a], ['B', b]] as const) {
       if (k === 'basketball') { if (n > 0) events.push({ event_type: 'score', payload: { team_side: side, kind: 'typed', value: n, typed: true } }); }
       else for (let j = 0; j < n; j++) events.push({ event_type: 'score', payload: { team_side: side, kind: 'goal', value: 1, typed: true } });
     }
+    if (pens) events.push({ event_type: 'note', payload: { kind: 'shootout', A: pens.A, B: pens.B, typed: true } });
     events.push({ event_type: 'note', payload: { kind: 'game_end', typed: true } });
-    if (a > b) wa += 1; else if (b > a) wb += 1;
-    parts.push(`G${i + 1} ${a}-${b}`);
+    const w = pens ? shootoutWinner(pens.A, pens.B) : a > b ? 'A' : 'B';
+    if (w === 'A') wa += 1; else wb += 1;
+    parts.push(`G${i + 1} ${scoreWithShootout(k, a, b, pens, '-')}`);
   }
   if (wa < need && wb < need) return no(`Nobody has won ${need} games yet.`);
   return { problem: null, events, winner: wa >= need ? 'A' : 'B', text: `${wa}-${wb} (${parts.join(', ')})` };

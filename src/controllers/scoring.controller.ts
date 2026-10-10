@@ -19,9 +19,10 @@ import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
-import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber } from '../utils/cricketRules';
+import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber, cricketSeries, cricketGameEvents, cricketGameOf, sideTotals } from '../utils/cricketRules';
 import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { FOUL_KINDS } from '../utils/basketballRules';
+import { gameShootout, shootoutKicksOf, shootoutProblem } from '../utils/shootoutRules'; // Stage 15 follow-up
 import { BASKETBALL_STAT_KEYS, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
 import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { trumpsFor } from '../utils/tieTrumps';
@@ -202,7 +203,9 @@ export async function validateScoringEvent(
     const batted = (x?: { balls?: number; wickets?: number }) => Number(x?.balls ?? 0) > 0 || Number(x?.wickets ?? 0) > 0;
     const level = batted(ss.A) && batted(ss.B) && Number(ss.A?.runs ?? 0) === Number(ss.B?.runs ?? 0);
     const bracket = await isKnockoutBracketMatch(match as { tournament_id: string | null; round: number | null; group_label: string | null });
-    if (slugSo !== 'cricket' || !bracket || !level) {
+    // Stage 15 follow-up: a tied game of a cricket series is decided by a super over too.
+    const soSeries = slugSo === 'cricket' && !!tieSpecOf('cricket', rulesOf('cricket', match as never))?.series;
+    if (slugSo !== 'cricket' || (!bracket && !soSeries) || !level) {
       return refuse(409, { error: 'A super over decides only a knockout cricket match that ended level.', code: 'SUPER_OVER_NOT_ALLOWED' });
     }
     const sos = ss.super_overs ?? [];
@@ -399,12 +402,35 @@ export async function validateScoringEvent(
     const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
     if (payload.kind === 'game_end' && !tieSpecOf(slug, rulesOf(slug, match))?.series) return refuse(400, { error: 'A game ends that way only in a series.', code: 'BAD_NOTE' });
     // A series game is won: a level one plays on (overtime, or the next goal) — it would count for nobody.
-    if (payload.kind === 'game_end') {
+    // Stage 15 follow-up: a cricket series game ends with its winner (from its result, a super over or an award) and who bats first next.
+    if (payload.kind === 'game_end' && slug === 'cricket') {
+      if (payload.winner != null && payload.winner !== 'A' && payload.winner !== 'B') return refuse(400, { error: 'A game’s winner is one of the two sides.', code: 'BAD_NOTE' });
+      if (payload.next_first != null && payload.next_first !== 'A' && payload.next_first !== 'B') return refuse(400, { error: 'Say which side bats first next.', code: 'BAD_NOTE' });
+      const t = (match.score_summary as { tie?: { decided?: unknown } } | null)?.tie;
+      if (t?.decided === 'A' || t?.decided === 'B') return refuse(409, { error: 'The series is decided — end the match.', code: 'SERIES_DECIDED' });
+    } else if (payload.kind === 'game_end') {
       const ss = (match.score_summary ?? {}) as { A?: { points?: unknown }; B?: { points?: unknown } };
-      if (Number(ss.A?.points ?? 0) === Number(ss.B?.points ?? 0)) return refuse(400, { error: 'The game is level — play on until one side leads (overtime, or the next goal).', code: 'GAME_LEVEL' });
+      if (Number(ss.A?.points ?? 0) === Number(ss.B?.points ?? 0)) {
+        // Stage 15 follow-up: football / hockey — a level game ends once its shoot-out is decided (kept apart from the goals).
+        let decided = false;
+        if (slug === 'football' || slug === 'hockey') {
+          const { data: notes } = await supabase.from('match_events').select('event_type, payload').eq('match_id', match.id).eq('event_type', 'note').order('created_at');
+          const all = (notes ?? []) as Array<{ event_type: string; payload: any }>;
+          let last = -1; all.forEach((e, i) => { if (e.payload?.kind === 'game_end') last = i; });
+          decided = !!gameShootout(all.slice(last + 1), shootoutKicksOf(rulesOf(slug, match)));
+        }
+        if (!decided) return refuse(400, { error: slug === 'basketball' ? 'The game is level — play on (overtime) until one side leads.' : `The game is level — ${slug === 'hockey' ? 'a shoot-out' : 'penalties'} decide it first.`, code: 'GAME_LEVEL' });
+      }
     }
     if (payload.kind !== 'game_end' && slug !== 'basketball') return refuse(400, { error: 'The possession arrow is basketball’s.', code: 'BAD_NOTE' });
     if (payload.kind === 'arrow' && payload.team_side !== 'A' && payload.team_side !== 'B') return refuse(400, { error: 'Say which team.', code: 'BAD_NOTE' });
+  }
+  // Stage 15 follow-up: a series game's shoot-out tally (football, hockey) — kept apart from the goals.
+  if (event_type === 'note' && payload && payload.kind === 'shootout') {
+    const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    if ((slug !== 'football' && slug !== 'hockey') || !tieSpecOf(slug, rulesOf(slug, match))?.series) return refuse(400, { error: 'A shoot-out tally is kept this way only in a football or hockey series.', code: 'BAD_NOTE' });
+    const sp = shootoutProblem(payload.A, payload.B);
+    if (sp) return refuse(400, { error: sp, code: 'BAD_NOTE' });
   }
   // Stage 14 · VB1 / VB7 / VB12 / VB8: volleyball's court notes and its PVL extras, basketball's stats.
   if ((event_type === 'note' && payload && ['rotation', 'libero', 'super_point', 'stat'].includes(payload.kind))
@@ -559,7 +585,8 @@ export async function validateScoringEvent(
         .from('match_events').select('event_type, payload')
         .eq('match_id', matchId).order('created_at', { ascending: true });
       // Gap 9: within the same innings — the match's own, or this super over's.
-      const sameInnings = (log ?? []).filter((e: { payload?: unknown }) => superOverNumber(e.payload) === superOverNumber(payload));
+      // Stage 15 follow-up: and within the same game of a series.
+      const sameInnings = (log ?? []).filter((e: { payload?: unknown }) => superOverNumber(e.payload) === superOverNumber(payload) && cricketGameOf(e.payload) === cricketGameOf(payload));
       if (freeHitNext(sameInnings as never, payload.team_side === 'B' ? 'B' : 'A')) {
         return refuse(400, {
           error: 'It’s a free hit — the batter can only be run out (or out obstructing the field or hitting the ball twice).',
@@ -584,7 +611,12 @@ export async function validateScoringEvent(
     // Gap 9: the match's quota doesn't stop anyone bowling a super over.
     if (bowlId && isDelivery && !superOverNumber(payload)) {
       const limit = rulesOf('cricket', match).bowlerOvers;
-      const bowled = (match.score_summary as { players?: Record<string, { bowl_balls?: number }> } | null)?.players?.[bowlId]?.bowl_balls;
+      let bowled = (match.score_summary as { players?: Record<string, { bowl_balls?: number }> } | null)?.players?.[bowlId]?.bowl_balls;
+      // Stage 15 follow-up: in a series the limit is a game's — count this game's balls only.
+      if (limit != null && tieSpecOf('cricket', rulesOf('cricket', match))?.series) {
+        const { data: log } = await supabase.from('match_events').select('event_type, payload').eq('match_id', matchId).order('created_at', { ascending: true });
+        bowled = aggregateCricketPlayers(mainEvents(cricketGameEvents((log ?? []) as Array<{ event_type: string; payload: any }>, cricketGameOf(payload))))[bowlId]?.bowl_balls;
+      }
       if (bowlerQuotaDone(bowled, limit)) {
         return refuse(409, {
           error: `This bowler has bowled their ${limit} over${limit === 1 ? '' : 's'} — the most one bowler may bowl in this match.`,
@@ -979,12 +1011,13 @@ export function rollupSets(
 export function rollupTieSpec(
   slug: string, rules: MatchRules, spec: TieSpec,
   events: { event_type: string; payload: any }[], sideOf: (p: any) => 'A' | 'B',
-): { scoreA: number; scoreB: number; setsA: number[]; setsB: number[]; gamesA: number; gamesB: number; curA: number; curB: number; rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw'; key: string; label: string; unitsA: number; unitsB: number }>; tie: { win: string; rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: 'A' | 'B' | 'draw' | null; decider?: boolean }; finished: RubberResult[]; ends: number[] } {
+): { scoreA: number; scoreB: number; setsA: number[]; setsB: number[]; gamesA: number; gamesB: number; curA: number; curB: number; rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw'; key: string; label: string; unitsA: number; unitsB: number; pens?: { A: number; B: number } }>; tie: { win: string; rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: 'A' | 'B' | 'draw' | null; decider?: boolean }; finished: RubberResult[]; ends: number[] } {
   const own = !!rules.tie;
   const single = { ...rules, tie: null, rubbers: null } as MatchRules;
   // Stage 11 · PB3: a match with its own rules (the DreamBreaker) plays those over the tie's.
   const rulesFor = (r: TieRubber) => (own ? { ...single, ...((r.rules ?? {}) as Partial<MatchRules>), players: r.players === 2 ? DOUBLES_PLAYERS : null, tie: null, rubbers: null } : single) as MatchRules;
   type Read = { winner: 'A' | 'B' | 'draw' | null; sets: { A: number[]; B: number[] }; games: { A: number; B: number }; points: { A: number; B: number } };
+  const seriesPens = new Map<string, { A: number; B: number }>(); // Stage 15 follow-up: each series game's shoot-out
   const read = (evs: { event_type: string; payload: any }[], r: TieRubber): Read => {
     const rr = rulesFor(r);
     // Stage 15 · BB6: a game of a series in a timed team sport — its score; it ends on END GAME (or a basketball target).
@@ -1000,7 +1033,10 @@ export function rollupTieSpec(
       }
       const target = slug === 'basketball' ? rr.targetScore ?? null : null;
       const done = ended || (target != null && (a >= target || b >= target));
-      return { winner: done ? (a === b ? 'draw' : a > b ? 'A' : 'B') : null, sets: { A: [a], B: [b] }, games: { A: 0, B: 0 }, points: { A: a, B: b } };
+      // Stage 15 follow-up: a level football / hockey game decided on penalties — kept apart from its goals.
+      const so = done && a === b && slug !== 'basketball' ? gameShootout(evs) : null;
+      if (so) seriesPens.set(r.key, { A: so.A, B: so.B }); else seriesPens.delete(r.key);
+      return { winner: done ? (so ? so.winner : a === b ? 'draw' : a > b ? 'A' : 'B') : null, sets: { A: [a], B: [b] }, games: { A: 0, B: 0 }, points: { A: a, B: b } };
     }
     // Stage 12 · CH5: a board of a team chess match — its result, by its colours, worth the board's points.
     if (slug === 'chess') {
@@ -1052,7 +1088,7 @@ export function rollupTieSpec(
     setsA: [...split.results.flatMap((r) => r.sets.A), ...(cur ? cur.sets.A : [])], setsB: [...split.results.flatMap((r) => r.sets.B), ...(cur ? cur.sets.B : [])],
     gamesA: cur?.games.A ?? 0, gamesB: cur?.games.B ?? 0, curA: cur?.points.A ?? 0, curB: cur?.points.B ?? 0,
     rubber: o.finished ? split.results.length : split.results.length + 1,
-    results: split.results.map((r) => ({ A: won(r.sets.A, r.sets.B), B: won(r.sets.B, r.sets.A), winner: r.winner, key: r.key, label: spec.rubbers.find((x) => x.key === r.key)?.label ?? r.key, unitsA: r.units.A, unitsB: r.units.B })),
+    results: split.results.map((r) => ({ A: won(r.sets.A, r.sets.B), B: won(r.sets.B, r.sets.A), winner: r.winner, key: r.key, label: spec.rubbers.find((x) => x.key === r.key)?.label ?? r.key, unitsA: r.units.A, unitsB: r.units.B, ...(seriesPens.has(r.key) ? { pens: seriesPens.get(r.key)! } : {}) })),
     tie: { win: spec.win, rubbersA: o.rubbersA, rubbersB: o.rubbersB, unitsA: o.unitsA, unitsB: o.unitsB, decided: o.decided, ...(o.decider ? { decider: true } : {}), // Stage 11 · PB3: won in the deciding match
       // Stage 12 follow-up: boards on their own clocks — how many are finished.
       ...(split.boards ? { boards: { done: split.results.length, of: spec.rubbers.length } } : {}) },
@@ -1357,8 +1393,9 @@ export function aggregatePointPlayers(events: { event_type: string; payload: any
       line.points += Number(p.value ?? 0);
       // Stage 15 · BB8: a made shot, by its kind ('1pt' a free throw in 5x5; in 3x3 a 1 is a field goal — `threeByThree`).
       const v = Number(p.value ?? 0);
-      if (e.event_type === 'score' && /^[123]pt$/.test(String(p.kind ?? ''))) {
-        const ft = v === 1 && !threeByThree;
+      // Stage 15 follow-up: 3x3's free-throw button sends kind 'ft'; older 3x3 matches' '1pt' stay field goals.
+      if (e.event_type === 'score' && /^([123]pt|ft)$/.test(String(p.kind ?? ''))) {
+        const ft = p.kind === 'ft' || (v === 1 && !threeByThree);
         if (ft) { line.ftm = (line.ftm ?? 0) + 1; line.fta = (line.fta ?? 0) + 1; }
         else { line.fgm = (line.fgm ?? 0) + 1; line.fga = (line.fga ?? 0) + 1; if (v === 3) { line.tpm = (line.tpm ?? 0) + 1; line.tpa = (line.tpa ?? 0) + 1; } }
       }
@@ -1381,7 +1418,7 @@ export function aggregatePointPlayers(events: { event_type: string; payload: any
       else if (p.stat === 'steal') inc('steals');
       else if (p.stat === 'block') inc('blocks');
       else if (p.stat === 'turnover') inc('turnovers');
-      else if (p.stat === 'miss') { if (p.shot === 'ft') inc('fta'); else { inc('fga'); if (p.shot === '3') inc('tpa'); } }
+      else if (p.stat === 'miss') { if (p.shot === 'ft') inc('fta'); else { inc('fga'); if (p.shot === '3' && !threeByThree) inc('tpa'); } }
     }
   }
   return players;
@@ -1490,6 +1527,10 @@ export async function recomputeSummary(
   let chessClockBlack: number | null = null;
 
   let cricketFirstBat: 'A' | 'B' | null = null;
+  // Stage 15 follow-up: a cricket series — the summary's innings are the game in play (the last, once decided).
+  const crSpec = slug === 'cricket' ? tieSpecOf('cricket', rulesOf('cricket', match)) : null;
+  const crSeries = crSpec?.series ? cricketSeries(events, crSpec.rubbers.length) : null;
+  const crEvents = crSeries ? cricketGameEvents(events, crSeries.current) : events;
   if (slug === 'cricket') {
     for (const s of ['A', 'B'] as const) Object.assign(sides[s], { runs: 0, balls: 0, wickets: 0 });
     // A6: a side is all out one short of its line-up (shared cricketRules); a
@@ -1497,7 +1538,7 @@ export async function recomputeSummary(
     const { data: lineup } = await supabase.from('match_participants').select('team_side').eq('match_id', matchId);
     const allOut = allOutBySide(lineup ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands); // BUILD 3.2
     // Cricket gap 9: the match's innings are its own events; super overs are kept apart.
-    for (const e of mainEvents(events)) {
+    for (const e of mainEvents(crEvents)) {
       const p: any = e.payload || {};
       const inn = sides[sideOf(p)];
       // F-15: who batted first, from play — the side on the first delivery. The
@@ -1713,9 +1754,21 @@ export async function recomputeSummary(
   if (slug === 'cricket') summary.first_batting_side = cricketFirstBat;
   // Cricket gap 9: the super overs played ball by ball, each side's runs / balls / wickets.
   if (slug === 'cricket') {
-    const sos = superOversOf(events, cricketFirstBat ?? 'A');
+    const sos = superOversOf(crEvents, cricketFirstBat ?? 'A');
     if (sos.length) summary.super_overs = sos;
     else delete summary.super_overs;
+    // Stage 15 follow-up: the series — games won, each game's result, the game in play.
+    if (crSeries && crSpec) {
+      const { data: lineup2 } = await supabase.from('match_participants').select('team_side').eq('match_id', matchId);
+      const out2 = allOutBySide(lineup2 ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands);
+      summary.tie = { win: 'first', rubbersA: crSeries.wonA, rubbersB: crSeries.wonB, unitsA: crSeries.wonA, unitsB: crSeries.wonB, decided: crSeries.decided, series: true };
+      summary.rubbers = crSeries.ends.map((x) => {
+        const g = mainEvents(cricketGameEvents(events, x.game));
+        const a = sideTotals(g, 'A', out2.A); const b = sideTotals(g, 'B', out2.B);
+        return { key: `G${x.game}`, label: `Game ${x.game}`, winner: x.winner ?? 'draw', A: x.winner === 'A' ? 1 : 0, B: x.winner === 'B' ? 1 : 0, runsA: a.runs, wicketsA: a.wickets, runsB: b.runs, wicketsB: b.wickets };
+      });
+      summary.rubber = crSeries.current;
+    } else if (slug === 'cricket') { delete summary.tie; delete summary.rubbers; delete summary.rubber; }
   }
   if (slug === 'chess' && !tieSummary) { // Stage 12 · CH5: a team match's summary is its tie's
     summary.result = chessResult ?? 'No result yet';

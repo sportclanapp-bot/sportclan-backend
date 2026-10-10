@@ -1853,6 +1853,8 @@ export async function recomputeSummary(
         else if (p.how === 'penalty' || p.penalty === true) { sp[sd].pens += 1; sp[sd].pen_goals += 1; }
       }
     }
+    // A goal marked "from a penalty corner" counts the corner too when none was logged (conversion never above 100%).
+    for (const sd of ['A', 'B'] as const) sp[sd].pc = Math.max(sp[sd].pc, sp[sd].pc_goals);
     if (sp.A.pc + sp.B.pc + sp.A.strokes + sp.B.strokes + sp.A.pens + sp.B.pens + sp.A.pc_goals + sp.B.pc_goals > 0) summary.set_pieces = sp;
     else delete summary.set_pieces;
   }

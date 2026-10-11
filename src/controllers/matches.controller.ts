@@ -6,7 +6,7 @@ import { sportTerms } from '../utils/sportTerms';
 import { sportSlugOf } from '../utils/sportSlug';
 import { plural } from '../utils/plural';
 import { selectAll } from '../utils/selectAll';
-import { joinChat } from '../utils/chatMembership';
+import { joinChat, wasRemovedFromChat } from '../utils/chatMembership';
 import { attachTeamNames } from '../utils/teamNames';
 import { myScheduledMatches, pickNextMatch } from '../utils/nextMatch';
 import { hideTestFor, excludeTest } from '../utils/testContent';
@@ -2752,6 +2752,10 @@ export async function getMatchChat(req: Request, res: Response) {
     // Ensure the caller is a participant.
     const { data: participant } = await supabase
       .from('chat_participants').select('id').is('left_at', null).eq('chat_id', chatId).eq('user_id', userId).maybeSingle();
+    // Audit #16: someone the chat's admin removed isn't put back by opening it.
+    if (!participant && (await wasRemovedFromChat(chatId as string, userId))) {
+      return res.status(403).json({ error: 'You were removed from this match’s chat.', code: 'REMOVED_FROM_CHAT' });
+    }
     if (!participant) {
       // 098: rejoins a member who left (clears left_at) rather than inserting twice.
       await joinChat(chatId as string, [{ user_id: userId, role: 'member' }]);

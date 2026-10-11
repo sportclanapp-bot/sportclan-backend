@@ -697,7 +697,7 @@ export async function addMember(req: Request, res: Response) {
   if (await isActiveMember(id, user_id)) return res.json({ success: true }); // already a member
   const privacyRefusal = await groupAddRefusal(userId, [user_id]);
   if (privacyRefusal) return res.status(403).json(privacyRefusal);
-  await joinChat(id, [{ user_id, role: 'member' }]);
+  await joinChat(id, [{ user_id, role: 'member' }], { byAdmin: true }); // audit #16: an admin may add a removed member back
   // The system line only for a join that happened.
   if (!(await isActiveMember(id, user_id))) {
     return res.status(500).json({ error: 'Could not add them. Try again.' });
@@ -746,7 +746,7 @@ export async function removeMember(req: Request, res: Response) {
   }
 
   // 098: removal is a soft leave — the row stays with left_at set.
-  await leaveChat(id, [memberId]);
+  await leaveChat(id, [memberId], { removedBy: userId }); // audit #16: an admin removal sticks
 
   return res.json({ success: true });
 }

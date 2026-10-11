@@ -694,7 +694,27 @@ export async function matchHistory(req: Request, res: Response) {
     }
     const limit = Math.min(Math.max(Number((req.query as any).limit ?? 50) || 50, 1), 100);
     const offset = Math.max(Number((req.query as any).offset ?? 0) || 0, 0);
+    const q0 = typeof (req.query as any).q === 'string' ? String((req.query as any).q).trim().slice(0, 60) : '';
+    const hideVoided = String((req.query as any).voided ?? '') === 'hide';
 
+    // Audit #90: the whole history in ONE database query (migration 150) — the
+    // page's ids, the counts — then just this page's matches. It read every match
+    // the person ever played (6,161 for QA B, ~75 round trips: 31 s on live).
+    const fast = await supabase.rpc('match_history_page', { p_user: target, p_offset: offset, p_limit: limit, p_q: q0 ? escapeLike(q0) : null, p_hide_voided: hideVoided });
+    if (!fast.error && fast.data) {
+      const h = fast.data as { played_count: number; officiated_count: number; voided_count: number; total: number; page: Array<{ id: string; side: string | null; role: 'played' | 'officiated' }> };
+      const page = h.page ?? [];
+      const { data: rowsP, error: errP } = page.length
+        ? await supabase.from('matches').select('*').in('id', page.map((p) => p.id))
+        : { data: [] as any[], error: null };
+      if (errP) return res.status(500).json({ error: sanitizeError(errP) });
+      const byId = new Map(((rowsP ?? []) as any[]).map((m) => [m.id as string, m]));
+      const matches = page.map((p) => byId.get(p.id) ? { ...byId.get(p.id), my_role: p.role, my_side: p.side ?? null } : null).filter(Boolean) as any[];
+      await attachTeamNames(matches);
+      return res.json({ matches, played_count: Number(h.played_count) || 0, officiated_count: Number(h.officiated_count) || 0, voided_count: Number(h.voided_count) || 0, total: Number(h.total) || 0, has_more: offset + limit < (Number(h.total) || 0) });
+    }
+
+    // Before migration 150 is on the database: the old way (slow for a big history).
     // Oct 2026 sweep: each read stopped at 1000 rows (PostgREST's cap), so a
     // player with more matches lost the rest — and the counts with them.
     const [parts, umps] = await Promise.all([

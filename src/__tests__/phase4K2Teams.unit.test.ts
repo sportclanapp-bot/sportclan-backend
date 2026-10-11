@@ -170,7 +170,8 @@ describe('K2-65a · the team header gets its W/L/D record (SC-293/290)', () => {
   });
   it('K2-65a (340ef3d): computeTeamRecord counts wins / losses / draws by winner_team_id', async () => {
     const { computeTeamRecord } = jest.requireActual('../utils/teamRecord');
-    mockNext = () => ({ data: [{ winner_team_id: TEAM }, { winner_team_id: TEAM }, { winner_team_id: D }, { winner_team_id: null }] });
+    const m = (w: string | null) => ({ winner_team_id: w, status: 'completed', team_a_id: TEAM, team_b_id: D }); // audit #70: real fixtures (two sides)
+    mockNext = () => ({ data: [m(TEAM), m(TEAM), m(D), m(null)] });
     expect(await computeTeamRecord(TEAM)).toEqual({ played: 4, wins: 2, losses: 1, draws: 1, win_rate: 50 });
   });
 });

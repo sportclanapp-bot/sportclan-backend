@@ -2053,11 +2053,17 @@ export async function typedScore(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const id = String(req.params.id);
-    const { data: m } = await supabase.from('matches')
-      .select('id, sport_id, status, voided_at, rules, format, overs, created_by, umpire_id, scorer_id, tournament_id, team_a_id, team_b_id')
-      .eq('id', id).maybeSingle();
-    if (!m) return res.status(404).json({ error: 'Match not found' });
-    if (!(await canOfficiateMatch(m as never, userId))) return res.status(403).json({ error: 'Only the organiser, the umpire or a scorer can enter the result.' });
+    // Audit #14: the same gate as live scoring — permission AND the scoring
+    // lease (a second phone can't write a whole typed result while someone else
+    // holds the pad) AND no deactivated sport.
+    const auth = await authorizeScorer(id, userId, deviceIdOf(req));
+    if (!auth.ok) {
+      return res.status(auth.status).json({ error: auth.status === 403 ? 'Only the organiser, the umpire or a scorer can enter the result.' : auth.error, ...(auth.code ? { code: auth.code } : {}) });
+    }
+    const m = auth.match;
+    if (await isSportInactive(m.sport_id)) {
+      return res.status(400).json({ error: 'This sport is not available', code: 'SPORT_INACTIVE' });
+    }
     if ((m as { voided_at?: string | null }).voided_at || m.status === 'completed' || m.status === 'abandoned' || m.status === 'cancelled') {
       return res.status(409).json({ error: 'This match is already finished.', code: 'MATCH_FINISHED' });
     }

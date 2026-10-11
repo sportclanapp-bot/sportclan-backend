@@ -84,6 +84,10 @@ export function pointsPresetFor(sport: string | null | undefined): PointsTemplat
     case 'chess': return tpl(1, 0.5, 0, { walkoverLoss: 0 });
     // Stage 16 · HK1: FIH's 3 / 2 / 1 / 0 — a shoot-out win 2, a shoot-out loss 1 (new tournaments; older ones keep theirs).
     case 'hockey': return tpl(3, 1, 0, { shootoutWin: 2, shootoutLoss: 1 });
+    // Audit #80 (Dipak, 11 Oct 2026): football too — a shoot-out win 2, a
+    // shoot-out loss 1, for NEW tournaments (a tournament keeps the points it
+    // was made with). Cricket keeps a full win for a super over (IPL).
+    case 'football': return tpl(3, 1, 0, { shootoutWin: 2, shootoutLoss: 1 });
     default: return tpl(3, 1, 0);
   }
 }

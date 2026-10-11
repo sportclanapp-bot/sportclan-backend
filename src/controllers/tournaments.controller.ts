@@ -1,3 +1,4 @@
+import { sportKeyOf, storedPoints, pointsPresetFor, type TournamentSettings } from '../utils/tournamentSettings';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { swissMaxRounds } from '../utils/tournamentSettings';
 import { deleteMatching } from '../utils/softDelete';
@@ -383,7 +384,7 @@ async function tournamentRowFrom(body: Record<string, any>, kind: 'single' | 'pa
       match_rules: parent ? null : storedStageRules(createSportSlug, match_rules), // BUILD 2.4
       // BUILD Stage 4; badminton gap 3: a parent's settings are its limit of events per player.
       settings: parent ? (storedEventLimits(body.event_limits) ? { v: 1, eventLimits: storedEventLimits(body.event_limits) } : null)
-        : settings ? storedSettings(settings) : null,
+        : withNewPoints(createSportSlug, format, settings ? storedSettings(settings) : null),
       // Badminton gaps 1–2. Only written when they differ from the column
       // defaults, so a plain tournament's insert is exactly as before.
       ...(parent ? { is_parent: true } : {}),
@@ -4040,6 +4041,18 @@ export function withinPlayingHours(ms: number, cfg: { dailyStartMin: number; dai
   if (minute < cfg.dailyStartMin) return dayStartUtc + cfg.dailyStartMin * 60_000;
   if (minute + cfg.durationMin > cfg.dailyEndMin) return dayStartUtc + 86_400_000 + cfg.dailyStartMin * 60_000;
   return ms;
+}
+
+/**
+ * Audit #80 (Dipak): a NEW football tournament with a table and no points of
+ * its own gets the sport's template written down (a shoot-out win 2, a loss 1),
+ * so it keeps those points for good. Tournaments made before keep theirs: one
+ * with no stored points still reads the old default (a shoot-out win is a win).
+ */
+export function withNewPoints(slug: string | null | undefined, format: string | null | undefined, settings: TournamentSettings | null): TournamentSettings | null {
+  if (sportKeyOf(slug) !== 'football' || settings?.points) return settings;
+  if (!['league', 'round_robin', 'groups_knockout', 'swiss'].includes(String(format ?? ''))) return settings;
+  return { ...(settings ?? { v: 1 }), points: storedPoints(pointsPresetFor('football')) };
 }
 
 export function buildTournamentScheduleConfig(

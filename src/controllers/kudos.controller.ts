@@ -2,10 +2,13 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { notifyUser } from '../utils/notify';
+import { consentedParticipants } from '../utils/matchConsent';
 import { excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
 
 const KUDOS_COINS = 2;
+/** Audit #12: one paid kudos per sender → receiver a week. */
+export const KUDOS_COIN_WINDOW_MS = 7 * 24 * 3600 * 1000;
 
 // POST /kudos  { toUserId, matchId, message? }
 //
@@ -32,15 +35,30 @@ export async function sendKudos(req: Request, res: Response) {
     return res.status(403).json({ error: 'You can’t send kudos to this user.' });
   }
 
+  // Audit #12: only a finished match that counts, and only between players who
+  // agreed to play it (audit #6) — a self-made match with a second account
+  // farmed coins.
+  const { data: match } = await supabase
+    .from('matches')
+    .select('id, status, voided_at, created_by, tournament_id, team_a_id, team_b_id')
+    .eq('id', matchId)
+    .maybeSingle();
+  if (!match || match.status !== 'completed' || match.voided_at) {
+    return res.status(409).json({ error: 'Kudos are for a finished match.', code: 'MATCH_NOT_FINISHED' });
+  }
   // Validate both users participated in this match.
   const { data: participants } = await supabase
     .from('match_participants')
-    .select('user_id')
+    .select('user_id, team_side')
     .eq('match_id', matchId)
     .in('user_id', [senderId, toUserId]);
   const ids = new Set((participants ?? []).map((p) => p.user_id));
   if (!ids.has(senderId) || !ids.has(toUserId)) {
     return res.status(403).json({ error: 'Both users must be match participants' });
+  }
+  const agreed = new Set((await consentedParticipants(match as any, (participants ?? []) as Array<{ user_id: string; team_side: string }>)).map((p) => p.user_id));
+  if (!agreed.has(senderId) || !agreed.has(toUserId)) {
+    return res.status(403).json({ error: 'Kudos are between players who agreed to play this match.', code: 'NOT_CONFIRMED_PLAYERS' });
   }
 
   // Idempotency — if we've already sent for this match, just return the
@@ -98,9 +116,23 @@ export async function sendKudos(req: Request, res: Response) {
    * while a second kudos from a different teammate credits again — which is the
    * existing rule, now enforced by the database rather than by luck.
    */
+  // Audit #12: coins at most once a week from the same sender to the same
+  // person (more kudos still count, they just don't pay again).
+  let paid = false;
   try {
-    const { awardCoins } = await import('../utils/coins');
-    await awardCoins(toUserId, `kudos_${inserted.id}`, KUDOS_COINS, 'Received kudos');
+    const since = new Date(Date.now() - KUDOS_COIN_WINDOW_MS).toISOString();
+    const { count: recent } = await supabase
+      .from('kudos')
+      .select('id', { count: 'exact', head: true })
+      .eq('from_user_id', senderId)
+      .eq('to_user_id', toUserId)
+      .neq('id', inserted.id)
+      .gte('created_at', since);
+    if (!recent) {
+      const { awardCoins } = await import('../utils/coins');
+      await awardCoins(toUserId, `kudos_${inserted.id}`, KUDOS_COINS, 'Received kudos');
+      paid = true;
+    }
   } catch {
     // best-effort — the kudos itself is already recorded
   }
@@ -117,14 +149,14 @@ export async function sendKudos(req: Request, res: Response) {
       userId: toUserId,
       type: 'kudos',
       title: '\uD83D\uDC4F Kudos!',
-      body: `${senderName} gave you kudos (+${KUDOS_COINS} coins)`,
+      body: paid ? `${senderName} gave you kudos (+${KUDOS_COINS} coins)` : `${senderName} gave you kudos`,
       data: { matchId, screen: 'MatchDetail' },
     });
   } catch {
     // swallow
   }
 
-  return res.json({ kudos: inserted, alreadySent: false });
+  return res.json({ kudos: inserted, alreadySent: false, coins: paid ? KUDOS_COINS : 0 });
 }
 
 // GET /kudos/received/:userId — list recent kudos for the given user,

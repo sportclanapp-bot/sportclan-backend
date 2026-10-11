@@ -129,7 +129,10 @@ describe('K2-7 · duplicate follow / block / kudos are idempotent by SQLSTATE (S
   });
   it('K2-7b (0782390): a concurrent double kudos (23505) → alreadySent, and NO second coin credit', async () => {
     mockNext = (q) => {
-      if (q[0] === 'from:match_participants') return { data: [{ user_id: ME }, { user_id: D }] };
+      if (q[0] === 'from:match_participants') return { data: [{ user_id: ME, team_side: 'A' }, { user_id: D, team_side: 'B' }] };
+      // Audit #12: a finished match that both said "In" to.
+      if (q[0] === 'from:matches') return { data: { id: MATCH, status: 'completed', voided_at: null, created_by: ME, tournament_id: null } };
+      if (q[0] === 'from:match_availability') return { data: [{ user_id: D }] };
       if (q[0] === 'from:kudos' && q.some((c) => c.startsWith('insert:'))) return { data: null, error: { code: '23505', message: 'dup' } };
       if (q[0] === 'from:kudos') return { data: mockLog.filter((x) => x[0] === 'from:kudos').length > 1 ? { id: 'k-winner' } : null };
       return { data: null };

@@ -17,11 +17,12 @@ test('the message', () => {
   expect(updateRequired('delete your account')).toEqual({ status: 403, body: { error: 'Update SportClan to delete your account.', code: 'UPDATE_REQUIRED' } });
 });
 
-test('the three places: change phone, delete account, offer to officiate', () => {
+test('the places: change phone, delete account, offer to officiate, the old edit sheet', () => {
   const c = (f: string) => fs.readFileSync(path.join(__dirname, '../controllers', f), 'utf8');
   expect(c('auth.controller.ts')).toContain("re.body.code === 'REAUTH_REQUIRED' && isOlderApp(req)) { const u = updateRequired('change your phone number');");
   // …and before any code is texted for a change it can't finish
   expect(c('auth.controller.ts')).toContain("if (purpose === 'change_phone' && isOlderApp(req)) { const u = updateRequired('change your phone number');");
   expect(c('account.controller.ts')).toContain("re.body.code === 'REAUTH_REQUIRED' && isOlderApp(req)) { const u = updateRequired('delete your account');");
+  expect(c('matchFeatures.controller.ts')).toContain("isOlderApp(req)) { const u = updateRequired('edit this event');");
   expect(c('matches.controller.ts')).toContain("if (isOlderApp(req)) { const u = updateRequired(`offer to be this match’s ${off.toLowerCase()}`);");
 });

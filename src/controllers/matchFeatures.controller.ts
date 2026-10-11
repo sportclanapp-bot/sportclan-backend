@@ -22,6 +22,7 @@ import { isUuid } from '../utils/uuid';
 import { rulesOf, legacyFromRules } from '../utils/matchRules';
 import { allOutBySide, inningsFinished, reduceOversRefusal } from '../utils/cricketRules';
 import { chasingSide } from '../utils/matchResult';
+import { isOlderApp, updateRequired } from '../utils/clientVersion';
 
 /**
  * Shared gate for match-mutating feature endpoints (DLS, event edit/delete,
@@ -558,6 +559,9 @@ export async function editMatchEvent(req: Request, res: Response) {
     // Audit #15: an edit went in unchecked ({ runs: 1e9 }, junk keys, a string
     // spread into character keys, another side or player).
     const refused = eventEditRefusal(oldPayload, changes);
+    // Release prep 2.16.0: 2.15.0's edit sheet offered cricket runs for every event
+    // (fixed in 2.16.0, audit #45) — its user hears what to do, not a field name.
+    if (refused && (refused.code === 'UNKNOWN_FIELD' || refused.code === 'FIELD_NOT_EDITABLE') && isOlderApp(req)) { const u = updateRequired('edit this event'); return res.status(u.status).json(u.body); }
     if (refused) return res.status(400).json(refused);
     const newPayload = { ...oldPayload, ...changes };
 

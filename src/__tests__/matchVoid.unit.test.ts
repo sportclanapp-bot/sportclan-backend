@@ -135,8 +135,9 @@ describe('SC-441 · shouldHideVoided', () => {
     expect(shouldHideVoided({ status: 'abandoned' })).toBe(false);
     // A team's match history, even for a live-shaped status.
     expect(shouldHideVoided({ status: 'live', teamScoped: true })).toBe(false);
-    // Your own match list.
-    expect(shouldHideVoided({ status: 'live', mine: true })).toBe(false);
+    // Your own match list (all of it). Audit #91: your own LIVE list hides them.
+    expect(shouldHideVoided({ mine: true })).toBe(false);
+    expect(shouldHideVoided({ status: 'live', mine: true })).toBe(true);
   });
 
   test('the scoping override beats the status', () => {

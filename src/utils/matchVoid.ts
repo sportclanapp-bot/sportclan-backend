@@ -92,7 +92,11 @@ export function shouldHideVoided(opts: {
    */
   tournamentScoped?: boolean;
 }): boolean {
-  if (opts.teamScoped || opts.mine || opts.tournamentScoped) return false;
+  if (opts.teamScoped || opts.tournamentScoped) return false;
+  // Audit #91: your own LIVE (or upcoming) matches never include a voided one —
+  // Home's "your live match" showed a VOIDED match. Your own full list (no
+  // status) still shows them, as a record.
+  if (opts.mine) return !!opts.status && (HIDE_VOIDED_FOR_STATUSES as readonly string[]).includes(opts.status);
   if (!opts.status) return true; // an unscoped list is discovery
   return (HIDE_VOIDED_FOR_STATUSES as readonly string[]).includes(opts.status);
 }

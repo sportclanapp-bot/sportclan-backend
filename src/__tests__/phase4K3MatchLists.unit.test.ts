@@ -53,8 +53,8 @@ describe('M2 · a voided match is not live and not upcoming', () => {
     await list(listMatches, status ? { status } : {});
     expect(matchesQ()).toContain('is:["voided_at",null]');
   });
-  it('K3-61 (1aa2103): history keeps them — your own list and a finished list', async () => {
-    await list(listMatches, { status: 'live', mine: '1' });
+  it('K3-61 (1aa2103): history keeps them — your own list and a finished list (audit #91: not your own LIVE list)', async () => {
+    await list(listMatches, { mine: '1' });
     expect(matchesQ()).not.toContain('voided_at');
     mockLog = [];
     await list(listMatches, { status: 'completed' });

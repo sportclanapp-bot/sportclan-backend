@@ -3833,7 +3833,7 @@ async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise
 // When every group-stage match is complete, seed the knockout round-1 slots from
 // the group standings (top 2 per group, cross-paired to avoid an immediate
 // same-group rematch). Idempotent. SC-23 (groups→KO transition).
-async function maybeSeedKnockout(tournamentId: string): Promise<void> {
+export async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   const groupMatches = await allRows(() => supabase
     .from('matches')
     .select('id, status, winner_team_id, team_a_id, team_b_id, score_summary, overs')
@@ -3860,7 +3860,12 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
     .from('tournament_entries')
     .select('team_id, group_label, club, status, team:teams!team_id(id, name, short_name)')
     .eq('tournament_id', tournamentId)
-    .not('group_label', 'is', null));
+    .not('group_label', 'is', null)
+    // Audit #54: the groups' teams, as on the table (a pending or rejected entry isn't in the draw).
+    .in('status', ['approved', 'withdrawn']));
+  // Audit #54: a withdrawn team stays in its group's ranking (its games count),
+  // but never takes a knockout place — the next team in the group goes through.
+  const outIds = new Set(((entries ?? []) as Array<{ team_id: string; status?: string }>).filter((e) => e.status === 'withdrawn').map((e) => e.team_id));
 
   // SC-58: deterministic standings (wins desc, then team id — NEVER DB row
   // order) + config-driven qualifiers per group + a properly SEEDED bracket so
@@ -3901,7 +3906,7 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   // Stage 8 · F8: fair play (when the order uses it) and each group's draw of lots.
   const extraFor = await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tableMatches as Array<{ id: string; team_a_id?: string | null; team_b_id?: string | null }>);
   for (const label of labels) {
-    const orderedIds = rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label));
+    const orderedIds = rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label)).filter((id) => !outIds.has(id)); // audit #54
     for (let r = 0; r < qualsPerGroup; r++) {
       const id = orderedIds[r];
       if (id) (ranks[r] ??= []).push({ id, name: nameOf[id] ?? 'Team' });
@@ -3936,7 +3941,7 @@ async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   if (st8.bestThirds || st8.bestNext != null) {
     const open = ko1.length * 2 - seeds.length;
     const count = Math.min(open, bestNextCount(st8, labels.map((l) => groupTeams[l].length), qualsPerGroup));
-    const ranked = labels.map((label) => rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label)));
+    const ranked = labels.map((label) => rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label)).filter((id) => !outIds.has(id))); // audit #54
     for (const id of bestPlacedAcrossGroups(ranked, qualsPerGroup, count, globalStats, tiebreakerRules, { ...extraFor(''), matches: tableMatches, pts })) seeds.push({ id, name: nameOf[id] ?? 'Team' });
   }
   if (seeds.length < 2) return;

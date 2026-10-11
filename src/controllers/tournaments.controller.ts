@@ -2224,7 +2224,7 @@ export async function addTournamentOrganiser(req: Request, res: Response) {
     const auth = await authorizeCarveout(t.created_by, userId);
     if (!auth.ok) return res.status(403).json({ error: 'Only the tournament creator can manage co-organisers.' });
     if (user_id === t.created_by) return res.status(400).json({ error: 'That user is already the tournament creator.' });
-    const { data: target } = await supabase.from('users').select('id, name').eq('id', user_id).maybeSingle();
+    const { data: target } = await supabase.from('users').select('id, name').eq('id', user_id).is('deleted_at', null).maybeSingle(); // audit #27: never a deleted account
     if (!target) return res.status(404).json({ error: 'User not found.' });
 
     const { error: insErr } = await supabase
@@ -2310,7 +2310,7 @@ export async function reassignTournamentOrganiser(req: Request, res: Response) {
     if (!t) return res.status(404).json({ error: 'Tournament not found' });
     const auth = await authorizeCarveout(t.created_by, userId);
     if (!auth.ok) return res.status(403).json({ error: 'Only the tournament creator (or a platform admin) can reassign the organiser.' });
-    const { data: target } = await supabase.from('users').select('id, name').eq('id', user_id).maybeSingle();
+    const { data: target } = await supabase.from('users').select('id, name').eq('id', user_id).is('deleted_at', null).maybeSingle(); // audit #27: never a deleted account
     if (!target) return res.status(404).json({ error: 'User not found.' });
 
     await supabase.from('tournaments').update({ created_by: user_id, updated_at: new Date().toISOString() }).eq('id', id);

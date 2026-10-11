@@ -522,7 +522,7 @@ export function boundariesOf(events: readonly Ev[]): { A: number; B: number } {
     if (e.event_type !== 'ball') continue;
     const p = (e.payload ?? {}) as P;
     const r = Number(p.runs ?? 0);
-    if (r === 4 || r === 6) out[p.team_side === 'B' ? 'B' : 'A'] += 1;
+    if ((r === 4 && p.boundary !== false) || r === 6) out[p.team_side === 'B' ? 'B' : 'A'] += 1; // audit #136: a run four is no boundary
   }
   return out;
 }

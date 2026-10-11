@@ -8,6 +8,10 @@ import { FOUL_KINDS } from './basketballRules';
  * now name the player when the scorer said who got it.
  */
 import { periodLabelOf } from './basketballRules';
+import { isDismissal, penaltyRunsOf } from './cricketRules';
+import { plural } from './plural';
+import { possessive } from './possessive';
+import { sportTerms } from './sportTerms';
 
 export interface CommentaryContext {
   sport: string;
@@ -97,11 +101,14 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (ctx.sport === 'volleyball' && eventType === 'note' && p.kind === 'rotation') {
     const names = (Array.isArray(p.slots) ? p.slots : []).map((x: any, i: number) => `${['I', 'II', 'III', 'IV', 'V', 'VI'][i] ?? i + 1} ${String(x?.name ?? '?')}`);
     const libs = (Array.isArray(p.liberos) ? p.liberos : []).map((x: any) => String(x?.name ?? '?'));
-    return `📋 ${team} line-up${typeof p.set === 'number' ? ` for set ${p.set}` : ''}: ${names.join(', ')}${libs.length ? ` · libero${libs.length === 1 ? '' : 's'} ${libs.join(', ')}` : ''}`;
+    return `📋 ${team} line-up${typeof p.set === 'number' ? ` for set ${p.set}` : ''}${names.length ? `: ${names.join(', ')}` : ' set'}${libs.length ? ` · libero${libs.length === 1 ? '' : 's'} ${libs.join(', ')}` : ''}`;
   }
   if (ctx.sport === 'volleyball' && eventType === 'note' && p.kind === 'libero') {
     if (p.out === true || p.back === true) return `🔄 Libero off — ${team}`;
-    return `🔄 Libero ${String(p.libero?.name ?? '')} in for ${String(p.replaced?.name ?? '')} — ${team}`;
+    // Audit #137: no names read "Libero  in for  —".
+    const lib = typeof p.libero?.name === 'string' && p.libero.name.trim() ? p.libero.name.trim() : null;
+    const rep = typeof p.replaced?.name === 'string' && p.replaced.name.trim() ? p.replaced.name.trim() : null;
+    return `🔄 Libero${lib ? ` ${lib}` : ''} in${rep ? ` for ${rep}` : ''} — ${team}`;
   }
   if (ctx.sport === 'volleyball' && eventType === 'note' && p.kind === 'super_point') return `⚡ Super Point called — ${team}`;
   if (ctx.sport === 'volleyball' && eventType === 'score' && p.kind === 'fault') return `🔢 Positional fault by ${other} — point to ${team}`;
@@ -147,7 +154,7 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (goalSport && eventType === 'note' && p.kind === 'pc_over') return '🏑 Penalty corner over — no goal';
   if (goalSport && eventType === 'note' && p.kind === 'pen_stroke' && p.scored === false) return `🎯 Penalty stroke missed — ${player ? `${player} (${team})` : team}`;
   if (goalSport && eventType === 'note' && p.kind === 'pen_missed') return `🎯 Penalty missed — ${player ? `${player} (${team})` : team}`;
-  if (goalSport && eventType === 'note' && p.kind === 'kickoff') return '⏱ Kick-off'; // BUILD 3.22
+  if (goalSport && eventType === 'note' && p.kind === 'kickoff') return `⏱ ${sportTerms(ctx.sport).start}`; // BUILD 3.22 · audit #123: hockey's push-back
   // BUILD 3.78: a carrom foul — a piece due from that side.
   if (ctx.sport === 'carrom' && eventType === 'foul') return `🚫 Foul — ${team} (a piece due)`;
   // BUILD 3.77: point carrom — the piece, who pocketed it, and what it was worth.
@@ -172,7 +179,7 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (eventType === 'note' && p.kind === 'point_off') return `➖ A point off ${team}`;
   if (eventType === 'note' && p.kind === 'game_forfeit') return `🏳️ Game forfeited by ${team}`;
   // Stage 10 · TT3: a paper-scored match typed in.
-  if (eventType === 'note' && p.kind === 'typed_score') return `📝 Result entered from the score sheet: ${String(p.text ?? '')}`;
+  if (eventType === 'note' && p.kind === 'typed_score') return `📝 Result entered from the score sheet${typeof p.text === 'string' && p.text.trim() ? `: ${p.text.trim()}` : ''}`;
   if (eventType === 'note' && p.kind === 'warmup') return '⏱ Warm-up';
   if (eventType === 'note' && p.kind === 'medical_timeout') return `🩺 Medical time-out — ${team}`;
   // BUILD 3.42: a volleyball timeout names the side (it read "Timeout called by team").
@@ -186,7 +193,14 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   // Stage 15 · BB9 / BB6 / BB8 · basketball's arrow, a series game's end, a missed shot.
   if (ctx.sport === 'basketball' && eventType === 'note' && p.kind === 'arrow') return `▶ Possession arrow — ${team}`;
   if (ctx.sport === 'basketball' && eventType === 'note' && p.kind === 'arrow_flip') return '⇄ Possession arrow flipped';
-  if (eventType === 'note' && p.kind === 'game_end') return '🏁 End of the game';
+  if (eventType === 'note' && p.kind === 'game_end') {
+    // Audit #112: a series game says which game, and who won it.
+    const g = Number.isInteger(p.game) && p.game > 0 ? ` ${p.game}` : ' of the game';
+    const won = p.winner === 'A' ? ctx.teamA : p.winner === 'B' ? ctx.teamB : null;
+    const next = p.next_first === 'A' ? ctx.teamA : p.next_first === 'B' ? ctx.teamB : null;
+    const nextWord = ctx.sport === 'cricket' ? 'bat' : 'start';
+    return `🏁 End${g === ' of the game' ? g : ` of game${g}`}${won ? ` — ${won} won it` : ''}${next && Number.isInteger(p.game) ? ` · ${next} ${nextWord} first in game ${p.game + 1}` : ''}`;
+  }
   // Stage 15 follow-up: a series game's shoot-out, apart from its goals.
   if (eventType === 'note' && p.kind === 'shootout' && Number.isInteger(p.A) && Number.isInteger(p.B)) {
     const w = p.A > p.B ? ctx.teamA : ctx.teamB;
@@ -211,7 +225,8 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     const who = p.winner === 'black' ? 'Black' : 'White';
     return `🏁 ${who} wins${why ? ` — ${why}` : ''}${player ? ` (${player})` : ''}`;
   }
-  if (eventType === 'serve_swap') return '🔁 Serve changed';
+  // Audit #113: a doubles partner swap is not a change of server between the sides.
+  if (eventType === 'serve_swap') return p.kind === 'partner' ? `🔁 ${team}: the other partner serves` : '🔁 Serve changed';
   if (ctx.sport === 'carrom' && eventType === 'score' && p.kind === 'board') {
     const v = Number(p.value ?? 0);
     // Stage 13 · CR6: a slam says so (White: break to finish; Black: all the rest in the first turn).
@@ -242,12 +257,168 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     if (p.kind === 'kickoff') return ctx.sport === 'basketball' ? (ctx.period > 0 ? '⏱ Clock started' : '⏱ Tip-off') : ctx.sport === 'chess' ? '⏱ Clocks started' : '⏱ Clock started';
     if (p.kind === 'clock_pause') return '⏸ Clock stopped';
     if (p.kind === 'clock_resume') return '▶ Clock restarted';
-    if (p.kind === 'clock_adjust' && secs) return `⏱ Clock corrected ${secs > 0 ? '+' : '−'}${dur(secs)}`;
+    if (p.kind === 'clock_adjust') return secs ? `⏱ Clock corrected ${secs > 0 ? '+' : '−'}${dur(secs)}` : '⏱ Clock checked — no change'; // audit #114
     if (p.kind === 'buzzer') return '⏰ Time’s up';
-    if (p.kind === 'serve_order') return `🏸 Serving order set — player ${p.server === 2 ? 2 : 1} serves to player ${p.receiver === 2 ? 2 : 1}`;
-    if (p.kind === 'add_time' && secs) return `⏱ ${named}: +${dur(secs)} from the arbiter`;
+    if (p.kind === 'serve_order') return `${sportTerms(ctx.sport).icon} Serving order set — player ${p.server === 2 ? 2 : 1} serves to player ${p.receiver === 2 ? 2 : 1}`; // audit #128: the sport's own icon
+    if (p.kind === 'add_time') return secs ? `⏱ ${named}: +${dur(secs)} from the ${sportTerms(ctx.sport).official.toLowerCase()}` : `⏱ ${named}: no time added`; // audit #114
     if (p.kind === 'illegal_move') return `♟️ Illegal move — ${named}${p.board ? ` (board ${String(p.board).replace(/^B/, '')})` : ''}${secs ? ` · ${dur(secs)} to ${opp}` : ''}`;
     if (p.kind === 'wrong_claim') return `♟️ Wrong draw claim — ${named}${secs ? ` · ${dur(secs)} to ${opp}` : ''}`;
   }
   return null;
+}
+
+
+// ─── Audit batch 4 · #111 / #112 / #136 · ONE place that words every timeline line ───
+//
+// The timeline printed `note {"kind":"receiver_swap",…}` for any event nobody
+// had written a sentence for, and cricket skipped the sport lines altogether
+// (a series' game_end note came out raw). Every line now comes from here:
+// cricket's deliveries, every sport's events, the event types older apps sent,
+// and — for anything still unknown — plain words made from its kind. Never a
+// key, never JSON.
+
+export interface TimelineLine { text: string; isWicket: boolean; isBoundary: boolean }
+
+/**
+ * Audit #111: events the timeline doesn't show — a doubles pair's receivers
+ * swapping is the scorer correcting the pad (Stage 9 · T10: not said). It
+ * printed `note {"kind":"receiver_swap",…}`.
+ */
+export function silentOnTimeline(eventType: string, payload: unknown): boolean {
+  const k = (payload as { kind?: unknown } | null | undefined)?.kind;
+  return eventType === 'note' && k === 'receiver_swap';
+}
+
+/** "receiver_swap" → "Receiver swap". */
+export function plainWords(key: string): string {
+  const w = String(key).replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim().toLowerCase();
+  return w ? w.charAt(0).toUpperCase() + w.slice(1) : '';
+}
+
+/** V200: "Bowler to Batter, <what happened>" when the event names them. */
+export function ballWho(p: any, what: string): string {
+  const batter = p?.batsman_name || p?.batsmanName || p?.batter || null;
+  const bowler = p?.bowler_name || p?.bowlerName || null;
+  if (bowler && batter) return `${bowler} to ${batter}, ${what}`;
+  if (batter) return `To ${batter}, ${what}`;
+  if (bowler) return `${bowler}, ${what}`;
+  return what;
+}
+
+/** "c Sharma b Khan", "lbw b Khan", "run out (Rao)" — a dismissal the cricket way. */
+export function wicketWords(kind: unknown, fielder?: unknown, bowler?: unknown): string {
+  const f = typeof fielder === 'string' && fielder.trim() ? fielder.trim() : null;
+  const b = typeof bowler === 'string' && bowler.trim() ? bowler.trim() : null;
+  switch (String(kind ?? '').toLowerCase().replace(/[^a-z]/g, '')) {
+    case 'bowled': return b ? `b ${b}` : 'bowled';
+    case 'caught': return f && b ? `c ${f} b ${b}` : b ? `c & b ${b}` : 'caught';
+    case 'lbw': return b ? `lbw b ${b}` : 'lbw';
+    case 'runout': return f ? `run out (${f})` : 'run out';
+    case 'stumped': return f && b ? `st ${f} b ${b}` : 'stumped';
+    case 'hitwicket': return b ? `hit wicket b ${b}` : 'hit wicket';
+    case 'retiredout': return 'retired out';
+    default: return '';
+  }
+}
+
+/** A cricket delivery, wicket, extra or innings end; null for anything else. */
+function cricketLine(eventType: string, p: Record<string, any>, ctx: CommentaryContext): TimelineLine | null {
+  const out = (text: string, isWicket = false, isBoundary = false): TimelineLine => ({ text, isWicket, isBoundary });
+  if (eventType === 'wicket' || (eventType === 'ball' && p.wicket)) {
+    const batter = p.batsman_name || p.batsmanName || p.player_name || p.batter || 'Batter';
+    if (eventType === 'wicket' && !isDismissal(p.wicket_type ?? p.type)) {
+      return out(String(p.wicket_type ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'retirednotout'
+        ? `Retired not out — ${batter}` // BUILD 3.4: the retire-at-N rule
+        : `🩹 Retired hurt — ${batter}`);
+    }
+    const how = wicketWords(p.wicket_type ?? p.type, p.fielder_name, p.bowler_name);
+    return out(`OUT! ${batter}${how ? ` — ${how}` : ''}${p.runs != null && Number(p.runs) > 0 ? ` — ${plural(Number(p.runs), 'run', 'runs')}` : ''}`, true);
+  }
+  if (eventType === 'ball') {
+    const runs = Number(p.runs ?? 0);
+    let text: string;
+    let boundary = false;
+    // Audit #136: four runs RUN (the pad's long-press on 4 marks it) is not a boundary.
+    if (runs === 4 && p.boundary === false) text = '4 runs, all run';
+    else if (runs === 4) { text = 'FOUR!'; boundary = true; }
+    else if (runs === 6) { text = 'SIX!'; boundary = true; }
+    else if (runs === 0) text = 'Dot ball';
+    else text = plural(runs, 'run', 'runs');
+    // BUILD 3.14: box cricket — the ball hit the roof and the side loses runs.
+    if (penaltyRunsOf(p)) { text = `Hit the roof · ${plural(penaltyRunsOf(p), 'run', 'runs')}`; boundary = false; }
+    return out(ballWho(p, text), false, boundary);
+  }
+  if (eventType === 'extra') {
+    // Audit #136: byes and leg byes the cricket way, and a wide or no-ball's runs.
+    const runs = Math.max(0, Number(p.runs ?? 0) || 0);
+    const pen = Number.isFinite(Number(p.penalty)) ? Number(p.penalty) : 1;
+    let text: string;
+    if (p.type === 'Wd') text = runs > 1 ? `${runs} wides` : 'Wide';
+    else if (p.type === 'Nb') text = runs > pen ? `No ball · ${plural(runs - pen, 'run', 'runs')} off the bat` : 'No ball';
+    else if (p.type === 'B') text = runs > 0 ? plural(runs, 'bye', 'byes') : 'Bye';
+    else if (p.type === 'Lb') text = runs > 0 ? plural(runs, 'leg bye', 'leg byes') : 'Leg bye';
+    else text = runs > 0 ? plural(runs, 'extra', 'extras') : 'Extra';
+    return out(ballWho(p, text));
+  }
+  if (eventType === 'declaration') return out(`${possessive(p.team_side === 'B' ? ctx.teamB : ctx.teamA)} innings ended`); // V194
+  return null;
+}
+
+/** Event types older apps sent before every sport had its own lines. */
+function olderLine(eventType: string, p: Record<string, any>, ctx: CommentaryContext): TimelineLine | null {
+  const out = (text: string, isWicket = false, isBoundary = false): TimelineLine => ({ text, isWicket, isBoundary });
+  const team = typeof p.team_name === 'string' && p.team_name.trim() ? p.team_name.trim() : p.team_side === 'B' ? ctx.teamB : ctx.teamA;
+  const who = typeof p.player === 'string' && p.player.trim() ? p.player.trim() : null;
+  switch (eventType) {
+    case 'goal': {
+      const a = p.score_a ?? '';
+      const b = p.score_b ?? '';
+      return out(`⚽ GOAL! ${team} scores!${a !== '' ? ` ${a}–${b}` : ''}`, false, true); // audit #134: an en dash
+    }
+    case 'yellow_card': return out(`🟨 Yellow card${who ? ` for ${who}` : ''}`);
+    case 'red_card': return out(`🟥 Red card${who ? ` for ${who}` : ''}`, true);
+    case 'score':
+    case 'point': {
+      const pts = Number(p.points ?? p.runs ?? p.value ?? 1) || 1;
+      return out(`${pts === 1 ? 'Point' : `${pts} points`} to ${team}`);
+    }
+    case 'basket': return out(`🏀 ${Number(p.points ?? 2) || 2}-pointer! ${team}`);
+    case 'foul': return out(`Foul by ${team}${p.bonus ? ' — bonus free throws' : ''}`);
+    case 'move': return out(`♟️ Move${Number.isInteger(p.moveNumber) ? ` ${p.moveNumber}` : ''}`);
+    case 'timeout': return out(`⏸ Timeout — ${team}`);
+    case 'assist': return out(`🅰️ Assist${who ? ` by ${who}` : ''}`);
+    case 'sub': return out(`🔁 Substitution${who ? ` — ${who}` : ''}`);
+    case 'queen': return out('👑 Queen pocketed');
+    default: return null;
+  }
+}
+
+const EVENT_WORDS: Record<string, string> = {
+  note: '📝 Note', result: '🏁 Result', card: 'Card', period_change: 'End of the period', serve_swap: '🔁 Server changed',
+  ball: 'Ball', extra: 'Extra', wicket: 'Wicket', declaration: 'Innings ended',
+};
+
+/** Anything nobody wrote a sentence for yet: its kind in plain words, and the side. */
+function plainLine(eventType: string, p: Record<string, any>, ctx: CommentaryContext): string {
+  const kind = typeof p.kind === 'string' && /^[A-Za-z][A-Za-z0-9_-]*$/.test(p.kind) ? p.kind : null;
+  const what = kind === 'stat' && typeof p.stat === 'string' && /^[A-Za-z][A-Za-z0-9_-]*$/.test(p.stat) ? plainWords(p.stat)
+    : kind ? plainWords(kind) : EVENT_WORDS[eventType] ?? (plainWords(eventType) || 'Update');
+  const player = typeof p.player_name === 'string' && p.player_name.trim() ? p.player_name.trim() : null;
+  const team = p.team_side === 'A' ? ctx.teamA : p.team_side === 'B' ? ctx.teamB : null;
+  return `${what}${player || team ? ` — ${player && team ? `${player} (${team})` : player ?? team}` : ''}`;
+}
+
+/** The timeline line for one event, in every sport. */
+export function timelineLine(eventType: string, payload: unknown, ctx: CommentaryContext): TimelineLine {
+  const p: Record<string, any> = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, any> : {};
+  if (ctx.sport === 'cricket') {
+    const c = cricketLine(eventType, p, ctx);
+    if (c) return c;
+  }
+  const line = sportCommentary(eventType, p, ctx);
+  if (line) {
+    return { text: line, isWicket: eventType === 'card' && p.kind === 'red', isBoundary: eventType === 'score' && p.kind === 'goal' };
+  }
+  if (eventType === 'note' && p.kind === 'receiver_swap') return { text: `↔ ${p.team_side === 'B' ? ctx.teamB : ctx.teamA}: receivers swapped`, isWicket: false, isBoundary: false }; // shown nowhere (silentOnTimeline), worded anyway
+  return olderLine(eventType, p, ctx) ?? { text: plainLine(eventType, p, ctx), isWicket: false, isBoundary: false };
 }

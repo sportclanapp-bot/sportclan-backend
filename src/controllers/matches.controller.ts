@@ -17,7 +17,8 @@ import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
 import { dlsWinner, deriveResultText, chasingSide } from '../utils/matchResult';
-import { sportCommentary } from '../utils/commentary';
+import { ballWho, silentOnTimeline, timelineLine, wicketWords } from '../utils/commentary';
+export { ballWho, wicketWords }; // moved to utils/commentary (audit batch 4); still exported here for old importers
 import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease, isStale, STALE_AFTER_MS } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { getMatchLiveStatus } from '../utils/liveStatus';
@@ -1346,19 +1347,6 @@ export function voidNoticeBody(label: string, voiderName: string | null, reason:
     : `${label} no longer counts. ${who} voided it.`;
 }
 
-/**
- * V200: "Bowler to Batter, <what happened>" when the event names them; just
- * "<what happened>" (or "to Batter") when it names fewer.
- */
-export function ballWho(p: any, what: string): string {
-  const batter = p?.batsman_name || p?.batsmanName || p?.batter || null;
-  const bowler = p?.bowler_name || p?.bowlerName || null;
-  if (bowler && batter) return `${bowler} to ${batter}, ${what}`;
-  if (batter) return `To ${batter}, ${what}`;
-  if (bowler) return `${bowler}, ${what}`;
-  return what;
-}
-
 export async function nextMatch(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1585,21 +1573,6 @@ export async function sweepUnplayedScheduledMatches(): Promise<{ abandoned: numb
   return { abandoned: await abandonInChunks(stale.map((m) => (m as { id: string }).id)) };
 }
 
-/** The manner of a dismissal for the timeline — "c Sharma b Khan", "run out (Patel)". */
-export function wicketWords(kind: unknown, fielder?: unknown, bowler?: unknown): string {
-  const f = typeof fielder === 'string' && fielder.trim() ? fielder.trim() : null;
-  const b = typeof bowler === 'string' && bowler.trim() ? bowler.trim() : null;
-  switch (String(kind ?? '').toLowerCase().replace(/[^a-z]/g, '')) {
-    case 'bowled': return b ? `b ${b}` : 'bowled';
-    case 'caught': return f && b ? `c ${f} b ${b}` : b ? `c & b ${b}` : 'caught';
-    case 'lbw': return b ? `lbw b ${b}` : 'lbw';
-    case 'runout': return f ? `run out (${f})` : 'run out';
-    case 'stumped': return f && b ? `st ${f} b ${b}` : 'stumped';
-    case 'hitwicket': return b ? `hit wicket b ${b}` : 'hit wicket';
-    case 'retiredout': return 'retired out';
-    default: return '';
-  }
-}
 
 // GET /matches/:id/commentary — returns match_events formatted into
 // human-readable commentary lines. Cheap — reads only the events table.
@@ -1642,6 +1615,7 @@ export async function getCommentary(req: Request, res: Response) {
       const p: any = ev.payload ?? {};
       // Stage 10 · TT3: a result typed from the score sheet says so once, not point by point.
       if (ev.event_type === 'score' && p.typed === true) continue;
+      if (silentOnTimeline(ev.event_type as string, p)) continue; // audit #111
 
       // For cricket, compute the over.ball label from a running legal-ball
       // count. Wides and no-balls don't advance the legal count.
@@ -1664,93 +1638,17 @@ export async function getCommentary(req: Request, res: Response) {
       let isBoundary = false;
       if (ev.event_type === 'period_change') periods += 1;
       if (ev.event_type === 'move') moves += 1;
-      const sportLine = isCricket ? null : sportCommentary(ev.event_type as string, p, {
+      // Audit batch 4 (#111 / #112 / #136): every line from one place (utils/commentary) — cricket too, and
+      // plain words for anything else; it printed `note {…}` raw.
+      const line = timelineLine(ev.event_type as string, p, {
         sport: slug, teamA, teamB, period: periods - 1, move: moves, clockSeconds: (ev as any).clock_seconds ?? null,
         regulation: rulesOf(slug, match).periods ?? null, // BUILD 3.17: the match's own periods
         periodMinutes: rulesOf(slug, match).periodMinutes ?? null, // BUILD 3.22: the timeline minute
         threeByThree: slug === 'basketball' && rulesOf(slug, match).pointSet === '12', // Stage 15 follow-up
       });
-      if (sportLine) {
-        commentary = sportLine;
-        if (ev.event_type === 'score' && p.kind === 'goal') isBoundary = true;
-        if (ev.event_type === 'card' && p.kind === 'red') isWicket = true;
-      } else if (ev.event_type === 'wicket' || (ev.event_type === 'ball' && p.wicket)) {
-        // The app sends batsman_name (this read batsmanName, so every line said
-        // "OUT! Batter"), and retired hurt is not a wicket (cricketRules.isDismissal).
-        const batter = p.batsman_name || p.batsmanName || p.player_name || p.batter || 'Batter';
-        if (ev.event_type === 'wicket' && !isDismissal(p.wicket_type ?? p.type)) {
-          commentary = String(p.wicket_type ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'retirednotout'
-            ? `Retired not out — ${batter}` // BUILD 3.4: the retire-at-N rule
-            : `\uD83E\uDE79 Retired hurt — ${batter}`;
-        } else {
-          isWicket = true;
-          const how = wicketWords(p.wicket_type ?? p.type, p.fielder_name, p.bowler_name);
-          commentary = `OUT! ${batter}${how ? ` — ${how}` : ''}${p.runs != null ? ` — ${plural(p.runs, 'run', 'runs')}` : ''}`;
-        }
-      } else if (ev.event_type === 'ball') {
-        const runs = Number(p.runs ?? 0);
-        if (runs === 4) {
-          commentary = 'FOUR! Beautiful shot';
-          isBoundary = true;
-        } else if (runs === 6) {
-          commentary = 'SIX! That\u2019s massive!';
-          isBoundary = true;
-        } else if (runs === 0) {
-          commentary = 'Dot ball';
-        } else {
-          commentary = `${runs} run${runs === 1 ? '' : 's'}`;
-        }
-        // BUILD 3.14: box cricket — the ball hit the roof and the side loses runs.
-        if (penaltyRunsOf(p)) commentary = `Hit the roof · ${plural(penaltyRunsOf(p), 'run', 'runs')}`;
-        // V200 (visual review B08): say who — "Khan to Sharma, SIX!", the way
-        // commentary reads — whenever the ball carries the names.
-        commentary = ballWho(p, commentary);
-      } else if (ev.event_type === 'declaration') {
-        // V194 (B09): limited-overs cricket ends an innings, it doesn't declare.
-        commentary = `${possessive(p.team_side === 'B' ? teamB : teamA)} innings ended`;
-      } else if (ev.event_type === 'extra') {
-        if (p.type === 'Wd') commentary = 'Wide ball';
-        else if (p.type === 'Nb') commentary = 'No ball called';
-        else commentary = `Extra: ${p.type ?? ''}`;
-        commentary = ballWho(p, commentary);
-      } else if (ev.event_type === 'goal') {
-        const team = p.team_name || `Team ${p.team_side ?? ''}`;
-        const a = p.score_a ?? '';
-        const b = p.score_b ?? '';
-        commentary = `\u26BD GOAL! ${team} scores!${a !== '' ? ` ${a}-${b}` : ''}`;
-        isBoundary = true;
-      } else if (ev.event_type === 'yellow_card') {
-        commentary = `\uD83D\uDFE8 Yellow card${p.player ? ` for ${p.player}` : ''}`;
-      } else if (ev.event_type === 'red_card') {
-        commentary = `\uD83D\uDFE5 Red card${p.player ? ` for ${p.player}` : ''}`;
-        isWicket = true;
-      } else if (ev.event_type === 'score' || ev.event_type === 'point') {
-        // Generic point-based sports (badminton, TT, pickleball, volleyball)
-        const team = p.team_name || (p.team_side === 'B' ? teamB : teamA);
-        const pts = p.points ?? p.runs ?? 1;
-        commentary = `${pts === 1 ? 'Point' : `${pts} points`} to ${team}`;
-      } else if (ev.event_type === 'basket') {
-        const pts = p.points ?? 2;
-        const team = p.team_name || `Team ${p.team_side ?? '?'}`;
-        commentary = `\uD83C\uDFC0 ${pts}-pointer! ${team}`;
-      } else if (ev.event_type === 'foul') {
-        const team = p.team_name || `Team ${p.team_side ?? '?'}`;
-        commentary = `Foul by ${team}${p.bonus ? ' — BONUS free throws' : ''}`;
-      } else if (ev.event_type === 'move') {
-        // Chess
-        commentary = `\u265F\uFE0F Move ${p.moveNumber ?? ''} — game in progress`;
-      } else if (ev.event_type === 'timeout') {
-        commentary = `\u23F8\uFE0F Timeout called by ${p.team_name ?? 'team'}`;
-      } else if (ev.event_type === 'assist') {
-        commentary = `\uD83C\uDD70\uFE0F Assist${p.player ? ` by ${p.player}` : ''}`;
-      } else if (ev.event_type === 'sub') {
-        commentary = `\uD83D\uDD04 Substitution${p.player ? ` — ${p.player}` : ''}`;
-      } else if (ev.event_type === 'queen') {
-        // Carrom
-        commentary = `\uD83D\uDC51 Queen pocketed! +5 points`;
-      } else {
-        commentary = `${ev.event_type}${p && Object.keys(p).length > 0 ? ` ${JSON.stringify(p).slice(0, 80)}` : ''}`;
-      }
+      commentary = line.text;
+      isWicket = line.isWicket;
+      isBoundary = line.isBoundary;
 
       enriched.push({
         id: ev.id,

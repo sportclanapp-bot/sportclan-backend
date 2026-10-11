@@ -48,8 +48,10 @@ describe('source', () => {
   test('the push and the timeline say "retired hurt"', () => {
     // BUILD 3.4 added "retired not out" beside retired hurt.
     expect(sc).toContain("const title = atLimit ? 'Retired' : hurt ? 'Retired hurt' : 'Wicket!';");
-    expect(mc).toContain(': `\\uD83E\\uDE79 Retired hurt — ${batter}`;');
-    expect(mc).toContain('const batter = p.batsman_name || p.batsmanName ||');
+    // Audit batch 4: the timeline's words moved to utils/commentary.
+    const cm = fs.readFileSync(path.join(__dirname, '../utils/commentary.ts'), 'utf8');
+    expect(cm).toContain(': `🩹 Retired hurt — ${batter}`);');
+    expect(cm).toContain('const batter = p.batsman_name || p.batsmanName ||');
   });
 });
 

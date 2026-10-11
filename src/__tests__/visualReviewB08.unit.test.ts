@@ -19,8 +19,8 @@ describe('V200 · who bowled, who faced', () => {
     expect(ballWho({}, '1 run')).toBe('1 run');
   });
   it('balls and extras both go through it', () => {
-    const s = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
-    expect((s.match(/commentary = ballWho\(p, commentary\);/g) ?? []).length).toBe(2);
+    const s = fs.readFileSync(path.join(__dirname, '../utils/commentary.ts'), 'utf8'); // audit batch 4: moved here
+    expect((s.match(/return out\(ballWho\(p, text\)/g) ?? []).length).toBe(2);
   });
 });
 

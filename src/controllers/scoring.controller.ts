@@ -1268,7 +1268,7 @@ export function aggregateCricketPlayers(
         const b = ensure(batId, batSide, batName);
         if (!p.is_extra) b.balls += 1;
         b.runs += runs;
-        if (runs === 4) b.fours += 1;
+        if (runs === 4 && p.boundary !== false) b.fours += 1; // audit #136: four runs RUN is not a four
         if (runs === 6) b.sixes += 1;
       }
       if (bowlId) {

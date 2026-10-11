@@ -1671,7 +1671,7 @@ export async function getSportProfile(req: Request, res: Response) {
           if (e.event_type === 'ball') {
             const r = Number(pay.runs ?? 0);
             runs += r; balls++;
-            if (r === 4) f4++;
+            if (r === 4 && pay.boundary !== false) f4++; // audit #136
             if (r === 6) s6++;
             perMatch.set(e.match_id, (perMatch.get(e.match_id) ?? 0) + r);
           }

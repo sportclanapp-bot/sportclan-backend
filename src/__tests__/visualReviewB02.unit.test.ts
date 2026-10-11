@@ -76,6 +76,7 @@ describe('N2 · the tournament tells the app whether this viewer may open the ch
   it('getTournament returns can_open_chat', () => {
     const t = code('controllers/tournaments.controller.ts');
     expect(t).toMatch(/const can_open_chat = req\.userId \? await canOpenTournamentChat\(String\(tournament\.id\), req\.userId\) : false;/);
-    expect(t).toMatch(/res\.json\(\{ tournament, entries: entries \|\| \[\], can_open_chat(, \.\.\.family)?(, \.\.\.\(paged \? \{ entries_paged: true, entry_summary \} : \{\}\))? \}\)/);
+    // Audit #37: the tournament now also carries can_manage.
+    expect(t).toMatch(/res\.json\(\{ tournament(: \{ \.\.\.tournament, can_manage: organiser === true \})?, entries: entries \|\| \[\], can_open_chat(, \.\.\.family)?(, \.\.\.\(paged \? \{ entries_paged: true, entry_summary \} : \{\}\))? \}\)/);
   });
 });

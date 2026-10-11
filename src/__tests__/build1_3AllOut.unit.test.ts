@@ -49,7 +49,7 @@ describe('the summary records all out at the side\'s own count', () => {
     ];
     const s = await recomputeSummary('m');
     expect(s!.A).toMatchObject({ wickets: 2, all_out: true });
-    expect((s!.B as any).all_out).toBeUndefined();
+    expect((s!.B as any).all_out).toBe(false); // audit #71: said either way
   });
 });
 

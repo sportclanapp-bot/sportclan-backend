@@ -176,6 +176,27 @@ type SideRuns = { runs: number; overs: number | null };
  * having batted the FULL quota, so being bowled out cheaply cannot flatter its
  * run rate. Applied only when the quota (`matches.overs`) is known.
  */
+/** Audit #71: a side is all out when its summary says so; older rows that don't say: 10 wickets. */
+function isAllOut(nested: any): boolean {
+  if (typeof nested?.all_out === 'boolean') return nested.all_out;
+  const at = Number(nested?.all_out_at);
+  const w = Number(nested?.wickets ?? 0);
+  return Number.isFinite(at) && at > 0 ? w >= at : w >= 10;
+}
+
+/**
+ * Audit #59 · ICC: NRR counts only matches played to a result — not a walkover,
+ * an award (an unfinished chase or an organiser's award), an organiser's
+ * "result stands" on an unfinished match, or a no-result.
+ */
+export function countsForNrr(m: GMatch): boolean {
+  const ss: any = m.score_summary ?? {};
+  if (m.status && m.status !== 'completed') return false;
+  if (ss.walkover === true || ss.awarded === true || ss.no_result === true) return false;
+  const kind = ss.decision?.kind;
+  return kind !== 'awarded' && kind !== 'stands';
+}
+
 export function inningsOf(m: GMatch): { a: SideRuns; b: SideRuns } {
   const ss: any = m.score_summary ?? {};
   const allotted = typeof m.overs === 'number' && m.overs > 0 ? m.overs : null;
@@ -188,8 +209,10 @@ export function inningsOf(m: GMatch): { a: SideRuns; b: SideRuns } {
     }
     // All out → charge the full quota (ICC).
     // BUILD 1.3: all out is the side's own all-out count (line-up − 1), which
-    // the summary records as all_out; 10 wickets stays the rule for older rows.
-    if (allotted != null && (nested?.all_out === true || Number(nested?.wickets ?? 0) >= 10)) overs = allotted;
+    // the summary records as all_out. Audit #71: a summary that says (all_out
+    // true/false, or all_out_at) is believed — a 12-a-side side with 10 down
+    // isn't all out; 10 wickets stays the rule only for older rows that don't say.
+    if (allotted != null && isAllOut(nested)) overs = allotted;
     return { runs, overs };
   };
 
@@ -209,10 +232,23 @@ export function inningsOf(m: GMatch): { a: SideRuns; b: SideRuns } {
     };
     return { a: sum('A'), b: sum('B') };
   }
-  return {
+  const out = {
     a: sideOf(ss.team_a_score, ss.team_a_overs, ss?.A),
     b: sideOf(ss.team_b_score, ss.team_b_overs, ss?.B),
   };
+  // Audit #59 · ICC NRR for a DLS match: the chase is charged the overs it was
+  // set (its full revised overs if all out), and the side batting first is
+  // credited with one run fewer than the revised target off those same overs.
+  const dlsOvers = Number(ss?.dls_overs);
+  const dlsTarget = Number(ss?.dls_target);
+  const chaser = ss?.dls_chaser === 'A' || ss?.dls_chaser === 'B' ? ss.dls_chaser as 'A' | 'B' : null;
+  if (ss?.dls_applied && chaser && Number.isFinite(dlsOvers) && dlsOvers > 0 && Number.isFinite(dlsTarget) && dlsTarget > 0) {
+    const ch = chaser === 'A' ? out.a : out.b;
+    const df = chaser === 'A' ? out.b : out.a;
+    if (isAllOut(chaser === 'A' ? ss?.A : ss?.B) || ch.overs == null) ch.overs = dlsOvers;
+    df.runs = dlsTarget - 1; df.overs = dlsOvers;
+  }
+  return out;
 }
 
 /** The NRR of a completed table row, or null when no overs were ever recorded. */
@@ -344,7 +380,7 @@ export function computeStats(
     // half a fixture would put runs into the numerator with no matching
     // denominator and silently skew the rate.
     const inn = inningsOf(m);
-    if (inn.a.overs != null && inn.b.overs != null && (inn.a.overs > 0 || inn.b.overs > 0)) {
+    if (countsForNrr(m) && inn.a.overs != null && inn.b.overs != null && (inn.a.overs > 0 || inn.b.overs > 0)) {
       ra.runsScored += inn.a.runs; ra.oversFaced += inn.a.overs;
       ra.runsConceded += inn.b.runs; ra.oversBowled += inn.b.overs;
       rb.runsScored += inn.b.runs; rb.oversFaced += inn.b.overs;
@@ -408,7 +444,10 @@ const GLOBAL_CRITERION: Record<Exclude<Criterion, 'head_to_head' | 'fair_play' |
   // as 0 for every team in the tie, which separates nobody, so the ladder falls
   // straight through to score_diff — i.e. goal difference still decides
   // football exactly as before.
-  score_rate: (s) => s.nrr ?? 0,
+  // Audit #60: a team with no NRR (no match played to a result with overs —
+  // e.g. walkover wins only) ranks below every team that has one, a negative
+  // one included; teams that all lack one stay level (so non-cricket falls through).
+  score_rate: (s) => s.nrr ?? -Number.MAX_VALUE,
   // BUILD 4.2: scored ÷ conceded — volleyball's set ratio, table tennis's
   // game ratio. Nothing conceded reads as a very large ratio (or 0 with
   // nothing scored either), never a division by zero.

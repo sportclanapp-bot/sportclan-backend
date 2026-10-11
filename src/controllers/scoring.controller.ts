@@ -1594,7 +1594,8 @@ export async function recomputeSummary(
     // capped at 10), so NRR can charge it the full quota. Standings read this
     // instead of assuming 10 wickets — a 6-a-side side is all out at 5.
     for (const s of ['A', 'B'] as const) {
-      if ((sides[s] as { wickets?: number }).wickets! >= allOut[s]) Object.assign(sides[s], { all_out: true });
+      // Audit #71: say it either way, with the count, so NRR never guesses 10.
+      Object.assign(sides[s], { all_out: (sides[s] as { wickets?: number }).wickets! >= allOut[s], all_out_at: allOut[s] });
     }
   } else if ((slug === 'football' || slug === 'hockey' || slug === 'basketball') && tieSpecOf(slug, rulesOf(slug, match))?.series) {
     // Stage 15 · BB6: a best-of-N series — each game read by its score; a game ends on END GAME (or a basketball target).

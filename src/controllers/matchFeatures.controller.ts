@@ -419,12 +419,20 @@ export async function applyDLS(req: Request, res: Response) {
     // Store in match score_summary
     const { data: match } = await supabase
       .from('matches')
-      .select('score_summary')
+      .select('score_summary, toss_choice')
       .eq('id', id)
       .maybeSingle();
-    const ss = (match?.score_summary ?? {}) as Record<string, unknown>;
+    const ss = (match?.score_summary ?? {}) as Record<string, any>;
     ss.dls_target = result.revisedTarget;
     ss.dls_applied = true;
+    // Audit #59: the overs the chase is now set (faced so far + those left), and
+    // who chases — NRR charges both sides these overs (ICC).
+    const chaser = chasingSide(ss.toss_winner_side ?? null, (match as { toss_choice?: string | null } | null)?.toss_choice ?? null, ss.first_batting_side ?? null);
+    if (chaser) {
+      const faced = Number(ss[chaser]?.balls ?? 0) / 6;
+      ss.dls_chaser = chaser;
+      ss.dls_overs = Math.min(Number(total_overs), Math.round((faced + Number(team2_overs_remaining)) * 6) / 6);
+    }
     ss.dls_resources = { team1: result.resourcesTeam1, team2: result.resourcesTeam2 };
 
     await supabase.from('matches').update({ score_summary: ss }).eq('id', id);

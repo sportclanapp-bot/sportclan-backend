@@ -1,5 +1,6 @@
 import { TEAM_DISBANDED, liveTeams, softDisbandTeam } from '../utils/teamVisibility';
 import { hideTestFor, excludeTest } from '../utils/testContent';
+import { escapeLike } from '../utils/likeSearch';
 import { syncTournamentChatsForTeam, syncAfterSuccess } from '../utils/tournamentChat';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -201,7 +202,7 @@ export async function listTeams(req: Request, res: Response) {
     query = liveTeams(query);
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
-    if (q) query = query.ilike('name', `%${q}%`);
+    if (q) query = query.ilike('name', `%${escapeLike(String(q))}%`); // audit #30: % and _ are literal
     if (teamIdsFilter) query = query.in('id', teamIdsFilter);
     // B03 (V245, D3): test teams are hidden from a real viewer's browse lists
     // (Sport hub Teams, Discover) — not from "my teams".

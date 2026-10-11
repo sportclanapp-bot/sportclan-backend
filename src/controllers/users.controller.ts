@@ -1,5 +1,6 @@
 import { orIlikeContains } from '../utils/likeSearch';
 import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
+import { bumpCounter } from '../utils/otpStore';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { racketStats, tennisServeStats, type RacketMatch } from '../utils/racketStats';
@@ -438,6 +439,8 @@ const ALLOWED_FIELDS = [
 ] as const;
 
 const USERNAME_COOLDOWN_DAYS = 30;
+/** Audit #30: email availability checks a person may make a day. */
+export const EMAIL_CHECKS_PER_DAY = 20;
 
 // SC-365 RESERVED_USERNAMES / EMAIL_RE live in utils/profileRules — sign-up
 // applies the same rules (Phase 3 B01-F3).
@@ -544,8 +547,15 @@ export async function updateMe(req: Request, res: Response) {
     if (!EMAIL_RE.test(email)) {
       return res.status(400).json({ error: 'Enter a valid email address.', code: 'INVALID_EMAIL' });
     }
+    // Audit #30: `_` and `%` in an address are literal (an address with "_" used
+    // to match others and be called "taken"), and a person can't use this to
+    // test many addresses: 20 tries a day.
+    const tries = await bumpCounter(`emailchk:${userId}`, 86400).catch(() => 0);
+    if (tries > EMAIL_CHECKS_PER_DAY) {
+      return res.status(429).json({ error: 'Too many email changes today. Try again tomorrow.', code: 'RATE_LIMITED' });
+    }
     const { data: emailTaken } = await supabase
-      .from('users').select('id').ilike('email', email).neq('id', userId).maybeSingle();
+      .from('users').select('id').ilike('email', escapeLike(email)).neq('id', userId).maybeSingle();
     if (emailTaken) {
       return res.status(409).json({
         error: 'That email is already used by another account.',

@@ -15,6 +15,7 @@
 
 export type LeaderStat = 'runs' | 'wickets' | 'best_bowling' | 'sixes' | 'catches' | 'player_of_tournament';
 export const LEADER_STATS: readonly LeaderStat[] = ['runs', 'wickets', 'best_bowling', 'sixes', 'catches', 'player_of_tournament'];
+/** Audit #78: the rows an older app is sent per stat (it shows all it gets); the boards hold everyone. */
 export const LEADERS_PER_STAT = 5;
 
 export interface PlayerLine {
@@ -121,7 +122,6 @@ export function tournamentLeaders(
   const top = (stat: LeaderStat, value: (t: Tally) => number, detail: (t: Tally) => string, tie: (a: Tally, b: Tally) => number = () => 0) =>
     all.filter((t) => value(t) > 0)
       .sort((a, b) => value(b) - value(a) || tie(a, b) || a.name.localeCompare(b.name))
-      .slice(0, LEADERS_PER_STAT)
       .map((t) => row(t, stat, value(t), detail(t)));
   const pot = (t: Tally) => t.runs + 25 * t.wickets + 10 * (t.catches + t.runouts + t.stumpings);
 
@@ -132,7 +132,6 @@ export function tournamentLeaders(
     wickets: top('wickets', (t) => t.wickets, (t) => `${played(t)} · ${overs(t.bowlBalls)} ov · ${runs(t.bowlRuns)}`, (a, b) => a.bowlRuns - b.bowlRuns),
     best_bowling: all.filter((t) => t.best && t.best.w > 0)
       .sort((a, b) => b.best!.w - a.best!.w || a.best!.r - b.best!.r || a.name.localeCompare(b.name))
-      .slice(0, LEADERS_PER_STAT)
       .map((t) => row(t, 'best_bowling', t.best!.w, `${t.best!.w}/${t.best!.r}`)),
     sixes: top('sixes', (t) => t.sixes, (t) => `${played(t)} · ${runs(t.runs)}`),
     catches: top('catches', (t) => t.catches, (t) => `${played(t)}${t.stumpings ? ` · ${t.stumpings} stumping${t.stumpings === 1 ? '' : 's'}` : ''}`),

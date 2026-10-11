@@ -13,7 +13,11 @@
  */
 import { pointHowFor } from './matchRules'; // Stage 14 · VB8
 
-export const BOARD_ROWS = 5;
+/**
+ * Audit #78 (Dipak): every board holds everyone — no top 5. The tournament
+ * screen first shows this many of each, then pages through the rest.
+ */
+export const BOARD_PREVIEW = 5;
 
 export type BoardRow = {
   user_id: string | null; team_id: string | null; name: string; team_name: string | null;
@@ -75,7 +79,6 @@ function topPlayers(
 ): Board {
   const rows = tallies.filter((t) => value(t) > 0)
     .sort((a, b) => value(b) - value(a) || a.matches.size - b.matches.size || a.name.localeCompare(b.name))
-    .slice(0, BOARD_ROWS)
     .map((t) => ({ user_id: t.user_id, team_id: t.team_id, name: t.name, team_name: t.team_id ? teamNames[t.team_id] ?? null : null, value: value(t), detail: detail(t) }));
   return { stat, title, one, many, kind: 'player', rows };
 }
@@ -127,7 +130,6 @@ function topTeams(
 ): Board {
   const rows = tallies.filter((t) => (allowNegative ? t.played > 0 : value(t) > 0))
     .sort((a, b) => value(b) - value(a) || tie(a, b) || (teamNames[a.team_id] ?? '').localeCompare(teamNames[b.team_id] ?? ''))
-    .slice(0, BOARD_ROWS)
     .map((t) => ({ user_id: null, team_id: t.team_id, name: teamNames[t.team_id] ?? 'Team', team_name: null, value: value(t), detail: detail(t) }));
   return { stat, title, one, many, kind: 'team', rows };
 }

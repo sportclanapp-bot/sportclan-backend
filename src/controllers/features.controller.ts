@@ -1,3 +1,4 @@
+import { BOARD_PREVIEW } from '../utils/sportLeaders';
 import { deleteMatching } from '../utils/softDelete';
 import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
 import { rankExtrasFor } from '../utils/rankExtras';
@@ -318,13 +319,42 @@ export async function loadLeaders(id: string): Promise<null | {
   return { slug, topWins, performers, leaders, boards: cricketBoards(leaders), played, teamMap };
 }
 
+/**
+ * GET /tournaments/:id/leaders/:stat?offset=&limit= — audit #78: one board,
+ * a page at a time (everyone is on it). `limit` is a page size (1–100, 20 by
+ * default), not a cap: has_more says whether to ask again.
+ */
+export async function getTournamentLeaderBoard(req: Request, res: Response) {
+  try {
+    const r = await loadLeaders(String(req.params.id));
+    if (!r) return res.status(404).json({ error: 'Tournament not found' });
+    const board = r.boards.find((b) => b.stat === String(req.params.stat));
+    if (!board) return res.status(404).json({ error: 'No such board.', code: 'NO_BOARD' });
+    const offset = Math.max(0, Math.floor(Number(req.query.offset ?? 0)) || 0);
+    const limit = Math.min(100, Math.max(1, Math.floor(Number(req.query.limit ?? 20)) || 20));
+    const rows = board.rows.slice(offset, offset + limit);
+    return res.json({ board: { ...board, rows }, offset, total: board.rows.length, has_more: offset + rows.length < board.rows.length });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 export async function getTournamentTopPerformers(req: Request, res: Response) {
   try {
     const r = await loadLeaders(String(req.params.id));
     if (!r) return res.status(404).json({ error: 'Tournament not found' });
     // `topWins` stays for older apps; `leaders` is cricket's by stat (null for
     // other sports); Stage 8 · F6: `boards` is every sport's, generic.
-    return res.json({ topWins: r.topWins, performers: r.performers, leaders: r.leaders, boards: r.boards });
+    // Audit #78: each board's first rows and how many it holds; the app pages
+    // the rest from GET /tournaments/:id/leaders/:stat. (Older apps get the
+    // same first rows they always showed.)
+    const head = <T,>(rows: T[]) => rows.slice(0, BOARD_PREVIEW);
+    const leaders = r.leaders ? Object.fromEntries(Object.entries(r.leaders).map(([k, v]) => [k, head(v as unknown[])])) : null;
+    const performers = LEADER_STATS.flatMap((st) => (leaders?.[st] as unknown[] | undefined) ?? []);
+    return res.json({
+      topWins: r.topWins, performers: r.leaders ? performers : r.performers, leaders,
+      boards: r.boards.map((b) => ({ ...b, rows: head(b.rows), total: b.rows.length })),
+    });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

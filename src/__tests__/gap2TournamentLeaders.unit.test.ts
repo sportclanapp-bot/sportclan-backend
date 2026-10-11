@@ -45,9 +45,9 @@ test('player of the tournament: runs + 25 a wicket + 10 a catch, run-out or stum
   expect(L.player_of_tournament.slice(0, 3).map((r) => [r.name, r.value])).toEqual([['Kiran', 200], ['Ravi', 150], ['Sameer', 85]]);
   expect(L.player_of_tournament[0]!.detail).toBe('70 runs · 4 wkts · 3 in the field');
 });
-test('at most five a board; empty boards for a tournament with nothing scored ball by ball', () => {
+test('everyone on a board (audit #78); empty boards for a tournament with nothing scored ball by ball', () => {
   const many = m('m9', 'tA', 'tB', Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`u${i + 10}`, { name: `P${i}`, side: 'A' as const, runs: 10 + i }])));
-  expect(tournamentLeaders([many], [], TEAMS).runs).toHaveLength(5);
+  expect(tournamentLeaders([many], [], TEAMS).runs).toHaveLength(8); // audit #78 (Dipak): everyone — the screen pages
   const none = tournamentLeaders([m('m0', 'tA', 'tB', null)], [], TEAMS);
   expect(Object.values(none).every((b) => b.length === 0)).toBe(true);
 });

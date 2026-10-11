@@ -38,7 +38,7 @@ import {
 import {
   getTournamentAnalytics,
   getTournamentStandings,
-  getTournamentTopPerformers,
+  getTournamentTopPerformers, getTournamentLeaderBoard,
   addTournamentOfficial,
   removeTournamentOfficial,
   getTournamentOfficials,
@@ -74,6 +74,7 @@ router.post('/:id/redraw', authenticateToken, redraw); // badminton 7.13
 router.get('/:id/analytics', authenticateToken, getTournamentAnalytics);
 router.get('/:id/standings', authenticateToken, getTournamentStandings);
 router.get('/:id/top-performers', authenticateToken, getTournamentTopPerformers);
+router.get('/:id/leaders/:stat', authenticateToken, getTournamentLeaderBoard); // audit #78: a whole board, paged
 router.get('/:id/chat', authenticateToken, getTournamentChat);
 router.get('/:id/officials', authenticateToken, getTournamentOfficials);
 router.post('/:id/officials', authenticateToken, addTournamentOfficial);

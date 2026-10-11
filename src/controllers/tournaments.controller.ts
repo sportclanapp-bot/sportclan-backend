@@ -2571,6 +2571,8 @@ export async function updateFixtures(req: Request, res: Response) {
 
       const patch: Record<string, any> = {};
       if (upd.scheduled_at) patch.scheduled_at = upd.scheduled_at;
+      // Audit #67: clearing the time unschedules a fixture (it has no time yet).
+      else if (upd.scheduled_at === null) patch.scheduled_at = null;
       if (upd.venue) patch.venue = upd.venue;
       if (upd.ground_label !== undefined) patch.ground_label = upd.ground_label; // scheduling: move a match to another ground
       // B08-F5: a team moves with its name. The id changed on its own, so the

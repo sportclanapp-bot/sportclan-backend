@@ -58,11 +58,12 @@ describe('SC-431 · rate-limit the person, not the pipe', () => {
   });
   it('K3-54 (43d7da8): the global limiter keys on rateLimitKey with a per-user budget, and a per-IP ceiling still applies to signed-in traffic', () => {
     const idx = readFileSync(join(__dirname, '..', 'index.ts'), 'utf8');
-    const g = idx.slice(idx.indexOf('const globalLimiter = rateLimit({'), idx.indexOf('const ipCeilingLimiter'));
+    // 2.16.0: the budgets are built in utils/budgetLimiters (scoring writes have their own).
+    const g = readFileSync(join(__dirname, '..', 'utils', 'budgetLimiters.ts'), 'utf8');
     expect(g).toMatch(/keyGenerator: rateLimitKey,/);
     expect(g).toMatch(/max: \(req\) => \(budgetUserId\(req\) \? PER_USER_MAX : PER_IP_MAX\),/); // audit #9: a refresh is the user's
-    expect(idx).toMatch(/const PER_USER_MAX = 600;/);
-    expect(idx).toMatch(/app\.use\(globalLimiter\);\s*app\.use\(ipCeilingLimiter\);/);
+    expect(g).toMatch(/export const PER_USER_MAX = 600;/);
+    expect(idx).toMatch(/app\.use\(globalLimiter\);\s*app\.use\(scoringLimiter\);\s*app\.use\(ipCeilingLimiter\);/);
   });
 });
 

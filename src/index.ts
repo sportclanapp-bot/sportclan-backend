@@ -65,6 +65,7 @@ import {
   runWeeklyDigest,
 } from './controllers/features.controller';
 import { dbTimingMiddleware } from './utils/dbTiming';
+import { makeBudgetLimiters } from './utils/budgetLimiters';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -124,8 +125,7 @@ app.use(sanitizeErrorResponses);
  * that cut a live viewer from ~1200 requests per 15 minutes to well under 200:
  * PER_USER_MAX is headroom for a long session, not permission to be chatty.
  */
-const PER_USER_MAX = 600;
-const PER_IP_MAX = 200;
+// PER_USER_MAX (600) and PER_IP_MAX (200) live in utils/budgetLimiters now, beside the scoring budget.
 /** Abuse ceiling for AUTHENTICATED traffic from one address, so per-user keying
  *  cannot be farmed by minting many accounts behind one IP. Generous enough that
  *  a full team on one Wi-Fi never reaches it. */
@@ -139,15 +139,7 @@ const PER_IP_AUTHED_CEILING = 4000;
  * The auth-sensitive ones wait for Redis and are exact. If Redis is down, each
  * falls back to this instance's own count.
  */
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: (req) => (budgetUserId(req) ? PER_USER_MAX : PER_IP_MAX), // audit #9: a refresh is the user's
-  keyGenerator: rateLimitKey,
-  skip: rateLimitBypassed,
-  standardHeaders: true,
-  legacyHeaders: false,
-  store: new RedisRateLimitStore('global', 'async'),
-});
+const { globalLimiter, scoringLimiter } = makeBudgetLimiters((name) => new RedisRateLimitStore(name, 'async'));
 
 const ipCeilingLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -160,6 +152,7 @@ const ipCeilingLimiter = rateLimit({
 });
 
 app.use(globalLimiter);
+app.use(scoringLimiter);
 app.use(ipCeilingLimiter);
 
 const authLimiter = rateLimit({

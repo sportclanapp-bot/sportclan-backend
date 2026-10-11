@@ -166,7 +166,6 @@ describe('every limiter uses the Redis store', () => {
   const idx = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
   const acct = fs.readFileSync(path.join(__dirname, '..', 'routes', 'account.routes.ts'), 'utf8');
   test.each([
-    ['globalLimiter', 'global', 'async'],
     ['ipCeilingLimiter', 'ipc', 'async'],
     ['authLimiter', 'auth', 'blocking'],
     ['resetCheckIpLimiter', 'rip', 'blocking'],
@@ -174,6 +173,13 @@ describe('every limiter uses the Redis store', () => {
     ['sendOtpLimiter', 'sendotp', 'blocking'],
   ])('%s → %s (%s)', (limiter, name, mode) => {
     expect(idx).toMatch(new RegExp(`const ${limiter} = rateLimit\\(\\{[\\s\\S]*?store: new RedisRateLimitStore\\('${name}', '${mode}'\\),\\n\\}\\);`));
+  });
+  // 2.16.0: the two per-user budgets are built by utils/budgetLimiters — from the server, on the Redis store.
+  test('globalLimiter → global, scoringLimiter → scoring (async, via makeBudgetLimiters)', () => {
+    expect(idx).toContain("const { globalLimiter, scoringLimiter } = makeBudgetLimiters((name) => new RedisRateLimitStore(name, 'async'));");
+    const b = fs.readFileSync(path.join(__dirname, '..', 'utils', 'budgetLimiters.ts'), 'utf8');
+    expect(b).toContain("store: store('global'),");
+    expect(b).toContain("store: store('scoring'),");
   });
   test('exportLimiter → export (blocking)', () => {
     expect(acct).toMatch(/const exportLimiter = rateLimit\(\{[\s\S]*?store: new RedisRateLimitStore\('export', 'blocking'\),\n\}\);/);

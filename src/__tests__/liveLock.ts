@@ -18,6 +18,7 @@
  * seconds; one not refreshed for STALE_MS is a crashed holder and is taken over.
  */
 import fs from 'fs';
+import { isLocalBase, resolveBase } from './targetBase';
 import os from 'os';
 import path from 'path';
 
@@ -72,7 +73,8 @@ export async function waitForStableDeploy(base: string, timeoutMs = 3 * 60_000):
 export function useLiveLock(name: string): void {
   let release: (() => void) | null = null;
   beforeAll(async () => {
-    await waitForStableDeploy(process.env.SC_BASE || 'https://sportclan-backend.onrender.com');
+    const base = resolveBase(); // audit #150
+    if (!isLocalBase(base)) await waitForStableDeploy(base); // a local server isn't deploying
     release = await acquireLiveLock(name);
   }, 15 * 60_000);
   afterAll(() => { release?.(); });

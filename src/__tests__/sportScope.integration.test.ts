@@ -11,9 +11,10 @@
  *
  * Read-only except the create attempt, which is REJECTED (no row inserted).
  */
+import { resolveBase, transportFor } from './targetBase';
 import https from 'https';
 
-const BASE = process.env.SC_BASE || 'https://sportclan-backend.onrender.com';
+const BASE = resolveBase(); // audit #150: local unless SC_BASE + SC_LIVE=1
 // Resolved from prod before the deactivation (kept as constants so the ids survive
 // once /sports stops returning them).
 const KABADDI = 'd55be36f-6d36-4f74-9e1f-74e7671c7389';
@@ -27,8 +28,8 @@ function call(method: string, path: string, token?: string, body?: unknown): Pro
   return new Promise((resolve) => {
     const payload = body !== undefined ? JSON.stringify(body) : undefined;
     const u = new URL(BASE + path);
-    const req = https.request(
-      { hostname: u.hostname, path: u.pathname + u.search, method, headers: { 'Content-Type': 'application/json', ...(process.env.SC_RATE_LIMIT_BYPASS ? { 'x-ratelimit-bypass': process.env.SC_RATE_LIMIT_BYPASS } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}) } },
+    const req = transportFor(u).request(
+      { hostname: u.hostname, port: u.port || undefined, path: u.pathname + u.search, method, headers: { 'Content-Type': 'application/json', ...(process.env.SC_RATE_LIMIT_BYPASS ? { 'x-ratelimit-bypass': process.env.SC_RATE_LIMIT_BYPASS } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}) } },
       (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => { try { resolve({ status: res.statusCode || 0, data: JSON.parse(b || '{}') }); } catch { resolve({ status: res.statusCode || 0, data: {} }); } }); },
     );
     req.on('error', () => resolve({ status: 0, data: {} }));

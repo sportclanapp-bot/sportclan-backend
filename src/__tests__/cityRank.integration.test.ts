@@ -12,9 +12,10 @@
  *   Aarav Ali    — a ranked Agra cricketer (the target)
  *   z19empty.qa  — zero-match account (the null-rank case)
  */
+import { resolveBase, transportFor } from './targetBase';
 import https from 'https';
 
-const BASE = process.env.SC_BASE || 'https://sportclan-backend.onrender.com';
+const BASE = resolveBase(); // audit #150: local unless SC_BASE + SC_LIVE=1
 const AARAV = '5a9eaac3-dea0-4419-906c-911c5af9f38b';
 
 function call(
@@ -26,9 +27,9 @@ function call(
   return new Promise((resolve) => {
     const payload = body !== undefined ? JSON.stringify(body) : undefined;
     const u = new URL(BASE + path);
-    const req = https.request(
+    const req = transportFor(u).request(
       {
-        hostname: u.hostname,
+        hostname: u.hostname, port: u.port || undefined,
         path: u.pathname + u.search,
         method,
         headers: {

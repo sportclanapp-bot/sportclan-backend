@@ -11,20 +11,21 @@
  * Read-only (no writes). Fixtures: Aarav Ali (well-connected), z16recap.qa (exactly
  * one cricket match → single point), z19empty.qa (zero matches → empty).
  */
+import { resolveBase, transportFor } from './targetBase';
 import https from 'https';
 import { useLiveLock } from './liveLock';
 
 // Shares state with other live suites — take turns (see liveLock.ts).
 useLiveLock('qa-pair');
 
-const BASE = process.env.SC_BASE || 'https://sportclan-backend.onrender.com';
+const BASE = resolveBase(); // audit #150: local unless SC_BASE + SC_LIVE=1
 const AARAV = '5a9eaac3-dea0-4419-906c-911c5af9f38b';
 
 function call(method: string, path: string, token?: string): Promise<{ status: number; data: any }> {
   return new Promise((resolve) => {
     const u = new URL(BASE + path);
-    const req = https.request(
-      { hostname: u.hostname, path: u.pathname + u.search, method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
+    const req = transportFor(u).request(
+      { hostname: u.hostname, port: u.port || undefined, path: u.pathname + u.search, method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } },
       (res) => {
         let buf = '';
         res.on('data', (c) => (buf += c));
@@ -47,8 +48,8 @@ async function login(email: string, password: string): Promise<string> {
     const u = new URL(BASE + '/auth/login');
     const body = JSON.stringify({ email, password });
     const res = await new Promise<{ status: number; data: any }>((resolve) => {
-      const req = https.request(
-        { hostname: u.hostname, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', ...(process.env.SC_RATE_LIMIT_BYPASS ? { 'x-ratelimit-bypass': process.env.SC_RATE_LIMIT_BYPASS } : {}), 'Content-Length': Buffer.byteLength(body) } },
+      const req = transportFor(u).request(
+        { hostname: u.hostname, port: u.port || undefined, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', ...(process.env.SC_RATE_LIMIT_BYPASS ? { 'x-ratelimit-bypass': process.env.SC_RATE_LIMIT_BYPASS } : {}), 'Content-Length': Buffer.byteLength(body) } },
         (r) => { let b = ''; r.on('data', (c) => (b += c)); r.on('end', () => { try { resolve({ status: r.statusCode || 0, data: JSON.parse(b || '{}') }); } catch { resolve({ status: r.statusCode || 0, data: {} }); } }); },
       );
       req.on('error', () => resolve({ status: 0, data: {} }));

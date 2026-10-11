@@ -12,20 +12,21 @@
  * Self-cleaning: unlikes in afterAll. Read-only otherwise (no content created).
  * Fixtures: z326agra.qa (viewer A) — likes then unlikes one existing feed post.
  */
+import { resolveBase, transportFor } from './targetBase';
 import https from 'https';
 import { useLiveLock } from './liveLock';
 
 // Shares state with other live suites — take turns (see liveLock.ts).
 useLiveLock('community');
 
-const BASE = process.env.SC_BASE || 'https://sportclan-backend.onrender.com';
+const BASE = resolveBase(); // audit #150: local unless SC_BASE + SC_LIVE=1
 
 function call(method: string, path: string, token?: string, body?: unknown): Promise<{ status: number; data: any }> {
   return new Promise((resolve) => {
     const payload = body !== undefined ? JSON.stringify(body) : undefined;
     const u = new URL(BASE + path);
-    const req = https.request(
-      { hostname: u.hostname, path: u.pathname + u.search, method, headers: { 'Content-Type': 'application/json', ...(process.env.SC_RATE_LIMIT_BYPASS ? { 'x-ratelimit-bypass': process.env.SC_RATE_LIMIT_BYPASS } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}) } },
+    const req = transportFor(u).request(
+      { hostname: u.hostname, port: u.port || undefined, path: u.pathname + u.search, method, headers: { 'Content-Type': 'application/json', ...(process.env.SC_RATE_LIMIT_BYPASS ? { 'x-ratelimit-bypass': process.env.SC_RATE_LIMIT_BYPASS } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}) } },
       (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => { try { resolve({ status: res.statusCode || 0, data: JSON.parse(b || '{}') }); } catch { resolve({ status: res.statusCode || 0, data: {} }); } }); },
     );
     req.on('error', () => resolve({ status: 0, data: {} }));

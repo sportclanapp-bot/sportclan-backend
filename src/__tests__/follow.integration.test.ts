@@ -16,13 +16,14 @@
  *   z19empty.qa — the target (B)
  *   Aarav Ali   — a well-connected account for the read-only count-consistency check
  */
+import { resolveBase, transportFor } from './targetBase';
 import https from 'https';
 import { useLiveLock } from './liveLock';
 
 // Shares state with other live suites — take turns (see liveLock.ts).
 useLiveLock('qa-pair');
 
-const BASE = process.env.SC_BASE || 'https://sportclan-backend.onrender.com';
+const BASE = resolveBase(); // audit #150: local unless SC_BASE + SC_LIVE=1
 const AARAV = '5a9eaac3-dea0-4419-906c-911c5af9f38b';
 
 function call(
@@ -34,9 +35,9 @@ function call(
   return new Promise((resolve) => {
     const payload = body !== undefined ? JSON.stringify(body) : undefined;
     const u = new URL(BASE + path);
-    const req = https.request(
+    const req = transportFor(u).request(
       {
-        hostname: u.hostname,
+        hostname: u.hostname, port: u.port || undefined,
         path: u.pathname + u.search,
         method,
         headers: {

@@ -288,7 +288,7 @@ export function computeStats(
       // Stage 12 · CH2: a bye asked for — half a point ('half'), nothing ('zero',
       // also "absent this round"), or a full one; the pairing's own bye is a win.
       const kind = m.score_summary?.bye_kind;
-      if (kind === 'half') { r.drawn++; r.points += pts.draw; }
+      if (kind === 'half') { r.played++; r.drawn++; r.points += pts.draw; } // audit #69: a draw is a game on the table (W + D + L = P)
       else if (kind === 'zero') { /* not played, no points */ }
       else { r.played++; r.won++; r.points += pts.win; }
       continue;

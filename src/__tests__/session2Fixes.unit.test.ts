@@ -39,7 +39,7 @@ describe('createFieldRefusal (F-19)', () => {
     const body = src.slice(src.indexOf('export async function createMatch('));
     const check = body.indexOf('createFieldRefusal({ is_ranked, is_open, players_needed, city_id })');
     expect(check).toBeGreaterThan(0);
-    expect(check).toBeLessThan(body.indexOf(".from('matches')"));
+    expect(check).toBeLessThan(body.indexOf('.insert(')); // the first write (audit #68 reads a retried create first)
     expect(check).toBeLessThan(body.indexOf('createMatchRefusal('));
   });
 });

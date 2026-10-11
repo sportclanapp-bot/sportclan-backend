@@ -1,3 +1,4 @@
+import { matchNamesForNotice } from '../utils/matchNames';
 import { BOARD_PREVIEW } from '../utils/sportLeaders';
 import { deleteMatching } from '../utils/softDelete';
 import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
@@ -1090,7 +1091,8 @@ export async function runMatchReminderSweep(): Promise<{ sent: number }> {
         userId: uid,
         type: 'match_reminder',
         title: 'Match reminder',
-        body: `⏰ ${m.team_a_name ?? 'Team A'} vs ${m.team_b_name ?? 'Team B'} starts ${kickoff ? `at ${kickoff} (~15 min)` : 'in ~15 minutes'}!`,
+        // Audit #89: the teams' names, not "Team A vs Team B" for a team match.
+        body: `⏰ ${(await matchNamesForNotice(m)) ?? 'Your match'} starts ${kickoff ? `at ${kickoff} (~15 min)` : 'in ~15 minutes'}!`,
         data: { matchId: m.id, screen: 'MatchDetail' },
       });
       sent++;

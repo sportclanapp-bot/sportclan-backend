@@ -1,3 +1,4 @@
+import { matchNamesForNotice } from '../utils/matchNames';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
 import { teamSheetProblem } from './squads.controller';
@@ -3790,8 +3791,13 @@ export async function completeMatch(req: Request, res: Response) {
           .eq('match_id', id);
         if (!scoredEvents) Object.assign(ss, submittedSummary);
       }
-      const aName = match.team_a_name ?? 'Team A';
-      const bName = match.team_b_name ?? 'Team B';
+      // Audit #81/#87: a match between registered teams stores no names (they're
+      // attached when read), so its result read "Team A won by walkover".
+      const regNames = (!match.team_a_name || !match.team_b_name) && (match.team_a_id || match.team_b_id)
+        ? new Map((((await supabase.from('teams').select('id, name').in('id', [match.team_a_id, match.team_b_id].filter(Boolean) as string[])).data ?? []) as Array<{ id: string; name: string }>).map((t) => [t.id, t.name]))
+        : new Map<string, string>();
+      const aName = match.team_a_name ?? (match.team_a_id ? regNames.get(match.team_a_id) : null) ?? 'Team A';
+      const bName = match.team_b_name ?? (match.team_b_id ? regNames.get(match.team_b_id) : null) ?? 'Team B';
       // SC-376: read the FLAT keys too, in the same order as the canonical
       // comparator in utils/standings. The live scorer writes the nested shape,
       // but a result submitted with the score uses the flat one — reading only
@@ -3915,6 +3921,10 @@ export async function completeMatch(req: Request, res: Response) {
         const wo = ss.walkover_score as Record<string, number> | undefined;
         ss.result = wo ? `${wName} won by walkover (${wo[derivedSide]}–0)` : `${wName} won by walkover`;
       }
+      // Audit #81/#82: the push says exactly what is stored — a series, a super
+      // over played ball by ball, a tie-break fallback, a walkover — never an
+      // earlier draft of the sentence.
+      resultForNotice = typeof ss.result === 'string' && ss.result ? ss.result : resultForNotice;
       // Audit #56 (with #6): whose record this result changed — so voiding it
       // later takes back exactly that, no more (only players who agreed count).
       ss.attributed_user_ids = [...allPlayerIds];
@@ -4035,8 +4045,9 @@ export async function completeMatch(req: Request, res: Response) {
         console.error('MVP calculation failed:', mvpErr instanceof Error ? mvpErr.message : mvpErr);
       }
 
-      // Resolve sport name for nicer notification copy — falls back to ID.
-      let sportName = 'rating';
+      // Resolve sport name for nicer notification copy. Audit #88: with no name
+      // the sentence is "Rating updated" — it read "rating rating updated".
+      let sportName: string | null = null;
       try {
         const { data: sport } = await supabase
           .from('sports')
@@ -4061,8 +4072,8 @@ export async function completeMatch(req: Request, res: Response) {
         void notifyUser({
           userId: row.user_id,
           type: 'rating_change',
-          title: `${sportName} rating updated`,
-          body: `Your ${sportName} rating changed: ${shownOld} \u2192 ${shownNew} (${sign}${shownDelta})`,
+          title: sportName ? `${sportName} rating updated` : 'Rating updated',
+          body: `Your ${sportName ? `${sportName} ` : ''}rating changed: ${shownOld} \u2192 ${shownNew} (${sign}${shownDelta})`,
           data: { sportId: match.sport_id, screen: 'SportProfile' },
         });
       }
@@ -4071,7 +4082,10 @@ export async function completeMatch(req: Request, res: Response) {
       // or who won; the line-up and both teams' rosters (the same audience a void
       // reaches) now get the stored result sentence — and so do its followers
       // (W-5), who were told every set but not who won. Not the person who ended it.
-      if (!walkover) {
+      // Audit #82: a walkover, a retirement and a default are results too (they
+      // were never told). Audit #87: titled with the match, so a draw's "Draw"
+      // or "Tied" still says which match.
+      {
         try {
           const [players, followers] = await Promise.all([
             matchAudienceIds(id, match.team_a_id, match.team_b_id),
@@ -4079,10 +4093,11 @@ export async function completeMatch(req: Request, res: Response) {
           ]);
           const audience = Array.from(new Set([...players, ...followers]));
           if (audience.length > 0) {
+            const names = await matchNamesForNotice(match);
             void notifyUsers(audience, {
               type: 'match_result',
-              title: 'Match result',
-              body: resultForNotice ?? `${match.team_a_name ?? 'Your match'} is complete.`,
+              title: names ? `Result · ${names}` : 'Match result',
+              body: resultForNotice ?? `${names ?? 'Your match'} is complete.`,
               data: { matchId: id, screen: 'MatchDetail' },
             }, { actorId: userId });
           }
@@ -4092,9 +4107,8 @@ export async function completeMatch(req: Request, res: Response) {
       // PRD Section 4: if the match had an assigned umpire, prompt all
       // participants to rate them.
       if (match.umpire_id) {
-        const matchLabel = (match.team_a_name && match.team_b_name)
-          ? `${match.team_a_name} vs ${match.team_b_name}`
-          : 'your match';
+        // Audit #89: the teams' names for a team match too (none are stored).
+        const matchLabel = (await matchNamesForNotice(match)) ?? 'your match';
         // SC-249: derive the recipients from the actual match_participants rows,
         // NOT allPlayerIds — allPlayerIds is only populated inside the ranked-ELO
         // branch above, so a CASUAL umpired match had zero recipients and never
@@ -4104,10 +4118,12 @@ export async function completeMatch(req: Request, res: Response) {
           new Set((participants ?? []).map((p) => p.user_id).filter(Boolean)),
         ).filter((uid) => uid !== match.umpire_id);
         if (participantIds.length > 0) {
+          // Audit #86: the sport's own word (referee, arbiter…), not "umpire" for every sport.
+          const offWord = sportTerms(normSportSlug(sportRow?.slug)).official.toLowerCase();
           void notifyUsers(participantIds, {
             type: 'umpire_rating_prompt',
-            title: 'Rate your umpire',
-            body: `Rate your umpire for ${matchLabel}`,
+            title: `Rate your ${offWord}`,
+            body: `Rate your ${offWord} for ${matchLabel}`,
             data: { umpireId: match.umpire_id, matchId: id, screen: 'UmpireRatings' },
           });
         }

@@ -180,11 +180,18 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
       if (ev.event_type === 'basket' || ev.event_type === 'score') scores.set(uid, cur + Number(p.value ?? 0));
       else if (ev.event_type === 'assist') scores.set(uid, cur + 3);
     } else if (['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball'].includes(slug)) {
-      // Points won
-      if (ev.event_type === 'score' || ev.event_type === 'point') scores.set(uid, cur + 1);
+      // Points won, at what each was worth (a super point is 2). Audit #84: not
+      // a side-out rally (no point) or a penalty point (the other side's fault).
+      if ((ev.event_type === 'score' || ev.event_type === 'point') && p.kind !== 'rally' && p.kind !== 'penalty') {
+        scores.set(uid, cur + Math.max(0, Number(p.value ?? 1) || 0));
+      }
     } else if (slug === 'carrom') {
       // Points pocketed — carrom sends the value under payload.value (A5-009).
-      scores.set(uid, cur + Number(p.value ?? 1));
+      // Audit #84: only a board or a piece scored — a foul, the toss or the
+      // buzzer is no point (a foul gave the fouler one).
+      if (ev.event_type === 'score') {
+        scores.set(uid, cur + Math.max(0, Number(p.value ?? 1) || 0));
+      }
     } else if (slug === 'chess') {
       // Winner gets MVP — handled below
     } else {

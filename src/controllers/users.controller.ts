@@ -1,3 +1,4 @@
+import { matchNamesForNotice } from '../utils/matchNames';
 import { inDisplayOrder, orderedSportIds, profileSportIds } from '../utils/userSports';
 import { deleteMatching } from '../utils/softDelete';
 import { orIlikeContains } from '../utils/likeSearch';
@@ -25,7 +26,7 @@ import { isRangeError, parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
 import { stepTimer } from '../utils/stepTimer';
 import { getSport } from '../utils/sportCache';
-import { isDismissal } from '../utils/cricketRules';
+import { isDismissal, wicketRuns } from '../utils/cricketRules';
 import { aggregateGoalPlayers, aggregatePointPlayers } from './scoring.controller';
 
 // SELF-only fields — the full row for /users/me + own-profile writes. Contains
@@ -64,7 +65,7 @@ async function runSmartNotifications(userId: string): Promise<void> {
     //    the user is a participant and a reminder hasn't been sent yet.
     const { data: parts } = await supabase
       .from('match_participants')
-      .select('match_id, match:matches(id, team_a_name, team_b_name, scheduled_at, status, voided_at)')
+      .select('match_id, match:matches(id, team_a_name, team_b_name, team_a_id, team_b_id, scheduled_at, status, voided_at)')
       .eq('user_id', userId);
 
     const soonMatches = (parts || []).filter((p) => {
@@ -96,7 +97,8 @@ async function runSmartNotifications(userId: string): Promise<void> {
         userId,
         type: 'match_reminder',
         title: 'Match reminder',
-        body: `\u23F0 ${m.team_a_name} vs ${m.team_b_name} starts in 15 minutes!`,
+        // Audit #89: the teams' names (a team match stores none — it read "null vs null").
+        body: `\u23F0 ${(await matchNamesForNotice(m)) ?? 'Your match'} starts in 15 minutes!`,
         data: { matchId: m.id, screen: 'MatchDetail' },
       });
     }
@@ -1672,8 +1674,19 @@ export async function getSportProfile(req: Request, res: Response) {
             if (r === 6) s6++;
             perMatch.set(e.match_id, (perMatch.get(e.match_id) ?? 0) + r);
           }
-          // Retired hurt is not a dismissal (cricketRules.isDismissal).
-          if ((e.event_type === 'wicket' && isDismissal(pay.wicket_type ?? pay.type)) || (e.event_type !== 'wicket' && pay.wicket)) { wkts++; dismissals++; }
+          // Audit #83: here a wicket is the batter's own DISMISSAL (it was also
+          // counted as a wicket taken). Retired hurt is not a dismissal.
+          if ((e.event_type === 'wicket' && isDismissal(pay.wicket_type ?? pay.type)) || (e.event_type !== 'wicket' && pay.wicket)) dismissals++;
+          // Audit #48: runs completed before a run-out are the batter's.
+          if (e.event_type === 'wicket') { const ro = wicketRuns(pay); runs += ro; if (ro) perMatch.set(e.match_id, (perMatch.get(e.match_id) ?? 0) + ro); }
+        }
+        // Audit #83: wickets TAKEN are the ones bowled by this player (bowler_id),
+        // the same rule as the scorecard — not run-outs or retirements.
+        for (const e of (events ?? []) as Array<{ event_type: string; payload: any }>) {
+          const pay: any = e.payload ?? {};
+          if (e.event_type !== 'wicket' || pay.bowler_id !== id) continue;
+          const wt = String(pay.wicket_type ?? pay.type ?? '').toLowerCase().replace(/[^a-z]/g, '');
+          if (wt !== 'runout' && wt !== 'retired' && wt !== 'retiredhurt' && wt !== 'retiredout' && wt !== 'retirednotout') wkts++;
         }
         const hs2 = perMatch.size > 0 ? Math.max(...perMatch.values()) : 0;
         sportStats = {

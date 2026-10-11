@@ -1499,7 +1499,10 @@ export async function sweepStaleLiveMatches(): Promise<{ abandoned: number }> {
     .from('matches')
     .select('id')
     .eq('status', 'live')
-    .lt('updated_at', cutoff);
+    .lt('updated_at', cutoff)
+    // Audit #52: a tournament fixture is its organiser's to finish (it moves the
+    // bracket on); abandoning it here left the bracket stuck.
+    .is('tournament_id', null);
   if (error || !stale || stale.length === 0) return { abandoned: 0 };
   await supabase
     .from('matches')
@@ -1529,7 +1532,10 @@ export async function sweepUnplayedScheduledMatches(): Promise<{ abandoned: numb
     .from('matches')
     .select('id')
     .eq('status', 'scheduled')
-    .lt('scheduled_at', cutoff);
+    .lt('scheduled_at', cutoff)
+    // Audit #52: never a tournament fixture — a tournament running late still
+    // plays it (it waits for its teams, or for the organiser to reschedule).
+    .is('tournament_id', null);
   if (error || !stale || stale.length === 0) return { abandoned: 0 };
   await supabase
     .from('matches')

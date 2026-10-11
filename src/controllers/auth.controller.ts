@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
+import { clientIpKey } from '../middleware/rateLimitKey';
 import axios from 'axios';
 import { supabase } from '../utils/supabase';
 import { isValidIndianPhone, canonicalisePhone, phoneVariants } from '../utils/phone';
@@ -25,6 +27,10 @@ const OTP_TTL_SECONDS = 300; // 5 minutes
 /** Codes sent to one number (28 Sep): per hour and per day, whoever asks. */
 export const SEND_PER_NUMBER_HOUR = 5;
 export const SEND_PER_NUMBER_DAY = 10;
+/** Audit #10: the number's daily total from anyone — the cost cap (the two above are per requester). */
+export const SEND_PER_NUMBER_DAY_ANYONE = 30;
+/** Audit #22: the codes that can sign in or finish a sign-up (not reset / change-phone codes). */
+export const SIGN_IN_PURPOSES = ['login', 'register'] as const;
 
 // ─── Welcome coins ───────────────────────────────────────────────────────────
 // Every NEW signup (phone or email) gets 50 coins, on top of the 10 for
@@ -73,8 +79,9 @@ function isTestOtp(code: string): boolean {
   );
 }
 
-function generateOtp(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+export function generateOtp(): string {
+  // Audit #21: a cryptographic random number (the old generator was predictable).
+  return String(crypto.randomInt(100000, 1000000));
 }
 
 function normalizePhone(phone: string): string {
@@ -295,24 +302,34 @@ export async function sendOtp(req: Request, res: Response) {
   // SMS-bombing someone else's number from many IPs and caps what we pay.
   // Counted in the OTP store (survives restarts / instances). Allowlisted
   // numbers are counted too: the limit is about the number, not the SMS.
-  const [sentHour, sentDay] = await Promise.all([
-    readCounter(`sendh:${p}`),
-    readCounter(`sendd:${p}`),
+  // Audit #10 (11 Oct 2026): those limits were per NUMBER only, so someone
+  // else could send ten codes to your number and you couldn't get one all day.
+  // Now the hourly / daily limits are per number AND requester (the caller's
+  // IP), and a higher per-number daily total still caps what we pay.
+  const who = clientIpKey(req);
+  const [sentHour, sentDay, sentAll] = await Promise.all([
+    readCounter(`sendh:${p}:${who}`),
+    readCounter(`sendd:${p}:${who}`),
+    readCounter(`senddall:${p}`),
   ]);
-  if (sentHour >= SEND_PER_NUMBER_HOUR || sentDay >= SEND_PER_NUMBER_DAY) {
+  if (sentHour >= SEND_PER_NUMBER_HOUR || sentDay >= SEND_PER_NUMBER_DAY || sentAll >= SEND_PER_NUMBER_DAY_ANYONE) {
     return res.status(429).json({
-      error: sentDay >= SEND_PER_NUMBER_DAY
+      error: sentDay >= SEND_PER_NUMBER_DAY || sentAll >= SEND_PER_NUMBER_DAY_ANYONE
         ? 'Too many codes sent to this number today. Try again tomorrow.'
         : 'Too many codes sent to this number. Try again in an hour.',
       code: 'OTP_SEND_LIMIT',
     });
   }
-  await Promise.all([bumpCounter(`sendh:${p}`, 3600), bumpCounter(`sendd:${p}`, 86400)]);
+  await Promise.all([bumpCounter(`sendh:${p}:${who}`, 3600), bumpCounter(`sendd:${p}:${who}`, 86400), bumpCounter(`senddall:${p}`, 86400)]);
 
   // OTP test-number allowlist (utils/otpTestNumbers): a listed number gets the
   // fixed test code and no SMS; every other number is unchanged.
   const testCode = testCodeFor(p);
-  const code = testCode ?? generateOtp();
+  // Audit #10: a code still valid for the same purpose is sent again rather
+  // than replaced, so someone else asking for a code can't make yours stop
+  // working (the SMS goes to the number's owner either way).
+  const prev = testCode ? null : await getOtp(p).catch(() => null);
+  const code = testCode ?? (prev && prev.purpose === purpose && /^\d{6}$/.test(String(prev.code)) ? String(prev.code) : generateOtp());
 
   // SC-398: storing the code is the step that used to throw when Upstash was
   // unconfigured, and sendOtp had no try/catch — so an unset env var turned the
@@ -321,7 +338,7 @@ export async function sendOtp(req: Request, res: Response) {
   // gets a clear, retryable message instead of "Internal server error".
   try {
     await setOtp(p, code, purpose, OTP_TTL_SECONDS);
-    await clearWrongCodes(p); // a new code, a new count of wrong guesses
+    await clearWrongCodes(p, who); // a new code, a new count of THIS requester's wrong guesses
   } catch (err: any) {
     // eslint-disable-next-line no-console
     console.error('[send-otp] OTP storage unavailable:', err?.message);
@@ -396,8 +413,9 @@ export async function verifyOtp(req: Request, res: Response) {
     await setOtp(p, verifiedMarker(code), 'login', OTP_TTL_SECONDS);
     return res.json({ success: true, verified: true });
   }
-  // 28 Sep: one shared check — 5 wrong codes and the code is gone.
-  const chk = await checkOtpCode(p, code);
+  // 28 Sep: one shared check. Audit #10: per requester. (Any purpose: verify is a
+  // step of sign-in AND of reset; the marker keeps the code's own purpose.)
+  const chk = await checkOtpCode(p, code, { requester: clientIpKey(req) });
   if (chk !== 'ok') { const e = otpCheckError(chk); return res.status(e.status).json(e.body); }
   const entry = await getOtp(p);
   if (!entry) return res.status(400).json({ error: 'No OTP requested or OTP expired', code: 'OTP_EXPIRED' });
@@ -465,7 +483,7 @@ export async function register(req: Request, res: Response) {
   // code (not 123456), so the entry.code check below would always fail. Skip it.
   // In production isTestOtp() is always false, so the real OTP check still runs.
   if (!isTestOtp(code)) {
-    const chk = await checkOtpCode(p, code);
+    const chk = await checkOtpCode(p, code, { requester: clientIpKey(req), purpose: SIGN_IN_PURPOSES }); // audit #10/#22
     if (chk !== 'ok') { const e = otpCheckError(chk); return res.status(e.status).json(e.body); }
   }
 
@@ -635,7 +653,7 @@ export async function otpLogin(req: Request, res: Response) {
   // Dev-only bypass (see isTestOtp): skip OTP validation for the fixed test code.
   // The user must still exist (seeded) — otherwise we fall through to the 404 below.
   if (!isTestOtp(code)) {
-    const chk = await checkOtpCode(p, code);
+    const chk = await checkOtpCode(p, code, { requester: clientIpKey(req), purpose: SIGN_IN_PURPOSES }); // audit #10/#22
     if (chk !== 'ok') { const e = otpCheckError(chk); return res.status(e.status).json(e.body); }
   }
 
@@ -798,7 +816,7 @@ export async function resetPassword(req: Request, res: Response) {
   // (see isTestOtp). In production isTestOtp() is always false, so the real
   // OTP check still runs.
   if (!isTestOtp(code)) {
-    const chk = await checkOtpCode(p, code, { purpose: 'reset' });
+    const chk = await checkOtpCode(p, code, { purpose: 'reset', requester: clientIpKey(req) }); // audit #10
     if (chk !== 'ok') { const e = otpCheckError(chk); return res.status(e.status).json(e.body); }
   }
   const password_hash = await bcrypt.hash(newPassword, 10);
@@ -848,7 +866,7 @@ export async function changePhone(req: Request, res: Response) {
   // Honor the dev-only test bypass uniformly (see isTestOtp). Production runs
   // the real OTP check since isTestOtp() is always false there.
   if (!isTestOtp(code)) {
-    const chk = await checkOtpCode(p, code, { purpose: 'change_phone' });
+    const chk = await checkOtpCode(p, code, { purpose: 'change_phone', requester: clientIpKey(req) }); // audit #10
     if (chk !== 'ok') { const e = otpCheckError(chk); return res.status(e.status).json(e.body); }
   }
   // Decided 28 Sep: a deleted account's number is held for 30 days, then free —

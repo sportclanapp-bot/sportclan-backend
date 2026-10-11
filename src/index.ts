@@ -189,7 +189,9 @@ const resetCheckNumberLimiter = rateLimit({
   keyGenerator: (req) => {
     const raw = (req.body as { phone?: unknown } | undefined)?.phone;
     const p = typeof raw === 'string' ? canonicalisePhone(raw) : null;
-    return p ? `rnum:${p}` : `rip:${clientIpKey(req)}`;
+    // Audit #10: per number AND requester — someone else's attempts must not
+    // use up the owner's checks (wrong guesses are capped in utils/otpCheck).
+    return p ? `rnum:${p}:${clientIpKey(req)}` : `rip:${clientIpKey(req)}`;
   },
   skip: rateLimitBypassed,
   standardHeaders: true,

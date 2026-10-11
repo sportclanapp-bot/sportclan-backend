@@ -188,7 +188,7 @@ describe('F16 · Change phone: no code for a number a live account already has',
   test('change-phone only accepts a code sent for change_phone', () => {
     const s = src('auth.controller.ts');
     const b = s.slice(s.indexOf('export async function changePhone('));
-    expect(b).toMatch(/checkOtpCode\(p, code, \{ purpose: 'change_phone' \}\)/);
+    expect(b).toMatch(/checkOtpCode\(p, code, \{ purpose: 'change_phone', requester: clientIpKey\(req\) \}\)/); // audit #10: + requester
   });
 });
 

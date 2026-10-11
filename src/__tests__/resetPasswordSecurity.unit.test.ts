@@ -36,7 +36,7 @@ jest.mock('bcrypt', () => ({ hash: jest.fn(async () => 'hash') }), { virtual: tr
 // eslint-disable-next-line import/first
 import { verifyOtp, resetPassword } from '../controllers/auth.controller';
 // eslint-disable-next-line import/first
-import { checkOtpCode, verifiedMarker, MAX_WRONG_CODES } from '../utils/otpCheck';
+import { checkOtpCode, verifiedMarker, MAX_WRONG_CODES, MAX_WRONG_CODES_ANYONE } from '../utils/otpCheck';
 // eslint-disable-next-line import/first
 import { deleteOtp } from '../utils/otpStore';
 
@@ -58,17 +58,25 @@ beforeEach(() => {
   delete process.env.ALLOW_TEST_OTP;
 });
 
-describe('5 wrong codes and the code is gone', () => {
-  test('4 wrong → still "wrong"; the 5th → locked and the code deleted; then even the right code fails', async () => {
+describe('5 wrong codes lock the guesser, not the number (audit #10, 11 Oct 2026)', () => {
+  test('one requester: 4 wrong → "wrong"; the 5th → locked for THEM; the code stays for the owner', async () => {
     store.set(P, { code: '482913', purpose: 'reset' });
-    for (let i = 1; i < MAX_WRONG_CODES; i++) expect(await checkOtpCode(P, '000000')).toBe('wrong');
-    expect(await checkOtpCode(P, '000000')).toBe('locked');
-    expect(deleteOtp).toHaveBeenCalledWith(P);
-    expect(await checkOtpCode(P, '482913')).toBe('locked');
+    for (let i = 1; i < MAX_WRONG_CODES; i++) expect(await checkOtpCode(P, '000000', { requester: 'ip:attacker' })).toBe('wrong');
+    expect(await checkOtpCode(P, '000000', { requester: 'ip:attacker' })).toBe('locked');
+    expect(deleteOtp).not.toHaveBeenCalled();
+    expect(await checkOtpCode(P, '482913', { requester: 'ip:attacker' })).toBe('locked');
+    expect(await checkOtpCode(P, '482913', { requester: 'ip:owner' })).toBe('ok');
   });
-  test('a new code starts a new count (the lock is on the code, not the number)', () => {
+  test(`${MAX_WRONG_CODES_ANYONE} wrong from anywhere and the code is gone`, async () => {
+    store.set(P, { code: '482913', purpose: 'reset' });
+    let last = '';
+    for (let i = 0; i < MAX_WRONG_CODES_ANYONE; i++) last = await checkOtpCode(P, '000000', { requester: `ip:${Math.floor(i / 4)}` });
+    expect(last).toBe('locked');
+    expect(deleteOtp).toHaveBeenCalledWith(P);
+  });
+  test("a new code starts a new count for that requester", () => {
     const auth = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'auth.controller.ts'), 'utf8');
-    expect(auth).toMatch(/await setOtp\(p, code, purpose, OTP_TTL_SECONDS\);\s*await clearWrongCodes\(p\);/);
+    expect(auth).toMatch(/await setOtp\(p, code, purpose, OTP_TTL_SECONDS\);\s*await clearWrongCodes\(p, who\);/);
   });
   test('a right code clears the count', async () => {
     store.set(P, { code: '482913', purpose: 'reset' });
@@ -76,13 +84,13 @@ describe('5 wrong codes and the code is gone', () => {
     expect(await checkOtpCode(P, '482913')).toBe('ok');
     expect(await checkOtpCode(P, '000000')).toBe('wrong'); // counting from zero again
   });
-  test('through the endpoints: 429 OTP_LOCKED on the 5th wrong code', async () => {
+  test('through the endpoints: 429 OTP_LOCKED on the 5th wrong code, and the owner still has their code', async () => {
     store.set(P, { code: '482913', purpose: 'reset' });
     let r: any;
     for (let i = 0; i < MAX_WRONG_CODES; i++) r = await call(resetPassword, { phone: '9000000001', code: '111111', newPassword: 'longenough1' });
     expect(r.statusCode).toBe(429);
     expect(r.body.code).toBe('OTP_LOCKED');
-    expect(store.has(P)).toBe(false);
+    expect(store.has(P)).toBe(true);
   });
 });
 
@@ -132,7 +140,7 @@ describe('limits in front of reset-password and verify-otp', () => {
     expect(idx).toContain(mount);
     expect(idx.indexOf(mount)).toBeLessThan(idx.indexOf("app.use('/auth', authLimiter, authRoutes)"));
     expect(idx).toMatch(/const resetCheckIpLimiter = rateLimit\(\{\s*windowMs: 15 \* 60 \* 1000,\s*max: 10,/);
-    expect(idx).toMatch(/const resetCheckNumberLimiter = rateLimit\(\{\s*windowMs: 60 \* 60 \* 1000,\s*max: 10,[\s\S]*?canonicalisePhone\(raw\)[\s\S]*?`rnum:\$\{p\}`/);
+    expect(idx).toMatch(/const resetCheckNumberLimiter = rateLimit\(\{\s*windowMs: 60 \* 60 \* 1000,\s*max: 10,[\s\S]*?canonicalisePhone\(raw\)[\s\S]*?`rnum:\$\{p\}:\$\{clientIpKey\(req\)\}`/); // audit #10
   });
   test('every endpoint that takes a code uses the one check', () => {
     const auth = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'auth.controller.ts'), 'utf8');
@@ -161,9 +169,9 @@ describe('send-otp: per-number limit (5 an hour, 10 a day), allowlisted numbers 
   });
   test('10 a day, even across hours', async () => {
     for (let i = 0; i < 5; i++) await send();
-    mockCtr.delete('sendh:+919000000001'); // the hour window rolls over
+    mockCtr.delete('sendh:+919000000001:unknown'); // audit #10: per number and requester // the hour window rolls over
     for (let i = 0; i < 5; i++) expect((await send()).statusCode).toBe(200);
-    mockCtr.delete('sendh:+919000000001');
+    mockCtr.delete('sendh:+919000000001:unknown'); // audit #10: per number and requester
     const r = await send();
     expect(r.statusCode).toBe(429);
     expect(r.body.error).toBe('Too many codes sent to this number today. Try again tomorrow.');

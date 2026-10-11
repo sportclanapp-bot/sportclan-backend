@@ -1864,6 +1864,19 @@ export async function getMatch(req: Request, res: Response) {
     // and over-showed it (→403) to a fixture creator later removed as organiser.
     matchWithRating.can_officiate = canOfficiate;
     matchWithRating.can_manage = canManage;
+    // Audit #5: may the viewer take the official's seat themselves ('assign'),
+    // only offer to ('offer', casual matches: the creator accepts), or not at
+    // all ('none', a tournament fixture they don't officiate)? And a pending
+    // offer: who made it (the creator answers it) / that it's the viewer's own.
+    matchWithRating.self_officiate_mode = !userId || match.umpire_id
+      ? 'none'
+      : await selfOfficiateMode(match as SelfOfficiateMatch, userId).catch(() => 'none');
+    const offerBy = (match as { umpire_offer_by?: string | null }).umpire_offer_by ?? null;
+    matchWithRating.my_umpire_offer = !!userId && offerBy === userId;
+    matchWithRating.umpire_offer = offerBy && userId && match.created_by === userId
+      ? await Promise.resolve(supabase.from('users').select('id, name, username').eq('id', offerBy).is('deleted_at', null).maybeSingle())
+        .then(({ data: u }) => u ?? null, () => null)
+      : null;
 
     // U-13: could this viewer actually be in the line-up? Only then is "Are you
     // playing?" a question worth asking them. It was shown to everyone — the
@@ -2321,6 +2334,87 @@ export async function addParticipants(req: Request, res: Response) {
 // Lets a user officiate a match they didn't create. Gated to accounts holding
 // the umpire/referee role, and only for matches still open for officiating
 // (not completed/cancelled/abandoned) that don't already have an umpire.
+type SelfOfficiateMatch = { tournament_id?: string | null; created_by?: string | null; umpire_id?: string | null; status?: string | null; voided_at?: string | null };
+
+/** The tournament roles that officiate a match (not scorer / commentator / pairings). */
+const TOURNAMENT_OFFICIATING_ROLES = ['umpire', 'referee', 'chief_referee', 'deputy_referee', 'assistant', 'sector'];
+
+/**
+ * Audit #5: how this user may take a match's official seat themselves.
+ * 'assign' = straight away (a casual match's creator; a tournament organiser or
+ * one of that tournament's own officials); 'offer' = a casual match, the creator
+ * accepts; 'none' = a tournament fixture they don't officiate.
+ */
+export async function selfOfficiateMode(match: SelfOfficiateMatch, userId: string): Promise<'assign' | 'offer' | 'none'> {
+  if (match.tournament_id) {
+    if (await isTournamentOrganiser(match.tournament_id, userId).catch(() => false)) return 'assign';
+    const { data: rows } = await supabase
+      .from('tournament_officials')
+      .select('role')
+      .eq('tournament_id', match.tournament_id)
+      .eq('user_id', userId)
+      .in('role', TOURNAMENT_OFFICIATING_ROLES);
+    return rows && rows.length > 0 ? 'assign' : 'none';
+  }
+  return match.created_by === userId ? 'assign' : 'offer';
+}
+
+// POST /matches/:id/umpire/offer { accept: boolean } — the casual match's creator
+// answers an offer to officiate (audit #5).
+export async function answerUmpireOffer(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const accept = (req.body || {}).accept === true;
+    const { data: match } = await supabase
+      .from('matches')
+      .select('id, created_by, umpire_id, umpire_offer_by, status, is_ranked, team_a_id, team_b_id, team_a_name, team_b_name, sport_id, tournament_id, voided_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (match.tournament_id || match.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the match’s creator can answer an offer to officiate.' });
+    }
+    const offerBy = (match as { umpire_offer_by?: string | null }).umpire_offer_by;
+    if (!offerBy) return res.status(409).json({ error: 'There is no offer to answer.', code: 'NO_OFFER' });
+    const off = sportTerms(await sportSlugOf((match as { sport_id?: string | null }).sport_id)).official;
+    const label = (match.team_a_name && match.team_b_name) ? `${match.team_a_name} vs ${match.team_b_name}` : 'a match';
+    if (!accept) {
+      const { data } = await supabase.from('matches').update({ umpire_offer_by: null, umpire_offer_at: null }).eq('id', id).select('*').single();
+      try {
+        await notifyUser({ userId: offerBy, type: 'match_umpire_offer_declined', title: 'Offer declined', body: `Your offer to be the ${off.toLowerCase()} for ${label} was declined.`, data: { matchId: id, screen: 'MatchDetail' } });
+      } catch { /* best-effort */ }
+      return res.json({ match: data, accepted: false });
+    }
+    if (match.umpire_id) return res.status(409).json({ error: 'Match already has an umpire' });
+    if (match.voided_at || ['completed', 'cancelled', 'abandoned'].includes(String(match.status))) {
+      return res.status(409).json({ error: 'This match is no longer open for officiating.' });
+    }
+    if (match.is_ranked) {
+      const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', id);
+      if (await viewerCanPlay(match, offerBy, (parts ?? []).map((p: { user_id: string }) => p.user_id))) {
+        return res.status(409).json({ error: `They play in this ranked match, so they can’t be its ${off.toLowerCase()}.`, code: 'UMPIRE_IS_PLAYER' });
+      }
+    }
+    const { data, error } = await supabase
+      .from('matches')
+      .update({ umpire_id: offerBy, umpire_offer_by: null, umpire_offer_at: null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .is('umpire_id', null)
+      .select('*')
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    if (!data) return res.status(409).json({ error: 'Match already has an umpire' });
+    try {
+      await notifyUser({ userId: offerBy, type: 'match_official_named', title: `You’re the ${off.toLowerCase()}`, body: `Your offer was accepted: you’re the ${off.toLowerCase()} for ${label}. You can score it in the app.`, data: { matchId: id, screen: 'MatchDetail' } });
+    } catch { /* best-effort */ }
+    return res.json({ match: data, accepted: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 export async function selfAssignUmpire(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -2342,11 +2436,11 @@ export async function selfAssignUmpire(req: Request, res: Response) {
 
     const { data: match } = await supabase
       .from('matches')
-      .select('id, umpire_id, created_by, status, team_a_name, team_b_name, is_ranked, team_a_id, team_b_id')
+      .select('id, umpire_id, created_by, status, team_a_name, team_b_name, is_ranked, team_a_id, team_b_id, tournament_id, sport_id, umpire_offer_by, voided_at')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
-    if (match.status === 'completed' || match.status === 'cancelled' || match.status === 'abandoned') {
+    if (match.voided_at || match.status === 'completed' || match.status === 'cancelled' || match.status === 'abandoned') {
       return res.status(409).json({ error: 'This match is no longer open for officiating.' });
     }
     if (match.umpire_id) {
@@ -2367,25 +2461,72 @@ export async function selfAssignUmpire(req: Request, res: Response) {
       }
     }
 
+    // Audit #5 (11 Oct 2026): taking the official's seat decides who may score,
+    // complete, abandon and void the match, so a stranger can't just take it.
+    //  · A tournament fixture: only its organisers and the tournament's own
+    //    officials (named by the organiser) may take it; anyone else is refused.
+    //  · A casual match: the match's creator takes it straight away; anyone else
+    //    OFFERS to officiate and the creator accepts or declines.
+    const mode = await selfOfficiateMode(match as SelfOfficiateMatch, userId);
+    const off = sportTerms(await sportSlugOf((match as { sport_id?: string | null }).sport_id)).official;
+    if (mode === 'none') {
+      return res.status(403).json({
+        error: `The tournament organiser names this match’s ${off.toLowerCase()}.`,
+        code: 'ORGANISER_NAMES_OFFICIALS',
+      });
+    }
+    const matchLabel = (match.team_a_name && match.team_b_name)
+      ? `${match.team_a_name} vs ${match.team_b_name}`
+      : 'your match';
+    if (mode === 'offer') {
+      const pending = (match as { umpire_offer_by?: string | null }).umpire_offer_by;
+      if (pending && pending !== userId) {
+        return res.status(409).json({ error: `Someone has already offered to be this match’s ${off.toLowerCase()}.`, code: 'OFFER_PENDING' });
+      }
+      const { data: offered, error: offerErr } = await supabase
+        .from('matches')
+        .update({ umpire_offer_by: userId, umpire_offer_at: new Date().toISOString() })
+        .eq('id', id)
+        .is('umpire_id', null)
+        .select('*')
+        .maybeSingle();
+      if (offerErr) return res.status(500).json({ error: sanitizeError(offerErr) });
+      if (!offered) return res.status(409).json({ error: 'Match already has an umpire' });
+      if (match.created_by && !pending) {
+        const { data: me } = await supabase.from('users').select('name').eq('id', userId).maybeSingle();
+        try {
+          await notifyUser({
+            userId: match.created_by,
+            type: 'match_umpire_offer',
+            title: `${off} offer`,
+            body: `${(me as { name?: string } | null)?.name ?? 'Someone'} offers to be the ${off.toLowerCase()} for ${matchLabel}. Accept or decline on the match page.`,
+            data: { matchId: id, screen: 'MatchDetail' },
+          });
+        } catch {
+          // best-effort
+        }
+      }
+      return res.json({ match: offered, offered: true });
+    }
+
     const { data, error } = await supabase
       .from('matches')
-      .update({ umpire_id: userId, updated_at: new Date().toISOString() })
+      .update({ umpire_id: userId, umpire_offer_by: null, umpire_offer_at: null, updated_at: new Date().toISOString() })
       .eq('id', id)
+      .is('umpire_id', null)
       .select('*')
-      .single();
+      .maybeSingle();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    if (!data) return res.status(409).json({ error: 'Match already has an umpire' });
 
     // Let the creator know someone picked up officiating (best-effort).
     if (match.created_by && match.created_by !== userId) {
-      const matchLabel = (match.team_a_name && match.team_b_name)
-        ? `${match.team_a_name} vs ${match.team_b_name}`
-        : 'your match';
       try {
         await notifyUser({
           userId: match.created_by,
           type: 'match_umpire_assigned',
-          title: 'Umpire assigned',
-          body: `An umpire has taken up officiating for ${matchLabel}.`,
+          title: `${off} assigned`,
+          body: `${off === 'Umpire' ? 'An umpire' : `A ${off.toLowerCase()}`} has taken up officiating for ${matchLabel}.`,
           data: { matchId: id, screen: 'MatchDetail' },
         });
       } catch {

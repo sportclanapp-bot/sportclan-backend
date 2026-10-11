@@ -13,6 +13,7 @@ import {
   updateMatch,
   addParticipants,
   selfAssignUmpire,
+  answerUmpireOffer,
   setMatchOfficials,
   cancelMatch,
   abandonMatch,
@@ -103,6 +104,8 @@ router.put('/:id/tie-toss', authenticateToken, setTieToss); // Stage 10 · TT1b
 // Stage 10 · TT3: a paper-scored match typed in.
 router.post('/:id/typed-score', authenticateToken, typedScore);
 router.post('/:id/umpire/self-assign', authenticateToken, selfAssignUmpire);
+// Audit #5: the casual match's creator accepts or declines an offer to officiate.
+router.post('/:id/umpire/offer', authenticateToken, answerUmpireOffer);
 // Cricket gap 3: the organiser names a fixture's umpire and scorer.
 router.patch('/:id/officials', authenticateToken, setMatchOfficials);
 // Stage 8 · F11: assistant officials and the official's report.

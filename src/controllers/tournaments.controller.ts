@@ -807,7 +807,9 @@ export async function getTournament(req: Request, res: Response) {
       family.parent = parent ?? null;
       family.events = await eventsOf(pid);
     }
-    return res.json({ tournament, entries: entries || [], can_open_chat, ...family, ...(paged ? { entries_paged: true, entry_summary } : {}) });
+    // Audit #37: whether the viewer organises it (the creator or a co-organiser)
+    // comes with the tournament, so a co-organiser's controls show at once.
+    return res.json({ tournament: { ...tournament, can_manage: organiser === true }, entries: entries || [], can_open_chat, ...family, ...(paged ? { entries_paged: true, entry_summary } : {}) });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

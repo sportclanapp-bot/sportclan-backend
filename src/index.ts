@@ -47,7 +47,7 @@ import devRoutes from './routes/dev.routes';
 import adminRoutes from './routes/admin.routes';
 import jobsRoutes from './routes/jobs.routes';
 import { authenticateToken } from './middleware/auth.middleware';
-import { clientIpKey, rateLimitKey, verifiedUserId } from './middleware/rateLimitKey';
+import { budgetUserId, clientIpKey, rateLimitKey, refreshUserId } from './middleware/rateLimitKey';
 import { rateLimitBypassed } from './middleware/rateLimitBypass';
 
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
@@ -133,7 +133,7 @@ const PER_IP_AUTHED_CEILING = 4000;
  */
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: (req) => (verifiedUserId(req) ? PER_USER_MAX : PER_IP_MAX),
+  max: (req) => (budgetUserId(req) ? PER_USER_MAX : PER_IP_MAX), // audit #9: a refresh is the user's
   keyGenerator: rateLimitKey,
   skip: rateLimitBypassed,
   standardHeaders: true,
@@ -145,7 +145,7 @@ const ipCeilingLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: PER_IP_AUTHED_CEILING,
   keyGenerator: (req) => `ipc:${clientIpKey(req)}`,
-  skip: (req) => rateLimitBypassed(req) || !verifiedUserId(req),
+  skip: (req) => rateLimitBypassed(req) || !budgetUserId(req),
   standardHeaders: false,
   legacyHeaders: false,
   store: new RedisRateLimitStore('ipc', 'async'),
@@ -159,7 +159,9 @@ const authLimiter = rateLimit({
   max: 20,
   // Stays per-IP on purpose: there is no verified identity on a login attempt,
   // and this is the limiter that actually stops credential stuffing.
-  skip: rateLimitBypassed,
+  // Audit #9: a refresh or sign-out with a VALID refresh token isn't a login
+  // attempt — it is budgeted per user (refreshLimiter) and skips this one.
+  skip: (req) => rateLimitBypassed(req) || !!refreshUserId(req),
   standardHeaders: true,
   legacyHeaders: false,
   store: new RedisRateLimitStore('auth', 'blocking'),
@@ -194,6 +196,18 @@ const resetCheckNumberLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many attempts for this number. Try again later.', code: 'RATE_LIMITED' },
   store: new RedisRateLimitStore('rnum', 'blocking'),
+});
+
+/** Audit #9: refresh / sign-out with a valid refresh token — per user, generous
+ *  (a phone refreshes about once per 15-minute access token). */
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  keyGenerator: (req) => `rf:${refreshUserId(req) ?? clientIpKey(req)}`,
+  skip: (req) => rateLimitBypassed(req) || !refreshUserId(req),
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: new RedisRateLimitStore('rf', 'blocking'),
 });
 
 const sendOtpLimiter = rateLimit({
@@ -246,6 +260,7 @@ const cacheFor = (seconds: number) => (_req: any, res: any, next: any) => {
 
 app.use('/auth/send-otp', sendOtpLimiter);
 app.use(['/auth/reset-password', '/auth/verify-otp'], resetCheckIpLimiter, resetCheckNumberLimiter);
+app.use(['/auth/refresh', '/auth/logout'], refreshLimiter);
 app.use('/auth', authLimiter, authRoutes);
 app.use('/cities', cacheFor(86400), citiesRoutes);      // 24h — pure static reference (id/name/state)
 // SC-269: /sports was 24h, but it now carries OPERATIONAL config (is_active

@@ -22,7 +22,7 @@
  */
 import type { Request } from 'express';
 import { ipKeyGenerator } from 'express-rate-limit';
-import { verifyAccessToken } from '../utils/jwt';
+import { verifyAccessToken, verifyRefreshToken } from '../utils/jwt';
 
 /**
  * The address part of a limiter key. IPv6 addresses are grouped by their /56
@@ -49,8 +49,32 @@ export function verifiedUserId(req: Request): string | null {
 }
 
 /** Per-request limiter key: the user when we know them, else the address. */
+/**
+ * Audit #9 (11 Oct 2026): a token refresh carries no access token (it has just
+ * expired), so it used to count against the IP — and on one ground Wi-Fi or a
+ * carrier CGNAT address, ~20 people's refreshes used up the /auth budget and
+ * they were signed out. The refresh token itself names the user: when it
+ * verifies, the refresh is budgeted per user like any signed-in request.
+ */
+export function refreshUserId(req: Request): string | null {
+  const p = (req.baseUrl || '') + (req.path || '');
+  if (!/\/auth\/(refresh|logout)$/.test(p) && !/\/auth\/(refresh|logout)$/.test(req.originalUrl?.split('?')[0] ?? '')) return null;
+  const t = (req.body as { refreshToken?: unknown } | undefined)?.refreshToken;
+  if (typeof t !== 'string' || !t) return null;
+  try {
+    return verifyRefreshToken(t)?.userId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whoever this request is, as far as budgets go: the access token's user, else a verified refresh token's. */
+export function budgetUserId(req: Request): string | null {
+  return verifiedUserId(req) ?? refreshUserId(req);
+}
+
 export function rateLimitKey(req: Request): string {
-  const userId = verifiedUserId(req);
+  const userId = budgetUserId(req);
   if (userId) return `u:${userId}`;
   return `ip:${clientIpKey(req)}`;
 }

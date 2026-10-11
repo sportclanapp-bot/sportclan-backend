@@ -76,6 +76,7 @@ export { viewerCanPlay } from '../utils/viewerCanPlay';
 import { viewerCanPlay } from '../utils/viewerCanPlay';
 import { possessive } from '../utils/possessive';
 import { OFFICIATING_TYPES } from '../constants/accountTypes';
+import { isOlderApp, updateRequired } from '../utils/clientVersion';
 
 // POST /matches — create. FREE for all (Change #6).
 /**
@@ -2459,6 +2460,9 @@ export async function selfAssignUmpire(req: Request, res: Response) {
       ? `${match.team_a_name} vs ${match.team_b_name}`
       : 'your match';
     if (mode === 'offer') {
+      // Release prep 2.16.0: 2.15.0 would send the offer and then say "You are now
+      // officiating" — it has no offer screens. It asks for the update instead.
+      if (isOlderApp(req)) { const u = updateRequired(`offer to be this match’s ${off.toLowerCase()}`); return res.status(u.status).json(u.body); }
       const pending = (match as { umpire_offer_by?: string | null }).umpire_offer_by;
       if (pending && pending !== userId) {
         return res.status(409).json({ error: `Someone has already offered to be this match’s ${off.toLowerCase()}.`, code: 'OFFER_PENDING' });
@@ -2479,7 +2483,7 @@ export async function selfAssignUmpire(req: Request, res: Response) {
             userId: match.created_by,
             type: 'match_umpire_offer',
             title: `${off} offer`,
-            body: `${(me as { name?: string } | null)?.name ?? 'Someone'} offers to be the ${off.toLowerCase()} for ${matchLabel}. Accept or decline on the match page.`,
+            body: `${(me as { name?: string } | null)?.name ?? 'Someone'} offers to be the ${off.toLowerCase()} for ${matchLabel}. Accept or decline on the match page (update SportClan if you don't see the buttons).`,
             data: { matchId: id, screen: 'MatchDetail' },
           });
         } catch {

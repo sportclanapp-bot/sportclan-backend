@@ -10,6 +10,7 @@ import { revokeSessionsNow } from '../utils/sessionRevocation';
 import { generateAccessTokenAt } from '../utils/jwt';
 import { denySessions } from '../utils/sessionDeny';
 import { sessionLabel } from '../utils/sessionDevice';
+import { isOlderApp, updateRequired } from '../utils/clientVersion';
 
 // POST /account/delete — FINAL delete: immediate PII scrub + login lockout,
 // hard-purged after a 30-day retention window.
@@ -88,6 +89,8 @@ export async function deleteAccount(req: Request, res: Response) {
   }
   // Audit #11: and a fresh check — the password, or a code sent to the account's number.
   const re = await reauthRefusal(req, userId);
+  // Release prep 2.16.0: 2.15.0 has no way to answer the check — say what to do.
+  if (re && re.body.code === 'REAUTH_REQUIRED' && isOlderApp(req)) { const u = updateRequired('delete your account'); return res.status(u.status).json(u.body); }
   if (re) return res.status(re.status).json(re.body);
 
   // Scrub identifiable fields immediately.

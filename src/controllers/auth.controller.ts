@@ -26,6 +26,7 @@ import { awardCoins } from '../utils/coins';
 import { denySessions } from '../utils/sessionDeny';
 import { insertRefreshToken, refreshedDeviceFields } from '../utils/sessionDevice';
 import { revokeSessionsNow } from '../utils/sessionRevocation';
+import { isOlderApp, updateRequired } from '../utils/clientVersion';
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
 /** Codes sent to one number (28 Sep): per hour and per day, whoever asks. */
@@ -293,6 +294,9 @@ export async function sendOtp(req: Request, res: Response) {
   // Phase 3 B11-F16: the same for Change phone the other way round — a number
   // a live account already uses can never be moved to, and change-phone said so
   // only after the code (a paid SMS nobody could use) was typed.
+  // Release prep 2.16.0: 2.15.0 can't finish a phone change (it has no way to
+  // confirm it's you), so it hears that before a code is texted for nothing.
+  if (purpose === 'change_phone' && isOlderApp(req)) { const u = updateRequired('change your phone number'); return res.status(u.status).json(u.body); }
   if (purpose === 'change_phone') {
     try {
       const { data: taken, error: takenErr } = await supabase
@@ -911,6 +915,8 @@ export async function changePhone(req: Request, res: Response) {
   // Audit #11: a fresh check first — the current password, or a code sent to the
   // CURRENT number. A token alone used to be enough to move the account away.
   const re = await reauthRefusal(req, userId);
+  // Release prep 2.16.0: 2.15.0 has no way to answer the check — say what to do.
+  if (re && re.body.code === 'REAUTH_REQUIRED' && isOlderApp(req)) { const u = updateRequired('change your phone number'); return res.status(u.status).json(u.body); }
   if (re) return res.status(re.status).json(re.body);
   // Honor the dev-only test bypass uniformly (see isTestOtp). Production runs
   // the real OTP check since isTestOtp() is always false there.

@@ -701,7 +701,7 @@ export async function matchHistory(req: Request, res: Response) {
     // page's ids, the counts — then just this page's matches. It read every match
     // the person ever played (6,161 for QA B, ~75 round trips: 31 s on live).
     const fast = await supabase.rpc('match_history_page', { p_user: target, p_offset: offset, p_limit: limit, p_q: q0 ? escapeLike(q0) : null, p_hide_voided: hideVoided });
-    if (!fast.error && fast.data) {
+    if (!fast.error && Array.isArray((fast.data as { page?: unknown } | null)?.page)) {
       const h = fast.data as { played_count: number; officiated_count: number; voided_count: number; total: number; page: Array<{ id: string; side: string | null; role: 'played' | 'officiated' }> };
       const page = h.page ?? [];
       const { data: rowsP, error: errP } = page.length

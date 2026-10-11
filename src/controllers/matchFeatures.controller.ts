@@ -262,8 +262,6 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   return mvpId;
 }
 
-const mvpTried = new Set<string>();
-
 export async function getMatchMVP(req: Request, res: Response) {
   try {
     const { id } = req.params;
@@ -276,9 +274,11 @@ export async function getMatchMVP(req: Request, res: Response) {
     // Completion computes the MVP AFTER responding (it held the scorer ~1.3 s),
     // so a result screen that asks first computes it here. Idempotent — the
     // background pass reaches the same answer.
+    // Audit #34: "tried" is on the match itself — the calculation always writes
+    // score_summary.mvp (null when there's none), so a match with no MVP is tried
+    // once for good. (An in-memory set did this, one entry a match, never emptied.)
     const ss0 = (match?.score_summary ?? null) as { mvp?: unknown } | null;
-    if (match && match.status === 'completed' && !match.mvp_user_id && !ss0?.mvp && !mvpTried.has(id)) {
-      mvpTried.add(id); // a match that has no MVP (name-only casual) is tried once, not on every view
+    if (match && match.status === 'completed' && !match.mvp_user_id && !(ss0 && 'mvp' in ss0)) {
       await calculateAndSetMVP(id).catch(() => null);
       ({ data: match } = await supabase
         .from('matches')

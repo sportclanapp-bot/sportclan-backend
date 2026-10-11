@@ -27,7 +27,6 @@ export type LadderMove = 'leapfrog' | 'swap';
 export type LadderSettings = { reach?: number | null; move?: LadderMove };
 export type BoxSettings = { size: number; up: number; down: number; round?: number };
 
-export const LADDER_REACH_DEFAULT = 3;
 export const BOX_DEFAULT: BoxSettings = { size: 5, up: 1, down: 1 };
 
 const whole = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n);
@@ -54,8 +53,8 @@ export function boxSettingsProblem(b: unknown): string | null {
   return null;
 }
 
-/** The reach a ladder uses (null: anyone above). */
-export const reachOf = (l: LadderSettings | null | undefined): number | null => (l && 'reach' in l ? (l.reach ?? null) : LADDER_REACH_DEFAULT);
+/** The reach a ladder uses (null: anyone above). Audit #64 (Dipak): no reach set → no limit (it was 3). */
+export const reachOf = (l: LadderSettings | null | undefined): number | null => l?.reach ?? null;
 
 /**
  * Why `challenger` can't challenge `defender` on this ladder (positions from

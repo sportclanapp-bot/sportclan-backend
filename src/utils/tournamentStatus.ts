@@ -17,10 +17,17 @@ export type TournamentStatus = 'upcoming' | 'live' | 'completed' | 'cancelled';
 
 /**
  * Today in ISO date form (YYYY-MM-DD), matching `tournaments.start_date`, which
- * is a DATE and therefore has no timezone of its own.
+ * is a DATE and therefore has no timezone of its own. Audit #77: India's date
+ * (IST, UTC+5:30, no daylight saving) — the UTC date made a tournament go live
+ * at 05:30 IST and put a box league's "tomorrow" a day out before 05:30.
  */
 export function ymd(now: Date = new Date()): string {
-  return now.toISOString().slice(0, 10);
+  return new Date(now.getTime() + 330 * 60_000).toISOString().slice(0, 10);
+}
+
+/** Audit #77: India's date `days` from now. */
+export function ymdIn(days: number, now: Date = new Date()): string {
+  return ymd(new Date(now.getTime() + days * 86_400_000));
 }
 
 /**

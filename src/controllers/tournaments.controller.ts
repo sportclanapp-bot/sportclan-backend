@@ -11,7 +11,7 @@ import { syncTournamentChatMembers, syncAfterSuccess, canOpenTournamentChat } fr
 import { isTeamManager } from '../utils/teamAuth';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
-import { statusAfterFixtures, shouldGoLive } from '../utils/tournamentStatus';
+import { statusAfterFixtures, shouldGoLive, ymd, ymdIn } from '../utils/tournamentStatus';
 
 /**
  * F-52 · the other half: something has to start the tournament on the day.
@@ -27,7 +27,7 @@ import { statusAfterFixtures, shouldGoLive } from '../utils/tournamentStatus';
  * second instance on the same tick, or an overlapping run, changes nothing.
  */
 export async function sweepTournamentsDue(): Promise<{ started: number }> {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = ymd(); // audit #77: India's date
   const { data: due } = await supabase
     .from('tournaments')
     .select('id, status, start_date')
@@ -3447,7 +3447,7 @@ export type SwissByeKind = 'half' | 'zero' | 'absent';
  */
 export async function swissContext(tournamentId: string) {
   const { data: t } = await supabase
-    .from('tournaments').select('id, name, sport_id, venue, city_id, created_by, settings, tiebreaker_rules, match_rules, match_duration_minutes, buffer_minutes, format, entry_kind')
+    .from('tournaments').select('id, name, sport_id, venue, city_id, created_by, settings, tiebreaker_rules, match_rules, match_duration_minutes, buffer_minutes, format, entry_kind, daily_start_time, daily_end_time, ground_count')
     .eq('id', tournamentId).maybeSingle();
   if (!t) return null;
   const settings = settingsOf(t as { settings?: unknown });
@@ -3534,7 +3534,9 @@ export async function swissInsertRound(ctx: NonNullable<Awaited<ReturnType<typeo
   }, { requested: paired.requested, late: paired.late });
   const lastAt = Math.max(...ctx.ms.map((m) => (m.scheduled_at ? Date.parse(m.scheduled_at) : 0)), Date.now());
   const gap = (Number((ctx.t as any).match_duration_minutes ?? 60) + Number((ctx.t as any).buffer_minutes ?? 10)) * 60000;
-  for (const r of rows) r.scheduled_at = new Date(lastAt + gap).toISOString();
+  // Audit #77: inside the day's hours (IST) — not at night; past them, the next morning.
+  const at = withinPlayingHours(lastAt + gap, buildTournamentScheduleConfig(ctx.t, ymd(new Date(lastAt + gap)), undefined, ctx.slug));
+  for (const r of rows) r.scheduled_at = new Date(at).toISOString();
   if (rows.length) await supabase.from('matches').insert(rows).select('id');
 }
 
@@ -4024,6 +4026,20 @@ export async function maybeSeedKnockout(tournamentId: string): Promise<void> {
 // Build the scheduler config from the tournament row. When the daily window /
 // duration aren't set, fall back to an unbounded single-ground sequential
 // schedule so create still works. end_date absent (but window set) → single day.
+/**
+ * Audit #77: a start time moved inside the playing hours (IST): before the day
+ * starts → that morning; too late to finish → the next morning.
+ */
+export function withinPlayingHours(ms: number, cfg: { dailyStartMin: number; dailyEndMin: number; durationMin: number }): number {
+  const IST = 330 * 60_000;
+  const local = new Date(ms + IST);
+  const minute = local.getUTCHours() * 60 + local.getUTCMinutes();
+  const dayStartUtc = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - IST;
+  if (minute < cfg.dailyStartMin) return dayStartUtc + cfg.dailyStartMin * 60_000;
+  if (minute + cfg.durationMin > cfg.dailyEndMin) return dayStartUtc + 86_400_000 + cfg.dailyStartMin * 60_000;
+  return ms;
+}
+
 export function buildTournamentScheduleConfig(
   t: any,
   startDateYmd: string,
@@ -4316,7 +4332,7 @@ export async function generateFixtures(req: Request, res: Response) {
       }
     }
 
-    const startDateYmd = (tournament.start_date ?? new Date().toISOString().slice(0, 10)) as string;
+    const startDateYmd = (tournament.start_date ?? ymd()) as string; // audit #77: India's date
     const fallbackStartIso = new Date(`${startDateYmd}T00:00:00.000Z`).toISOString();
     const dayWindows = await loadDayWindows(id);
     const schedCfg = buildTournamentScheduleConfig(tournament, startDateYmd, dayWindows, await sportSlugOf(tournament.sport_id));
@@ -4899,7 +4915,7 @@ export async function nextBoxRound(req: Request, res: Response) {
     new Map(entries.map((e) => [e.team_id, e.team?.name ?? 'Player'])),
     { sport_id: t.sport_id, tournament_id: String(id), venue: t.venue ?? null, city_id: t.city_id ?? null, created_by: userId, fixtureDefaults });
   // The next round's days: from tomorrow (or the start date, if that's later).
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const tomorrow = ymdIn(1); // audit #77: India's tomorrow
   const startYmd = t.start_date && t.start_date > tomorrow ? t.start_date : tomorrow;
   const schedCfg = buildTournamentScheduleConfig({ ...t, start_date: startYmd }, startYmd, await loadDayWindows(String(id)), sportSlug);
   const sched = applyScheduleToRows(rows, schedCfg, new Date(`${startYmd}T00:00:00.000Z`).toISOString());

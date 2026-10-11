@@ -10,6 +10,8 @@ const calls: Array<{ table: string; op: string; args: unknown[] }> = [];
 let insertError: unknown = null;
 jest.mock('../utils/supabase', () => ({
   supabase: {
+    // Audit #25: the event is archived and removed by delete_with_reason (migration 147).
+    rpc: (fn: string, args: Record<string, unknown>) => { calls.push({ table: String(args.p_table), op: fn === 'delete_with_reason' ? 'delete' : fn, args: [args] }); return Promise.resolve({ data: 1, error: null }); },
     from: (table: string) => {
       const q: any = {};
       const rec = (op: string) => (...args: unknown[]) => { calls.push({ table, op, args }); return q; };
@@ -46,6 +48,7 @@ describe('logThenDeleteEvent', () => {
     expect(await logThenDeleteEvent(EVENT, 'u1', 'undo')).toEqual({ auditId: 'log1' });
     const order = calls.filter((c) => c.op === 'insert' || c.op === 'delete').map((c) => `${c.op}:${c.table}`);
     expect(order).toEqual(['insert:match_event_audit', 'delete:match_events']);
+    expect(calls.find((c) => c.op === 'delete')?.args[0]).toMatchObject({ p_ids: ['e1'], p_by: 'u1', p_reason: 'scoring undo' }); // audit #25: who and why
     expect(calls.find((c) => c.op === 'insert')?.args[0]).toEqual({
       event_id: 'e1', match_id: 'm1', changed_by: 'u1', old_payload: EVENT, new_payload: {}, action: 'undo',
       score_before: { A: { score: 0, points: 3 }, B: { score: 0, points: 1 } },

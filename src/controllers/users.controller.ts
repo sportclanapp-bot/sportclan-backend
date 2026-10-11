@@ -1,3 +1,4 @@
+import { deleteMatching } from '../utils/softDelete';
 import { orIlikeContains } from '../utils/likeSearch';
 import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
 import { bumpCounter } from '../utils/otpStore';
@@ -2003,12 +2004,9 @@ export async function deleteReview(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
-    const { error } = await supabase
-      .from('user_reviews')
-      .delete()
-      .eq('reviewer_id', userId) // own row only — can't delete someone else's review
-      .eq('reviewed_id', id);
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // Audit #24: archived (who and why) — own row only, as before.
+    const { error } = await deleteMatching('user_reviews', (q) => q.eq('reviewer_id', userId).eq('reviewed_id', id), userId, 'deleted by its writer');
+    if (error) return res.status(500).json({ error: sanitizeError({ message: error }) });
     return res.json({ success: true });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

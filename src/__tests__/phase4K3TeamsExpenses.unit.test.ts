@@ -22,7 +22,8 @@ jest.mock('../utils/supabase', () => {
     };
     return chain;
   };
-  return { supabase: { from: jest.fn((t: string) => start(`from:${t}`)), rpc: jest.fn((n: string) => start(`rpc:${n}`)) } };
+  // Audit #23: rpc args are recorded (delete_with_reason names its table).
+  return { supabase: { from: jest.fn((t: string) => start(`from:${t}`)), rpc: jest.fn((n: string, a?: unknown) => { const c = start(`rpc:${n}`); mockLog[mockLog.length - 1].push(`args:${JSON.stringify(a ?? null)}`); return c; }) } };
 });
 let mockRole: string | null = 'player';
 jest.mock('../utils/teamAuth', () => ({
@@ -53,7 +54,8 @@ const res = () => {
   return r;
 };
 const call = async (fn: any, req: object) => { const r = res(); await fn({ userId: ME, params: {}, query: {}, body: {}, ...req }, r); return r; };
-const writesTo = (t: string) => mockLog.filter((q) => q[0] === `from:${t}` && q.some((c) => /^(insert|update|upsert|delete):/.test(c)));
+const writesTo = (t: string) => mockLog.filter((q) => (q[0] === `from:${t}` && q.some((c) => /^(insert|update|upsert|delete):/.test(c)))
+  || (q[0] === 'rpc:delete_with_reason' && q.some((c) => c.includes(`"p_table":"${t}"`)))); // audit #23: a delete is archived
 /** I am a member of TEAM (and OTHER is too), nobody is banned. */
 const memberQ = (q: Q) => q[0] === 'from:team_members' && q.includes('maybeSingle');
 
@@ -74,14 +76,14 @@ describe('SC-358 · createTeam keeps join_policy', () => {
 describe('SC-359 · a voluntary leaver is not banned', () => {
   it('K3-7 (dd81760): a plain member leaving → removed, banned:false, no team_bans row', async () => {
     mockRole = 'player';
-    mockNext = (q) => (q[0] === 'from:team_members' && q.some((c) => c.startsWith('delete:')) ? { data: [{ id: 'm1' }] } : { data: null });
+    mockNext = (q) => (q[0] === 'from:team_members' && q.includes('select:["id"]') ? { data: [{ id: 'm1' }] } : { data: null }); // audit #23: the row to archive
     const r = await call(removeTeamMember, { params: { id: TEAM, userId: ME } });
     expect(r.body).toEqual({ removed: true, banned: false });
     expect(writesTo('team_bans')).toHaveLength(0);
   });
   it('K3-7 (dd81760): a captain removing someone else still bans them', async () => {
     mockRole = 'captain';
-    mockNext = (q) => (q[0] === 'from:team_members' && q.some((c) => c.startsWith('delete:')) ? { data: [{ id: 'm1' }] } : { data: null });
+    mockNext = (q) => (q[0] === 'from:team_members' && q.includes('select:["id"]') ? { data: [{ id: 'm1' }] } : { data: null }); // audit #23: the row to archive
     const r = await call(removeTeamMember, { params: { id: TEAM, userId: OTHER } });
     expect(r.body).toEqual({ removed: true, banned: true });
     expect(writesTo('team_bans')).toHaveLength(1);
@@ -114,6 +116,7 @@ describe('SC-360 · who can delete', () => {
     mockNext = (q) => {
       if (memberQ(q)) return { data: { id: 'm' } };
       if (q[0] === 'from:team_expenses' && q.includes('maybeSingle')) return { data: { id: EXP, created_by: createdBy, title: 'Ground', amount: 100 } };
+      if (q[0] === 'from:team_expenses' && q.includes('select:["id"]')) return { data: [{ id: EXP }] }; // audit #23: the rows to archive
       return { data: null };
     };
   };

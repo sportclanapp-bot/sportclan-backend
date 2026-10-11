@@ -1,3 +1,4 @@
+import { deleteMatching } from '../utils/softDelete';
 import { selectAll } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -514,10 +515,9 @@ export async function deleteExpense(req: Request, res: Response) {
       });
     }
 
-    const { error } = await supabase
-      .from('team_expenses').delete()
-      .eq('id', expenseId).eq('team_id', id);
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // Audit #23: archived with who and why (the team log above keeps its line too).
+    const { error } = await deleteMatching('team_expenses', (q) => q.eq('id', expenseId).eq('team_id', id), userId, 'expense deleted');
+    if (error) return res.status(500).json({ error: sanitizeError({ message: error }) });
     return res.json({ success: true });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

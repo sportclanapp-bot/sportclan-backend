@@ -1,3 +1,4 @@
+import { deleteMatching } from '../utils/softDelete';
 import { secretEquals } from '../utils/secretEqual';
 import { disbandedTeamIds } from '../utils/teamVisibility';
 import { NUMBER_HOLD_MS } from '../utils/deletedNumber';
@@ -66,7 +67,7 @@ async function resolveCaptainciesOnDelete(userId: string): Promise<void> {
     const list = others || [];
     if (list.length === 0) {
       // Sole member — remove the membership; the team goes inert.
-      await supabase.from('team_members').delete().eq('team_id', team_id).eq('user_id', userId);
+      await deleteMatching('team_members', (q) => q.eq('team_id', team_id).eq('user_id', userId), userId, 'account deleted'); // audit #23
       continue;
     }
     // Vice-captain succeeds first; otherwise the oldest remaining member.

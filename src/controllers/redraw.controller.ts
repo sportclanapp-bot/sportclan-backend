@@ -5,6 +5,7 @@
  * ready for "Generate fixtures" again; everyone entered is told. A knockout's
  * bye, or a Swiss bye, doesn't count as started. Sport-neutral.
  */
+import { deleteMatching } from '../utils/softDelete';
 import { allRows, selectAllIn } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -47,7 +48,7 @@ export async function redraw(req: Request, res: Response) {
       return res.status(409).json({ error: 'A match has started, so the draw can’t be made again. Edit a fixture instead.', code: 'DRAW_STARTED' });
     }
     if (matches.length) {
-      const { error } = await supabase.from('matches').delete().in('id', matches.map((m) => m.id));
+      const { error } = await deleteMatching('matches', (q) => q.in('id', matches.map((m) => m.id)), userId, 'unplayed fixture replaced by a redraw'); // audit #25
       if (error) return res.status(409).json({ error: 'The draw couldn’t be cleared. Edit the fixtures instead.', code: 'REDRAW_FAILED' });
     }
     // Ready for "Generate fixtures": the flag down; a random draw's seeds go (it writes new ones).

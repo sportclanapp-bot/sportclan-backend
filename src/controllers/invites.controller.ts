@@ -1,3 +1,4 @@
+import { deleteMatching } from '../utils/softDelete';
 import { isRangeError, pageMeta, parsePagination } from '../utils/pagination';
 import { Request, Response } from 'express';
 import { isUuid } from '../utils/uuid';
@@ -198,23 +199,17 @@ export async function withdrawInvite(req: Request, res: Response) {
   }
   // Guarded delete: if the receiver responded between the read and here, 0 rows
   // delete → clean 400 (race-safe), never a false success.
-  const { data: deleted, error } = await supabase
-    .from('invites').delete()
-    .eq('id', id).eq('sender_id', userId).eq('status', 'pending')
-    .select('id');
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
+  // Audit #24: archived (who and why), not erased.
+  const del = await deleteMatching('invites', (q) => q.eq('id', id).eq('sender_id', userId).eq('status', 'pending'), userId, 'withdrawn by its sender');
+  const deleted = del.ids;
+  if (del.error) return res.status(500).json({ error: sanitizeError({ message: del.error }) });
   if (!deleted || deleted.length === 0) {
     return res.status(400).json({ error: 'This invite was already responded to.', code: 'INVITE_RESOLVED' });
   }
   // SC-332: remove the receiver's now-dangling invite notification so a withdrawn
   // invite doesn't linger in their bell (best-effort — never fail the withdraw).
   try {
-    await supabase
-      .from('notifications')
-      .delete()
-      .eq('user_id', invite.receiver_id)
-      .eq('type', 'invite')
-      .contains('data', { invite_id: id });
+    await deleteMatching('notifications', (q) => q.eq('user_id', invite.receiver_id).eq('type', 'invite').contains('data', { invite_id: id }), userId, 'invite withdrawn'); // audit #24
   } catch {
     /* best-effort */
   }

@@ -9,6 +9,7 @@
  * (Migration 107 makes the row outlive the event; before it, the log row of a
  * delete was cascaded away with the event it described.)
  */
+import { deleteWithReason } from './softDelete';
 import { supabase } from './supabase';
 
 export type EventRemoval = 'undo' | 'delete';
@@ -35,8 +36,9 @@ export async function logThenDeleteEvent(
     score_before: await currentScore(event.match_id),
   }).select('id').maybeSingle();
   if (logErr) return { error: 'Could not record this change, so nothing was removed. Try again.' };
-  const { error } = await supabase.from('match_events').delete().eq('id', event.id);
-  if (error) return { error: error.message };
+  // Audit #25: archived (deleted_records, with who and why) as well as logged.
+  const { error } = await deleteWithReason('match_events', [event.id], userId, `scoring ${action}`);
+  if (error) return { error };
   return { auditId: (logRow as { id?: string } | null)?.id };
 }
 

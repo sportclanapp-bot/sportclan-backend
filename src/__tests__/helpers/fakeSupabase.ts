@@ -119,7 +119,20 @@ export function fakeDb(seed: Record<string, Row[]> = {}, opts: { maxRows?: numbe
     }
     return b;
   }
-  return { client: { from, rpc: async () => ({ data: null, error: null }) }, tables, t, log };
+  // Audit #23–#25: the archive-then-delete function (migration 147).
+  async function rpc(fn: string, args: Record<string, any> = {}) {
+    if (fn === 'delete_with_reason') {
+      const table = String(args.p_table); const ids = new Set((args.p_ids ?? []) as string[]);
+      const rows = t(table);
+      const gone = rows.filter((r) => ids.has(r.id));
+      tables[table] = rows.filter((r) => !ids.has(r.id));
+      for (const r of gone) t('deleted_records').push({ table_name: table, row_id: r.id, row: { ...r }, deleted_at: new Date().toISOString(), deleted_by: args.p_by ?? null, deleted_reason: args.p_reason ?? null });
+      log.push({ table, op: 'delete', arg: { ids: [...ids], by: args.p_by, reason: args.p_reason } });
+      return { data: gone.length, error: null };
+    }
+    return { data: null, error: null };
+  }
+  return { client: { from, rpc }, tables, t, log };
 }
 
 function defaults(table: string): Row {

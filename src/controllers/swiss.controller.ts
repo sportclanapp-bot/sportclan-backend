@@ -14,6 +14,7 @@
  * started; the server says what a swap breaks (a repeat, a colour run, the same
  * club in the last round) but lets the arbiter decide.
  */
+import { deleteMatching } from '../utils/softDelete';
 import type { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
@@ -312,7 +313,7 @@ export async function swapSwissPairing(req: Request, res: Response) {
     if (g.white === p.white && g.black === p.black) continue;
     await supabase.from('matches').update({ team_a_id: p.white, team_b_id: p.black, team_a_name: name(p.white), team_b_name: name(p.black) }).eq('id', g.row.id);
     // The game's line-up was its old players': cleared, then filled from the new entries.
-    await supabase.from('match_participants').delete().eq('match_id', g.row.id);
+    await deleteMatching('match_participants', (q) => q.eq('match_id', g.row.id), userId, 'Swiss pairing swapped'); // audit #25
   }
   await fillEntryLineups(id);
   if (byeRow && next.bye && byeRow.team_a_id !== next.bye) {

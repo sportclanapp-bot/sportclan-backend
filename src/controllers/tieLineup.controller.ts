@@ -28,6 +28,7 @@
  * that side. Hidden from the other side until both orders are in, like the
  * orders (match_tie_trumps).
  */
+import { deleteMatching } from '../utils/softDelete';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { isUuid } from '../utils/uuid';
@@ -248,7 +249,7 @@ export async function setTieLineup(req: Request, res: Response) {
     // This side's players, each with their rubbers.
     const roles = new Map<string, string[]>();
     for (const r of order) for (const u of lineup[r]!) roles.set(u, [...(roles.get(u) ?? []), r]);
-    await supabase.from('match_participants').delete().eq('match_id', id).eq('team_side', side);
+    await deleteMatching('match_participants', (q) => q.eq('match_id', id).eq('team_side', side), userId, 'tie line-up set again'); // audit #25
     const { error } = await supabase.from('match_participants').insert([...roles].map(([u, rs]) => ({ match_id: id, user_id: u, team_side: side, role: `${TIE}${rs.join(',')}` })));
     if (error) return res.status(500).json({ error: 'The order wasn’t saved. Try again.' });
     if (spec.trump && !(await setTrump(id, side, String(trumpKey), userId))) return res.status(500).json({ error: 'The trump match wasn’t saved. Try again.' });

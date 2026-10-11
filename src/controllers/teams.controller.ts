@@ -1,3 +1,4 @@
+import { deleteMatching } from '../utils/softDelete';
 import { TEAM_DISBANDED, liveTeams, softDisbandTeam } from '../utils/teamVisibility';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { escapeLike } from '../utils/likeSearch';
@@ -472,12 +473,9 @@ export async function removeTeamMember(req: Request, res: Response) {
           p_target_id: heir,
         });
         if (tErr) return res.status(400).json({ error: sanitizeError(tErr) });
-        const { error: dErr } = await supabase
-          .from('team_members')
-          .delete()
-          .eq('team_id', id)
-          .eq('user_id', userId);
-        if (dErr) return res.status(500).json({ error: sanitizeError(dErr) });
+        // Audit #23: archived (who and why), not erased.
+        const { error: dErr } = await deleteMatching('team_members', (q) => q.eq('team_id', id).eq('user_id', userId), userId, 'left the team (captaincy passed on)');
+        if (dErr) return res.status(500).json({ error: sanitizeError({ message: dErr }) });
         return res.json({ removed: true, captaincy_transferred_to: heir });
       }
       // Last member leaving → the team is disbanded if it has no match
@@ -502,22 +500,16 @@ export async function removeTeamMember(req: Request, res: Response) {
         }
         return res.json({ removed: true, team_disbanded: true });
       }
-      const { error: dErr } = await supabase
-        .from('team_members')
-        .delete()
-        .eq('team_id', id)
-        .eq('user_id', userId);
-      if (dErr) return res.status(500).json({ error: sanitizeError(dErr) });
+      const { error: dErr } = await deleteMatching('team_members', (q) => q.eq('team_id', id).eq('user_id', userId), userId, 'left the team (last member)'); // audit #23
+      if (dErr) return res.status(500).json({ error: sanitizeError({ message: dErr }) });
       return res.json({ removed: true, team_empty: true });
     }
 
-    const { data: gone, error } = await supabase
-      .from('team_members')
-      .delete()
-      .eq('team_id', id)
-      .eq('user_id', targetUserId)
-      .select('id');
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // Audit #23: archived with who removed them (or that they left).
+    const del = await deleteMatching('team_members', (q) => q.eq('team_id', id).eq('user_id', targetUserId), userId,
+      targetUserId === userId ? 'left the team' : 'removed by a team manager');
+    const gone = del.ids;
+    if (del.error) return res.status(500).json({ error: sanitizeError({ message: del.error }) });
     // B07-F22: removing a non-member answered "removed, banned" while nothing
     // was removed and the ban write failed silently.
     if (!gone || gone.length === 0) return res.status(404).json({ error: 'Not a member of this team.' });
@@ -535,11 +527,7 @@ export async function removeTeamMember(req: Request, res: Response) {
       if (banErr) return res.json({ removed: true, banned: false });
       // Drop any pending request too, or the removed user's stale request could
       // be approved straight back in.
-      await supabase
-        .from('team_join_requests')
-        .delete()
-        .eq('team_id', id)
-        .eq('user_id', targetUserId);
+      await deleteMatching('team_join_requests', (q) => q.eq('team_id', id).eq('user_id', targetUserId), userId, 'removed from the team'); // audit #23
     }
 
     return res.json({ removed: true, banned: !isSelfLeave });

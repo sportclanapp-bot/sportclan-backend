@@ -1,3 +1,4 @@
+import { deleteMatching } from '../utils/softDelete';
 import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
 import { rankExtrasFor } from '../utils/rankExtras';
 import { sportBoards, type SportLeaderMatch, type Board } from '../utils/sportLeaders';
@@ -403,7 +404,7 @@ export async function removeTournamentOfficial(req: Request, res: Response) {
       return res.status(403).json({ error: 'Only the organiser or the official themselves can remove' });
     }
 
-    await supabase.from('tournament_officials').delete().eq('id', officialId).eq('tournament_id', id);
+    await deleteMatching('tournament_officials', (q) => q.eq('id', officialId).eq('tournament_id', id), userId, 'removed by an organiser'); // audit #25
     return res.json({ success: true });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

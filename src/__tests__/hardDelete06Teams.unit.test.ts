@@ -101,7 +101,7 @@ describe('disband and the last member leaving are the soft disband', () => {
     expect(f).not.toMatch(/from\('teams'\)\.delete\(\)|from\('team_expenses'\)\.delete\(\)/);
     const i = f.indexOf("softDisbandTeam(id, userId, 'last_member_left')");
     const j = f.indexOf("team_empty: true");
-    expect(f.slice(i, j)).toMatch(/\.from\('team_members'\)\s*\.delete\(\)/); // only on the kept-empty path
+    expect(f.slice(i, j)).toMatch(/deleteMatching\('team_members'/); // only on the kept-empty path (audit #23: archived)
   });
 });
 

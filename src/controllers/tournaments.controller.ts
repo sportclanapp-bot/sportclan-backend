@@ -1,3 +1,4 @@
+import { deleteMatching } from '../utils/softDelete';
 import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
 import { rankExtrasFor } from '../utils/rankExtras';
 import { sportTerms } from '../utils/sportTerms';
@@ -2285,7 +2286,7 @@ export async function removeTournamentOrganiser(req: Request, res: Response) {
       if (!auth.ok) return res.status(403).json({ error: 'Only the tournament creator can remove a co-organiser.' });
       viaAdmin = auth.viaAdmin;
     }
-    await supabase.from('tournament_organisers').delete().eq('tournament_id', id).eq('user_id', targetId);
+    await deleteMatching('tournament_organisers', (q) => q.eq('tournament_id', id).eq('user_id', targetId), userId, 'removed as co-organiser'); // audit #25
     if (viaAdmin) void logAdminAction(userId, 'remove_co_organiser', 'tournament', id, `removed co-organiser ${targetId}`);
     return res.json({ success: true });
   } catch {
@@ -2316,7 +2317,7 @@ export async function reassignTournamentOrganiser(req: Request, res: Response) {
     await supabase.from('tournaments').update({ created_by: user_id, updated_at: new Date().toISOString() }).eq('id', id);
     await supabase.from('tournaments').update({ created_by: user_id }).eq('parent_id', id); // its events
     // The new organiser can't also be a co-organiser (would be redundant).
-    await supabase.from('tournament_organisers').delete().eq('tournament_id', id).eq('user_id', user_id);
+    await deleteMatching('tournament_organisers', (q) => q.eq('tournament_id', id).eq('user_id', user_id), userId, 'became the main organiser'); // audit #25
     if (auth.viaAdmin) {
       void logAdminAction(userId, 'reassign_organiser', 'tournament', id, `organiser ${t.created_by} → ${target.name ?? user_id}`);
     }

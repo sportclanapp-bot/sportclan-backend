@@ -187,7 +187,8 @@ describe('K2-2j · SC-108 hardening', () => {
     mockNext = () => ({ data: null, error: { message: 'relation "invites" secret detail' } });
     const l = await call(listInvites, {});
     expect([l.statusCode, l.body.error]).toEqual([500, 'Internal server error']);
-    mockNext = (q) => (q.some((c) => c.startsWith('delete:'))
+    // Audit #24: the withdraw reads the rows to archive first; fail there.
+    mockNext = (q) => (q.some((c) => c.startsWith('delete:') || c === 'select:["id"]')
       ? { data: null, error: { message: 'permission denied for table invites' } }
       : { data: { id: 'i1', sender_id: ME, receiver_id: OTHER, status: 'pending' } });
     const w = await call(withdrawInvite, { params: { id: 'i1' } });

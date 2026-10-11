@@ -1,3 +1,4 @@
+import { deleteMatching } from '../utils/softDelete';
 import { CONSOLATION_ONLY } from '../utils/drawLinks';
 /**
  * Badminton gap 2 (Oct 2026) · singles and pair entries.
@@ -371,7 +372,7 @@ export async function answerPairInvite(req: Request, res: Response) {
       const teamId = (entry as { team_id: string }).team_id;
       const { data: members } = await supabase.from('team_members').select('user_id').eq('team_id', teamId);
       const old = ((members ?? []) as Array<{ user_id: string }>).map((m) => m.user_id).filter((u) => u !== inv.inviter_id);
-      if (old.length) await supabase.from('team_members').delete().eq('team_id', teamId).in('user_id', old);
+      if (old.length) await deleteMatching('team_members', (q) => q.eq('team_id', teamId).in('user_id', old), userId, 'pair partner replaced'); // audit #23
       await supabase.from('team_members').insert({ team_id: teamId, user_id: userId, role: 'vice_captain' });
       await supabase.from('teams').update({ name: entryTeamName([nameOf(ppl.get(inv.inviter_id)), nameOf(ppl.get(userId))]) }).eq('id', teamId);
       await supabase.from('tournament_pair_invites').update({ status: 'accepted', responded_at: now }).eq('id', inv.id);

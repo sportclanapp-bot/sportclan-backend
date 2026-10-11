@@ -111,9 +111,10 @@ describe('K1-60 (d7d3e84) SC-79 · a deleted captain hands the team on', () => {
   it('K1-60 (d7d3e84): the sole member just leaves; the team is not given a captain', async () => {
     mockNext = teams([]);
     await call(deleteAccount, { body: { confirmation: 'DELETE' } });
+    // Audit #23: the sole member's row is archived (delete_with_reason), not given a captain.
     const tm = writes().filter((q) => q[0] === 'from:team_members');
-    expect(tm).toHaveLength(1);
-    expect(tm[0].join(' ')).toContain('delete:[]');
+    expect(tm).toHaveLength(0);
+    expect(mockLog.some((q) => q[0] === 'from:team_members' && q.includes('select:["id"]'))).toBe(true);
   });
 });
 

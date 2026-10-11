@@ -129,11 +129,12 @@ describe('K2-49a · a captain leaving hands the team on first (SC-243)', () => {
   it('K2-49a (ba1d194): captaincy moves to the heir BEFORE the ex-captain’s row is deleted', async () => {
     mockNext = (q) => (q[0] === 'from:team_members' && q.some((c) => c.startsWith('neq:'))
       ? { data: [{ user_id: E, role: 'player', joined_at: '2026-01-01' }, { user_id: D, role: 'vice_captain', joined_at: '2026-02-01' }] }
-      : { data: null });
+      : q[0] === 'from:team_members' && q.includes('select:["id"]') ? { data: [{ id: 'row-me' }] } : { data: null });
     const r = await call(removeTeamMember, { params: { id: TEAM, userId: ME } });
     expect(r.body).toEqual({ removed: true, captaincy_transferred_to: D }); // the co-captain is preferred
     const rpcAt = mockLog.findIndex((q) => q[0] === 'rpc:transfer_team_captaincy');
-    const delAt = mockLog.findIndex((q) => q[0] === 'from:team_members' && q.some((c) => c.startsWith('delete:')));
+    // Audit #23: the ex-captain's row is archived by delete_with_reason.
+    const delAt = mockLog.findIndex((q) => q[0] === 'rpc:delete_with_reason' && String(q[1]).includes('"p_table":"team_members"'));
     expect(rpcAt).toBeGreaterThan(-1);
     expect(JSON.parse(mockLog[rpcAt][1])).toEqual({ p_team_id: TEAM, p_actor_id: ME, p_target_id: D });
     expect(delAt).toBeGreaterThan(rpcAt);

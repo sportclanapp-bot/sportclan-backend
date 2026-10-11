@@ -490,6 +490,33 @@ export async function reduceOvers(req: Request, res: Response) {
 // FEATURE 6 — Live Match Edit
 // ────────────────────────────────────────────────────────────────────────────
 
+/** Fields an edit may not touch: who did it and for which side (undo and re-score instead). */
+const IDENTITY_FIELDS = new Set(['team_side', 'player_id', 'player_name', 'batsman_id', 'batsman_name', 'bowler_id', 'bowler_name', 'non_striker_id', 'fielder_id', 'assist_id', 'out_player_id', 'kind', 'super_over', 'game', 'board', 'rubber']);
+/** Count fields: whole numbers, 0 or more (no top — the no-caps rule). penalty_runs may be negative. */
+const COUNT_FIELDS = new Set(['runs', 'value', 'points', 'extras', 'byes', 'leg_byes', 'minutes', 'seconds']);
+
+/**
+ * Audit #15 (11 Oct 2026): what an event edit may change. Only fields the event
+ * already has, keeping their type; counts stay whole numbers 0 or more; who did
+ * it and for which side can't be edited. Returns the refusal, or null.
+ */
+export function eventEditRefusal(oldPayload: unknown, changes: unknown): { error: string; code: string } | null {
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) return { error: 'changes must be an object of fields.', code: 'BAD_CHANGES' };
+  const old = (oldPayload && typeof oldPayload === 'object' ? oldPayload : {}) as Record<string, unknown>;
+  const entries = Object.entries(changes as Record<string, unknown>);
+  if (entries.length === 0) return { error: 'Nothing to change.', code: 'BAD_CHANGES' };
+  for (const [k, v] of entries) {
+    if (IDENTITY_FIELDS.has(k)) return { error: `“${k}” can’t be edited — undo the event and score it again.`, code: 'FIELD_NOT_EDITABLE' };
+    if (!(k in old)) return { error: `This event has no “${k}” to edit.`, code: 'UNKNOWN_FIELD' };
+    const was = old[k];
+    if (was !== null && v !== null && typeof v !== typeof was) return { error: `“${k}” must stay a ${typeof was}.`, code: 'BAD_FIELD_TYPE' };
+    if (typeof v === 'number' && (!Number.isFinite(v) || !Number.isInteger(v))) return { error: `“${k}” must be a whole number.`, code: 'BAD_FIELD_VALUE' };
+    if (COUNT_FIELDS.has(k) && (typeof v !== 'number' || v < 0 || v > Number.MAX_SAFE_INTEGER)) return { error: `“${k}” must be a whole number, 0 or more.`, code: 'BAD_FIELD_VALUE' };
+    if (typeof v === 'object' && v !== null) return { error: `“${k}” can’t be edited here.`, code: 'FIELD_NOT_EDITABLE' };
+  }
+  return null;
+}
+
 export async function editMatchEvent(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -512,6 +539,10 @@ export async function editMatchEvent(req: Request, res: Response) {
     if (!event) return res.status(404).json({ error: 'Event not found' });
 
     const oldPayload = event.payload ?? {};
+    // Audit #15: an edit went in unchecked ({ runs: 1e9 }, junk keys, a string
+    // spread into character keys, another side or player).
+    const refused = eventEditRefusal(oldPayload, changes);
+    if (refused) return res.status(400).json(refused);
     const newPayload = { ...oldPayload, ...changes };
 
     // Audit log — first, with the score before (scoring edit log). No log

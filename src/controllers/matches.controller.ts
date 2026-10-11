@@ -3857,6 +3857,9 @@ export async function completeMatch(req: Request, res: Response) {
         const wo = ss.walkover_score as Record<string, number> | undefined;
         ss.result = wo ? `${wName} won by walkover (${wo[derivedSide]}–0)` : `${wName} won by walkover`;
       }
+      // Audit #56 (with #6): whose record this result changed — so voiding it
+      // later takes back exactly that, no more (only players who agreed count).
+      ss.attributed_user_ids = [...allPlayerIds];
       const patch: Record<string, any> = { score_summary: ss };
       // Backfill winner_team_id when the client didn't send it but a real team
       // maps to the winning side. Free-text matches keep null team ids (winner

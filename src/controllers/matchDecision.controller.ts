@@ -27,7 +27,7 @@ import { advanceTournamentWinner, tournamentSettingsOf } from './tournaments.con
 import { notifyUsers, matchAudienceIds } from '../utils/notify';
 
 export const REASON_MAX = 200;
-const COLS = 'id, sport_id, tournament_id, created_by, status, round, group_label, next_match_id, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules, score_summary, voided_at';
+const COLS = 'id, sport_id, tournament_id, created_by, status, round, group_label, next_match_id, next_slot, winner_team_id, bracket, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules, score_summary, voided_at';
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
 
@@ -76,7 +76,20 @@ export async function decideMatch(req: Request, res: Response) {
       if (m.status === 'scheduled') return res.status(409).json({ error: 'This match hasn’t been played yet.', code: 'NOT_STARTED' });
       const at = typeof body.at === 'string' && Number.isFinite(Date.parse(body.at)) ? new Date(body.at).toISOString() : null;
       ss.decision = { kind: 'replay', reason, by: userId, at: now };
-      update = { status: 'scheduled', winner_team_id: null, result_type: null, score_summary: ss, ...(at ? { scheduled_at: at } : {}), called_at: null };
+      // Audit #57: with no new time it is due now — the old (past) time sent it
+      // straight back to abandoned by the hourly sweep.
+      update = { status: 'scheduled', winner_team_id: null, result_type: null, score_summary: ss, scheduled_at: at ?? now, called_at: null };
+      // Audit #57: a knockout winner already moved on comes back out of the next
+      // round (which mustn't have started) — the match is being played again.
+      if (bracket && m.next_match_id && m.winner_team_id) {
+        const { data: child } = await supabase.from('matches').select('id, status, team_a_id, team_b_id').eq('id', m.next_match_id).maybeSingle();
+        const c = child as { id: string; status: string; team_a_id: string | null; team_b_id: string | null } | null;
+        if (c && c.status !== 'scheduled') return res.status(409).json({ error: 'The next round has already started — it can’t be replayed now.', code: 'NEXT_ROUND_STARTED' });
+        if (c) {
+          const slotA = m.next_slot === 'A' || (m.next_slot == null && c.team_a_id === m.winner_team_id);
+          await supabase.from('matches').update(slotA ? { team_a_id: null, team_a_name: 'TBD' } : { team_b_id: null, team_b_name: 'TBD' }).eq('id', c.id);
+        }
+      }
     } else if (body.decision === 'stands') {
       const sc = scoreNow(ss);
       if (!sc) return res.status(409).json({ error: 'There’s no score to stand. Award it or replay it instead.', code: 'NO_SCORE' });
@@ -101,6 +114,9 @@ export async function decideMatch(req: Request, res: Response) {
       }
       const fin = scoreNow(summary);
       summary.decision = { kind: 'awarded', reason, by: userId, at: now };
+      // Audit #72: an awarded match wasn't played — it scores like a walkover
+      // (the walkover points, no averages from its score, no record change).
+      summary.walkover = true;
       summary.result = `${names[side]} awarded the match${fin ? ` ${Math.max(fin.A, fin.B)}–${Math.min(fin.A, fin.B)}` : ''}`;
       update = { status: 'completed', winner_team_id: side === 'A' ? m.team_a_id : m.team_b_id, result_type: 'awarded', score_summary: summary, completed_at: now };
     } else {

@@ -137,9 +137,19 @@ export async function recordDeltas(matchId: string): Promise<ProfileDelta[]> {
   const participants = parts ?? [];
 
   // A walkover records a winner without a played game and applies no attribution.
-  const walkover = (match.score_summary as { walkover?: boolean } | null)?.walkover === true;
-  if (walkover) return [];
+  const ssAll = (match.score_summary ?? {}) as { walkover?: boolean; decision?: { kind?: string }; attributed_user_ids?: unknown };
+  if (ssAll.walkover === true) return [];
+  // Audit #56: an organiser's decision ("result stands", "awarded") completes a
+  // match without touching anyone's record — so voiding it takes nothing back.
+  if (ssAll.decision?.kind === 'stands' || ssAll.decision?.kind === 'awarded') return [];
   if (!countsTowardRecord(match, participants.length)) return [];
+  // Audit #56 (with #6): only the players whose record the result changed.
+  // Older matches (before the list was kept) credited the whole line-up.
+  if (Array.isArray(ssAll.attributed_user_ids)) {
+    const credited = new Set(ssAll.attributed_user_ids as string[]);
+    participants.splice(0, participants.length, ...participants.filter((p) => credited.has(p.user_id)));
+    if (participants.length === 0) return [];
+  }
 
   const { data: history } = await supabase
     .from('rating_history')

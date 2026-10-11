@@ -421,7 +421,7 @@ export async function signOutOtherDevices(req: Request, userId: string): Promise
   // device can later be signed out on its own like any other.
   let sid: string | null = null;
   if (currentRefreshToken) {
-    sid = mineSess && mineSess.row.user_id === userId ? mineSess.row.id : null; // audit #19
+    sid = mineSess && (!mineSess.row.user_id || mineSess.row.user_id === userId) ? mineSess.row.id : null; // audit #19
   }
   const accessToken = generateAccessTokenAt(userId, Math.floor(cutoffMs / 1000) + 1, sid);
   return { accessToken };

@@ -251,11 +251,14 @@ describe('15 · every way to sign one device out denies its session', () => {
     expect(await isSessionDenied(SID)).toBe(false);
   });
   test('Log out: the signed-out row\'s id is denied', async () => {
-    mockNext = (q) => (q[0] === 'from:refresh_tokens' ? { data: [{ id: SID }] } : {});
+    // Audit #19: the session is found by its token's hash, then signed out by id.
+    mockNext = (q) => (q[0] === 'from:refresh_tokens'
+      ? (q.some((c) => c.startsWith('maybeSingle')) ? { data: { id: SID, user_id: 'u1', revoked: false } } : { data: [{ id: SID }] })
+      : {});
     const r = await call(logout, { body: { refreshToken: 'rt' } });
     expect(r.body).toEqual({ success: true });
     expect(await isSessionDenied(SID)).toBe(true);
-    expect(mockLog[0].join()).toContain('update:[{"revoked":true}]');
+    expect(mockLog.some((q) => q.join().includes('update:[{"revoked":true}]'))).toBe(true);
   });
   test('…a log-out with no refresh token denies nothing and still succeeds', async () => {
     const r = await call(logout, { body: {} });

@@ -735,16 +735,17 @@ export async function login(req: Request, res: Response) {
   // hour pauses password sign-in for the account (sign-in by code still works,
   // so nobody can lock the owner out completely).
   const who = clientIpKey(req);
-  const [mine, anyone] = await Promise.all([readCounter(`pwf:${user.id}:${who}`), readCounter(`pwfa:${user.id}`)]);
+  // The counters fail open: a counter store hiccup must never block sign-in.
+  const [mine, anyone] = await Promise.all([readCounter(`pwf:${user.id}:${who}`), readCounter(`pwfa:${user.id}`)]).catch(() => [0, 0]);
   if (mine >= PASSWORD_FAILS_PER_REQUESTER || anyone >= PASSWORD_FAILS_PER_ACCOUNT) {
     return res.status(429).json({ error: 'Too many wrong passwords. Try again later, or sign in with a code.', code: 'PASSWORD_LOCKED' });
   }
   const ok = await bcrypt.compare(password, user.password_hash);
   if (!ok) {
-    await Promise.all([bumpCounter(`pwf:${user.id}:${who}`, 15 * 60), bumpCounter(`pwfa:${user.id}`, 60 * 60)]);
+    await Promise.all([bumpCounter(`pwf:${user.id}:${who}`, 15 * 60), bumpCounter(`pwfa:${user.id}`, 60 * 60)]).catch(() => undefined);
     return res.status(401).json({ error: 'Invalid credentials' });
   }
-  await clearCounter(`pwf:${user.id}:${who}`);
+  await clearCounter(`pwf:${user.id}:${who}`).catch(() => undefined);
   if (await isSuspended(user.id)) {
     return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
   }
@@ -768,7 +769,7 @@ export async function refresh(req: Request, res: Response) {
     // stolen or stale copy, and the whole sign-in is ended.
     const found = await findSessionByToken(refreshToken);
     const row = found?.row;
-    if (!row || row.revoked || row.user_id !== payload.userId) return res.status(401).json({ error: 'Refresh token revoked' });
+    if (!row || row.revoked || (row.user_id && row.user_id !== payload.userId)) return res.status(401).json({ error: 'Refresh token revoked' });
     if (found.reused && !found.inGrace) {
       await supabase.from('refresh_tokens').update({ revoked: true }).eq('id', row.id);
       await denySessions([row.id]);

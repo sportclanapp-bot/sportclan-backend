@@ -2014,12 +2014,16 @@ export async function undoEvent(req: Request, res: Response) {
       return res.status(409).json({ error: 'This match is finished and can no longer be edited', code: 'MATCH_FINISHED' });
     }
 
+    // Audit #47: the match's last event, whoever scored it, in the order the
+    // timeline and the score use (time, then id). "Mine only" skipped the real
+    // last one after a hand-over. authorizeScorer above means the caller holds
+    // the scoring lease — they're the one scoring now.
     const { data: latest } = await supabase
       .from('match_events')
       .select('*')
       .eq('match_id', matchId)
-      .eq('created_by', userId)
       .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .limit(1)
       .maybeSingle();
     if (!latest) return res.status(404).json({ error: 'No event to undo' });

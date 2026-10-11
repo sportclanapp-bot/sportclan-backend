@@ -10,7 +10,7 @@ import type { Server } from 'http';
 import { MemoryStore } from 'express-rate-limit';
 import { makeBudgetLimiters, PER_USER_MAX } from '../utils/budgetLimiters';
 import { isScoringWrite, SCORING_PER_USER_MAX } from '../utils/scoringBudget';
-import { generateAccessToken } from '../utils/jwt';
+import { generateAccessToken, generateRefreshToken } from '../utils/jwt';
 
 const servers: Server[] = [];
 afterAll(() => servers.forEach((s) => s.close()));
@@ -18,6 +18,7 @@ afterAll(() => servers.forEach((s) => s.close()));
 async function app() {
   const { globalLimiter, scoringLimiter } = makeBudgetLimiters(() => new MemoryStore());
   const a = express();
+  a.use(express.json());
   a.set('trust proxy', false);
   a.use(globalLimiter);
   a.use(scoringLimiter);
@@ -25,14 +26,15 @@ async function app() {
   const s = a.listen(0); servers.push(s);
   await new Promise((r) => s.once('listening', r));
   const base = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
-  return async (method: string, path: string, auth?: Record<string, string>) => (await fetch(base + path, { method, headers: auth })).status;
+  return async (method: string, path: string, auth?: Record<string, string>, body?: unknown) =>
+    (await fetch(base + path, { method, headers: { ...(auth ?? {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined })).status;
 }
 
 test('which requests are scoring writes', () => {
   const w = (method: string, path: string) => isScoringWrite({ method, path } as never);
   expect([w('POST', '/scoring/m1/event'), w('POST', '/scoring/m1/undo'), w('POST', '/matches/m1/scoring-lease'), w('POST', '/matches/m1/scoring-lease/heartbeat'),
-    w('POST', '/matches/m1/typed-score'), w('POST', '/matches/m1/edit-event')]).toEqual([true, true, true, true, true, true]);
-  expect([w('GET', '/scoring/m1/events'), w('GET', '/matches/m1'), w('POST', '/matches/m1/complete'), w('POST', '/messages/chats/c/messages')]).toEqual([false, false, false, false]);
+    w('POST', '/matches/m1/typed-score'), w('POST', '/matches/m1/edit-event'), w('POST', '/matches/m1/complete')]).toEqual([true, true, true, true, true, true, true]);
+  expect([w('GET', '/scoring/m1/events'), w('GET', '/matches/m1'), w('POST', '/matches/m1/rsvp'), w('POST', '/messages/chats/c/messages')]).toEqual([false, false, false, false]);
 });
 
 test('browsing spent to the last request: scoring still goes through; browsing is stopped', async () => {
@@ -56,4 +58,14 @@ test('not signed in: a scoring write is on the per-IP budget as before', async (
   const call = await app();
   for (let i = 0; i < 200; i++) await call('POST', '/scoring/m1/event');
   expect(await call('POST', '/scoring/m1/event')).toBe(429);
+}, 60000);
+
+test('a spent browsing budget doesn’t stop the access token being renewed (it has its own limit), nor End match', async () => {
+  const call = await app();
+  const uid = '33333333-3333-4333-8333-333333333333';
+  const auth = { Authorization: `Bearer ${generateAccessToken(uid)}` };
+  for (let i = 0; i < PER_USER_MAX; i++) await call('GET', '/matches/m1', auth);
+  expect(await call('GET', '/matches/m1', auth)).toBe(429);
+  expect(await call('POST', '/auth/refresh', undefined, { refreshToken: generateRefreshToken(uid) })).toBe(200);
+  expect(await call('POST', '/matches/m1/complete', auth)).toBe(200);
 }, 60000);

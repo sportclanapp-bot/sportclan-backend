@@ -6,7 +6,7 @@
  * fast matches ~220, measured), but a person who browses fast while scoring
  * could spend it on reads — and then the POINTS were refused, the one thing that
  * must never wait. Scoring writes (a point, an undo, the scoring lease, a typed
- * score, an event edit) now count in a bucket of their own, so browsing can't
+ * score, an event edit, End match) now count in a bucket of their own, so browsing can't
  * block scoring and scoring can't crowd out browsing.
  *
  * Anti-abuse stays: the scoring bucket is itself limited (SCORING_PER_USER_MAX,
@@ -21,7 +21,7 @@ export const SCORING_PER_USER_MAX = 1200;
 const SCORING_WRITE_PATHS = [
   /^\/scoring\/[^/]+\/(event|undo)\/?$/,
   /^\/matches\/[^/]+\/scoring-lease(\/(heartbeat|release|handover|takeover))?\/?$/,
-  /^\/matches\/[^/]+\/(typed-score|edit-event)\/?$/,
+  /^\/matches\/[^/]+\/(typed-score|edit-event|complete)\/?$/, // complete: the pad's End match
 ];
 
 /** A write that scores a match (POST to one of the scoring paths). */

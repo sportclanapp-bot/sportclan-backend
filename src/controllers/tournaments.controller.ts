@@ -1,3 +1,4 @@
+import { swissMaxRounds } from '../utils/tournamentSettings';
 import { deleteMatching } from '../utils/softDelete';
 import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
 import { rankExtrasFor } from '../utils/rankExtras';
@@ -4390,9 +4391,9 @@ export async function generateFixtures(req: Request, res: Response) {
       // BUILD 4.15: round 1 now (top half v bottom half); each later round is
       // paired when the one before it is finished (swissAfterResult).
       const rounds = settingsOf(tournament as { settings?: unknown }).swiss?.rounds ?? 0;
-      if (rounds < 2 || rounds > teams.length - 1) {
+      if (rounds < 2 || rounds > swissMaxRounds(teams.length)) { // audit #63: an odd field plays as many rounds as players
         await releaseFixtureClaim(id);
-        return res.status(400).json({ error: `${teams.length} players can play at most ${plural(teams.length - 1, 'Swiss round', 'Swiss rounds')} without meeting twice; this one has ${rounds}.`, code: 'SWISS_ROUNDS' });
+        return res.status(400).json({ error: `${teams.length} players can play at most ${plural(swissMaxRounds(teams.length), 'Swiss round', 'Swiss rounds')} without meeting twice; this one has ${rounds}.`, code: 'SWISS_ROUNDS' });
       }
       // Stage 12 · CH2: FIDE's round 1 (colours only in chess), the pairing numbers fixed from here on,
       // and any byes asked for round 1 before the draw.

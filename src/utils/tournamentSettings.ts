@@ -535,10 +535,19 @@ export const MIN_PLAYERS: [number, number] = [1, Number.MAX_SAFE_INTEGER]; // St
 /** Oct 2026 (Dipak): a Swiss has at least 2 rounds and at most one fewer than its players (no fixed top). */
 export const SWISS_MIN_ROUNDS = 2;
 
+/**
+ * Audit #63: the most Swiss rounds `players` can play without meeting twice.
+ * An even field: one fewer than the players. An odd field: as many as the
+ * players — each round one sits out with a bye (5 players → 5 rounds).
+ */
+export function swissMaxRounds(players: number): number {
+  return players % 2 === 1 ? players : players - 1;
+}
+
 /** Why these rounds don't suit a Swiss of `players` (unknown: only the minimum), or null. */
 export function swissRoundsProblem(rounds: unknown, players?: number | null): string | null {
   if (!(typeof rounds === 'number' && Number.isInteger(rounds) && rounds >= SWISS_MIN_ROUNDS)) return `A Swiss has at least ${SWISS_MIN_ROUNDS} rounds.`;
-  if (players != null && Number.isFinite(players) && players >= 3 && rounds > players - 1) return `${players} players can play at most ${players - 1} Swiss rounds without meeting twice.`;
+  if (players != null && Number.isFinite(players) && players >= 3 && rounds > swissMaxRounds(players)) return `${players} players can play at most ${swissMaxRounds(players)} Swiss rounds without meeting twice.`;
   return null;
 }
 

@@ -15,7 +15,7 @@
  *             last batter can't bat alone), at most 10. A side with no line-up
  *             (typed-in teams) is all out at 10, as before.
  */
-import { plural } from './plural';
+import { ordinal, plural } from './plural';
 
 export type CricketFormat = 'limited' | 'box' | 'pair';
 
@@ -504,12 +504,11 @@ export function superOversOf(events: readonly Ev[], matchFirst: 'A' | 'B'): Supe
   return out;
 }
 
-const ORD = ['', '', '2nd ', '3rd ', '4th ', '5th '];
 /** "Lions won the super over (14–9)", "Lions won the 2nd super over (8–6)". */
 export function superOverPlayedText(winnerName: string, so: SuperOverState): string {
   const w = so.winner === 'A' ? so.A.runs : so.B.runs;
   const l = so.winner === 'A' ? so.B.runs : so.A.runs;
-  return `${winnerName} won the ${ORD[so.n] ?? `${so.n}th `}super over (${w}–${l})`;
+  return `${winnerName} won the ${so.n > 1 ? `${ordinal(so.n)} ` : ''}super over (${w}–${l})`; // audit #138: 21st, 22nd, 23rd
 }
 
 /** Cricket gap 9: how a tied knockout is settled when no (more) super overs can be played. */

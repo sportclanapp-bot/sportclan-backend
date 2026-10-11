@@ -40,7 +40,7 @@ export async function listNotifications(req: Request, res: Response) {
   // page past their newest 100 (and the FE, asking 50, saw only 50).
   const p = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   // The page and the unread count, together (they were read one after the other).
-  const [{ data, error, count }, unreadRes, typesRes] = await Promise.all([
+  const [{ data, error, count }, unreadRes, typesRes, exactRes] = await Promise.all([
     supabase
       .from('notifications')
       .select('id, type, title, body, data, read, created_at', { count: 'exact' })
@@ -68,22 +68,28 @@ export async function listNotifications(req: Request, res: Response) {
       .eq('user_id', userId)
       .is('hidden_at', null)
       .range(0, TYPE_COUNT_CAP - 1),
+    // Audit #143: every notification counted by type (migration 151) — the sample
+    // above is only the fallback until 151 is on the database.
+    supabase.rpc('notification_type_counts', { p_user: userId }),
   ]);
   // SC-41: an offset landing past the end returns PGRST103 — treat it as an
   // empty final page rather than a 500.
   if (error && !isRangeError(error)) return res.status(500).json({ error: error.message });
   const rows = error ? [] : (data || []);
 
+  const exact = !exactRes.error && exactRes.data && typeof exactRes.data === 'object' && !Array.isArray(exactRes.data)
+    ? exactRes.data as Record<string, number> : null;
   const typeCounts: Record<string, number> = {};
-  for (const r of (typesRes.data ?? []) as Array<{ type: string | null }>) {
+  if (exact) for (const [t, n] of Object.entries(exact)) typeCounts[t] = Number(n) || 0;
+  else for (const r of (typesRes.data ?? []) as Array<{ type: string | null }>) {
     const t = r.type ?? 'other';
     typeCounts[t] = (typeCounts[t] ?? 0) + 1;
   }
   return res.json({
     notifications: rows,
     unread: unreadRes.count ?? 0,
-    type_counts: typesRes.error ? null : typeCounts,
-    type_counts_complete: !typesRes.error && (count ?? 0) <= TYPE_COUNT_CAP,
+    type_counts: exact ? typeCounts : typesRes.error ? null : typeCounts,
+    type_counts_complete: !!exact || (!typesRes.error && (count ?? 0) <= TYPE_COUNT_CAP),
     ...pageMeta(count ?? 0, p),
   });
 }

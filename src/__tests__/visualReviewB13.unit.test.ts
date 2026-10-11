@@ -34,8 +34,9 @@ describe('V216 · the void notice', () => {
 describe('V009 · filter counts for the whole inbox', () => {
   it('returns per-type counts and whether they are complete', () => {
     const n = code('controllers/notifications.controller.ts');
-    expect(n).toMatch(/type_counts: typesRes\.error \? null : typeCounts/);
-    expect(n).toMatch(/type_counts_complete: !typesRes\.error && \(count \?\? 0\) <= TYPE_COUNT_CAP/);
+    // Audit #143: exact counts from migration 151; the capped sample only until it's applied.
+    expect(n).toMatch(/type_counts: exact \? typeCounts : typesRes\.error \? null : typeCounts/);
+    expect(n).toMatch(/type_counts_complete: !!exact \|\| \(!typesRes\.error && \(count \?\? 0\) <= TYPE_COUNT_CAP\)/);
   });
 });
 

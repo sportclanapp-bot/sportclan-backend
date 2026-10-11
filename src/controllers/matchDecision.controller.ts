@@ -25,6 +25,8 @@ import { withWalkoverScore } from '../utils/walkoverScore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { advanceTournamentWinner, tournamentSettingsOf } from './tournaments.controller';
 import { notifyUsers, matchAudienceIds } from '../utils/notify';
+import { plural } from '../utils/plural';
+import { sportTerms } from '../utils/sportTerms';
 
 export const REASON_MAX = 200;
 const COLS = 'id, sport_id, tournament_id, created_by, status, round, group_label, next_match_id, next_slot, winner_team_id, bracket, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules, score_summary, voided_at';
@@ -96,7 +98,7 @@ export async function decideMatch(req: Request, res: Response) {
       const winner = sc.A > sc.B ? 'A' : sc.B > sc.A ? 'B' : null;
       if (!winner && bracket) return res.status(409).json({ error: 'A knockout match can’t end level — award it or replay it.', code: 'LEVEL_KNOCKOUT' });
       ss.decision = { kind: 'stands', reason, by: userId, at: now };
-      ss.result = winner ? `${names[winner]} won ${Math.max(sc.A, sc.B)}–${Math.min(sc.A, sc.B)} (result stands)` : `Draw ${sc.A}–${sc.B} (result stands)`;
+      ss.result = standsResultText(slug, names, sc, winner);
       update = { status: 'completed', winner_team_id: winner ? (winner === 'A' ? m.team_a_id : m.team_b_id) : null, result_type: winner ? 'decisive' : 'draw', score_summary: ss, completed_at: now };
     } else if (body.decision === 'awarded') {
       const side = body.winner_side === 'A' || body.winner_side === 'B' ? body.winner_side : null;
@@ -142,4 +144,17 @@ export async function decideMatch(req: Request, res: Response) {
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+/**
+ * Audit #139 · "result stands" in the sport's own way. Cricket counts a margin
+ * in runs ("Lions were ahead by 30 runs when play stopped") — it read like a
+ * goal score, "Lions won 150–120"; a level score uses the sport's word.
+ */
+export function standsResultText(slug: string | null, names: { A: string; B: string }, sc: { A: number; B: number }, winner: 'A' | 'B' | null): string {
+  if (slug === 'cricket') {
+    if (!winner) return `Tied on ${sc.A} (result stands)`;
+    return `${names[winner]} were ahead by ${plural(Math.abs(sc.A - sc.B), 'run')} when play stopped (result stands)`;
+  }
+  return winner ? `${names[winner]} won ${Math.max(sc.A, sc.B)}–${Math.min(sc.A, sc.B)} (result stands)` : `${sportTerms(slug).level} ${sc.A}–${sc.B} (result stands)`;
 }

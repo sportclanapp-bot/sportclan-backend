@@ -1,3 +1,4 @@
+import { isValidHttpUrl } from '../utils/validation';
 import { selectAll } from '../utils/selectAll';
 import {
   asDeletedPlaceholder, commentForWrite, commentGone, hiddenFrom, isDeletedPost, livePosts, postForWrite, postGone,
@@ -468,12 +469,8 @@ export async function createPost(req: Request, res: Response) {
     text: textAlias, // frontend historically sends `text`
     image_url,
     media_urls, // frontend historically sends `media_urls: string[]`
-    // SC-236 (LOW, DEFERRED): link_url is stored WITHOUT scheme/host validation —
-    // the SC-146/147 allowlist below covers image URLs only. Harmless TODAY: link
-    // posts aren't a user-facing feature (no compose type, no FE render/open). But
-    // BEFORE adding any link rendering/opening, validate link_url here (reject
-    // javascript:/data:, enforce http/https) or it becomes an injection/tapjacking
-    // vector — the same class as the image-URL fix.
+    // SC-236 · audit #32 (11 Oct 2026): link_url is checked below — an http(s)
+    // URL only (no javascript:/data:), within the URL length limit.
     link_url,
     sport_id,
     city_id,
@@ -486,6 +483,10 @@ export async function createPost(req: Request, res: Response) {
     scheduled_at, // optional ISO string · Premium-only scheduled publishing
     match_id, // SC-193: optional — links a match_result post to a completed match
   } = req.body;
+  // Audit #32: a link is an http(s) URL or nothing.
+  if (link_url != null && link_url !== '' && !isValidHttpUrl(link_url)) {
+    return res.status(400).json({ error: 'A link must be a web address starting with http:// or https://.', code: 'BAD_LINK' });
+  }
 
   // Normalise frontend field names to the columns we store.
   const bodyContent = (content ?? textAlias) as string | undefined;
@@ -751,6 +752,10 @@ export async function updatePost(req: Request, res: Response) {
   const userId = req.userId!;
   const { id } = req.params;
   const { content, sport_id, city_id, post_type, link_url, media_urls, scheduled_at } = req.body;
+  // Audit #32: a link is an http(s) URL or nothing.
+  if (link_url != null && link_url !== '' && !isValidHttpUrl(link_url)) {
+    return res.status(400).json({ error: 'A link must be a web address starting with http:// or https://.', code: 'BAD_LINK' });
+  }
 
   // N320 side finding 4: an edit can't set an unknown type either.
   if (post_type !== undefined && post_type !== null && !isPostType(post_type)) {

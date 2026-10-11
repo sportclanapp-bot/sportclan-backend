@@ -30,7 +30,7 @@ import {
 import { getSeasonRecap } from '../controllers/features.controller';
 import { getUserInsights } from '../controllers/insights.controller';
 import { getAdvancedStats } from '../controllers/advancedStats.controller';
-import { authenticateToken, optionalAuth } from '../middleware/auth.middleware';
+import { authenticateToken } from '../middleware/auth.middleware';
 import { registerSigningKey } from '../controllers/qrHandoff.controller';
 
 const router = Router();
@@ -58,9 +58,9 @@ router.get('/me/advanced-stats', authenticateToken, getAdvancedStats);
 router.get('/:id/advanced-stats', authenticateToken, getAdvancedStats);
 router.get('/discover', authenticateToken, discoverPlayers);
 
-router.get('/:id', optionalAuth, getUserById);
-router.get('/:id/followers', optionalAuth, getFollowers);
-router.get('/:id/following', optionalAuth, getFollowing);
+router.get('/:id', authenticateToken, getUserById); // audit #7: sign-in only
+router.get('/:id/followers', authenticateToken, getFollowers); // audit #7
+router.get('/:id/following', authenticateToken, getFollowing); // audit #7
 router.get('/:id/sport-profile/:sportId', authenticateToken, getSportProfile);
 router.patch('/:id/sport-profile/:sportId', authenticateToken, updateSportProfile);
 router.get('/:id/activity-heatmap', authenticateToken, getActivityHeatmap);
@@ -70,7 +70,7 @@ router.get('/:id/rival', authenticateToken, getRival);
 router.get('/:id/season-recap', authenticateToken, getSeasonRecap);
 router.get('/:id/insights', authenticateToken, getUserInsights);
 
-router.get('/:id/reviews', optionalAuth, getReviews);
+router.get('/:id/reviews', authenticateToken, getReviews); // audit #7
 router.post('/:id/reviews', authenticateToken, submitReview);
 router.delete('/:id/reviews', authenticateToken, deleteReview);
 

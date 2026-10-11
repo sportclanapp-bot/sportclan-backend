@@ -12,17 +12,17 @@ import {
   addProfilePostComment,
   deleteProfilePostComment,
 } from '../controllers/profilePosts.controller';
-import { authenticateToken, optionalAuth } from '../middleware/auth.middleware';
+import { authenticateToken } from '../middleware/auth.middleware';
 
 const router = Router();
 // SC-397: 400 on a malformed id instead of letting it reach Postgres and 500.
 guardIdParams(router);
 
-// SC-356 · profile posts. Reads use optionalAuth so a wall is viewable while
-// still resolving per-viewer state (is_liked, block filtering) when signed in.
-router.get('/', optionalAuth, listProfilePosts);
-router.get('/:id', optionalAuth, getProfilePost);
-router.get('/:id/comments', optionalAuth, listProfilePostComments);
+// SC-356 · profile posts. Audit #7 (11 Oct 2026): reads need sign-in too (no public pages); they
+// resolve per-viewer state (is_liked, block filtering).
+router.get('/', authenticateToken, listProfilePosts); // audit #7: sign-in only
+router.get('/:id', authenticateToken, getProfilePost); // audit #7
+router.get('/:id/comments', authenticateToken, listProfilePostComments); // audit #7
 
 router.post('/', authenticateToken, createProfilePost);
 router.patch('/:id', authenticateToken, updateProfilePost);

@@ -9,7 +9,7 @@ const db: { sport: string; events: any[]; lineup: any[]; parts: any[]; summary: 
 jest.mock('../utils/supabase', () => {
   const from = (table: string) => {
     const chain: any = {
-      select: () => chain, eq: () => chain, in: () => chain, order: () => chain, is: () => chain, limit: () => chain,
+      select: () => chain, eq: () => chain, in: () => chain, order: () => chain, range: () => chain, is: () => chain, limit: () => chain, // audit #38: paged event reads
       update: (row: unknown) => { db.written.push({ table, row }); return chain; },
       maybeSingle: async () => ({
         data: table === 'matches' ? { sport_id: 's', winner_team_id: null, score_summary: db.summary, format: null }

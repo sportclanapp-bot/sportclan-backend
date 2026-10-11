@@ -147,6 +147,8 @@ describe('SC-392 · the activity streak is stamped with the IST day', () => {
     try {
       mockNext = (q) => {
         if (q[0] === 'from:match_participants') return { data: [{ user_id: 'p1', team_side: 'A' }, { user_id: 'p2', team_side: 'B' }] };
+        // Audit #6: both players said "In", so the result counts for them.
+        if (q[0] === 'from:match_availability') return { data: [{ user_id: 'p1' }, { user_id: 'p2' }] };
         if (q[0] === 'from:users' && q.some((c) => c.startsWith('select:') && c.includes('streak_count'))) return { data: [{ id: 'p1', streak_count: 0, last_match_date: null }] };
         return base(matchRow())(q);
       };

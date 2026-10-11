@@ -93,10 +93,10 @@ describe('SC-81/82 edge · public lists leave out people the viewer has blocked'
     const q = mockLog.find((x) => x[0] === `from:${table}`)!;
     expect(q.join(' ')).toContain(`not:["${col}","in","(${BAD})"]`);
   });
-  test('K1-66 (abff690): the three public routes read the viewer (optionalAuth)', () => {
+  test('K1-66 (abff690) · audit #7: the three list routes need sign-in and read the viewer', () => {
     const r = code('routes/users.routes.ts');
     for (const p of ['followers', 'following', 'reviews']) {
-      expect(r).toContain(`router.get('/:id/${p}', optionalAuth,`);
+      expect(r).toContain(`router.get('/:id/${p}', authenticateToken,`);
     }
   });
 });

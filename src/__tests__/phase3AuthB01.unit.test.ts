@@ -61,13 +61,13 @@ beforeEach(() => {
 });
 afterAll(() => { process.env = ENV; });
 
-describe('F14 · send-otp takes only the four purposes', () => {
+describe('F14 · send-otp takes only the known purposes (audit #11: + reauth)', () => {
   test('anything else → 400, nothing sent', async () => {
     const r = await call(auth.sendOtp, { phone: '9876543210', purpose: 'admin' });
     expect(r.statusCode).toBe(400);
     expect(r.body.code).toBe('INVALID_PURPOSE');
     expect(get).not.toHaveBeenCalled();
-    expect(auth.OTP_PURPOSES).toEqual(['login', 'register', 'reset', 'change_phone']);
+    expect(auth.OTP_PURPOSES).toEqual(['login', 'register', 'reset', 'change_phone', 'reauth']);
   });
 });
 

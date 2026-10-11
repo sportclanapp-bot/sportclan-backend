@@ -10,6 +10,7 @@ import path from 'path';
 type Q = string[];
 let mockLog: Q[] = [];
 let mockNext: (q: Q) => { data?: unknown; error?: unknown; count?: number } = () => ({ data: null, error: null });
+jest.mock('../utils/reauth', () => ({ reauthRefusal: jest.fn(async () => null) })); // audit #11: these cases are about other things; the fresh check has its own test (audit11)
 jest.mock('../utils/supabase', () => {
   const start = (t: string) => {
     const q: string[] = [`from:${t}`];

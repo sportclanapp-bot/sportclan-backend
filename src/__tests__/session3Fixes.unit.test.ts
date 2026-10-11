@@ -44,7 +44,7 @@ describe('F-29 · lineupSideConflict', () => {
 describe('F-33 · selfAssignUmpire', () => {
   const body = fn('selfAssignUmpire');
   test('reads is_ranked and both team ids', () => {
-    expect(body).toContain(".select('id, umpire_id, created_by, status, team_a_name, team_b_name, is_ranked, team_a_id, team_b_id')");
+    expect(body).toContain(".select('id, umpire_id, created_by, status, team_a_name, team_b_name, is_ranked, team_a_id, team_b_id, tournament_id, sport_id, umpire_offer_by, voided_at')"); // audit #5
   });
   test('a player (line-up or either roster) is refused on a ranked match, before the write', () => {
     const guard = body.indexOf('if (match.is_ranked) {');

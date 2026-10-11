@@ -11,6 +11,7 @@ jest.mock('../utils/supabase', () => {
     const chain: any = {
       select: () => chain,
       eq: () => chain,
+      order: () => chain, range: () => chain, // audit #38: paged event reads
       update: () => chain,
       maybeSingle: async () => ({
         data: table === 'matches' ? { sport_id: 's', winner_team_id: null, score_summary: db.summary } : table === 'sports' ? { slug: db.sport } : null,

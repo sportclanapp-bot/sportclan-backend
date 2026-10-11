@@ -65,11 +65,11 @@ const res = () => {
 beforeEach(() => { mockTable = {}; mockWrites = []; });
 
 describe('B19b (15b1940) · GET /users/:id knows the viewer', () => {
-  test('B19b (15b1940): the /:id route runs optionalAuth before getUserById', () => {
+  test('B19b (15b1940) · audit #7: the /:id route needs sign-in (authenticateToken) before getUserById', () => {
     const layer = (usersRouter as any).stack.find((l: any) => l.route?.path === '/:id' && l.route.methods.get);
     expect(layer).toBeTruthy();
     const names = layer.route.stack.map((s: any) => s.handle.name);
-    expect(names).toEqual(['optionalAuth', 'getUserById']);
+    expect(names).toEqual(['authenticateToken', 'getUserById']);
   });
 
   test('B19b (15b1940): optionalAuth sets userId from a valid token and lets an anonymous call through', () => {

@@ -1,5 +1,6 @@
 import { disbandedTeamIds } from '../utils/teamVisibility';
 import { NUMBER_HOLD_MS } from '../utils/deletedNumber';
+import { reauthRefusal } from '../utils/reauth';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { revokeSessionsNow } from '../utils/sessionRevocation';
@@ -82,6 +83,9 @@ export async function deleteAccount(req: Request, res: Response) {
   if (confirmation !== 'DELETE') {
     return res.status(400).json({ error: 'Type "DELETE" to confirm' });
   }
+  // Audit #11: and a fresh check — the password, or a code sent to the account's number.
+  const re = await reauthRefusal(req, userId);
+  if (re) return res.status(re.status).json(re.body);
 
   // Scrub identifiable fields immediately.
   const shortId = userId.slice(0, 8);
@@ -365,8 +369,12 @@ export async function revokeSession(req: Request, res: Response) {
 // DELETE /account/sessions/all — revoke all other refresh tokens.
 // The caller's current token (X-Refresh-Token header) is preserved so they
 // stay logged in on this device.
-export async function revokeAllSessions(req: Request, res: Response) {
-  const userId = req.userId!;
+/**
+ * Sign every OTHER device out, keep this one (audit #11 reuses it for a phone
+ * change). Returns a fresh access token for this device (the cutoff kills the
+ * one it holds), or an error message.
+ */
+export async function signOutOtherDevices(req: Request, userId: string): Promise<{ accessToken: string } | { error: string }> {
   const currentRefreshToken =
     (req.headers['x-refresh-token'] as string | undefined) ?? null;
 
@@ -378,7 +386,7 @@ export async function revokeAllSessions(req: Request, res: Response) {
     query = query.neq('token', currentRefreshToken);
   }
   const { error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return { error: error.message };
 
   // SC-384: deleting the refresh tokens only stops those devices RENEWING. The
   // access token each one already holds stays valid for its full 15-minute life,
@@ -411,6 +419,14 @@ export async function revokeAllSessions(req: Request, res: Response) {
     sid = (mine as { id?: string } | null)?.id ?? null;
   }
   const accessToken = generateAccessTokenAt(userId, Math.floor(cutoffMs / 1000) + 1, sid);
+  return { accessToken };
+}
+
+export async function revokeAllSessions(req: Request, res: Response) {
+  const userId = req.userId!;
+  const out = await signOutOtherDevices(req, userId);
+  if ('error' in out) return res.status(500).json({ error: out.error });
+  const accessToken = out.accessToken;
   return res.json({
     success: true,
     message: 'All other sessions revoked',

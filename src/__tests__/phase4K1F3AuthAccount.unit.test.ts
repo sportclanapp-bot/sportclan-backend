@@ -9,6 +9,7 @@ import path from 'path';
 
 const mockCalls: string[] = [];
 let mockRpcError: unknown = null;
+jest.mock('../utils/reauth', () => ({ reauthRefusal: jest.fn(async () => null) })); // audit #11: these cases are about other things; the fresh check has its own test (audit11)
 jest.mock('../utils/supabase', () => {
   const chain: any = {};
   for (const m of ['from', 'select', 'in', 'not', 'eq', 'neq', 'is', 'ilike', 'limit', 'maybeSingle', 'single', 'update', 'delete', 'order', 'insert']) {

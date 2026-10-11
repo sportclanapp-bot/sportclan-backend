@@ -105,8 +105,9 @@ describe('K1-61 (11a9336) SC-81/82 · blocked users (either direction) are hidde
   });
   it('K1-61 (11a9336): post and comment reads take the viewer when signed in (optionalAuth); rival skips blocked users', () => {
     const r = fs.readFileSync(path.join(__dirname, '..', 'routes', 'community.routes.ts'), 'utf8');
-    expect(r).toContain("router.get('/posts/:id', optionalAuth, getPost);");
-    expect(r).toContain("router.get('/posts/:id/comments', optionalAuth, listComments);");
+    // Audit #7: sign-in only now (they took an optional viewer before).
+    expect(r).toContain("router.get('/posts/:id', authenticateToken, getPost);");
+    expect(r).toContain("router.get('/posts/:id/comments', authenticateToken, listComments);");
     const u = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'users.controller.ts'), 'utf8');
     expect(u).toMatch(/const blockedRival = await blockedUserIds\(userId\);\s*const candidateIds = higher\.map\(\(h\) => h\.user_id\)\.filter\(\(uid\) => uid !== id && !blockedRival\.has\(uid\)\);/);
   });

@@ -60,7 +60,7 @@ describe('SC-431 · rate-limit the person, not the pipe', () => {
     const idx = readFileSync(join(__dirname, '..', 'index.ts'), 'utf8');
     const g = idx.slice(idx.indexOf('const globalLimiter = rateLimit({'), idx.indexOf('const ipCeilingLimiter'));
     expect(g).toMatch(/keyGenerator: rateLimitKey,/);
-    expect(g).toMatch(/max: \(req\) => \(verifiedUserId\(req\) \? PER_USER_MAX : PER_IP_MAX\),/);
+    expect(g).toMatch(/max: \(req\) => \(budgetUserId\(req\) \? PER_USER_MAX : PER_IP_MAX\),/); // audit #9: a refresh is the user's
     expect(idx).toMatch(/const PER_USER_MAX = 600;/);
     expect(idx).toMatch(/app\.use\(globalLimiter\);\s*app\.use\(ipCeilingLimiter\);/);
   });

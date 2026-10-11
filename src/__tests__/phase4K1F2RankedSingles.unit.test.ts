@@ -65,6 +65,8 @@ const complete = async (parts: Array<{ user_id: string; team_side: string }>) =>
       return { data: { id: MATCH, created_by: ME, umpire_id: null, status: 'live', team_a_id: null, team_b_id: null, sport_id: 's-chess', is_ranked: true, tournament_id: null, team_a_name: 'Me', team_b_name: 'You', score_summary: {}, voided_at: null } };
     }
     if (q[0] === 'from:match_participants') return { data: parts };
+    // Audit #6: the opponent accepted the challenge (said "In") — their record may move.
+    if (q[0] === 'from:match_availability' && !mockPending) return { data: parts.filter((p) => p.user_id !== ME).map((p) => ({ user_id: p.user_id })) };
     return { data: null };
   };
   const r = res();

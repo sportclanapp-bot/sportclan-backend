@@ -1,5 +1,8 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import { notifyUser } from '../utils/notify';
+import { reauthRefusal } from '../utils/reauth';
+import { signOutOtherDevices } from './account.controller';
 import crypto from 'crypto';
 import { clientIpKey } from '../middleware/rateLimitKey';
 import axios from 'axios';
@@ -92,7 +95,7 @@ function normalizePhone(phone: string): string {
 const INVALID_PHONE_BODY = { error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE' } as const;
 
 /** What a code can be sent for. Anything else was stored as-is (Phase 3 B01-F14). */
-export const OTP_PURPOSES = ['login', 'register', 'reset', 'change_phone'] as const;
+export const OTP_PURPOSES = ['login', 'register', 'reset', 'change_phone', 'reauth'] as const; // audit #11: + reauth
 
 // Send OTP via 2Factor.in — SMS or voice call.
 //
@@ -272,7 +275,7 @@ export async function sendOtp(req: Request, res: Response) {
   // code and a new password — that there was nothing to reset. Same trade as
   // the deleted check above: resetPassword already says this a step later.
   // Fails open on a query error, like the check above.
-  if (purpose === 'reset') {
+  if (purpose === 'reset' || purpose === 'reauth') { // audit #11: a reauth code goes only to an account's own number
     try {
       const { data: live, error: liveErr } = await supabase
         .from('users').select('id').in('phone', phoneVariants(p)).is('deleted_at', null).limit(1);
@@ -863,6 +866,10 @@ export async function changePhone(req: Request, res: Response) {
   if (!isValidIndianPhone(p)) {
     return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE' });
   }
+  // Audit #11: a fresh check first — the current password, or a code sent to the
+  // CURRENT number. A token alone used to be enough to move the account away.
+  const re = await reauthRefusal(req, userId);
+  if (re) return res.status(re.status).json(re.body);
   // Honor the dev-only test bypass uniformly (see isTestOtp). Production runs
   // the real OTP check since isTestOtp() is always false there.
   if (!isTestOtp(code)) {
@@ -891,5 +898,10 @@ export async function changePhone(req: Request, res: Response) {
     .eq('id', userId);
   if (error) return res.status(500).json({ error: error.message });
   await deleteOtp(p);
-  return res.json({ success: true });
+  // Audit #11: every other device is signed out; this one gets a fresh token.
+  const out = await signOutOtherDevices(req, userId);
+  try {
+    await notifyUser({ userId, type: 'account_phone_changed', title: 'Phone number changed', body: 'Your SportClan phone number was changed and your other devices were signed out. If this wasn’t you, contact support.', data: { screen: 'Settings' } });
+  } catch { /* best-effort */ }
+  return res.json({ success: true, ...('accessToken' in out ? { accessToken: out.accessToken } : {}) });
 }

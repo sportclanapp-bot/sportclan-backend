@@ -5,6 +5,7 @@
 type Q = string[];
 let mockLog: Q[] = [];
 let mockNext: (q: Q) => { data?: unknown; error?: unknown; count?: number | null } = () => ({ data: null, error: null });
+jest.mock('../utils/reauth', () => ({ reauthRefusal: jest.fn(async () => null) })); // audit #11: these cases are about other things; the fresh check has its own test (audit11)
 jest.mock('../utils/supabase', () => {
   const start = (head: string) => {
     const q: string[] = [head];
@@ -98,7 +99,7 @@ describe('SC-386 · one number, one account, whatever form it was typed in', () 
     mockStore.set('+919876543210', { code: '482913', purpose: 'change_phone' });
     mockNext = () => ({ data: null });
     const r = await call(auth.changePhone, { newPhone: '98765-43210', code: '482913' }, { userId: 'u1' });
-    expect(r.body).toEqual({ success: true });
+    expect(r.body).toEqual({ success: true, accessToken: expect.any(String) }); // audit #11: other devices signed out, this one gets a fresh token
     const upd = mockLog.find((q) => q.some((c) => c.startsWith('update:') && c.includes('"phone"')))!;
     expect(upd.join()).toContain('update:[{"phone":"+919876543210"}]');
     mockLog = [];

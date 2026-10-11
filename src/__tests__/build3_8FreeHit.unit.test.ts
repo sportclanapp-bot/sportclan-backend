@@ -7,7 +7,7 @@ let mockLog: unknown[] = [];
 jest.mock('../utils/supabase', () => ({
   supabase: {
     from: jest.fn(() => {
-      const q: any = { select: () => q, eq: () => q, order: async () => ({ data: mockLog }) };
+      const q: any = { select: () => q, eq: () => q, order: () => q, range: async () => ({ data: mockLog, error: null }) }; // audit #38: paged reads
       return q;
     }),
   },

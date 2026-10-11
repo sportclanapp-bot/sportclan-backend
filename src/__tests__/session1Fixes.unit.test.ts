@@ -16,10 +16,12 @@ jest.mock('../utils/supabase', () => {
       select: () => chain,
       eq: (k: string, v: unknown) => { st.filters[k] = v; return chain; },
       in: (k: string, v: unknown[]) => { st.filters[k] = v; return chain; },
+      limit: () => chain, // audit #6: the creator's team membership
       maybeSingle: async () => (table === 'tournaments'
         ? { data: st.filters.id === 'tour-1' ? { id: 'tour-1', sport_id: 'cricket-id' } : null }
         : { data: null }),
-      then: (res: any) => res({ data: table === 'teams' ? (st.filters.id as string[]).map((i) => teams[i]).filter(Boolean) : [] }),
+      then: (res: any) => res({ data: table === 'teams' ? (st.filters.id as string[]).map((i) => teams[i]).filter(Boolean)
+        : table === 'team_members' ? [{ id: 'member-row' }] : [] }), // audit #6: the creator is on the team here
     };
     return chain;
   };

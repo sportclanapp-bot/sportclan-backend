@@ -249,6 +249,9 @@ export async function createMatchRefusal(args: {
   if (teamRefusal) return teamRefusal;
   // Audit #6: a match between registered teams is made by someone on one of
   // them (a tournament's fixtures come from its organiser instead).
+  if (args.teamIds.length === 2 && args.teamIds[0] === args.teamIds[1]) {
+    return { status: 400, error: 'A team can’t play itself — pick two different teams.', code: 'SAME_TEAM' };
+  }
   if (!args.tournamentId && args.teamIds.length && !(await isOnAnyTeam(args.userId, args.teamIds))) {
     return { status: 403, error: 'You can only set up a match for a team you’re in.', code: 'NOT_ON_TEAM' };
   }

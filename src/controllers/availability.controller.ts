@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
-import { ARRAY_LIMITS, tooManyItems } from '../utils/validation';
 import { isUuid } from '../utils/uuid';
 
 /** A real calendar date as YYYY-MM-DD (2026-02-30 is not one). */
@@ -46,13 +45,17 @@ export async function updateAvailability(req: Request, res: Response) {
   if (status !== undefined && status !== null && !VALID_STATUSES.includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
-  if (tooManyItems(sport_ids, ARRAY_LIMITS.sportIds)) {
-    return res.status(400).json({ error: `Too many sport_ids (max ${ARRAY_LIMITS.sportIds})` });
-  }
-  // B02-F3: only the count was checked — a bad date, a non-list or a non-uuid
-  // sport, or a non-boolean flag reached Postgres and came back a 500.
+  // B02-F3: a bad date, a non-list or a non-uuid sport, or a non-boolean flag
+  // reached Postgres and came back a 500.
   if (sport_ids !== undefined && sport_ids !== null && (!Array.isArray(sport_ids) || !sport_ids.every(isUuid))) {
     return res.status(400).json({ error: 'sport_ids must be a list of sport ids' });
+  }
+  // Audit #79: no count cap (it was 30) — each must be a real sport, so the
+  // list can't be longer than the sports there are.
+  if (Array.isArray(sport_ids) && sport_ids.length > 0) {
+    const want = Array.from(new Set(sport_ids as string[]));
+    const { data: real } = await supabase.from('sports').select('id').in('id', want);
+    if ((real ?? []).length !== want.length) return res.status(400).json({ error: 'One or more sports are not available', code: 'INVALID_SPORT' });
   }
   for (const [name, v] of [['date_from', date_from], ['date_to', date_to]] as const) {
     if (v !== undefined && v !== null && v !== '' && !isYmd(v)) {

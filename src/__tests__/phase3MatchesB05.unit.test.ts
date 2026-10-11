@@ -176,7 +176,6 @@ describe('F2 · PATCH /matches/:id checks every key with create’s rules', () =
   test.each([
     [{ scheduled_at: 'garbage' }, 'BAD_SCHEDULED_AT'],
     [{ scheduled_at: '2020-01-01T00:00:00Z' }, 'SCHEDULED_IN_PAST'],
-    [{ scheduled_at: '9999-12-31T00:00:00Z' }, 'SCHEDULED_TOO_FAR'],
     [{ city_id: 'nope' }, 'BAD_CITY'],
     [{ team_a_name: 'x'.repeat(300) }, 'TEAM_NAME_TOO_LONG'],
     [{ overs: 'abc' }, 'BAD_OVERS'],
@@ -340,9 +339,9 @@ describe('F17 · format and date on create', () => {
     expect(formatRefusal('badminton', 'bo3', null)).toBeNull();
     expect(formatRefusal('badminton', 'x'.repeat(21), null)?.code).toBe('BAD_FORMAT');
   });
-  test('within the next year', () => {
+  test('any time ahead (audit #79, Dipak: no year top)', () => {
     expect(scheduleRefusal(new Date(Date.now() + 86_400_000).toISOString())).toBeNull();
-    expect(scheduleRefusal('9999-12-31T00:00:00Z')?.code).toBe('SCHEDULED_TOO_FAR');
+    expect(scheduleRefusal('9999-12-31T00:00:00Z')).toBeNull();
     expect(scheduleRefusal({ x: 1 })?.code).toBe('BAD_SCHEDULED_AT');
   });
 });

@@ -125,8 +125,6 @@ async function lastChessSide(userId: string, opponentId: string, chessSportId: s
 
 /** A little clock skew is allowed: "now" on the phone can be a minute behind. */
 const PAST_GRACE_MS = 5 * 60_000;
-/** How far ahead a match can be scheduled (the app's date picker stops here too). */
-export const MAX_SCHEDULE_AHEAD_MS = 366 * 86_400_000;
 export const FORMAT_MAX = 20;
 
 /**
@@ -192,14 +190,12 @@ export function withLegacy(sport: string | null | undefined, rules: MatchRules, 
   return out as unknown as MatchRules;
 }
 
-/** The match time: a real date, not in the past, within the next year. */
+/** The match time: a real date, not in the past. Audit #79 (Dipak): no "within the next year" top. */
 export function scheduleRefusal(scheduledAt: unknown): { status: number; error: string; code: string } | null {
   if (scheduledAt == null || scheduledAt === '') return null;
   const t = typeof scheduledAt === 'string' || typeof scheduledAt === 'number' ? Date.parse(String(scheduledAt)) : NaN;
   if (Number.isNaN(t)) return { status: 400, error: 'Pick a valid date and time.', code: 'BAD_SCHEDULED_AT' };
   if (t < Date.now() - PAST_GRACE_MS) return { status: 400, error: 'Match time can’t be in the past.', code: 'SCHEDULED_IN_PAST' };
-  // Phase 3 B05-F17: 9999-12-31 was accepted, and Home's "next match" carried it forever.
-  if (t > Date.now() + MAX_SCHEDULE_AHEAD_MS) return { status: 400, error: 'Pick a date within the next year.', code: 'SCHEDULED_TOO_FAR' };
   return null;
 }
 

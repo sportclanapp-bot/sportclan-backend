@@ -152,9 +152,11 @@ describe('K2-10a · user-supplied arrays are capped (AUDIT-5)', () => {
     const r = await call(createComment, { params: { id: POST }, body: { content: 'nice', mentions: uuids(21) } });
     expect([r.statusCode, r.body.error]).toEqual([400, 'Too many mentions (max 20)']);
   });
-  it('K2-10a (d02809c): availability with 31 sport_ids → 400', async () => {
+  // Audit #79 (Dipak): no 30 top — each must be a real sport instead.
+  it('K2-10a / audit #79: availability with 31 unknown sport_ids → 400 for the sports, not the number', async () => {
     const r = await call(updateAvailability, { body: { sport_ids: uuids(31) } });
-    expect([r.statusCode, r.body.error]).toEqual([400, 'Too many sport_ids (max 30)']);
+    expect(r.statusCode).toBe(400);
+    expect(r.body.error).not.toMatch(/Too many/);
   });
   // Oct 2026 (Dipak): teams have no size cap, so neither does a split.
   it('K2-10a: an expense split among 51 is not refused for its number', async () => {

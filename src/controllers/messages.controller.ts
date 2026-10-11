@@ -1224,9 +1224,6 @@ export async function batchMarkRead(req: Request, res: Response) {
   if (!Array.isArray(messageIds) || messageIds.length === 0) {
     return res.status(400).json({ error: 'messageIds array is required' });
   }
-  if (tooManyItems(messageIds, ARRAY_LIMITS.batchIds)) {
-    return res.status(400).json({ error: `Too many messageIds (max ${ARRAY_LIMITS.batchIds})` });
-  }
   if (messageIds.some((m: unknown) => typeof m !== 'string' || !isUuid(m))) {
     return res.status(400).json({ error: 'messageIds must be valid ids', code: 'INVALID_ID' }); // B09-F8
   }
@@ -1277,12 +1274,17 @@ export async function batchMarkRead(req: Request, res: Response) {
   // BUILD 1.13: only the caller's chats, checked here rather than as a huge
   // `.in('chat_id', …)` in the URL (the batch itself is capped).
   const mine = new Set(callerChatIds);
-  const { data: found, error } = await supabase
-    .from('messages')
-    .select('id, read_by, sender_id, chat_id')
-    .in('id', messageIds);
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
-  const rows = (found ?? []).filter((r) => mine.has(r.chat_id as string));
+  // Audit #79: any number of ids (the 500 cap is gone) — read in chunks.
+  const found: Array<{ id: string; read_by: unknown; sender_id: string; chat_id: string }> = [];
+  for (const part of chunks(Array.from(new Set(messageIds as string[])))) {
+    const { data, error } = await supabase
+      .from('messages')
+      .select('id, read_by, sender_id, chat_id')
+      .in('id', part);
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    found.push(...((data ?? []) as typeof found));
+  }
+  const rows = found.filter((r) => mine.has(r.chat_id as string));
 
   const updates: Array<{ id: string; read_by: string[] }> = [];
   for (const r of rows ?? []) {

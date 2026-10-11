@@ -142,11 +142,11 @@ describe('K2-10c · forward and batch-read arrays are capped (AUDIT-5)', () => {
     expect([r.statusCode, r.body.error]).toEqual([400, 'Too many chats (max 20)']);
     expect(mockLog).toHaveLength(0);
   });
-  it('K2-10c (d02809c): marking 501 messages read → 400 before any query', async () => {
+  // Audit #79 (Dipak): the 500 cap is gone — a big batch is read in chunks.
+  it('K2-10c / audit #79: marking 501 messages read is not refused for its number', async () => {
     const messageIds = Array.from({ length: 501 }, () => MSG);
     const r = await call(msgs.batchMarkRead, { body: { messageIds } });
-    expect([r.statusCode, r.body.error]).toEqual([400, 'Too many messageIds (max 500)']);
-    expect(mockLog).toHaveLength(0);
+    expect(r.body?.error ?? '').not.toMatch(/Too many messageIds/);
   });
 });
 

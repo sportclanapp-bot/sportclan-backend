@@ -184,8 +184,7 @@ describe('SC-396 · client limits mirror the server', () => {
   // Array caps are a SEPARATE object on the server — the mirror keeps that split.
   const FE_ARRAY_MIRROR = {
     // Oct 2026: participants and splitAmong are no longer capped.
-    mentions: 20, forwardChats: 20,
-    batchIds: 500, sportIds: 30,
+    mentions: 20, forwardChats: 20, // audit #79: the 500 batch and 30 sports are gone
   };
 
   it('every mirrored key matches the server value', () => {

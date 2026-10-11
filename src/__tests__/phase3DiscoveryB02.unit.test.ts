@@ -108,7 +108,7 @@ describe('F3 · bad input → 400', () => {
     expect(queries).toHaveLength(0);
   });
   test('availability: good input is saved', async () => {
-    results = [{ data: { user_id: 'me' }, error: null }];
+    results = [{ data: [{ id: S }], error: null }, { data: { user_id: 'me' }, error: null }]; // audit #79: the sport is checked to be real first
     const r = await call(updateAvailability, { body: { status: 'looking_to_play', sport_ids: [S], date_from: '2026-10-01', date_to: '2026-10-05', hide_stats: true } });
     expect(r.statusCode).toBe(200);
   });

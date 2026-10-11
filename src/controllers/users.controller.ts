@@ -12,7 +12,7 @@ import { sanitizeError } from '../utils/response';
 import { inviteFreshCutoffIso } from './invites.controller';
 import { resolveSportId } from '../utils/sportId';
 import { isSportInactive } from '../utils/sports';
-import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl, ARRAY_LIMITS, tooManyItems } from '../utils/validation';
+import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { RESERVED_USERNAMES, EMAIL_RE, GENDERS, GENDER_ERROR } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
@@ -662,10 +662,8 @@ export async function updateMySports(req: Request, res: Response) {
   if (!Array.isArray(incoming)) {
     return res.status(400).json({ error: 'sport_ids must be an array' });
   }
-  if (tooManyItems(incoming, ARRAY_LIMITS.sportIds)) {
-    return res.status(400).json({ error: `Too many sports (max ${ARRAY_LIMITS.sportIds})` });
-  }
-
+  // Audit #79: no count cap — each id must be a real, active sport (below), so
+  // the list can't be longer than the sports there are.
   const ids = Array.from(new Set(incoming.map((x: unknown) => String(x))));
 
   // Every id must be a real, ACTIVE sport (SC-335: no kabaddi/athletics via a

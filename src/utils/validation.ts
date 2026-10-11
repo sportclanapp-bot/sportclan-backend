@@ -44,11 +44,13 @@ export const LIMITS = {
 
 // AUDIT-5: cap user-supplied array lengths to block payload/DoS via huge arrays.
 // Caps chosen to sit well above real UI limits (never break legit use).
+// Audit #79 (Dipak, 11 Oct 2026): 20 mentions and 20 forwards stay (anti-abuse,
+// his choice). The sports-list cap (30) and the mark-read batch cap (500) are
+// gone: a sports list is checked against the real sports (so it can't be
+// longer than they are), and a mark-read batch is read in chunks.
 export const ARRAY_LIMITS = {
   mentions: 20,
   forwardChats: 20,
-  batchIds: 500,
-  sportIds: 30,
 } as const;
 
 /**

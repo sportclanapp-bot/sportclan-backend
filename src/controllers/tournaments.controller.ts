@@ -28,13 +28,15 @@ import { statusAfterFixtures, shouldGoLive, ymd, ymdIn } from '../utils/tourname
  */
 export async function sweepTournamentsDue(): Promise<{ started: number }> {
   const today = ymd(); // audit #77: India's date
-  const { data: due } = await supabase
+  // Audit #79: every tournament due, a page at a time (it read only the first
+  // 200 — and 200 with no draw yet would have kept the rest waiting for ever).
+  const due = await allRows(() => supabase
     .from('tournaments')
     .select('id, status, start_date')
     .eq('status', 'upcoming')
     .not('start_date', 'is', null)
     .lte('start_date', today)
-    .limit(200);
+    .order('id'));
 
   let started = 0;
   for (const t of (due ?? []) as { id: string; status: string; start_date: string | null }[]) {

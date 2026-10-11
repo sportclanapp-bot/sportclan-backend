@@ -80,11 +80,13 @@ async function placingsFor(t: { id: string; format: string; status: string; spor
     const ents = await allRows(() => supabase.from('tournament_entries').select('team_id, status, team:teams!team_id(id, name)').eq('tournament_id', t.id).in('status', ['approved', 'withdrawn']));
     const rows = (ents ?? []) as Array<{ team_id: string; status: string; team: { name?: string } | Array<{ name?: string }> | null }>;
     const nameOf = new Map(rows.map((r) => [r.team_id, (Array.isArray(r.team) ? r.team[0]?.name : r.team?.name) ?? 'Team']));
-    const tin = tableInputs(t.settings, rows.filter((r) => r.status === 'approved').map((r) => r.team_id),
+    // Audit #53: the table's teams (approved and withdrawn); placings skip a withdrawn team.
+    const tin = tableInputs(t.settings, rows.map((r) => r.team_id),
       matches.filter((m) => !m.voided_at && (m.status === 'completed' || m.status === 'abandoned')), rows.filter((r) => r.status === 'withdrawn').map((r) => r.team_id));
     const slug = (await getSport(String(t.sport_id)))?.slug ?? null;
     const order = rankTeams(tin.teamIds, tin.matches as never[], ((t.tiebreaker_rules ?? []) as never[]), pointsFor(slug, t.settings), (await rankExtrasFor(t, tin.matches as Array<{ id: string }>))('')); // Stage 8 · F8
-    base = order.slice(0, 4).map((id, i) => ({ place: (i + 1) as 1 | 2 | 3 | 4, title: TITLES[(i + 1) as 1 | 2 | 3 | 4], team_id: id, name: nameOf.get(id) ?? 'Team' }));
+    const goneSet = new Set(rows.filter((r) => r.status === 'withdrawn').map((r) => r.team_id));
+    base = order.filter((id) => !goneSet.has(id)).slice(0, 4).map((id, i) => ({ place: (i + 1) as 1 | 2 | 3 | 4, title: TITLES[(i + 1) as 1 | 2 | 3 | 4], team_id: id, name: nameOf.get(id) ?? 'Team' }));
   }
   if (base.length === 0) return [];
   const { data: mem } = await supabase.from('team_members').select('team_id, user_id, role').in('team_id', base.map((b) => b.team_id));

@@ -3225,10 +3225,14 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
   // Stage 13 · CR9: a Swiss that fed a knockout is won in its final.
   const swissKo = fmt === 'swiss' && !!settingsOf(t as { settings?: unknown }).swiss?.koDrawn;
   if (fmt === 'round_robin' || fmt === 'league' || (fmt === 'swiss' && !swissKo)) { // BUILD 4.15: a Swiss is won on the table
+    // Audit #53: the same teams as the table — approved AND withdrawn (a
+    // withdrawn team's played games still count for its opponents); a
+    // withdrawn team is never the champion.
     const entries = await allRows(() => supabase
-      .from('tournament_entries').select('team_id, team:teams!team_id(id, name, short_name)')
-      .eq('tournament_id', tournamentId).eq('status', 'approved'));
+      .from('tournament_entries').select('team_id, status, team:teams!team_id(id, name, short_name)')
+      .eq('tournament_id', tournamentId).in('status', ['approved', 'withdrawn']));
     const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id as string).filter(Boolean)));
+    const gone = new Set((entries ?? []).filter((e) => e.status === 'withdrawn').map((e) => e.team_id as string));
     if (teamIds.length === 0) return null;
     // Oct 2026: every match (a 64-team league has 2016; an unpaged read stops at 1000).
     const matches = await allRows(() => supabase
@@ -3240,7 +3244,7 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
     const extraFor = await rankExtrasFor((t ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>);
     const leader = rankTeams(
       tin.teamIds, tin.matches, ((t as any)?.tiebreaker_rules ?? []) as any[], await tournamentPoints(t as any), extraFor(''),
-    )[0];
+    ).find((id) => !gone.has(id));
     if (!leader) return null;
     const e = (entries ?? []).find((x) => x.team_id === leader);
     return { id: leader, name: ((e?.team as any)?.name as string) ?? null };
@@ -3317,12 +3321,15 @@ async function withdrawnTeamIds(tournamentId: string): Promise<string[]> {
 
 async function crownLeagueChampion(tournamentId: string): Promise<void> {
   if (await hasUnplayedFixtures(tournamentId)) return;
+  // Audit #53: the table's teams (approved AND withdrawn — a withdrawn team's
+  // played games still count for its opponents); never crown a withdrawn team.
   const entries = await allRows(() => supabase
     .from('tournament_entries')
-    .select('team_id, team:teams!team_id(id, name, short_name)')
+    .select('team_id, status, team:teams!team_id(id, name, short_name)')
     .eq('tournament_id', tournamentId)
-    .eq('status', 'approved'));
+    .in('status', ['approved', 'withdrawn']));
   const teamIds = Array.from(new Set((entries ?? []).map((e) => e.team_id).filter(Boolean)));
+  const goneIds = new Set((entries ?? []).filter((e) => e.status === 'withdrawn').map((e) => e.team_id as string));
   if (teamIds.length === 0) return;
   const nameOf: Record<string, string> = {};
   for (const e of entries ?? []) nameOf[e.team_id as string] = (e.team as any)?.name ?? 'Team';
@@ -3339,7 +3346,7 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
 
   const tin = tableInputs((trow as any)?.settings, teamIds as string[], (matches ?? []) as any[], await withdrawnTeamIds(tournamentId)); // gap 6
   const ordered = rankTeams(tin.teamIds, tin.matches, tiebreakerRules, pts, (await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>))('')); // Stage 8 · F8
-  const championId = ordered[0];
+  const championId = ordered.find((id) => !goneIds.has(id));
   if (!championId) return;
 
   const { data: crowned } = await supabase

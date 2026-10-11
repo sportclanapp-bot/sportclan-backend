@@ -44,7 +44,7 @@ function catalogue(): Ev[] {
 
 const ctx = (sport: string): CommentaryContext => ({ sport, teamA: 'Lions', teamB: 'Tigers', period: 1, move: 3, clockSeconds: 75, regulation: null, periodMinutes: null });
 
-const RAW = [/[{}"[\]]/, /^\s*note\b/i, /note\s*\{/i, /\b[a-z]+_[a-z_]+\b/, /\bundefined\b/, /\bnull\b/, /\bNaN\b/, /\[object/, / {2}/, /—\s*$/, /\(\s*\)/, /\bfor\s+—/, /:\s*$/];
+const RAW = [/\bset \d+ set\b/, /[{}"[\]]/, /^\s*note\b/i, /note\s*\{/i, /\b[a-z]+_[a-z_]+\b/, /\bundefined\b/, /\bnull\b/, /\bNaN\b/, /\[object/, / {2}/, /—\s*$/, /\(\s*\)/, /\bfor\s+—/, /:\s*$/];
 
 test.each(SPORTS)('every event kind in %s reads as plain words', (sport) => {
   const bad: string[] = [];
@@ -70,6 +70,7 @@ test('the exact lines the audit found', () => {
   expect(timelineLine('note', { kind: 'serve_order', server: 1, receiver: 2 }, ctx('tabletennis')).text).toMatch(/^🏓 /); // #128
   expect(timelineLine('note', { kind: 'serve_order', server: 1, receiver: 2 }, ctx('pickleball')).text).toMatch(/^🥒 /);
   expect(timelineLine('note', { kind: 'libero', team_side: 'A' }, ctx('volleyball')).text).toBe('🔄 Libero in — Lions'); // #137
+  expect(timelineLine('note', { kind: 'rotation', team_side: 'B', set: 1 }, ctx('volleyball')).text).toBe('📋 Tigers line-up for set 1');
   // #136
   expect(timelineLine('extra', { type: 'B', runs: 2 }, ctx('cricket')).text).toBe('2 byes');
   expect(timelineLine('extra', { type: 'Lb', runs: 1 }, ctx('cricket')).text).toBe('1 leg bye');

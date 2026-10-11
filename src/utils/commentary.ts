@@ -101,7 +101,7 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (ctx.sport === 'volleyball' && eventType === 'note' && p.kind === 'rotation') {
     const names = (Array.isArray(p.slots) ? p.slots : []).map((x: any, i: number) => `${['I', 'II', 'III', 'IV', 'V', 'VI'][i] ?? i + 1} ${String(x?.name ?? '?')}`);
     const libs = (Array.isArray(p.liberos) ? p.liberos : []).map((x: any) => String(x?.name ?? '?'));
-    return `📋 ${team} line-up${typeof p.set === 'number' ? ` for set ${p.set}` : ''}${names.length ? `: ${names.join(', ')}` : ' set'}${libs.length ? ` · libero${libs.length === 1 ? '' : 's'} ${libs.join(', ')}` : ''}`;
+    return `📋 ${team} line-up${typeof p.set === 'number' ? ` for set ${p.set}` : ''}${names.length ? `: ${names.join(', ')}` : ''}${libs.length ? ` · libero${libs.length === 1 ? '' : 's'} ${libs.join(', ')}` : ''}`;
   }
   if (ctx.sport === 'volleyball' && eventType === 'note' && p.kind === 'libero') {
     if (p.out === true || p.back === true) return `🔄 Libero off — ${team}`;

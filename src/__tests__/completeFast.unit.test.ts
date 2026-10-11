@@ -43,8 +43,8 @@ describe('completeMatch', () => {
 describe('GET /matches/:id/mvp computes on demand', () => {
   const mf = fs.readFileSync(path.join(__dirname, '../controllers/matchFeatures.controller.ts'), 'utf8');
   const fn = mf.slice(mf.indexOf('export async function getMatchMVP'));
-  test('a completed match without an MVP yet gets one computed, once per process', () => {
-    expect(fn).toMatch(/status === 'completed' && !match\.mvp_user_id[\s\S]{0,80}!mvpTried\.has\(id\)[\s\S]{0,200}calculateAndSetMVP\(id\)/);
+  test('a completed match without an MVP yet gets one computed, once (audit #34: recorded on the match)', () => {
+    expect(fn).toMatch(/status === 'completed' && !match\.mvp_user_id[\s\S]{0,80}'mvp' in ss0[\s\S]{0,200}calculateAndSetMVP\(id\)/);
   });
 });
 

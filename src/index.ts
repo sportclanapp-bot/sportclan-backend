@@ -89,7 +89,15 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // what actually enforces the limit, with the message the user should see.
 // Per-request db timing on Server-Timing — first, so the whole request is inside it.
 app.use(dbTimingMiddleware);
-app.use(express.json({ limit: '14mb' }));
+// Audit #18 (11 Oct 2026): 14mb was the limit on EVERY route, sign-in included,
+// so anyone could make the server parse 14mb bodies for nothing. Now: 14mb only
+// where it is needed (an image upload, a scorer's QR handoff of queued points),
+// 100kb for the pre-sign-in /auth routes, 2mb for everything else. Parsing is
+// done once — the first matching parser wins (body-parser skips a parsed body).
+app.use('/uploads', express.json({ limit: '14mb' }));
+app.use(/^\/matches\/[^/]+\/handoff$/, express.json({ limit: '14mb' }));
+app.use('/auth', express.json({ limit: '100kb' }));
+app.use(express.json({ limit: '2mb' }));
 // SC-403: make snake_case/camelCase query params interchangeable, so a filter
 // spelled the other way is applied rather than silently dropped (which returned
 // an unfiltered list with a 200).
@@ -212,6 +220,18 @@ const refreshLimiter = rateLimit({
   store: new RedisRateLimitStore('rf', 'blocking'),
 });
 
+/** Audit #18: each upload decodes a whole image — a per-user budget of its own. */
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  keyGenerator: rateLimitKey,
+  skip: rateLimitBypassed,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many uploads. Try again in a few minutes.', code: 'RATE_LIMITED' },
+  store: new RedisRateLimitStore('upl', 'async'),
+});
+
 const sendOtpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
@@ -274,7 +294,7 @@ app.use('/cities', cacheFor(86400), citiesRoutes);      // 24h — pure static r
 app.use('/sports', cacheFor(300), sportsRoutes);        // 5m (SC-269)
 app.use('/users', usersRoutes);
 app.use('/notifications', notificationsRoutes);
-app.use('/uploads', uploadsRoutes);
+app.use('/uploads', uploadLimiter, uploadsRoutes); // audit #18
 app.use('/app', cacheFor(300), appRoutes);             // 5m
 app.use('/invites', invitesRoutes);
 app.use('/services', servicesRoutes);

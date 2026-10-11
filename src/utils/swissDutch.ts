@@ -159,20 +159,23 @@ function pairOnce(inp: DutchInput, hardClub: boolean): { round: DutchRound; rela
   const topscorer = (id: string) => inp.lastRound && pts(id) * 2 > maxPts;
   const pref = new Map(inp.players.map((id) => [id, colourPreference(hist(id))]));
 
-  const compatible = (a: string, b: string): boolean => {
+  // Audit #62: rules are relaxed one at a time, in FIDE's order — level 0 all
+  // rules; level 1 colours dropped; level 2 rematches allowed too. (It used to
+  // drop both at once, so a rematch could be chosen when colours alone would do.)
+  const compatible = (a: string, b: string, level = 0): boolean => {
     if (a === b) return false;
-    if (hist(a)?.opponents.has(b)) return false;
+    if (level < 2 && hist(a)?.opponents.has(b)) return false;
     if (hardClub) { const ca = inp.clubOf!(a); if (ca && ca === inp.clubOf!(b)) return false; }
-    if (inp.colours) {
+    if (level < 1 && inp.colours) {
       const pa = pref.get(a)!; const pb = pref.get(b)!;
       if (pa.strength === 3 && pb.strength === 3 && pa.colour === pb.colour && !(topscorer(a) || topscorer(b))) return false;
     }
     return true;
   };
-  const feasible = (ids: string[]): boolean => {
+  const feasible = (ids: string[], level = 0): boolean => {
     if (ids.length % 2 === 1) return false;
     if (!ids.length) return true;
-    const adj = ids.map((a) => ids.map((b) => compatible(a, b)));
+    const adj = ids.map((a) => ids.map((b) => compatible(a, b, level)));
     const mate = maxMatching(ids.length, adj);
     return mate.every((m) => m !== -1);
   };
@@ -194,7 +197,8 @@ function pairOnce(inp: DutchInput, hardClub: boolean): { round: DutchRound; rela
   }
   // If nothing pairs without a repeat or a colour clash (a tiny field late on), relax in FIDE's order:
   // colours first, then repeats — the round is still made.
-  const relaxed = !feasible(pool);
+  const level = feasible(pool, 0) ? 0 : feasible(pool, 1) ? 1 : 2;
+  const relaxed = level > 0;
 
   const groups: string[][] = [];
   for (const id of pool) {
@@ -220,8 +224,8 @@ function pairOnce(inp: DutchInput, hardClub: boolean): { round: DutchRound; rela
   return { round: { bye, pairs: pairs.map(([a, b]) => colourPair(a, b)) }, relaxed };
 
   function pairBracket(bracket: string[], mdps: string[], lower: string[], isLast: boolean): { pairs: Array<[string, string]>; left: string[] } {
-    const ok = (a: string, b: string) => relaxed || compatible(a, b);
-    const restFeasible = (left: string[]) => relaxed || feasible([...left, ...lower]);
+    const ok = (a: string, b: string) => compatible(a, b, level);
+    const restFeasible = (left: string[]) => level === 2 || feasible([...left, ...lower], level);
     const n = bracket.length;
     // Most pairs first; the last bracket must pair everyone.
     for (let want = Math.floor(n / 2); want >= 0; want--) {

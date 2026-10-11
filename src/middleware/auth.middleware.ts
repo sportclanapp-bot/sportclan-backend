@@ -34,9 +34,26 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
     return res.status(401).json({ error: 'Session revoked. Please sign in again.', code: 'SESSION_REVOKED' });
   }
   req.userId = payload.userId;
-  // Fire-and-forget last_active_at update — no await, no error check
-  supabase.from('users').update({ last_active_at: new Date().toISOString() }).eq('id', payload.userId).then(() => {});
+  // Fire-and-forget last_active_at update — no await, no error check. Audit
+  // #95: at most once every PRESENCE_WRITE_MS per person (it wrote the database
+  // on every request; the online window is minutes, not seconds).
+  if (shouldWritePresence(payload.userId)) {
+    supabase.from('users').update({ last_active_at: new Date().toISOString() }).eq('id', payload.userId).then(() => {});
+  }
   return next();
+}
+
+/** Audit #95: how often one person's request writes last_active_at. */
+export const PRESENCE_WRITE_MS = 30_000;
+const lastPresenceWrite = new Map<string, number>();
+export function shouldWritePresence(userId: string, now = Date.now()): boolean {
+  const last = lastPresenceWrite.get(userId) ?? 0;
+  if (now - last < PRESENCE_WRITE_MS) return false;
+  lastPresenceWrite.set(userId, now);
+  if (lastPresenceWrite.size > 50_000) { // keep the map small: drop entries older than the window
+    for (const [k, v] of lastPresenceWrite) if (now - v >= PRESENCE_WRITE_MS) lastPresenceWrite.delete(k);
+  }
+  return true;
 }
 
 /**

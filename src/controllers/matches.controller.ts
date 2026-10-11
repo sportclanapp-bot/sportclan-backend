@@ -1,5 +1,6 @@
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
 import { teamSheetProblem } from './squads.controller';
+import { consentedParticipants, isOnAnyTeam } from '../utils/matchConsent';
 import { matchEventsAll } from '../utils/matchEventsAll';
 import { sportTerms } from '../utils/sportTerms';
 import { sportSlugOf } from '../utils/sportSlug';
@@ -246,6 +247,11 @@ export async function createMatchRefusal(args: {
       : Promise.resolve(null),
   ]);
   if (teamRefusal) return teamRefusal;
+  // Audit #6: a match between registered teams is made by someone on one of
+  // them (a tournament's fixtures come from its organiser instead).
+  if (!args.tournamentId && args.teamIds.length && !(await isOnAnyTeam(args.userId, args.teamIds))) {
+    return { status: 403, error: 'You can only set up a match for a team you’re in.', code: 'NOT_ON_TEAM' };
+  }
   if (args.tournamentId) {
     const tr = tournament as { id: string; sport_id: string } | null;
     if (!tr) return { status: 400, error: 'That tournament could not be found.', code: 'TOURNAMENT_NOT_FOUND' };
@@ -2268,6 +2274,20 @@ export async function addParticipants(req: Request, res: Response) {
           return res.status(403).json({ error: 'That player can’t be added to this match.', code: 'BLOCKED_FROM_MATCH' });
         }
       }
+      // Audit #6: a side that is a registered team takes only that team's own
+      // players (a tournament fixture's line-up is the organiser's to set).
+      if (!match.tournament_id && (match.team_a_id || match.team_b_id)) {
+        const sideTeams = [match.team_a_id, match.team_b_id].filter((x): x is string => !!x);
+        const { data: roster } = await supabase.from('team_members').select('team_id, user_id').in('team_id', sideTeams).in('user_id', ids);
+        const on = new Set(((roster ?? []) as Array<{ team_id: string; user_id: string }>).map((r) => `${r.team_id}:${r.user_id}`));
+        const off = (participants as Array<{ user_id: string; team_side: string }>).find((p) => {
+          const team = p.team_side === 'A' ? match.team_a_id : match.team_b_id;
+          return !!team && !on.has(`${team}:${p.user_id}`);
+        });
+        if (off) {
+          return res.status(403).json({ error: 'That player isn’t in that team, so they can’t play for it here.', code: 'NOT_ON_ROSTER', user_id: off.user_id });
+        }
+      }
     }
     // F-29: one player, one side. A batch placing the same player on both sides
     // used to be "deduped" (last wins), so the line-up stored was not the one
@@ -3450,7 +3470,10 @@ export async function completeMatch(req: Request, res: Response) {
 
     timer.mark('guards');
     // Participants grouped by team side (read above, with the lease).
-    const participants = partsRes.data;
+    // Audit #6: only players who agreed to play have their record changed (the
+    // creator, the creator's teammates, anyone who said "In"; a tournament
+    // fixture's whole line-up). Others stay in the line-up, unrated.
+    const participants = partsRes.data ? await consentedParticipants(match as any, partsRes.data as any[]) : partsRes.data;
     const now = new Date().toISOString();
     const ratingHistoryRows: Array<{ user_id: string; sport_id: string; match_id: string; old_rating: number; new_rating: number; delta: number }> = [];
     let allPlayerIds: string[] = [];
@@ -3473,6 +3496,10 @@ export async function completeMatch(req: Request, res: Response) {
       const aCount = (participants ?? []).filter((p) => p.team_side === 'A').length;
       const bCount = (participants ?? []).filter((p) => p.team_side === 'B').length;
       if (aCount < 1 || bCount < 1) {
+        const lined = (partsRes.data ?? []) as Array<{ team_side: string }>;
+        if (lined.some((p) => p.team_side === 'A') && lined.some((p) => p.team_side === 'B')) {
+          return res.status(400).json({ error: 'Nobody on one side has said they’re playing yet. A ranked result needs at least one player a side who tapped “In”.', code: 'SIDE_NOT_CONFIRMED' });
+        }
         return res.status(400).json({ error: 'Ranked matches need at least one registered player on each side. Set the lineup first.' });
       }
     }
@@ -3723,8 +3750,8 @@ export async function completeMatch(req: Request, res: Response) {
         aWickets: Number(ss?.A?.wickets ?? 0),
         bWickets: Number(ss?.B?.wickets ?? 0),
         // A6: "won by N wickets" counts wickets in hand against the side's line-up.
-        aAllOut: allOutBySide(participants ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands).A, // BUILD 3.2
-        bAllOut: allOutBySide(participants ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands).B,
+        aAllOut: allOutBySide((partsRes.data ?? []) as never, rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands).A, // BUILD 3.2 · audit #6: the whole line-up
+        bAllOut: allOutBySide((partsRes.data ?? []) as never, rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands).B,
         tossWinnerSide: (ss?.toss_winner_side as 'A' | 'B' | undefined) ?? null,
         // SC-442: read directly, NOT through a cast. This line was
         // `(match as { toss_choice?: string | null }).toss_choice` and the

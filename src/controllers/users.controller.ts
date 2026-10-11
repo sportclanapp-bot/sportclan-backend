@@ -495,6 +495,8 @@ export async function updateMe(req: Request, res: Response) {
       return res.status(400).json({ error: `${k} must be true or false`, code: 'INVALID_FIELD' });
     }
   }
+  // Audit #8: remember that the person set it themselves (the default is off).
+  if ('show_dob' in patch) patch.show_dob_set_at = new Date().toISOString();
   if (patch.dob === '') patch.dob = null;
   if ('city_id' in patch && patch.city_id !== null) {
     const { data: city } = isUuid(patch.city_id)

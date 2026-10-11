@@ -1,3 +1,4 @@
+import { secretEquals } from '../utils/secretEqual';
 import { hideTestFor, testFlagReady } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -143,7 +144,7 @@ export async function getCurrentSeason(req: Request, res: Response) {
 // and creates the next season (3 months from now).
 export async function endSeason(req: Request, res: Response) {
   const adminKey = req.headers['x-admin-key'];
-  if (!adminKey || adminKey !== process.env.ADMIN_KEY) {
+  if (!secretEquals(adminKey, process.env.ADMIN_KEY)) { // audit #33: constant time
     return res.status(403).json({ error: 'Admin key required' });
   }
 

@@ -1,3 +1,4 @@
+import { secretEquals } from '../utils/secretEqual';
 import { disbandedTeamIds } from '../utils/teamVisibility';
 import { NUMBER_HOLD_MS } from '../utils/deletedNumber';
 import { findSessionByToken, hashRefreshToken } from '../utils/refreshTokenStore';
@@ -269,7 +270,7 @@ export async function purgeExpiredAccountsCore(): Promise<{ purged: number; ids:
 
 export async function purgeExpiredAccounts(req: Request, res: Response) {
   const secret = req.headers['x-cron-secret'];
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+  if (!secretEquals(secret, process.env.CRON_SECRET)) { // audit #33: constant time
     return res.status(403).json({ error: 'Forbidden' });
   }
   try {

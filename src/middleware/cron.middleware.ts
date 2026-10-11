@@ -1,3 +1,4 @@
+import { secretEquals } from '../utils/secretEqual';
 import { Request, Response, NextFunction } from 'express';
 
 /**
@@ -8,7 +9,7 @@ import { Request, Response, NextFunction } from 'express';
  */
 export function requireCronSecret(req: Request, res: Response, next: NextFunction) {
   const secret = req.headers['x-cron-secret'];
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+  if (!secretEquals(secret, process.env.CRON_SECRET)) { // audit #33: constant time
     return res.status(403).json({ error: 'Forbidden' });
   }
   return next();

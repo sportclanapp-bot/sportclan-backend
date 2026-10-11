@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import jwt, { SignOptions } from 'jsonwebtoken';
 
 // In production the secrets MUST come from the environment. Falling back to the
@@ -64,7 +65,9 @@ export function generateAccessTokenAt(userId: string, iatSeconds: number, sid?: 
 }
 
 export function generateRefreshToken(userId: string): string {
-  return jwt.sign({ userId }, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRES });
+  // Audit #19: a random id makes every refresh token unique — two minted in the
+  // same second (a sign-in and a rotation) were byte-for-byte identical.
+  return jwt.sign({ userId }, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRES, jwtid: crypto.randomUUID() });
 }
 
 export function verifyAccessToken(token: string): TokenPayload {

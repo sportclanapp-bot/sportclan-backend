@@ -165,8 +165,8 @@ describe('K1-41d / K1-44 · the 5xx backstop', () => {
   it('K1-41d (d5aa529): the backstop is mounted before the routes, the final handler after', () => {
     const idx = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
     expect(idx.indexOf('app.use(sanitizeErrorResponses)')).toBeGreaterThan(0);
-    expect(idx.indexOf('app.use(sanitizeErrorResponses)')).toBeLessThan(idx.indexOf("app.use('/auth'"));
-    expect(idx.indexOf('app.use(globalErrorHandler)')).toBeGreaterThan(idx.indexOf("app.use('/auth'"));
+    expect(idx.indexOf('app.use(sanitizeErrorResponses)')).toBeLessThan(idx.indexOf("app.use('/auth', authLimiter")); // audit #18: '/auth' also has its body parser first
+    expect(idx.indexOf('app.use(globalErrorHandler)')).toBeGreaterThan(idx.indexOf("app.use('/auth', authLimiter"));
   });
   it('K1-44 (b63f79c): an intentional 503 keeps its message', () => {
     expect(run(503, { error: 'We could not send a code to that number. Please try again.' }))

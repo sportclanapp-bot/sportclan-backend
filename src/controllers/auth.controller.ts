@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import { findSessionByToken, hashRefreshToken } from '../utils/refreshTokenStore';
 import { notifyUser } from '../utils/notify';
 import { reauthRefusal } from '../utils/reauth';
 import { signOutOtherDevices } from './account.controller';
@@ -745,12 +746,17 @@ export async function refresh(req: Request, res: Response) {
   if (!refreshToken) return res.status(400).json({ error: 'refreshToken is required' });
   try {
     const payload = verifyRefreshToken(refreshToken);
-    const { data: row } = await supabase
-      .from('refresh_tokens')
-      .select('id, revoked')
-      .eq('token', refreshToken)
-      .maybeSingle();
-    if (!row || row.revoked) return res.status(401).json({ error: 'Refresh token revoked' });
+    // Audit #19: found by the token's hash; a token a rotation already replaced
+    // is answered only within a short grace (a lost response) — later, it is a
+    // stolen or stale copy, and the whole sign-in is ended.
+    const found = await findSessionByToken(refreshToken);
+    const row = found?.row;
+    if (!row || row.revoked || row.user_id !== payload.userId) return res.status(401).json({ error: 'Refresh token revoked' });
+    if (found.reused && !found.inGrace) {
+      await supabase.from('refresh_tokens').update({ revoked: true }).eq('id', row.id);
+      await denySessions([row.id]);
+      return res.status(401).json({ error: 'Refresh token revoked', code: 'REFRESH_REUSED' });
+    }
     // SC-213: a ban/deletion must bite mid-session — a suspended or soft-deleted
     // user must NOT be able to mint fresh access tokens off an old refresh token.
     // (Login/verify-otp already gate this; refresh was the evasion path.)
@@ -766,6 +772,20 @@ export async function refresh(req: Request, res: Response) {
       supabase.from('refresh_tokens').update({ last_used_at: new Date().toISOString(), ...refreshedDeviceFields(req) }).eq('id', row.id),
     ).catch(() => undefined);
     const accessToken = generateAccessToken(payload.userId, row.id); // decision 15: this sign-in's sid
+    // Audit #19: an app that keeps a new refresh token says so; it gets one each
+    // time (the old one is remembered as prev_token_hash). Older apps don't, and
+    // keep their token — rotating it would sign them out.
+    const features = String(req.headers['x-client-features'] ?? '');
+    if (/\brotate-refresh\b/.test(features)) {
+      const next = generateRefreshToken(payload.userId);
+      const { error: rotErr } = await supabase.from('refresh_tokens').update({
+        token: null,
+        token_hash: hashRefreshToken(next),
+        prev_token_hash: found.reused ? row.prev_token_hash : hashRefreshToken(refreshToken),
+        rotated_at: new Date().toISOString(),
+      }).eq('id', row.id);
+      if (!rotErr) return res.json({ accessToken, refreshToken: next });
+    }
     return res.json({ accessToken });
   } catch {
     return res.status(401).json({ error: 'Invalid refresh token' });
@@ -776,7 +796,11 @@ export async function refresh(req: Request, res: Response) {
 export async function logout(req: Request, res: Response) {
   const { refreshToken, pushToken } = req.body || {};
   if (refreshToken) {
-    const { data: signedOut } = await supabase.from('refresh_tokens').update({ revoked: true }).eq('token', refreshToken).select('id');
+    // Audit #19: the session is found by the token's hash (or the old plain copy).
+    const sess = await findSessionByToken(refreshToken).catch(() => null);
+    const { data: signedOut } = sess
+      ? await supabase.from('refresh_tokens').update({ revoked: true }).eq('id', sess.row.id).select('id')
+      : { data: [] as Array<{ id: string }> };
     // Decision 15: the access token this phone still holds stops now too.
     await denySessions(((signedOut ?? []) as Array<{ id: string }>).map((r) => r.id));
   }

@@ -1,5 +1,6 @@
 import { disbandedTeamIds } from '../utils/teamVisibility';
 import { NUMBER_HOLD_MS } from '../utils/deletedNumber';
+import { findSessionByToken, hashRefreshToken } from '../utils/refreshTokenStore';
 import { reauthRefusal } from '../utils/reauth';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
@@ -289,6 +290,7 @@ export async function getSessions(req: Request, res: Response) {
   const userId = req.userId!;
   const currentRefreshToken =
     (req.headers['x-refresh-token'] as string | undefined) ?? null;
+  const currentHash = currentRefreshToken ? hashRefreshToken(currentRefreshToken) : null; // audit #19
 
   // Try the rich schema first. If some of the optional columns don't
   // exist, fall back to the minimal id/token/created_at set.
@@ -298,7 +300,7 @@ export async function getSessions(req: Request, res: Response) {
     // (revoked) are not "active" and are no longer listed.
     const rich = await supabase
       .from('refresh_tokens')
-      .select('id, token, created_at, device_name, device_os, app_version, last_used_at')
+      .select('id, token, token_hash, created_at, device_name, device_os, app_version, last_used_at')
       .eq('user_id', userId)
       .eq('revoked', false)
       .order('created_at', { ascending: false });
@@ -324,7 +326,8 @@ export async function getSessions(req: Request, res: Response) {
   // a caller that sent no X-Refresh-Token at all (an older app).
   const recency = (r: any) => String(r.last_used_at ?? r.created_at ?? '');
   const ordered = rows
-    .map((row) => ({ row, current: !!currentRefreshToken && row.token === currentRefreshToken }))
+    // Audit #19: by the token's hash (the plain copy goes after the deploy).
+    .map((row) => ({ row, current: !!currentRefreshToken && (row.token_hash === currentHash || row.token === currentRefreshToken) }))
     .sort((a, b) => (a.current === b.current ? recency(b.row).localeCompare(recency(a.row)) : a.current ? -1 : 1));
   if (!currentRefreshToken && ordered.length > 0) ordered[0].current = true;
 
@@ -382,7 +385,11 @@ export async function signOutOtherDevices(req: Request, userId: string): Promise
     .from('refresh_tokens')
     .delete()
     .eq('user_id', userId);
-  if (currentRefreshToken) {
+  // Audit #19: this device's own session, found by its token's hash.
+  const mineSess = currentRefreshToken ? await findSessionByToken(currentRefreshToken).catch(() => null) : null;
+  if (mineSess) {
+    query = query.neq('id', mineSess.row.id);
+  } else if (currentRefreshToken) {
     query = query.neq('token', currentRefreshToken);
   }
   const { error } = await query;
@@ -414,9 +421,7 @@ export async function signOutOtherDevices(req: Request, userId: string): Promise
   // device can later be signed out on its own like any other.
   let sid: string | null = null;
   if (currentRefreshToken) {
-    const { data: mine } = await supabase
-      .from('refresh_tokens').select('id').eq('user_id', userId).eq('token', currentRefreshToken).maybeSingle();
-    sid = (mine as { id?: string } | null)?.id ?? null;
+    sid = mineSess && mineSess.row.user_id === userId ? mineSess.row.id : null; // audit #19
   }
   const accessToken = generateAccessTokenAt(userId, Math.floor(cutoffMs / 1000) + 1, sid);
   return { accessToken };

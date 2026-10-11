@@ -7,6 +7,7 @@
  * trimmed and capped — it is only ever shown back to the same user.
  */
 import type { Request } from 'express';
+import { hashRefreshToken } from './refreshTokenStore';
 import { supabase } from './supabase';
 
 const clean = (v: unknown): string | null => {
@@ -46,6 +47,9 @@ export function refreshedDeviceFields(req: Pick<Request, 'headers'>): Partial<Re
  */
 export async function insertRefreshToken(userId: string, token: string, req: Pick<Request, 'headers'>): Promise<string | null> {
   const now = new Date().toISOString();
+  // Audit #19: only the token's hash is stored (migration 145).
+  const hashed = await supabase.from('refresh_tokens').insert({ user_id: userId, token: null, token_hash: hashRefreshToken(token), ...deviceFields(req), last_used_at: now }).select('id').maybeSingle();
+  if (!hashed.error) return (hashed.data as { id?: string } | null)?.id ?? null;
   const first = await supabase.from('refresh_tokens').insert({ user_id: userId, token, ...deviceFields(req), last_used_at: now }).select('id').maybeSingle();
   if (!first.error) return (first.data as { id?: string } | null)?.id ?? null;
   const fallback = await supabase.from('refresh_tokens').insert({ user_id: userId, token }).select('id').maybeSingle();

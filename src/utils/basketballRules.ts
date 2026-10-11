@@ -13,6 +13,7 @@
  * periods are a counter the scorer advances, so the copy says "4 quarters",
  * not a length.
  */
+import { plural } from './plural';
 
 export const REGULATION_QUARTERS = 4;
 
@@ -187,7 +188,7 @@ export function timeoutsLeft(
     if (rules.perPeriod != null) candidates.push({ left: Math.max(0, rules.perPeriod - taken.filter((t) => t.period === period).length), why: `all ${rules.perPeriod} time-outs this period` });
     // FIBA: at most `lateMax` once the clock shows `lateMinutes` or less in the last regulation period.
     if (period === regulation && rules.lateMinutes != null && rules.lateMax != null && secondsLeft != null && secondsLeft <= rules.lateMinutes * 60) {
-      candidates.push({ left: Math.max(0, rules.lateMax - taken.filter((t) => t.period === period && t.late).length), why: `the ${rules.lateMax} allowed in the last ${rules.lateMinutes} minutes` });
+      candidates.push({ left: Math.max(0, rules.lateMax - taken.filter((t) => t.period === period && t.late).length), why: `the ${rules.lateMax} allowed in the last ${plural(rules.lateMinutes, 'minute')}` });
     }
   }
   if (!candidates.length) return { left: null, why: null };

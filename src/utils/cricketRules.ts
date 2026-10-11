@@ -15,6 +15,7 @@
  *             last batter can't bat alone), at most 10. A side with no line-up
  *             (typed-in teams) is all out at 10, as before.
  */
+import { plural } from './plural';
 
 export type CricketFormat = 'limited' | 'box' | 'pair';
 
@@ -321,7 +322,7 @@ export function reduceOversRefusal(args: { from: number; to: unknown; firstBalls
     return `Reduce to a whole number of overs below ${from}.`;
   }
   if (args.firstDone && args.firstBalls > to * 6) {
-    return `The first innings already had more than ${to} overs. Both sides must get the same — cut the chase with the DLS calculator instead.`;
+    return `The first innings already had more than ${plural(to, 'over')}. Both sides must get the same — cut the chase with the DLS calculator instead.`;
   }
   const bowled = Math.max(args.firstDone ? 0 : args.firstBalls, args.chaseBalls);
   if (bowled > to * 6) {
@@ -416,7 +417,7 @@ export function typedScoreRefusal(
     const balls = typedOversToBalls(x.overs);
     if (balls == null) return { error: 'Overs are written like 12.3 — whole overs, then 0 to 5 balls.', field: `${s}.overs` };
     if (balls === 0 && (runs > 0 || w > 0)) return { error: 'A side that scored runs or lost wickets faced at least one ball.', field: `${s}.overs` };
-    if (opts.overs != null && balls > opts.overs * 6) return { error: `No side can bat more than the match's ${opts.overs} overs.`, field: `${s}.overs` };
+    if (opts.overs != null && balls > opts.overs * 6) return { error: `No side can bat more than the match's ${plural(opts.overs, 'over')}.`, field: `${s}.overs` };
   }
   // Stage 13 · CR3: no top on the chase (was first innings + 7) — a ball's runs have no top
   // (all-run overthrows, a wide worth the match's own number), so the last ball can pass the target by any amount.

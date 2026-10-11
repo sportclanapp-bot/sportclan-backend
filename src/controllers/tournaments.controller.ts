@@ -172,7 +172,7 @@ function groupsEditRefusal(
   if (gs !== null && q > gs) return bad('qualifiers_per_group cannot exceed group_size');
   const maxTeams = 'max_teams' in body ? Number(body.max_teams) : row.max_teams ?? null;
   if (row.format === 'groups_knockout' && ng !== null && maxTeams != null && maxTeams < ng * 2) {
-    return { status: 400, body: { error: `${ng} groups need at least ${ng * 2} teams; max teams is ${maxTeams}.`, code: 'GROUPS_TOO_SMALL' } };
+    return { status: 400, body: { error: `${plural(ng, 'group')} need${ng === 1 ? 's' : ''} at least ${ng * 2} teams; max teams is ${maxTeams}.`, code: 'GROUPS_TOO_SMALL' } };
   }
   if (row.format === 'groups_knockout' && ng !== null && gs !== null && maxTeams != null && maxTeams > ng * gs) {
     return { status: 400, body: { error: `Max teams (${maxTeams}) is more than ${ng} groups of ${gs} can hold (${ng * gs}).`, code: 'GROUPS_TOO_SMALL' } };
@@ -337,7 +337,7 @@ async function tournamentRowFrom(body: Record<string, any>, kind: 'single' | 'pa
   // BUILD 4.3: every group needs 2 teams, so a group count the tournament
   // can't fill could never be drawn.
   if (format === 'groups_knockout' && ng !== null && maxTeamsNum < ng * 2) {
-    return bad({ error: `${ng} groups need at least ${ng * 2} teams; max teams is ${maxTeamsNum}.`, code: 'GROUPS_TOO_SMALL' });
+    return bad({ error: `${plural(ng, 'group')} need${ng === 1 ? 's' : ''} at least ${ng * 2} teams; max teams is ${maxTeamsNum}.`, code: 'GROUPS_TOO_SMALL' });
   }
   // BUILD 1.12: the group size is a cap — a tournament that takes more teams
   // than its groups can hold could never be drawn.

@@ -20,6 +20,7 @@ import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { notifyUsers, matchAudienceIds } from '../utils/notify';
 import { familyIds, rootTournamentId } from '../utils/tournamentEvents';
 import { formatTimeIst } from '../utils/scheduleFixtures';
+import { plural } from '../utils/plural';
 
 type M = {
   id: string; tournament_id: string; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null;
@@ -221,7 +222,7 @@ export async function runningLate(req: Request, res: Response) {
       void notifyUsers([...people], {
         type: 'tournament_updated',
         title: `Running ${minutes} min late`,
-        body: `${f.rootRow.name ?? 'The tournament'} is running ${minutes} minutes late. Every match not yet started moves ${minutes} minutes later — the next is at ${formatTimeIst(new Date(first).toISOString())}.`,
+        body: `${f.rootRow.name ?? 'The tournament'} is running ${plural(minutes, 'minute')} late. Every match not yet started moves ${plural(minutes, 'minute')} later — the next is at ${formatTimeIst(new Date(first).toISOString())}.`,
         data: { tournamentId: f.root },
       }, { actorId: userId });
     }

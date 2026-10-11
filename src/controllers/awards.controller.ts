@@ -18,6 +18,7 @@ import { fairPlayPoints, type CardEvent } from '../utils/fairPlay';
 import { settingsOf, settingsRefusal, storedSettings, type PickedAward } from '../utils/tournamentSettings';
 import { selectAllIn } from '../utils/selectAll';
 import { rankExtrasFor } from '../utils/rankExtras';
+import { plural } from '../utils/plural';
 
 export type Placing = { place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string; players: Array<{ id: string; name: string }> };
 type M = { id: string; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null; winner_team_id: string | null; status: string; round: number | null; group_label: string | null; third_place?: boolean | null; voided_at: string | null; score_summary?: unknown; overs?: number | null; bracket?: string | null };
@@ -170,7 +171,7 @@ export function computedAwards(
     const best = Math.max(...playedTeams.map(pts));
     const winners = playedTeams.filter((t) => pts(t) === best);
     if (winners.length < playedTeams.length) {
-      out.push({ key: 'fair_play', title: 'Fair play', winners: winners.map((t) => ({ user_id: null, name: teamNames.get(t) ?? 'Team', team_name: null })), value: best === 0 ? 'no cards' : `${best} fair-play points` });
+      out.push({ key: 'fair_play', title: 'Fair play', winners: winners.map((t) => ({ user_id: null, name: teamNames.get(t) ?? 'Team', team_name: null })), value: best === 0 ? 'no cards' : `${plural(best, 'fair-play point')}` });
     }
   }
   return out;

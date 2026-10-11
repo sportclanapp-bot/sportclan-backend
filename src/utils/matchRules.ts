@@ -19,6 +19,7 @@
 import { SERIES_SPORTS, TIE_SPORTS, tieNeed as tieNeedOf, tieSpecProblem, tieWeighted, type TieSpec } from './tieCore';
 import { MATCH_LENGTHS, bestOfFor, lengthKey } from './matchLength';
 import { OVERS_MIN, PLAYERS_MIN, PLAYERS_MAX, RETIRE_MIN, RETIRE_MAX, EXTRA_RUNS_MIN, EXTRA_RUNS_MAX, INNINGS_MINUTES_MIN, INNINGS_MINUTES_MAX, isOfferedOvers } from './cricketRules';
+import { plural } from './plural';
 
 export const RULES_VERSION = 1;
 
@@ -792,7 +793,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     }
     // …and enough of them to bowl the innings, or the pad has nobody to pick.
     if (r.bowlerOvers !== null && r.players !== null && (r.players as number) * (r.bowlerOvers as number) < (r.overs as number)) {
-      return refuse(`${String(r.players)} players bowling ${String(r.bowlerOvers)} over${r.bowlerOvers === 1 ? '' : 's'} each can’t bowl ${String(r.overs)} overs. Raise the max overs per bowler.`, 'bowlerOvers');
+      return refuse(`${String(r.players)} players bowling ${String(r.bowlerOvers)} over${r.bowlerOvers === 1 ? '' : 's'} each can’t bowl ${plural(Number(r.overs), 'over')}. Raise the max overs per bowler.`, 'bowlerOvers');
     }
     // BUILD 3.6: a wide / no-ball is worth 0, 1 or 2.
     if (!isWhole(r.extraRuns) || r.extraRuns < EXTRA_RUNS_MIN || r.extraRuns > EXTRA_RUNS_MAX) {
@@ -1291,7 +1292,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   const key = lengthKey(sport);
   const parts: string[] = [];
   // Stage 9 · T3: the organiser's own tie, any tie sport.
-  if (rules.tie && !tieSpecProblem(rules.tie) && rules.tie.series) parts.push(`best of ${rules.tie.rubbers.length} games`); // Stage 15 · BB6
+  if (rules.tie && !tieSpecProblem(rules.tie) && rules.tie.series) parts.push(rules.tie.rubbers.length === 1 ? 'one game' : `best of ${rules.tie.rubbers.length} games`); // Stage 15 · BB6
   else if (rules.tie && !tieSpecProblem(rules.tie)) {
     const n = rules.tie.rubbers.length;
     parts.push(`team tie · ${n} ${n === 1 ? 'match' : 'matches'} · ${rules.tie.win === 'first' ? `first to ${tieNeedOf(rules.tie)}` : rules.tie.win === 'all' ? (tieWeighted(rules.tie) ? 'most matches by worth' : 'most matches') /* Stage 11 follow-up: a match worth more, or a trump */ : `most ${key === 'tennis' ? 'games' : 'points'}`}`);
@@ -1333,7 +1334,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     if (rules.target != null && rules.target !== 25) parts.push(`games to ${rules.target}`);
     if (rules.queenPoints != null && rules.queenPoints !== 3) parts.push(rules.queenPoints === 0 ? 'no queen points' : `queen +${rules.queenPoints}`);
     if (rules.queenCutoff === false && rules.queenPoints !== 0) parts.push('queen always counts'); // BUILD 3.73
-    if (rules.boardCap) parts.push(`${rules.boardCap} boards a game`); // BUILD 3.74
+    if (rules.boardCap) parts.push(`${plural(rules.boardCap, 'board')} a game`); // BUILD 3.74
     if (rules.gameMinutes) parts.push(`${rules.gameMinutes} min a game`); // BUILD 3.76
     return parts.length ? parts.join(' · ') : null;
   }

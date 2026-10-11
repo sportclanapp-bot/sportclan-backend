@@ -27,6 +27,7 @@ import { sideOutRally, sideOutStart, type SideOutOpts } from './pickleballCore';
 import { boardPointsFor, boardWhite, tieOutcome, type RubberResult, type TieSpec } from './tieCore';
 import { carromReplay, type CarromItem, type CarromOpts } from './carromCore';
 import { scoreWithShootout, shootoutProblem, shootoutWinner } from './shootoutRules';
+import { plural } from './plural';
 
 export type TypedSide = 'A' | 'B';
 /** One game (rally sports) or set (tennis): each side's score; a tennis set won 7-6 also gives its tiebreak points. */
@@ -156,7 +157,7 @@ function tennisPoints(rules: MatchRules, sets: TypedSet[]): { problem: string | 
       return { problem: `Set ${k + 1}: ${done.tiebreak ? `the tiebreak ${set.tbA}-${set.tbB} isn’t a finished one (win by 2)` : 'this set has no tiebreak'}.`, points, winner: null };
     }
   }
-  if (!s.winner) return { problem: `The match isn’t finished: ${opts.setsToWin} sets to win.`, points, winner: null };
+  if (!s.winner) return { problem: `The match isn’t finished: ${plural(opts.setsToWin, 'set')} to win.`, points, winner: null };
   return { problem: null, points, winner: s.winner };
 }
 
@@ -225,7 +226,7 @@ function carromPoints(rules: MatchRules, sets: TypedSet[]): { problem: string | 
       wb = (splitBoards(w, Math.ceil(w / 9)) ?? []).map((p) => ({ p, queen: false })); lb = splitBoards(l, Math.ceil(l / 9)); buzzer = true;
     }
     if (!wb || !lb) {
-      const how = [o.boardCap != null ? `${o.boardCap} boards` : null, o.gameMinutes ? `${o.gameMinutes} minutes` : null].filter(Boolean).join(' or ');
+      const how = [o.boardCap != null ? plural(o.boardCap, 'board') : null, o.gameMinutes ? plural(o.gameMinutes, 'minute') : null].filter(Boolean).join(' or ');
       return { problem: `Game ${g + 1}: ${label(set)} isn’t a finished game — to ${target}${how ? `, or ${how}` : ''}.`, points, winner: null };
     }
     // Boards in turn, the winner's last board last (the loser's never reach the target).
@@ -279,7 +280,7 @@ export function typedTiePoints(
   const unitsOfSets = (sets: TypedSet[], side: TypedSide) => sets.reduce((n, x) => n + (side === 'A' ? x.a : x.b), 0);
   for (let i = 0; i < rubbers.length; i++) {
     const rubber = spec.rubbers[i];
-    if (!rubber) return { problem: `This tie has ${spec.rubbers.length} matches.`, points, winner: null };
+    if (!rubber) return { problem: `This tie has ${plural(spec.rubbers.length, 'match', 'matches')}.`, points, winner: null };
     if (tieOutcome(spec, results).finished) return { problem: `The tie was decided before ${rubber.label}.`, points, winner: null };
     const own = { ...(rules ?? {}), ...((rubber.rules ?? {}) as Partial<MatchRules>), tie: null, rubbers: null, players: rubber.players === 2 ? 2 : null } as Partial<MatchRules>; // Stage 11 · PB3: a match's own rules
     const m = typedMatchPoints(sport, own, rubbers[i]);
@@ -416,6 +417,6 @@ export function typedSeriesPoints(
     if (w === 'A') wa += 1; else wb += 1;
     parts.push(`G${i + 1} ${scoreWithShootout(k, a, b, pens, '-')}`);
   }
-  if (wa < need && wb < need) return no(`Nobody has won ${need} games yet.`);
+  if (wa < need && wb < need) return no(`Nobody has won ${plural(need, 'game')} yet.`);
   return { problem: null, events, winner: wa >= need ? 'A' : 'B', text: `${wa}-${wb} (${parts.join(', ')})` };
 }

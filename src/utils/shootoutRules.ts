@@ -12,6 +12,7 @@
  * shootout, recorded as its score (e.g. 4–3). Casual matches, league and group
  * matches stay draws: no shootout there.
  */
+import { plural } from './plural';
 
 export type ShootoutSide = 'A' | 'B';
 
@@ -45,7 +46,7 @@ export function shootoutProblem(a: unknown, b: unknown, kicks?: number | null): 
   if (!ok(a) || !ok(b)) return 'A shootout score is two whole numbers, 0 or more.';
   if (a === b) return 'A shootout can’t end level.';
   if (kicks && Math.max(a as number, b as number) > kicks && Math.abs((a as number) - (b as number)) !== 1) {
-    return `After ${kicks} kicks each it’s sudden death, so it ends by one goal (e.g. ${kicks + 1}–${kicks}).`;
+    return `After ${plural(kicks, 'kick')} each it’s sudden death, so it ends by one goal (e.g. ${kicks + 1}–${kicks}).`;
   }
   return null;
 }

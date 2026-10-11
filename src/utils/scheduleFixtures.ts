@@ -9,6 +9,7 @@
 // the resulting instant as a UTC timestamptz. The offset lives in ONE constant.
 // Per-day window overrides (Sat 8–8, Sun 8–2) are a later enhancement; v1 uses a
 // single window for all days.
+import { plural } from './plural';
 export const TOURNAMENT_TZ_OFFSET_MIN = 330; // IST = UTC+05:30
 
 export interface SchedulingConfig {
@@ -173,13 +174,15 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
   const capacityError = (): ScheduleResult => {
     const perDayDefault = Math.max(1, slotsInWindow(defaultWindowMin));
     const needDays = Math.ceil(N / (G * perDayDefault));
+    const area = (cfg.areaWord ?? 'Ground').toLowerCase();
     return {
       ok: false,
       code: 'CAPACITY',
       error:
-        `These ${N} fixtures need ${N} slots, but the schedule (${G} ground${G > 1 ? 's' : ''} at ` +
-        `${D} min/match across ${days} day${days > 1 ? 's' : ''}) fits only ${rawCapacity}. ` +
-        `Add a ground, extend to ${needDays} day${needDays > 1 ? 's' : ''}, or shorten the match duration` +
+        // Audit batch 4: counts that agree, and the sport's own area word.
+        `${N === 1 ? 'This fixture needs 1 slot' : `These ${N} fixtures need ${N} slots`}, but the schedule (${plural(G, area)} at ` +
+        `${D} min/match across ${plural(days, 'day')}) fits only ${rawCapacity}. ` +
+        `Add ${/^[aeiou]/.test(area) ? 'an' : 'a'} ${area}, extend to ${plural(needDays, 'day')}, or shorten the match duration` +
         (R > 0 ? ` — or the ${R}-minute rest between a team’s matches.` : '.') +
         (shared ? ' The courts are shared with the tournament’s other events, and a player in two events can’t play both at once.' : ''),
     };

@@ -21,6 +21,7 @@ import { settingsOf, storedSettings, womenOnCourtProblem, type SquadRules } from
 import { possessive } from '../utils/possessive';
 import { notifyUser } from '../utils/notify';
 import { disciplineRecords, bannedFrom, openBans, type DMatch, type DCard } from '../utils/discipline';
+import { plural } from '../utils/plural';
 
 const NAME_MAX = 60; const NOTE_MAX = 200;
 type T = { id: string; settings: unknown; fixtures_generated: boolean | null; registration_deadline: string | null; entry_kind: string | null; format: string | null };
@@ -144,7 +145,7 @@ export async function setSquad(req: Request, res: Response) {
       clean.push({ user_id: uid, guest_name: uid ? null : g, jersey_number: jn });
     }
     const size = settingsOf(t as { settings?: unknown }).squad?.size;
-    if (size != null && clean.length > size) return res.status(409).json({ error: `A squad is at most ${size} players in this tournament.`, code: 'SQUAD_TOO_BIG' });
+    if (size != null && clean.length > size) return res.status(409).json({ error: `A squad is at most ${plural(size, 'player')} in this tournament.`, code: 'SQUAD_TOO_BIG' });
     // An account is in one squad per tournament.
     const uids = clean.map((c) => c.user_id).filter((x): x is string => !!x);
     if (uids.length) {

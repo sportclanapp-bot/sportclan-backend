@@ -1529,6 +1529,12 @@ export async function updateEntry(req: Request, res: Response) {
     } else {
       if (!isCreator) return res.status(403).json({ error: 'Forbidden' });
     }
+    // Audit #13: a captain withdrawing their team got past the check above and
+    // could then also set the organiser-only fields (fee paid, seed, group,
+    // club, fee note). Those stay the organiser's whatever else is sent.
+    if (!isCreator && [seed, club, group_label, fee_paid, fee_note, wild_card].some((v) => v !== undefined)) {
+      return res.status(403).json({ error: 'Only the organiser can change seeds, groups, clubs and fees.', code: 'ORGANISER_ONLY_FIELDS' });
+    }
 
     // BUILD 1.13: once the groups are drawn, a team's group is its fixtures'
     // group — moving it would split the table from the matches it played.

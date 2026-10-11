@@ -4,6 +4,9 @@ import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
 import { getTeamRole } from '../utils/teamAuth';
 import { isBlockedBetween } from '../utils/blocks';
+import { matchFormatName } from '../utils/displayNames';
+import { getSport } from '../utils/sportCache';
+import { MATCH_LENGTHS, lengthKey } from '../utils/matchLength';
 
 // SC-275: Advanced Stats (PREMIUM). Strictly ADDITIVE analytics that go BEYOND
 // the free surfaces. Free already gives, and STAYS free:
@@ -62,6 +65,7 @@ export async function getAdvancedStats(req: Request, res: Response) {
   const rawSportId = req.query.sport_id as string | undefined;
   if (!rawSportId) return res.status(400).json({ error: 'sport_id is required' });
   const sportId = (await resolveSportId(rawSportId)) ?? rawSportId;
+  const unitOf = MATCH_LENGTHS[lengthKey((await getSport(sportId))?.slug)]?.unit ?? 'game';
 
   try {
     // ── Universe: this user's ranked matches for the sport (rating_history) ──
@@ -273,7 +277,10 @@ export async function getAdvancedStats(req: Request, res: Response) {
         bump(acc.tod, todBucket(ist.getUTCHours()), won);
         bump(acc.dow, DOW[ist.getUTCDay()]!, won);
       }
-      if (m.format) bump(acc.fmt, String(m.format), won);
+      // Audit #117: the format in words ("Best of 3", "Box cricket"), never "bo3" / "box";
+      // an old match that stored its sport's name says nothing about its format.
+      const fmtName = matchFormatName(m.format as string | null, { unit: unitOf });
+      if (fmtName) bump(acc.fmt, fmtName, won);
       if (m.city_id) bump(acc.city, cityName.get(m.city_id as string) || 'Unknown city', won);
     }
     const splitOut = (m: Map<string, [number, number]>) =>

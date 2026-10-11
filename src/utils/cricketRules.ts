@@ -187,6 +187,19 @@ export function isDismissal(wicketType: unknown): boolean {
   return k !== 'retiredhurt' && k !== 'retirednotout';
 }
 
+/**
+ * Audit #48 (11 Oct 2026): runs completed before a run-out count — to the
+ * total, the batter and the bowler, like runs off the bat. Only a run-out
+ * carries them (`payload.runs`, a whole number, 0 or more); any other
+ * wicket's runs are 0.
+ */
+export function wicketRuns(p: { wicket_type?: unknown; type?: unknown; runs?: unknown } | null | undefined): number {
+  const k = String(p?.wicket_type ?? p?.type ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  if (k !== 'runout') return 0;
+  const n = Number(p?.runs ?? 0);
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+
 /** BUILD 3.4: a retire-at-N match's range (off = null). */
 export const RETIRE_MIN = 1; // Stage 13 · CR3: any number of runs, 1 or more
 export const RETIRE_MAX = Number.MAX_SAFE_INTEGER;
@@ -344,7 +357,7 @@ export function powerplayState(
     if ((p.team_side === 'B' ? 'B' : 'A') !== side) continue;
     if (ev.event_type !== 'ball' && ev.event_type !== 'extra' && ev.event_type !== 'wicket') continue;
     if (balls >= limit) break;
-    runs += Math.max(0, Number(p.runs ?? 0) || 0) + penaltyRunsOf(p); // BUILD 3.14: a roof penalty
+    runs += (ev.event_type === 'wicket' ? wicketRuns(p) : Math.max(0, Number(p.runs ?? 0) || 0)) + penaltyRunsOf(p); // BUILD 3.14: a roof penalty · audit #48: a wicket's runs only on a run-out
     if (ev.event_type === 'wicket' && isDismissal(p.wicket_type ?? p.type)) wickets += 1;
     if (isBallOfOver(ev.event_type, ev.payload)) balls += 1;
   }
@@ -448,7 +461,7 @@ export function sideTotals(events: readonly Ev[], side: 'A' | 'B', allOut: numbe
     if ((p.team_side === 'B' ? 'B' : 'A') !== side) continue;
     if (e.event_type === 'ball') { t.runs += Number(p.runs ?? 0) + penaltyRunsOf(p); if (!p.is_extra) t.balls += 1; }
     else if (e.event_type === 'extra') { t.runs += Number(p.runs ?? 0); if (isBallOfOver('extra', p)) t.balls += 1; }
-    else if (e.event_type === 'wicket') { if (isDismissal((p.wicket_type ?? p.type) as string)) t.wickets = Math.min(allOut, t.wickets + 1); if (!p.is_extra) t.balls += 1; }
+    else if (e.event_type === 'wicket') { t.runs += wicketRuns(p as never); if (isDismissal((p.wicket_type ?? p.type) as string)) t.wickets = Math.min(allOut, t.wickets + 1); if (!p.is_extra) t.balls += 1; } // audit #48
   }
   return t;
 }

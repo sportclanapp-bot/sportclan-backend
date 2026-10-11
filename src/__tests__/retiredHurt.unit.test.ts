@@ -43,7 +43,7 @@ describe('source', () => {
   const sc = fs.readFileSync(path.join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
   const mc = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
   test('the innings counts only dismissals (all out, "won by N wickets")', () => {
-    expect(sc).toContain("else if (e.event_type === 'wicket') { if (isDismissal(p.wicket_type ?? p.type)) inn.wickets = Math.min(allOut[sideOf(p)], inn.wickets + 1);");
+    expect(sc).toContain("else if (e.event_type === 'wicket') { inn.runs += wicketRuns(p); if (isDismissal(p.wicket_type ?? p.type)) inn.wickets = Math.min(allOut[sideOf(p)], inn.wickets + 1);");
   });
   test('the push and the timeline say "retired hurt"', () => {
     // BUILD 3.4 added "retired not out" beside retired hurt.

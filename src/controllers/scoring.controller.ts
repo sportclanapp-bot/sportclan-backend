@@ -20,7 +20,7 @@ import { getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
-import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber, cricketSeries, cricketGameEvents, cricketGameOf, sideTotals } from '../utils/cricketRules';
+import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber, cricketSeries, cricketGameEvents, cricketGameOf, sideTotals, wicketRuns } from '../utils/cricketRules';
 import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { FOUL_KINDS } from '../utils/basketballRules';
 import { gameShootout, shootoutKicksOf, shootoutProblem } from '../utils/shootoutRules'; // Stage 15 follow-up
@@ -225,6 +225,13 @@ export async function validateScoringEvent(
   }
   if (event_type === 'wicket' && payload && payload.wicket_type != null && !isKnownWicketType(payload.wicket_type)) {
     return refuse(400, { error: 'That isn’t a way a batter can be out.', code: 'BAD_WICKET_TYPE' });
+  }
+  // Audit #48: a run-out's completed runs count (utils/cricketRules wicketRuns);
+  // they're a whole number, 0 or more. Runs on any other wicket count for
+  // nothing, and aren't refused (an older client's event goes in as before).
+  if (event_type === 'wicket' && payload && payload.runs != null) {
+    const r = Number(payload.runs);
+    if (!Number.isInteger(r) || r < 0 || r > Number.MAX_SAFE_INTEGER) return refuse(400, { error: 'Runs completed are a whole number, 0 or more.', code: 'BAD_WICKET_RUNS' });
   }
 
   // SC-228: validate numeric scoring inputs so a buggy/malicious client can't
@@ -1238,7 +1245,7 @@ export function aggregateCricketPlayers(
     else if (e.event_type === 'extra') {
       const legalExtra = isBallOfOver('extra', p);
       delivery(batSide, bowlId, legalExtra, p.type === 'B' || p.type === 'Lb' ? 0 : Number(p.runs ?? 0));
-    } else if (e.event_type === 'wicket' && isBallOfOver('wicket', p)) delivery(batSide, bowlId, true, 0);
+    } else if (e.event_type === 'wicket' && isBallOfOver('wicket', p)) delivery(batSide, bowlId, true, wicketRuns(p)); // audit #48
     if (e.event_type === 'ball' || e.event_type === 'extra' || (e.event_type === 'wicket' && isDismissal(p.wicket_type || p.type))) resumed(batId);
     if (e.event_type === 'ball') {
       const runs = Number(p.runs ?? 0);
@@ -1284,9 +1291,13 @@ export function aggregateCricketPlayers(
       const wt = String(p.wicket_type || p.type || '').toLowerCase().replace(/[^a-z]/g, '');
       const fielderId: string | undefined = p.fielder_id;
       const fielderName: string | undefined = p.fielder_name;
+      // Audit #48: a run-out's completed runs are the batter's, and the bowler is charged them.
+      const ro = wicketRuns(p);
+      if (ro && bowlId) ensure(bowlId, bowlSide, bowlName).bowl_runs += ro;
       if (batId) {
         const b = ensure(batId, batSide, batName);
         if (!p.is_extra) b.balls += 1;
+        b.runs += ro;
         if (!isDismissal(wt)) {
           // Retired hurt: off the field, NOT out — "retired hurt" on the
           // scorecard until they bat again (see resumed() above).
@@ -1582,7 +1593,7 @@ export async function recomputeSummary(
       }
       // Retired hurt is not a wicket (cricketRules.isDismissal): the batter
       // leaves and may return; the side is not a wicket down.
-      else if (e.event_type === 'wicket') { if (isDismissal(p.wicket_type ?? p.type)) inn.wickets = Math.min(allOut[sideOf(p)], inn.wickets + 1); if (!p.is_extra) inn.balls += 1; }
+      else if (e.event_type === 'wicket') { inn.runs += wicketRuns(p); if (isDismissal(p.wicket_type ?? p.type)) inn.wickets = Math.min(allOut[sideOf(p)], inn.wickets + 1); if (!p.is_extra) inn.balls += 1; } // audit #48: a run-out's completed runs
       // A batting side can end its innings early by declaring (before all-out /
       // overs). This is a marker only — it doesn't change runs/balls/wickets or
       // the winner (still total-vs-total); it just lets the scorecard show

@@ -380,6 +380,20 @@ export async function validateScoringEvent(
     }
   }
 
+  // Audit #51: a score event the score can't use was stored anyway — the
+  // timeline said GOAL, the score stayed 0–0. In football and hockey a score is
+  // a goal or an own goal; in basketball it carries its points (1–3).
+  if (event_type === 'score' && match.sport_id) {
+    const slug51 = normSportSlug((await getSport(match.sport_id))?.slug);
+    const p51 = (payload && typeof payload === 'object' ? payload : {}) as { kind?: unknown; value?: unknown };
+    if ((slug51 === 'football' || slug51 === 'hockey') && p51.kind !== 'goal' && p51.kind !== 'own_goal') {
+      return refuse(400, { error: 'A goal is scored as a goal or an own goal.', code: 'BAD_SCORE_KIND' });
+    }
+    if (slug51 === 'basketball' && p51.value == null) {
+      return refuse(400, { error: 'A basket says how many points it’s worth (1, 2 or 3).', code: 'BAD_SCORE_KIND' });
+    }
+  }
+
   // BUILD 3.66: time called at the buzzer — a timed tennis match only.
   if (event_type === 'note' && payload && payload.kind === 'buzzer') {
     const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';

@@ -99,9 +99,13 @@ describe('SC-442 · the unplayed sweep predicate', () => {
     const body = fn.slice(0, fn.indexOf('\n}'));
     expect(body).toContain("eq('status', 'scheduled')");
     expect(body).toContain("lt('scheduled_at', cutoff)");
-    expect(body).toContain("update({ status: 'abandoned'");
+    // Audit #79 follow-up: the update itself is in abandonInChunks (it sets abandoned, nothing else).
+    expect(body).toContain('abandonInChunks(');
+    const helper = src.slice(src.indexOf('async function abandonInChunks'));
+    expect(helper.slice(0, helper.indexOf('\n}'))).toContain("update({ status: 'abandoned'");
     // Nothing is deleted — decision D2.
     expect(body).not.toContain('.delete(');
+    expect(helper.slice(0, helper.indexOf('\n}'))).not.toContain('.delete(');
   });
 });
 

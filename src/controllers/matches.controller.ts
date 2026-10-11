@@ -7,7 +7,7 @@ import { matchEventsAll } from '../utils/matchEventsAll';
 import { sportTerms } from '../utils/sportTerms';
 import { sportSlugOf } from '../utils/sportSlug';
 import { plural } from '../utils/plural';
-import { selectAll } from '../utils/selectAll';
+import { selectAll, IN_CHUNK } from '../utils/selectAll';
 import { joinChat, wasRemovedFromChat } from '../utils/chatMembership';
 import { attachTeamNames } from '../utils/teamNames';
 import { myScheduledMatches, pickNextMatch } from '../utils/nextMatch';
@@ -1502,6 +1502,24 @@ export function discoveryCutoffIso(now: number = Date.now()): string {
   return new Date(now - DISCOVERY_GRACE_HOURS * 3600_000).toISOString();
 }
 
+/**
+ * Audit #79 follow-up: a sweep's matches are abandoned a chunk of ids at a time —
+ * one update with up to 1,000 ids in its address could be refused as a whole,
+ * and then nothing was ever swept. Returns how many were changed.
+ */
+async function abandonInChunks(ids: string[]): Promise<number> {
+  let n = 0;
+  for (let i = 0; i < ids.length; i += IN_CHUNK) {
+    const { data } = await supabase
+      .from('matches')
+      .update({ status: 'abandoned', updated_at: new Date().toISOString() })
+      .in('id', ids.slice(i, i + IN_CHUNK))
+      .select('id');
+    n += (data ?? []).length;
+  }
+  return n;
+}
+
 export async function sweepStaleLiveMatches(): Promise<{ abandoned: number }> {
   const cutoff = new Date(Date.now() - STALE_LIVE_HOURS * 3600_000).toISOString();
   const { data: stale, error } = await supabase
@@ -1513,11 +1531,7 @@ export async function sweepStaleLiveMatches(): Promise<{ abandoned: number }> {
     // bracket on); abandoning it here left the bracket stuck.
     .is('tournament_id', null);
   if (error || !stale || stale.length === 0) return { abandoned: 0 };
-  await supabase
-    .from('matches')
-    .update({ status: 'abandoned', updated_at: new Date().toISOString() })
-    .in('id', stale.map((m) => m.id));
-  return { abandoned: stale.length };
+  return { abandoned: await abandonInChunks(stale.map((m) => (m as { id: string }).id)) };
 }
 
 /**
@@ -1546,11 +1560,7 @@ export async function sweepUnplayedScheduledMatches(): Promise<{ abandoned: numb
     // plays it (it waits for its teams, or for the organiser to reschedule).
     .is('tournament_id', null);
   if (error || !stale || stale.length === 0) return { abandoned: 0 };
-  await supabase
-    .from('matches')
-    .update({ status: 'abandoned', updated_at: new Date().toISOString() })
-    .in('id', stale.map((m) => m.id));
-  return { abandoned: stale.length };
+  return { abandoned: await abandonInChunks(stale.map((m) => (m as { id: string }).id)) };
 }
 
 /** The manner of a dismissal for the timeline — "c Sharma b Khan", "run out (Patel)". */

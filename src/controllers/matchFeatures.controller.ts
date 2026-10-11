@@ -1,5 +1,6 @@
 import { selectAll } from '../utils/selectAll';
 import { isAdminUser } from '../middleware/admin.middleware';
+import { matchEventsAll } from '../utils/matchEventsAll';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { AuditRow, LogContext, cricketBallLabels, editLine } from '../utils/editLog';
 import { logEventEdit, logThenDeleteEvent, recordScoreAfter } from '../utils/scoringAudit';
@@ -112,10 +113,8 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   // Normalise so 'table-tennis' matches the single-token family checks below.
   const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
 
-  const { data: events } = await supabase
-    .from('match_events')
-    .select('event_type, payload, created_by')
-    .eq('match_id', matchId);
+  // Audit #38: every event, not the first 1000.
+  const events = await matchEventsAll<{ event_type: string; payload: any; created_by: string | null }>(matchId, 'event_type, payload, created_by');
   const { data: participants } = await supabase
     .from('match_participants')
     .select('user_id, team_side')

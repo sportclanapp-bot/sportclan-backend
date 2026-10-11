@@ -1,5 +1,6 @@
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
 import { teamSheetProblem } from './squads.controller';
+import { matchEventsAll } from '../utils/matchEventsAll';
 import { sportTerms } from '../utils/sportTerms';
 import { sportSlugOf } from '../utils/sportSlug';
 import { plural } from '../utils/plural';
@@ -3241,7 +3242,7 @@ export async function completeMatch(req: Request, res: Response) {
         }
         if (!winnerSide) return res.status(400).json({ error: 'Name the side that goes through.', code: 'TIE_FALLBACK_NEEDS_WINNER' });
         if (tieFallback === 'boundaries') {
-          const { data: allEv } = await supabase.from('match_events').select('event_type, payload').eq('match_id', id);
+          const allEv = await matchEventsAll(id, 'event_type, payload'); // audit #38: every event
           const b = boundariesOf((allEv ?? []) as never);
           if (b.A === b.B) return res.status(400).json({ error: `Boundaries are level too (${b.A}–${b.B}).`, code: 'BOUNDARIES_LEVEL' });
           const more: 'A' | 'B' = b.A > b.B ? 'A' : 'B';

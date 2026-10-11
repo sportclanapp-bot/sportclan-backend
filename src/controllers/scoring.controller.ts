@@ -1,5 +1,6 @@
 import { logThenDeleteEvent, recordScoreAfter } from '../utils/scoringAudit';
 import { Request, Response } from 'express';
+import { matchEventsAll } from '../utils/matchEventsAll';
 import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { isRangeError } from '../utils/pagination';
@@ -414,7 +415,7 @@ export async function validateScoringEvent(
         // Stage 15 follow-up: football / hockey — a level game ends once its shoot-out is decided (kept apart from the goals).
         let decided = false;
         if (slug === 'football' || slug === 'hockey') {
-          const { data: notes } = await supabase.from('match_events').select('event_type, payload').eq('match_id', match.id).eq('event_type', 'note').order('created_at');
+          const notes = await matchEventsAll(match.id, 'event_type, payload', (q) => q.eq('event_type', 'note')); // audit #38
           const all = (notes ?? []) as Array<{ event_type: string; payload: any }>;
           let last = -1; all.forEach((e, i) => { if (e.payload?.kind === 'game_end') last = i; });
           decided = !!gameShootout(all.slice(last + 1), shootoutKicksOf(rulesOf(slug, match)));
@@ -595,9 +596,7 @@ export async function validateScoringEvent(
     // plays free hits and the wicket is one a free hit rules out.
     if (event_type === 'wicket' && payload.is_extra !== true && !allowedOnFreeHit(payload.wicket_type ?? payload.type)
       && rulesOf('cricket', match).freeHit) {
-      const { data: log } = await supabase
-        .from('match_events').select('event_type, payload')
-        .eq('match_id', matchId).order('created_at', { ascending: true });
+      const log = await matchEventsAll(matchId, 'event_type, payload'); // audit #38: every event
       // Gap 9: within the same innings — the match's own, or this super over's.
       // Stage 15 follow-up: and within the same game of a series.
       const sameInnings = (log ?? []).filter((e: { payload?: unknown }) => superOverNumber(e.payload) === superOverNumber(payload) && cricketGameOf(e.payload) === cricketGameOf(payload));
@@ -628,7 +627,7 @@ export async function validateScoringEvent(
       let bowled = (match.score_summary as { players?: Record<string, { bowl_balls?: number }> } | null)?.players?.[bowlId]?.bowl_balls;
       // Stage 15 follow-up: in a series the limit is a game's — count this game's balls only.
       if (limit != null && tieSpecOf('cricket', rulesOf('cricket', match))?.series) {
-        const { data: log } = await supabase.from('match_events').select('event_type, payload').eq('match_id', matchId).order('created_at', { ascending: true });
+        const log = await matchEventsAll(matchId, 'event_type, payload'); // audit #38
         bowled = aggregateCricketPlayers(mainEvents(cricketGameEvents((log ?? []) as Array<{ event_type: string; payload: any }>, cricketGameOf(payload))))[bowlId]?.bowl_balls;
       }
       if (bowlerQuotaDone(bowled, limit)) {
@@ -1501,12 +1500,14 @@ export async function recomputeSummary(
   // The match and its events are independent reads — fetched together, and the
   // sport comes from the process cache: this runs on EVERY scoring event and at
   // completion, and each sequential round-trip costs ~300 ms from Render.
-  const [{ data: match }, { data: eventRows }] = await Promise.all([
+  // Audit #38: every event, read 1000 at a time — a plain read stopped at 1000
+  // and the score froze there.
+  const [{ data: match }, eventRows] = await Promise.all([
     supabase.from('matches').select('sport_id, score_summary, format, overs, rules').eq('id', matchId).maybeSingle(),
-    supabase.from('match_events').select('event_type, payload, clock_seconds, period').eq('match_id', matchId)
-      .order('created_at', { ascending: true }),
+    matchEventsAll<{ event_type: string; payload: any; clock_seconds: number | null; period: number | null }>(matchId, 'event_type, payload, clock_seconds, period')
+      .catch(() => null), // a failed read must not rebuild the score from nothing
   ]);
-  if (!match) return null;
+  if (!match || !eventRows) return null;
   const sportRow = await getSport(match.sport_id as string);
   // Normalise the slug so hyphenated/underscored slugs (e.g. 'table-tennis')
   // match the single-token keys in SET_CONFIG / the family checks below.
@@ -1965,10 +1966,8 @@ export async function writeCricketInningsStats(matchId: string): Promise<void> {
   const { data: sportRow } = await supabase
     .from('sports').select('slug').eq('id', match.sport_id).maybeSingle();
   if ((sportRow?.slug ?? '') !== 'cricket') return;
-  const { data: events } = await supabase
-    .from('match_events').select('event_type, payload').eq('match_id', matchId)
-    .order('created_at', { ascending: true });
-  if (!events || events.length === 0) return;
+  const events = await matchEventsAll<{ event_type: string; payload: any }>(matchId, 'event_type, payload'); // audit #38
+  if (events.length === 0) return;
 
   const players = aggregateCricketPlayers(mainEvents(events as any[])); // gap 9: not the super overs
   const teamId = (side: 'A' | 'B'): string | null =>

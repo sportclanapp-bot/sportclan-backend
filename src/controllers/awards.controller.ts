@@ -25,21 +25,25 @@ type M = { id: string; team_a_id: string | null; team_b_id: string | null; team_
 const TITLES = { 1: 'Winner', 2: 'Runner-up', 3: 'Third', 4: 'Fourth' } as const;
 
 /** Pure: the knockout's placings from its matches (final, third-place match or semi-finals). */
-export function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string }> {
+export /** Audit #65: a knockout match is decided when it has a winner — played, or a walkover (abandoned with a winner); not a voided one. */
+const decided = <T extends { status: string; winner_team_id: string | null; voided_at?: string | null }>(m: T): m is T & { winner_team_id: string } =>
+  !!m.winner_team_id && !m.voided_at && (m.status === 'completed' || m.status === 'abandoned');
+
+function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string }> {
   const ko = matches.filter((m) => !m.voided_at && !m.group_label && (m.round ?? 0) >= 1);
   // Stage 11 · PB4: a double elimination — the deciding final (the reset if it was played), and third the back draw's final loser.
   if (ko.some((m) => m.bracket)) {
     const nameOfDe = (m: M, id: string) => (id === m.team_a_id ? m.team_a_name : m.team_b_name) ?? 'TBD';
     const loser = (m: M) => (m.winner_team_id === m.team_a_id ? m.team_b_id : m.team_a_id);
-    const reset = ko.find((m) => m.bracket === 'reset' && m.status === 'completed' && m.winner_team_id);
-    const fin = reset ?? ko.find((m) => m.bracket === 'final' && m.status === 'completed' && m.winner_team_id);
+    const reset = ko.find((m) => m.bracket === 'reset' && decided(m));
+    const fin = reset ?? ko.find((m) => m.bracket === 'final' && decided(m));
     if (!fin || !fin.winner_team_id) return [];
     const out: Array<{ place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string }> = [{ place: 1, title: TITLES[1], team_id: fin.winner_team_id, name: nameOfDe(fin, fin.winner_team_id) }];
     const ru = loser(fin);
     if (ru) out.push({ place: 2, title: TITLES[2], team_id: ru, name: nameOfDe(fin, ru) });
     const backs = ko.filter((m) => m.bracket === 'back');
     const backFinal = backs.length ? backs.reduce((x, y) => ((y.round ?? 0) > (x.round ?? 0) ? y : x)) : null;
-    const third = backFinal && backFinal.status === 'completed' && backFinal.winner_team_id ? loser(backFinal) : null;
+    const third = backFinal && decided(backFinal) ? loser(backFinal) : null;
     if (backFinal && third) out.push({ place: 3, title: TITLES[3], team_id: third, name: nameOfDe(backFinal, third) });
     return out;
   }
@@ -47,7 +51,7 @@ export function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; ti
   if (main.length === 0) return [];
   const lastRound = Math.max(...main.map((m) => m.round ?? 0));
   const final = main.find((m) => m.round === lastRound);
-  if (!final || final.status !== 'completed' || !final.winner_team_id) return [];
+  if (!final || !decided(final)) return [];
   const nameOf = (m: M, id: string) => (id === m.team_a_id ? m.team_a_name : m.team_b_name) ?? 'TBD';
   const loserOf = (m: M) => (m.winner_team_id === m.team_a_id ? m.team_b_id : m.team_a_id);
   const out: Array<{ place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string }> = [];
@@ -55,13 +59,13 @@ export function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; ti
   const ru = loserOf(final);
   if (ru) out.push({ place: 2, title: TITLES[2], team_id: ru, name: nameOf(final, ru) });
   const third = ko.find((m) => m.third_place);
-  if (third && third.status === 'completed' && third.winner_team_id) {
+  if (third && decided(third)) {
     out.push({ place: 3, title: TITLES[3], team_id: third.winner_team_id, name: nameOf(third, third.winner_team_id) });
     const fourth = loserOf(third);
     if (fourth) out.push({ place: 4, title: TITLES[4], team_id: fourth, name: nameOf(third, fourth) });
   } else if (!third) {
     // Two bronzes: both semi-final losers.
-    for (const sf of main.filter((m) => m.round === lastRound - 1 && m.status === 'completed' && m.winner_team_id)) {
+    for (const sf of main.filter((m) => m.round === lastRound - 1 && decided(m))) {
       const l = loserOf(sf);
       if (l) out.push({ place: 3, title: 'Semi-finalist', team_id: l, name: nameOf(sf, l) });
     }
@@ -69,7 +73,7 @@ export function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; ti
   return out;
 }
 
-async function placingsFor(t: { id: string; format: string; status: string; sport_id: string | null; tiebreaker_rules?: unknown; settings?: unknown }): Promise<Placing[]> {
+export async function placingsFor(t: { id: string; format: string; status: string; sport_id: string | null; tiebreaker_rules?: unknown; settings?: unknown }): Promise<Placing[]> {
   const ms = await allRows(() => supabase.from('matches')
     .select('id, team_a_id, team_b_id, team_a_name, team_b_name, winner_team_id, status, round, group_label, third_place, voided_at, score_summary, overs, bracket')
     .eq('tournament_id', t.id));

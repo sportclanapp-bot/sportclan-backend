@@ -3444,7 +3444,11 @@ export async function swissContext(tournamentId: string) {
     .eq('tournament_id', tournamentId).is('voided_at', null).is('bracket', null))) ?? []) as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; score_summary: any; scheduled_at: string | null; round: number | null }>;
   const pts = await tournamentPoints(t as any);
   const slug = normSportSlug((await getSport(t.sport_id as string))?.slug);
-  return { t, settings, sw, ids, nameOf, clubOf: (id: string) => clubOfTeam.get(id) ?? null, ms, pts, slug, colours: slug === 'chess' };
+  // Audit #58: scores and pairing history count a withdrawn player's games too
+  // (their opponents earned those points); only `ids` are paired.
+  const gone = (await withdrawnTeamIds(tournamentId)).filter((id) => !ids.includes(id));
+  const scoreIds = [...ids, ...gone];
+  return { t, settings, sw, ids, scoreIds, nameOf, clubOf: (id: string) => clubOfTeam.get(id) ?? null, ms, pts, slug, colours: slug === 'chess' };
 }
 
 /**
@@ -3477,11 +3481,11 @@ export function swissPairRound(ctx: NonNullable<Awaited<ReturnType<typeof swissC
   const all = [...(ctx.ms as GMatchRow[]), ...virtual];
   const pool = ctx.ids.filter((id) => !requested.some((q) => q.team === id));
   if (roundNo === 1) return { round: dutchFirstRound(pool, ctx.colours), requested, late };
-  const upTo = (r: number) => computeStats(ctx.ids, all.filter((m) => Number(m.round ?? 0) <= r) as never[], undefined, ctx.pts);
+  const upTo = (r: number) => computeStats(ctx.scoreIds, all.filter((m) => Number(m.round ?? 0) <= r) as never[], undefined, ctx.pts); // audit #58
   const cache = new Map<number, ReturnType<typeof upTo>>();
   const pointsAfter = (r: number) => (cache.get(r) ?? cache.set(r, upTo(r)).get(r)!);
   const before = pointsAfter(roundNo - 1);
-  const history = dutchHistory(ctx.ids, all.map((m) => ({
+  const history = dutchHistory(ctx.scoreIds, all.map((m) => ({ // audit #58
     round: Number(m.round ?? 0), white: m.team_a_id, black: m.team_b_id, bye: m.score_summary?.bye === true,
     byeKind: m.score_summary?.bye_kind ?? null, forfeit: m.score_summary?.walkover === true || (m.status === 'abandoned' && !!m.winner_team_id), winner: m.winner_team_id,
   })), (id, r) => pointsAfter(r - 1).get(id)?.points ?? 0);
@@ -3526,8 +3530,10 @@ async function swissSeedKnockout(tournamentId: string): Promise<void> {
     .eq('id', tournamentId).is('settings->swiss->koDrawn', null).select('id');
   if (!claim || claim.length === 0) return;
   const trow = ctx.t as { settings?: unknown; tiebreaker_rules?: unknown; match_rules?: unknown; entry_kind?: string | null };
-  const tin = tableInputs(trow.settings, ctx.ids, ctx.ms as any[], await withdrawnTeamIds(tournamentId));
-  const ordered = rankTeams(tin.teamIds, tin.matches, ((trow.tiebreaker_rules ?? []) as any[]), ctx.pts, (await rankExtrasFor(trow as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>))(''));
+  // Audit #58/#54: ranked on the table's teams (withdrawn players' games count); a withdrawn player isn't seeded.
+  const tin = tableInputs(trow.settings, ctx.scoreIds, ctx.ms as any[], await withdrawnTeamIds(tournamentId));
+  const ordered = rankTeams(tin.teamIds, tin.matches, ((trow.tiebreaker_rules ?? []) as any[]), ctx.pts, (await rankExtrasFor(trow as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>))(''))
+    .filter((id) => ctx.ids.includes(id));
   const top = ordered.slice(0, Math.min(ctx.sw.knockout ?? 0, ordered.length));
   if (top.length < 2) { await crownLeagueChampion(tournamentId); return; }
   const seeds: TeamSlot[] = top.map((id) => ({ id, name: ctx.nameOf.get(id) ?? 'Player' }));

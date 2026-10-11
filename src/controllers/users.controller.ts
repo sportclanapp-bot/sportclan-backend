@@ -1434,6 +1434,8 @@ export async function getChessRatings(req: Request, res: Response) {
 // GET /users/:id/sport-profile/:sportId — per-sport rating + stats
 // Every preference column the frontend can edit. Centralised here so
 // getSportProfile and updateSportProfile agree on what's allowed.
+/** Audit #31: a sport-profile preference is a short label. */
+export const SPORT_PREF_MAX = 60;
 const SPORT_PROFILE_PREFS = [
   'batting_style', 'bowling_style', 'role',
   'dominant_hand', 'play_type', 'preferred_position', 'playing_level',
@@ -1777,7 +1779,14 @@ export async function updateSportProfile(req: Request, res: Response) {
   const incoming = req.body ?? {};
   const patch: Record<string, unknown> = {};
   for (const key of SPORT_PROFILE_PREFS) {
-    if (key in incoming) patch[key] = incoming[key];
+    if (!(key in incoming)) continue;
+    const v = incoming[key];
+    // Audit #31: each is a short label ("Right-arm fast", "Left foot") shown to
+    // others — text of any length (up to the body limit) used to be stored.
+    if (v !== null && typeof v !== 'string') return res.status(400).json({ error: `${key} must be text.`, code: 'BAD_PREFERENCE' });
+    const t = typeof v === 'string' ? v.trim() : null;
+    if (t && t.length > SPORT_PREF_MAX) return res.status(400).json({ error: `${key} is ${SPORT_PREF_MAX} characters or fewer.`, code: 'PREFERENCE_TOO_LONG' });
+    patch[key] = t || null;
   }
   if (Object.keys(patch).length === 0) {
     return res.status(400).json({ error: 'No updatable fields provided' });

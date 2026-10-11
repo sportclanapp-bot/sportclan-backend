@@ -2901,7 +2901,7 @@ export async function cancelMatch(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, created_by, team_a_name, team_b_name, status, tournament_id, team_a_id, team_b_id')
+      .select('id, created_by, team_a_name, team_b_name, status, tournament_id, team_a_id, team_b_id, round, group_label')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -2913,6 +2913,11 @@ export async function cancelMatch(req: Request, res: Response) {
     if (isTerminalMatchStatus(match.status)) {
       return res.status(409).json({ error: 'This match is already finished and cannot be cancelled.' });
     }
+    // Audit #76: a knockout match decides who goes through — cancelling it left
+    // the bracket stuck. Award it (a walkover) or replay it instead.
+    if (match.tournament_id && await isKnockoutBracketMatch({ id, tournament_id: match.tournament_id, round: (match as { round?: number | null }).round ?? null, group_label: (match as { group_label?: string | null }).group_label ?? null })) {
+      return res.status(409).json({ error: 'A knockout match decides who goes through, so it can’t just be cancelled. Award it to a side, or move it to another time.', code: 'KNOCKOUT_NO_CANCEL' });
+    }
     const { data, error } = await supabase
       .from('matches')
       .update({ status: 'cancelled', updated_at: new Date().toISOString() })
@@ -2920,6 +2925,10 @@ export async function cancelMatch(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // Audit #76: a cancelled fixture won't be played — the competition moves on
+    // as for a void (a league or group whose last fixture it was finishes; a
+    // Swiss pairs its next round).
+    if (match.tournament_id) await recrownAfterVoidChange(id);
 
     // PRD Addition #17: notify the audience of the cancellation. SC-270: lineup
     // UNION entrant teams' members — a bracket fixture has no participants until

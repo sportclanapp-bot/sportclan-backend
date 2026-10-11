@@ -80,6 +80,6 @@ describe('voiding a final un-crowns; restoring re-crowns', () => {
 describe('wired into void and restore', () => {
   const m = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'matches.controller.ts'), 'utf8');
   it('both paths call it', () => {
-    expect((m.match(/if \(match\.tournament_id\) await recrownAfterVoidChange\(id\);/g) ?? []).length).toBe(2);
+    expect((m.match(/if \(match\.tournament_id\) await recrownAfterVoidChange\(id\);/g) ?? []).length).toBe(3); // void, restore, and (audit #76) cancel
   });
 });

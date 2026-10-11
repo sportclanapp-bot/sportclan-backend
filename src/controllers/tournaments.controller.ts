@@ -3782,7 +3782,7 @@ async function completeBracketIfDone(tournamentId: string, knownFinal: FinalRow 
     // thousands of unlinked matches no longer get read here).
     const { data: rows } = await supabase
       .from('matches')
-      .select('winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, round, third_place, bracket')
+      .select('winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, round, third_place, bracket, status')
       .eq('tournament_id', tournamentId)
       .is('next_match_id', null)
       .is('group_label', null)
@@ -3790,7 +3790,10 @@ async function completeBracketIfDone(tournamentId: string, knownFinal: FinalRow 
       .order('round', { ascending: false })
       .limit(40);
     // Stage 13 · CR9: after a Swiss, the knockout's final (not a Swiss round's last match).
-    const list = (Array.isArray(rows) ? rows : []) as Array<FinalRow & { third_place?: boolean; bracket?: string | null }>;
+    // Audit #74: a double elimination's reset final that wasn't needed is
+    // cancelled — the final before it decides, so it's passed over.
+    const list = ((Array.isArray(rows) ? rows : []) as Array<FinalRow & { third_place?: boolean; bracket?: string | null; status?: string }>)
+      .filter((r) => r.status !== 'cancelled');
     const ko = list.filter((r) => r.bracket === 'ko');
     final = (ko.length ? ko : list).find((r) => !r.third_place) as FinalRow | undefined;
   }
@@ -3819,12 +3822,14 @@ async function completeBracketIfDone(tournamentId: string, knownFinal: FinalRow 
 // advanceTournamentWinner never touch user_sport_profiles). If the match has no
 // valid opponent (empty slot, or the opponent has ALSO withdrawn) the match is
 // abandoned with no winner and nothing advances.
-async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise<void> {
+export async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise<void> {
   const matches = await allRows(() => supabase
     .from('matches')
     .select('id, team_a_id, team_b_id, status, sport_id, format, overs, rules, score_summary')
     .eq('tournament_id', tournamentId)
     .in('status', ['scheduled', 'live'])
+    // Audit #73: a voided fixture isn't going to be played — no walkover for it.
+    .is('voided_at', null)
     .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`));
   const now = new Date().toISOString();
   for (const mt of matches ?? []) {

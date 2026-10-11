@@ -45,12 +45,18 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
  * endpoints that still want viewer-relative fields (e.g. isFollowing on a
  * profile) when a logged-in user views them.
  */
-export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
+export async function optionalAuth(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (token) {
     try {
-      req.userId = verifyAccessToken(token).userId;
+      const payload = verifyAccessToken(token);
+      // Audit #28: a signed-out (revoked) session is anonymous here too, as it
+      // is refused by authenticateToken. (No route uses this since audit #7,
+      // but it must not hand a revoked token a viewer's view.)
+      if (!(await isTokenRevoked(payload.userId, payload.iat)) && !(await isSessionDenied(payload.sid))) {
+        req.userId = payload.userId;
+      }
     } catch {
       // Invalid token → treat as anonymous, don't fail the request.
     }

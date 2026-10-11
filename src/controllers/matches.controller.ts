@@ -1,3 +1,4 @@
+import { inBackground } from '../utils/background';
 import { matchNamesForNotice } from '../utils/matchNames';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
@@ -621,7 +622,7 @@ export async function createMatch(req: Request, res: Response) {
     // Best-effort venue upsert — tracks frequently-used venues for the
     // autocomplete in CreateMatchScreen. Errors are swallowed.
     if (cleanVenue) {
-      void upsertVenue(cleanVenue, city_id ?? null, userId, { countUse: true });
+      inBackground(upsertVenue(cleanVenue, city_id ?? null, userId, { countUse: true }), 'upsertVenue'); // audit #99
     }
 
     return res.json({ match: data });
@@ -1176,7 +1177,7 @@ export async function joinOpenMatch(req: Request, res: Response) {
       case 'joined':
         // SC-260: tell the pickup organiser someone joined — their whole reason
         // to care. Best-effort, 'matches'-gated (see PREF_CATEGORY).
-        void notifyMatchParticipation(id, userId, 'joined');
+        inBackground(notifyMatchParticipation(id, userId, 'joined'), 'notifyMatchParticipation'); // audit #99
         return res.json({ success: true, players_needed: playersNeeded });
       case 'already_joined':
         return res.json({ success: true, alreadyJoined: true, players_needed: playersNeeded });
@@ -1275,7 +1276,7 @@ export async function leaveMatch(req: Request, res: Response) {
     const playersNeeded = row?.players_needed ?? 0;
     switch (status) {
       case 'left':
-        void notifyMatchParticipation(id, userId, 'left');
+        inBackground(notifyMatchParticipation(id, userId, 'left'), 'notifyMatchParticipation'); // audit #99
         return res.json({ success: true, players_needed: playersNeeded });
       case 'not_participant':
         return res.status(400).json({ error: 'You are not in this match' });

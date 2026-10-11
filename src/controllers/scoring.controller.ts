@@ -1,3 +1,4 @@
+import { inBackground } from '../utils/background';
 import { logThenDeleteEvent, recordScoreAfter } from '../utils/scoringAudit';
 import { Request, Response } from 'express';
 import { matchEventsAll } from '../utils/matchEventsAll';
@@ -803,7 +804,7 @@ export async function createEvent(req: Request, res: Response) {
             runs !== ''
               ? `${playerName} ${verb} ${runs} | ${teamName(side)} ${scoreStr}`
               : `${playerName} ${atLimit ? 'retired not out' : hurt ? 'retired hurt' : 'out'} | ${teamName(side)} ${scoreStr}`;
-          void fanoutScoreUpdate(matchId, title, body, userId);
+          inBackground(fanoutScoreUpdate(matchId, title, body, userId), 'fanoutScoreUpdate'); // audit #99
         } else {
           // V-5: sports scored in games/sets push when a game (tennis: a set)
           // ends, quoting it — not on every rally, and never "scores! 0-0".
@@ -819,7 +820,7 @@ export async function createEvent(req: Request, res: Response) {
           });
           if (!push) return res.json({ event });
           const { title, body } = push;
-          void fanoutScoreUpdate(matchId, title, body, userId);
+          inBackground(fanoutScoreUpdate(matchId, title, body, userId), 'fanoutScoreUpdate'); // audit #99
         }
       }
     } catch {
@@ -844,7 +845,7 @@ export async function createEvent(req: Request, res: Response) {
             teamAName: fresh?.team_a_name || 'Team A',
             teamBName: fresh?.team_b_name || 'Team B',
           });
-          void fanoutScoreUpdate(matchId, title, body, userId);
+          inBackground(fanoutScoreUpdate(matchId, title, body, userId), 'fanoutScoreUpdate'); // audit #99
         }
       } catch {
         // best-effort, like every push

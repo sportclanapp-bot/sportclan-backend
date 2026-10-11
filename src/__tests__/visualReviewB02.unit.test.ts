@@ -61,7 +61,7 @@ describe('D7 · every trigger re-syncs', () => {
   });
   it('teams · every instant join (by code, and D8 from the team page) goes through joinOpenTeam, which syncs', () => {
     const i = teams.indexOf('async function joinOpenTeam(');
-    expect(teams.slice(i, teams.indexOf('export async function', i + 10))).toContain('void syncTournamentChatsForTeam(team.id as string)');
+    expect(teams.slice(i, teams.indexOf('export async function', i + 10))).toContain("inBackground(syncTournamentChatsForTeam(team.id as string), 'syncTournamentChatsForTeam')"); // audit #99
     const j = teams.indexOf('export async function joinTeamByCode(');
     expect(teams.slice(j, teams.indexOf('export async function', j + 10))).toContain('await joinOpenTeam(');
   });

@@ -1,3 +1,4 @@
+import { inBackground } from '../utils/background';
 import { sportKeyOf, storedPoints, pointsPresetFor, type TournamentSettings } from '../utils/tournamentSettings';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { swissMaxRounds } from '../utils/tournamentSettings';
@@ -1995,7 +1996,7 @@ export async function updateTournament(req: Request, res: Response) {
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     if (crownedChampion) {
-      void notifyTournamentChampion(id, crownedChampion.id, crownedChampion.name, tournament.name ?? null);
+      inBackground(notifyTournamentChampion(id, crownedChampion.id, crownedChampion.name, tournament.name ?? null), 'notifyTournamentChampion'); // audit #99
     }
 
     // Attribution: this cancel/complete was authorized ONLY by is_admin (not the

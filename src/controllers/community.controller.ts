@@ -1,3 +1,4 @@
+import { inBackground } from '../utils/background';
 import { isValidHttpUrl } from '../utils/validation';
 import { selectAll } from '../utils/selectAll';
 import {
@@ -699,7 +700,7 @@ export async function createPost(req: Request, res: Response) {
       .gte('created_at', istDayStartIso());
     const todayN = postsToday ?? 1;
     if (todayN <= 5) {
-      void awardCoins(userId, `community_post_${today}_${todayN}`, 2, 'Community post');
+      inBackground(awardCoins(userId, `community_post_${today}_${todayN}`, 2, 'Community post'), 'awardCoins'); // audit #99
     }
   } catch {
     // best-effort

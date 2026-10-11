@@ -221,7 +221,7 @@ export async function enterSelf(req: Request, res: Response) {
     const landed = waitlistOn(t) && await isFull(t) ? 'waitlisted' : settingsOf(t).entry === 'open' ? 'approved' : 'pending';
     const made = await makeEntry(t, [userId], landed, userId, settingsOf(t).category?.amateurOnly === true);
     if (!made.entry) return res.status(500).json({ error: made.error });
-    void tellOrganiser(t, userId, String((made.entry.team as { name: string }).name), landed, String(made.entry.id));
+    void tellOrganiser(t, userId, String((made.entry.team as { name: string }).name), landed, String(made.entry.id)).catch((e) => console.error('[entries] organiser notice failed', t.id, e instanceof Error ? e.message : e)); // eslint-disable-line no-console — audit #99
     return res.json({ entry: made.entry });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
@@ -401,7 +401,7 @@ export async function answerPairInvite(req: Request, res: Response) {
       body: `${nameOf(ppl.get(userId))} accepted — you’re ${landed === 'approved' ? 'entered' : landed === 'waitlisted' ? 'on the waitlist' : 'waiting for the organiser'} in ${t.name ?? 'the doubles event'}.`,
       data: { tournamentId: t.id, entryId: String(made.entry.id) },
     });
-    void tellOrganiser(t, userId, String((made.entry.team as { name: string }).name), landed, String(made.entry.id));
+    void tellOrganiser(t, userId, String((made.entry.team as { name: string }).name), landed, String(made.entry.id)).catch((e) => console.error('[entries] organiser notice failed', t.id, e instanceof Error ? e.message : e)); // eslint-disable-line no-console — audit #99
     return res.json({ entry: made.entry });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

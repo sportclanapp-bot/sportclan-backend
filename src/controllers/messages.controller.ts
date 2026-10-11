@@ -1,3 +1,4 @@
+import { inBackground } from '../utils/background';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { Request, Response } from 'express';
 import { selectAllIn } from '../utils/selectAll';
@@ -1068,7 +1069,7 @@ export async function sendMessage(req: Request, res: Response) {
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   // B13 (D18): a push to the other members — fire-and-forget, throttled.
-  void pushChatMessage(id, userId, data?.sender?.name ?? 'Someone', body);
+  inBackground(pushChatMessage(id, userId, data?.sender?.name ?? 'Someone', body), 'pushChatMessage'); // audit #99
 
   // Parse @mentions and create notifications (fire-and-forget)
   {

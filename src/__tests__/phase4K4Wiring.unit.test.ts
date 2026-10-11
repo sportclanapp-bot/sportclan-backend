@@ -20,7 +20,7 @@ describe('K4-7 (d83501b) · V-5 live score pushes go through scorePush', () => {
 
   it('K4-7 (d83501b): a score that ends nothing sends no push — createEvent returns before the fan-out', () => {
     expect(createEvent).toMatch(
-      /const push = scorePush\(\{[\s\S]{0,400}?\}\);\s*if \(!push\) return res\.json\(\{ event \}\);\s*const \{ title, body \} = push;\s*void fanoutScoreUpdate\(matchId, title, body, userId\);/,
+      /const push = scorePush\(\{[\s\S]{0,400}?\}\);\s*if \(!push\) return res\.json\(\{ event \}\);\s*const \{ title, body \} = push;\s*inBackground\(fanoutScoreUpdate\(matchId, title, body, userId\), 'fanoutScoreUpdate'\);/,
     );
   });
 

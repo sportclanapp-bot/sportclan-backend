@@ -1,3 +1,4 @@
+import { inBackground } from '../utils/background';
 import { selectAll } from '../utils/selectAll';
 import { isAdminUser } from '../middleware/admin.middleware';
 import { matchEventsAll } from '../utils/matchEventsAll';
@@ -381,7 +382,7 @@ export async function setMatchAvailability(req: Request, res: Response) {
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
     if ((prev as { status?: string } | null)?.status !== status && status !== 'maybe') {
-      void notifyChallengerOfAnswer(id, userId, status === 'available');
+      inBackground(notifyChallengerOfAnswer(id, userId, status === 'available'), 'notifyChallengerOfAnswer'); // audit #99
     }
     return res.json({ availability: data });
   } catch {

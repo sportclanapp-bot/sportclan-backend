@@ -1,3 +1,4 @@
+import { inBackground } from '../utils/background';
 import { matchNamesForNotice } from '../utils/matchNames';
 import { inDisplayOrder, orderedSportIds, profileSportIds } from '../utils/userSports';
 import { deleteMatching } from '../utils/softDelete';
@@ -160,7 +161,7 @@ export async function getMe(req: Request, res: Response) {
   // with the tiers, so no user is told anything when the old complimentary dates
   // pass.
   // Fire-and-forget — the profile response shouldn't wait on this.
-  void runSmartNotifications(userId);
+  inBackground(runSmartNotifications(userId), 'runSmartNotifications'); // audit #99
 
   // Everything /me returns besides the row itself is independent of it, and was
   // read one query at a time: ~8 sequential round-trips at ~300 ms from Render

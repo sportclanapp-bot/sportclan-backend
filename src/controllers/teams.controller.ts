@@ -1,3 +1,4 @@
+import { inBackground } from '../utils/background';
 import { deleteMatching } from '../utils/softDelete';
 import { TEAM_DISBANDED, liveTeams, softDisbandTeam } from '../utils/teamVisibility';
 import { hideTestFor, excludeTest } from '../utils/testContent';
@@ -805,7 +806,7 @@ async function joinOpenTeam(team: { id: string; name: string }, userId: string):
     }
     if (error) return reply(500, { error: sanitizeError(error) });
     // B02 (V022, D7): joining puts you in your team's tournament chats.
-    void syncTournamentChatsForTeam(team.id as string);
+    inBackground(syncTournamentChatsForTeam(team.id as string), 'syncTournamentChatsForTeam'); // audit #99
     return reply(200, { team, member });
 }
 

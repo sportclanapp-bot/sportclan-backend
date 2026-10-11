@@ -119,7 +119,8 @@ async function callMatch(m: M, court: string, userId: string) {
     .update({ called_at: now, called_by: userId, ground_label: court })
     .eq('id', m.id).eq('status', 'scheduled').select(M_COLS).maybeSingle();
   if (error || !data) return null;
-  void announceCall({ ...m, ground_label: court }, court, userId);
+  // Audit #99: a failed notice must never be an unhandled rejection (the crash handler stops the server).
+  void announceCall({ ...m, ground_label: court }, court, userId).catch((e) => console.error('[court] call notice failed', m.id, e instanceof Error ? e.message : e)); // eslint-disable-line no-console
   return data as M;
 }
 

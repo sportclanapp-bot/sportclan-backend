@@ -56,7 +56,7 @@ describe('D18 · chat pushes', () => {
     expect(dueForPush('c1', ['a'], t0 + QUIET_MS + 1)).toEqual(['a']);
   });
   it('is sent on every message', () => {
-    expect(code('controllers/messages.controller.ts')).toMatch(/void pushChatMessage\(id, userId,/);
+    expect(code('controllers/messages.controller.ts')).toMatch(/inBackground\(pushChatMessage\(id, userId,/); // audit #99
     expect(code('utils/notify.ts')).toMatch(/chat_message: 'chat'/);
   });
   it('an @mention keeps its own path: not behind the Chat messages switch', () => {

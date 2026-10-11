@@ -102,7 +102,7 @@ describe('7 · a use is a match, not a repeat "Add venue"', () => {
     const v = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'venues.controller.ts'), 'utf8');
     const m = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'matches.controller.ts'), 'utf8');
     expect(v).toContain('await upsertVenue(clean, city_id || null, userId, { countUse: false });');
-    expect(m).toContain('void upsertVenue(cleanVenue, city_id ?? null, userId, { countUse: true });');
+    expect(m).toContain("inBackground(upsertVenue(cleanVenue, city_id ?? null, userId, { countUse: true }), 'upsertVenue');"); // audit #99
   });
   test('the directory rows carry created_by, so the app can offer Edit', async () => {
     mockNext = () => ({ data: [] });

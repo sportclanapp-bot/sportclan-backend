@@ -87,7 +87,7 @@ describe('K2-5c · the /users/me smart-notification job logs its failures (SC-11
   it('K2-5c (e73f9e8): a throw inside runSmartNotifications → console.warn, /me still answers', async () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     mockNext = (q) => {
-      if (q[0] === 'from:match_participants' && q.some((c) => c.includes('team_a_name, team_b_name, scheduled_at'))) throw new Error('db gone');
+      if (q[0] === 'from:match_participants' && q.some((c) => c.includes('team_a_name, team_b_name, team_a_id, team_b_id, scheduled_at'))) throw new Error('db gone');
       if (q[0] === 'from:users') return { data: { id: ME, name: 'Dipak' } };
       return { data: [] };
     };

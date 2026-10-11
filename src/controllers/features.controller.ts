@@ -699,12 +699,17 @@ export async function getPlayerOfWeek(req: Request, res: Response) {
     const weekly = await matchesThisWeek([...new Set(scored.map((p) => p.user_id as string))], weekAgo);
 
     // Top per sport
+    // Audit #110: one card per PERSON too — someone top in three sports showed
+    // three times. They keep their best-scoring sport; the others go to that
+    // sport's next player.
     const seen = new Set<string>();
+    const shownPeople = new Set<string>();
     const top: typeof scored = [];
     for (const p of scored) {
-      if (seen.has(p.sport_id)) continue;
+      if (seen.has(p.sport_id) || shownPeople.has(p.user_id as string)) continue;
       if (weekly && !weekly.get(`${p.user_id}:${p.sport_id}`)) continue;
       seen.add(p.sport_id);
+      shownPeople.add(p.user_id as string);
       top.push(p);
     }
 

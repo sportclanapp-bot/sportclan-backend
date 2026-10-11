@@ -94,7 +94,7 @@ import { swissFirstRound, type SwissRound } from '../utils/swiss';
 import { dutchFirstRound, dutchRound, dutchHistory } from '../utils/swissDutch';
 import { bergerRounds, seededGroupFixtures } from '../utils/groupOrder';
 import { declineStaleByeRequests } from '../utils/swissByeRequests';
-import { BOX_DEFAULT, boxesOf, boxLabel, challengeProblem, ladderAfter, nextBoxOrder } from '../utils/ladderBox';
+import { BOX_DEFAULT, boxesOf, boxLabel, challengeProblem, ladderAfter, nextBoxOrder, reachOf } from '../utils/ladderBox';
 import {
   SHARED_KEYS, EVENT_KEYS, eventsListRefusal, eventName, entryKindRefusal, eventLabelRefusal, refreshParentStatus, refreshParentOf,
   clientHas, eventsOf, ENTER_AN_EVENT, ENTER_AS_PLAYERS, familyIds, sameSharedValue, rootTournamentId,
@@ -4788,7 +4788,7 @@ export async function getLadder(req: Request, res: Response) {
     set: !!(t as { fixtures_generated?: boolean }).fixtures_generated,
     ladder: rows.map((r, i) => ({ position: i + 1, team_id: r.team_id, name: r.name, busy: busy.has(r.team_id), mine: mine.includes(r.team_id) })),
     can_challenge: open ? Object.fromEntries(mine.map((me) => [me, order.filter((d) => challengeProblem(order, me, d, l, busy) === null)])) : {},
-    reach: l && 'reach' in l ? (l.reach ?? null) : 3,
+    reach: reachOf(l), // audit #64: none set → null (anyone above), not 3
     move: l?.move ?? 'leapfrog',
   });
 }

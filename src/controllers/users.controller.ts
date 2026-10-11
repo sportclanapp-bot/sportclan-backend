@@ -1,3 +1,4 @@
+import { inDisplayOrder, orderedSportIds, profileSportIds } from '../utils/userSports';
 import { deleteMatching } from '../utils/softDelete';
 import { orIlikeContains } from '../utils/likeSearch';
 import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
@@ -186,8 +187,8 @@ export async function getMe(req: Request, res: Response) {
       .maybeSingle(),
     // SC-365: the sports you play, so Edit profile can seed its selector. Own
     // data only — this is getMe. Also the "≥1 sport" test of the completion bonus.
-    safe(supabase.from('user_sports').select('sport_id').eq('user_id', userId)
-      .then(({ data: us }) => (us ?? []).map((r: { sport_id: string }) => r.sport_id)), [] as string[]),
+    // Audit #1: in the app's display order (Cricket first), never the database's.
+    safe(orderedSportIds(userId), [] as string[]),
     // The full account-type set from the join table (the legacy users.account_type
     // column only holds the primary type).
     safe(supabase.from('user_account_types').select('account_type').eq('user_id', userId)
@@ -415,6 +416,8 @@ export async function getUserById(req: Request, res: Response) {
   safeUser.total_matches = total_matches;
   // Phase 3 · decision 4: an umpire's public profile shows what they've officiated.
   safeUser.officiated_count = await officiatedCount(id);
+  // Audit #3: the sports they play, in display order — their profile opens on the first.
+  safeUser.sport_ids = await profileSportIds(id).catch(() => [] as string[]);
 
   return res.json({
     user: safeUser,
@@ -671,8 +674,9 @@ export async function updateMySports(req: Request, res: Response) {
   let valid: string[] = [];
   if (ids.length > 0) {
     const { data: rows } = await supabase
-      .from('sports').select('id').in('id', ids).eq('is_active', true);
-    valid = (rows ?? []).map((r) => r.id);
+      .from('sports').select('id, display_order').in('id', ids).eq('is_active', true);
+    // Audit #1: kept in the app's display order (Cricket first), not tap or database order.
+    valid = inDisplayOrder(((rows ?? []) as Array<{ id: string; display_order?: number | null }>).map((r) => ({ sport_id: r.id, order: r.display_order ?? null })));
     const unknown = ids.filter((i) => !valid.includes(i));
     if (unknown.length > 0) {
       return res.status(400).json({ error: 'One or more sports are not available', code: 'INVALID_SPORT' });
@@ -689,7 +693,7 @@ export async function updateMySports(req: Request, res: Response) {
     if (insErr) return res.status(500).json({ error: sanitizeError(insErr) });
   }
 
-  return res.json({ sport_ids: valid });
+  return res.json({ sport_ids: valid }); // audit #1: in display order
 }
 
 // PATCH /users/me/account-types — replace the user's account-type set.

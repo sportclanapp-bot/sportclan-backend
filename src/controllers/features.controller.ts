@@ -280,7 +280,11 @@ export async function loadLeaders(id: string): Promise<null | {
     .in('status', ['completed', 'abandoned'])
     // SC-428: a voided fixture doesn't count.
     .is('voided_at', null));
-  const played = (matches ?? []) as unknown as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; players?: LeaderMatch['players']; result_type?: string | null; score_summary?: SportLeaderMatch['score_summary'] }>;
+  // Audit #61: an abandoned match with no winner is a no-result — no draw, no
+  // clean sheet, no stats; one with a winner (a walkover) counts only as a result.
+  const played = ((matches ?? []) as unknown as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status?: string; players?: LeaderMatch['players']; result_type?: string | null; score_summary?: SportLeaderMatch['score_summary'] }>)
+    .filter((m) => m.status !== 'abandoned' || !!m.winner_team_id);
+  const unplayed = (m: { status?: string }) => m.status === 'abandoned';
   const winCount = new Map<string, number>();
   for (const m of played) if (m.winner_team_id) winCount.set(m.winner_team_id, (winCount.get(m.winner_team_id) ?? 0) + 1);
   const teamIds = Array.from(new Set([...winCount.keys(), ...played.flatMap((m) => [m.team_a_id, m.team_b_id]).filter((x): x is string => !!x)]));
@@ -291,12 +295,14 @@ export async function loadLeaders(id: string): Promise<null | {
     .sort((a, b) => b.wins - a.wins)
     .slice(0, 3);
   if (!cricket) {
-    const sm = played.map((m) => ({ id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, winner_team_id: m.winner_team_id, result_type: m.result_type ?? null, score_summary: m.score_summary ?? null }));
+    const sm = played.map((m) => (unplayed(m)
+      ? { id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, winner_team_id: m.winner_team_id, result_type: 'walkover', score_summary: { walkover: true } }
+      : { id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, winner_team_id: m.winner_team_id, result_type: m.result_type ?? null, score_summary: m.score_summary ?? null }));
     const ids = [...new Set(sm.flatMap((m) => Object.keys(m.score_summary?.players ?? {})).filter((x) => !x.startsWith('guest:')))];
     const boards = sportBoards(slug, sm, Object.fromEntries(teamMap) as Record<string, string>, await leaderAccounts(ids));
     return { slug, topWins, performers: [], leaders: null, boards, played, teamMap };
   }
-  const older = played.filter((m) => !m.players || Object.keys(m.players).length === 0).map((m) => m.id);
+  const older = played.filter((m) => !unplayed(m) && (!m.players || Object.keys(m.players).length === 0)).map((m) => m.id);
   let statsRows: StatsRow[] = [];
   if (older.length) {
     // Oct 2026: every row (22 a match — an unpaged read stopped at about 45 matches).
@@ -306,7 +312,7 @@ export async function loadLeaders(id: string): Promise<null | {
       .in('match_id', c).order('id').range(f, to));
     statsRows = ((rows ?? []) as any[]).map((r) => ({ ...r, name: (Array.isArray(r.user) ? r.user[0]?.name : r.user?.name) ?? null }));
   }
-  const leaderMatches = played.map((m) => ({ id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, players: m.players ?? null }));
+  const leaderMatches = played.filter((m) => !unplayed(m)).map((m) => ({ id: m.id, team_a_id: m.team_a_id, team_b_id: m.team_b_id, players: m.players ?? null }));
   const leaders = tournamentLeaders(leaderMatches, statsRows, Object.fromEntries(teamMap) as Record<string, string>, await leaderAccounts(leaderUserIds(leaderMatches, statsRows)));
   const performers = LEADER_STATS.flatMap((st) => leaders[st]);
   return { slug, topWins, performers, leaders, boards: cricketBoards(leaders), played, teamMap };

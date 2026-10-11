@@ -1890,6 +1890,16 @@ export async function getMatch(req: Request, res: Response) {
     // and over-showed it (→403) to a fixture creator later removed as organiser.
     matchWithRating.can_officiate = canOfficiate;
     matchWithRating.can_manage = canManage;
+    // Audit #35/#36: Cancel and Void by the same rules cancelMatch and
+    // voidMatch enforce, so the app offers them to exactly who may use them —
+    // Cancel: the organiser (a tournament fixture) or the creator, before it's
+    // finished, never a knockout match (#76); Void: an organiser, the umpire or
+    // the creator, or an admin — not a named scorer.
+    const koMatch = (tournamentFormat === 'knockout' || tournamentFormat === 'groups_knockout' || (tournamentFormat === 'swiss' && (match as { bracket?: string | null }).bracket === 'ko'))
+      && !match.group_label && Number(match.round ?? 0) > 0;
+    matchWithRating.can_cancel = !!userId && !isTerminalMatchStatus(match.status)
+      && (match.tournament_id ? canManage === true && !koMatch : match.created_by === userId);
+    matchWithRating.can_void = !!userId && await canVoidMatch(match, userId).catch(() => false);
     // Audit #5: may the viewer take the official's seat themselves ('assign'),
     // only offer to ('offer', casual matches: the creator accepts), or not at
     // all ('none', a tournament fixture they don't officiate)? And a pending

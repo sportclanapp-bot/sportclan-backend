@@ -20,7 +20,7 @@ const src = (f: string) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8'
 describe('own goal push', () => {
   test('credits the side it counts for, and names who put it in', () => {
     const p = scorePush({ slug: 'football', summary: { A: { score: 1 }, B: { score: 0 } }, side: 'A', teamName: 'Lions', kind: 'own_goal', concedingName: 'Tigers' });
-    expect(p).toEqual({ title: 'GOAL!', body: 'Lions scores! 1-0 (own goal by Tigers)' });
+    expect(p).toEqual({ title: 'GOAL!', body: 'Lions scores! 1–0 (own goal by Tigers)' });
   });
   test('createEvent flips the side for an own goal', () => {
     const s = src('controllers/scoring.controller.ts');

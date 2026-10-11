@@ -47,8 +47,8 @@ export type SportTerms = {
    *  start     how play begins: "Kick-off", "Push-back", "Tip-off" — else "Start";
    *  shootout  how a level knockout is settled after play: "Penalties",
    *            "Shoot-out", "Super over" — null where there is none;
-   *  level     a level result: "Draw", or "Tied" for cricket (and any sport
-   *            whose level result is not a draw);
+   *  level     a level result: "Tied" for cricket, "Draw" for every other
+   *            sport (audit #131: the server and the app used to differ);
    *  draws     whether a match can end level (the standings' D column, a
    *            team's DREW);
    *  credited  what a player scores: "runs", "goals", "points" — null for chess.
@@ -72,14 +72,14 @@ const plural = (w: string): string => (/(ch|sh|s|x)$/i.test(w) ? `${w}es` : `${w
 const t = (more: More, area: string, official: string, assistants: AssistantRole[], venue: string, name: string, areaNames: string, referee = 'Referee', deputyReferee: string | null = 'Deputy referee'): SportTerms => ({
   area, areas: plural(area), official, officials: plural(official), assistants, venue, name, areaNames,
   referee, deputyReferee, assistant: `Assistant ${official.toLowerCase()}`, deskRoles: {},
-  start: 'Start', shootout: null, level: 'Tied', draws: false, credited: 'points', ...more,
+  start: 'Start', shootout: null, level: 'Draw', draws: false, credited: 'points', ...more,
 });
 
 /** Cricket's words: every screen's words before Stage 8, and the default. */
 // Stage 14 · VB10: each sport's scorers and reserve officials too (ICC's fourth umpire; FIFA's reserve assistant;
 // FIH's judge and reserve umpire; FIBA's table; FIVB's assistant scorer, challenge and reserve referees; BWF's reserve umpire —
 // the match's scorer is every fixture's own, beside the referee).
-const CRICKET = t({ icon: '🏏', shootout: 'Super over', draws: true, credited: 'runs' }, 'Ground', 'Umpire', [{ key: 'umpire_2', label: 'Second umpire' }, { key: 'third_umpire', label: 'Third umpire' }, { key: 'fourth_umpire', label: 'Fourth umpire' }],
+const CRICKET = t({ icon: '🏏', shootout: 'Super over', level: 'Tied', draws: true, credited: 'runs' }, 'Ground', 'Umpire', [{ key: 'umpire_2', label: 'Second umpire' }, { key: 'third_umpire', label: 'Third umpire' }, { key: 'fourth_umpire', label: 'Fourth umpire' }],
   'e.g. MCA Ground', 'e.g. Mumbai T20 Cup 2026', 'e.g. MCA Pitch 1, Turf A', 'Match referee', null);
 
 const TERMS: Record<string, SportTerms> = {

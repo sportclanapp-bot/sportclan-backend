@@ -76,7 +76,7 @@ describe('SC-373 · standings and bracket names', () => {
     }
     // control: a knockout's last round is still the Final
     mockNext = (q) => (q[0] === 'from:tournaments' ? { data: { id: TOUR, name: 'Cup', format: 'knockout' } } : q[0] === 'from:matches' ? { data: [{ id: 'm1', round: 1 }, { id: 'm2', round: 2 }] } : { data: null });
-    expect((await call(getBracket, {})).body.rounds.map((x: any) => x.name)).toEqual(['Semi-Finals', 'Final']);
+    expect((await call(getBracket, {})).body.rounds.map((x: any) => x.name)).toEqual(['Semi-final', 'Final']); // audit #132
   });
 });
 

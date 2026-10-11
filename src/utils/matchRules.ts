@@ -1348,7 +1348,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     if (rules.timeLimitMinutes) parts.push(`timed · ${rules.timeLimitMinutes} min`); // BUILD 3.66
     if (rules.adScoring === 'noad' || rules.adScoring === 'semiad') parts.push(rules.adScoring === 'noad' ? 'no-ad' : 'semi-ad'); // BUILD 3.63
     // Stage 9 · T2.
-    if (rules.tiebreakAt != null && rules.tiebreakAt !== (rules.gamesPerSet ?? 6) && rules.tiebreak !== false) parts.push(`tiebreak at ${rules.tiebreakAt}-${rules.tiebreakAt}`);
+    if (rules.tiebreakAt != null && rules.tiebreakAt !== (rules.gamesPerSet ?? 6) && rules.tiebreak !== false) parts.push(`tiebreak at ${rules.tiebreakAt}–${rules.tiebreakAt}`);
     if (rules.finalSetTiebreakTo != null) parts.push(`final-set tiebreak to ${rules.finalSetTiebreakTo}`);
     if (rules.noLet === true) parts.push('no lets');
     if (rules.ballChange === true) parts.push('new balls 7/9'); // Stage 9 · T10

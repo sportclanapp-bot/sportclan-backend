@@ -21,6 +21,7 @@
  */
 
 import { dlsOutcome } from './cricketRules';
+import { sportTerms } from './sportTerms';
 
 export type Side = 'A' | 'B';
 
@@ -114,8 +115,6 @@ export function chasingSide(
  *   level            → "Tied" (football, hockey and chess: "Draw")
  * Chess reports no margin. Set sports and everything else report the score.
  */
-/** Sports whose level result is a "Draw" (the app's noWinnerWording agrees). */
-const DRAW_WORD_SPORTS = new Set(['chess', 'football', 'hockey']);
 
 export function deriveResultText(input: ResultInput): {
   text: string;
@@ -131,7 +130,9 @@ export function deriveResultText(input: ResultInput): {
     // "Match Draw 0-0" while the app said "Match tied" and insights said "DREW".
     // BUILD 1.8: football and hockey draw, like chess — the app has always said
     // "Draw" for them while this stored "Tied". Cricket (and the rest) tie.
-    return { text: DRAW_WORD_SPORTS.has(sport) ? 'Draw' : 'Tied', winnerSide: null };
+    // Audit #131: the same word as the app, from sportTerms — "Tied" for cricket, "Draw" for the rest
+    // (a timed badminton match level at the buzzer stored "Tied" while the app said "Draw").
+    return { text: sportTerms(sport).level, winnerSide: null };
   }
 
   const winnerName = winnerSide === 'A' ? teamAName : teamBName;

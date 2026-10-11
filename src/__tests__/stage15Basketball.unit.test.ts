@@ -64,7 +64,7 @@ describe('BB6 · a series read game by game', () => {
 
 describe('BB4 · typed periods and series (server copy)', () => {
   it('reads the same as the app', () => {
-    expect(typedPeriodPoints('basketball', null, [{ a: 22, b: 18 }, { a: 15, b: 20 }, { a: 24, b: 19 }, { a: 20, b: 17 }]).text).toBe('81-74 (Q1 22-18, Q2 15-20, Q3 24-19, Q4 20-17)');
+    expect(typedPeriodPoints('basketball', null, [{ a: 22, b: 18 }, { a: 15, b: 20 }, { a: 24, b: 19 }, { a: 20, b: 17 }]).text).toBe('81–74 (Q1 22–18, Q2 15–20, Q3 24–19, Q4 20–17)');
     expect(typedSeriesPoints('hockey', seriesSpec(3), [{ a: 2, b: 1 }, { a: 3, b: 0 }]).winner).toBe('A');
   });
 });

@@ -132,12 +132,13 @@ describe('SC-441 · other sports', () => {
     expect(isSetSport('cricket')).toBe(false);
   });
 
-  test('cricket and the rest say "Tied"; football, hockey and chess say "Draw" (BUILD 1.8)', () => {
-    for (const sport of ['cricket', 'badminton', 'basketball']) {
+  // Audit #131: one word per sport from sportTerms — "Tied" for cricket, "Draw" for every other sport (as the app says).
+  test('cricket says "Tied"; every other sport says "Draw" (BUILD 1.8 · audit #131)', () => {
+    for (const sport of ['cricket']) {
       expect(deriveResultText({ sport, teamAName: 'A', teamBName: 'B', aScore: 3, bScore: 3 }).text)
         .toBe('Tied');
     }
-    for (const sport of ['football', 'hockey', 'chess']) {
+    for (const sport of ['football', 'hockey', 'chess', 'badminton', 'basketball']) {
       expect(deriveResultText({ sport, teamAName: 'A', teamBName: 'B', aScore: 3, bScore: 3 }).text)
         .toBe('Draw');
     }

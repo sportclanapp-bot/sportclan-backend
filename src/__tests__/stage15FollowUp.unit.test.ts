@@ -25,7 +25,7 @@ describe('a series game decided on penalties', () => {
   it('the typed tally note (hockey)', () => {
     const r = { ...standardRules('hockey'), tie: seriesSpec(3) } as MatchRules;
     const got = typedSeriesPoints('hockey', seriesSpec(3), [{ a: 1, b: 1, pa: 4, pb: 3 }, { a: 2, b: 0 }]);
-    expect(got.text).toBe('2-0 (G1 1-1 (4-3 shootout), G2 2-0)');
+    expect(got.text).toBe('2–0 (G1 1–1 (4–3 shootout), G2 2–0)');
     const t = rollupTieSpec('hockey', r, seriesSpec(3), got.events as never, sideOf);
     expect(t.results[0]).toMatchObject({ winner: 'A', pens: { A: 4, B: 3 }, unitsA: 1, unitsB: 1 });
     expect(sportCommentary('note', { kind: 'shootout', A: 4, B: 3 }, { sport: 'hockey', teamA: 'Reds', teamB: 'Blues', period: 1 })).toBe('🥅 Shoot-out — Reds won 4–3');

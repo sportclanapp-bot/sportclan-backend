@@ -89,9 +89,9 @@ export function scorePush(args: {
   // Goals: every one is the moment.
   const val = (s: SideLine) => (s ? s.score ?? s.goals ?? s.points ?? 0 : 0);
   if (kind === 'own_goal') {
-    return { title: 'GOAL!', body: `${teamName} scores! ${val(summary.A)}-${val(summary.B)} (own goal by ${args.concedingName ?? 'the other side'})` };
+    return { title: 'GOAL!', body: `${teamName} scores! ${val(summary.A)}–${val(summary.B)} (own goal by ${args.concedingName ?? 'the other side'})` };
   }
-  return { title: kind === 'goal' ? 'GOAL!' : 'Score!', body: `${teamName} scores! ${val(summary.A)}-${val(summary.B)}` };
+  return { title: kind === 'goal' ? 'GOAL!' : 'Score!', body: `${teamName} scores! ${val(summary.A)}–${val(summary.B)}` };
 }
 
 /**

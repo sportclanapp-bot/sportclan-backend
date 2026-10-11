@@ -32,7 +32,7 @@ test('tennis: a game inside a set sends nothing; a set end quotes the set and it
 
 test('football goals are unchanged: every one is the moment', () => {
   expect(scorePush({ slug: 'football', side: 'A', teamName: 'FC', kind: 'goal', summary: { A: { score: 2 }, B: { score: 1 } } }))
-    .toEqual({ title: 'GOAL!', body: 'FC scores! 2-1' });
+    .toEqual({ title: 'GOAL!', body: 'FC scores! 2–1' });
 });
 
 test('basketball: a basket sends nothing — ~150 of them a game', () => {

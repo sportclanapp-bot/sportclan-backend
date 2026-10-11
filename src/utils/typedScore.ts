@@ -65,7 +65,7 @@ function rallyWon(a: number, b: number, target: number, cap: number | null | und
   return null;
 }
 
-const label = (s: TypedSet) => `${s.a}-${s.b}`;
+const label = (s: TypedSet) => `${s.a}–${s.b}`; // audit #134: an en dash, like every other score
 
 /** Rally sports (rally scoring). */
 function rallyPoints(rules: MatchRules, sets: TypedSet[], sideOut: boolean, u: 'game' | 'set' = 'game'): { problem: string | null; points: TypedPoint[]; winner: TypedSide | null } {
@@ -89,7 +89,7 @@ function rallyPoints(rules: MatchRules, sets: TypedSet[], sideOut: boolean, u: '
     for (let i = 0; i < order.length; i++) {
       if (order[i] === 'A') a++; else b++;
       const w = rallyWon(a, b, target, rules.cap, winBy2);
-      if (w && i < order.length - 1) return { problem: `${U} ${g + 1}: ${label(set)} isn’t a score a ${u} can finish on (it ends at ${a}-${b}).`, points, winner: null };
+      if (w && i < order.length - 1) return { problem: `${U} ${g + 1}: ${label(set)} isn’t a score a ${u} can finish on (it ends at ${a}–${b}).`, points, winner: null };
       if (!w && i === order.length - 1) return { problem: `${U} ${g + 1}: ${label(set)} isn’t finished — ${winBy2 ? `to ${target}, win by 2${rules.cap ? ` (up to ${rules.cap})` : ''}` : `to ${target}`}.`, points, winner: null };
     }
     if (soState) {
@@ -140,7 +140,7 @@ function tennisPoints(rules: MatchRules, sets: TypedSet[]): { problem: string | 
         // A set's tiebreak: the typed points (7-5), or the winner's points until it's won.
         if (typedTb) {
           const tw = winner === 'A' ? set.tbA! : set.tbB!; const tl = winner === 'A' ? set.tbB! : set.tbA!;
-          if (tw <= tl) return { problem: `Set ${k + 1}: the tiebreak ${set.tbA}-${set.tbB} goes the other way.`, points, winner: null };
+          if (tw <= tl) return { problem: `Set ${k + 1}: the tiebreak ${set.tbA}–${set.tbB} goes the other way.`, points, winner: null };
           for (const p of interleave(winner, tw, tl)) { if (s.sets.length > before) break; play(p); }
         } else {
           for (let guard = 0; guard < 40 && s.sets.length === before; guard++) play(winner);
@@ -151,10 +151,10 @@ function tennisPoints(rules: MatchRules, sets: TypedSet[]): { problem: string | 
     }
     const done = s.sets[before];
     if (!done || done.A !== set.a || done.B !== set.b) {
-      return { problem: `Set ${k + 1}: ${label(set)} isn’t a finished set under this match’s rules${done ? ` (it ends ${done.A}-${done.B})` : ''}.`, points, winner: null };
+      return { problem: `Set ${k + 1}: ${label(set)} isn’t a finished set under this match’s rules${done ? ` (it ends ${done.A}–${done.B})` : ''}.`, points, winner: null };
     }
     if (typedTb && (!done.tiebreak || done.tiebreak.A !== set.tbA || done.tiebreak.B !== set.tbB)) {
-      return { problem: `Set ${k + 1}: ${done.tiebreak ? `the tiebreak ${set.tbA}-${set.tbB} isn’t a finished one (win by 2)` : 'this set has no tiebreak'}.`, points, winner: null };
+      return { problem: `Set ${k + 1}: ${done.tiebreak ? `the tiebreak ${set.tbA}–${set.tbB} isn’t a finished one (win by 2)` : 'this set has no tiebreak'}.`, points, winner: null };
     }
   }
   if (!s.winner) return { problem: `The match isn’t finished: ${plural(opts.setsToWin, 'set')} to win.`, points, winner: null };
@@ -244,7 +244,7 @@ function carromPoints(rules: MatchRules, sets: TypedSet[]): { problem: string | 
     const after = carromReplay(items, o);
     const done = after.games[before.games.length];
     if (!done || done.A !== set.a || done.B !== set.b) {
-      return { problem: `Game ${g + 1}: ${label(set)} isn’t a finished game under this match’s rules${done ? ` (it ends ${done.A}-${done.B})` : ''}.`, points, winner: null };
+      return { problem: `Game ${g + 1}: ${label(set)} isn’t a finished game under this match’s rules${done ? ` (it ends ${done.A}–${done.B})` : ''}.`, points, winner: null };
     }
     points.push(...order);
   }
@@ -296,7 +296,7 @@ export function typedTiePoints(
 
 /** "11-8, 9-11, 11-6" — the typed games for the timeline (a set's tiebreak in brackets). */
 export function typedScoreText(sets: TypedSet[]): string {
-  return sets.map((x) => `${x.a}-${x.b}${x.tbA != null && x.tbB != null ? ` (${Math.min(x.tbA, x.tbB)})` : ''}`).join(', ');
+  return sets.map((x) => `${x.a}–${x.b}${x.tbA != null && x.tbB != null ? ` (${Math.min(x.tbA, x.tbB)})` : ''}`).join(', ');
 }
 
 /**
@@ -384,7 +384,7 @@ export function typedPeriodPoints(
       else for (let j = 0; j < n; j++) events.push({ event_type: 'score', payload: { team_side: side, kind: 'goal', value: 1, typed: true } });
     }
   });
-  return { problem: null, events, winner: level ? null : a > b ? 'A' : 'B', draw: level, text: `${a}-${b} (${ps.map((p, i) => `${periodWord(k, i, regulation)} ${p.a}-${p.b}`).join(', ')})` };
+  return { problem: null, events, winner: level ? null : a > b ? 'A' : 'B', draw: level, text: `${a}–${b} (${ps.map((p, i) => `${periodWord(k, i, regulation)} ${p.a}–${p.b}`).join(', ')})` };
 }
 
 /** Stage 15 · BB6 · a series typed game by game (each game's final score), first to a majority. */
@@ -415,8 +415,8 @@ export function typedSeriesPoints(
     events.push({ event_type: 'note', payload: { kind: 'game_end', typed: true } });
     const w = pens ? shootoutWinner(pens.A, pens.B) : a > b ? 'A' : 'B';
     if (w === 'A') wa += 1; else wb += 1;
-    parts.push(`G${i + 1} ${scoreWithShootout(k, a, b, pens, '-')}`);
+    parts.push(`G${i + 1} ${scoreWithShootout(k, a, b, pens)}`); // audit #134: en dashes
   }
   if (wa < need && wb < need) return no(`Nobody has won ${plural(need, 'game')} yet.`);
-  return { problem: null, events, winner: wa >= need ? 'A' : 'B', text: `${wa}-${wb} (${parts.join(', ')})` };
+  return { problem: null, events, winner: wa >= need ? 'A' : 'B', text: `${wa}–${wb} (${parts.join(', ')})` };
 }

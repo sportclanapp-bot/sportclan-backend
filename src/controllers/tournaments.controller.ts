@@ -2430,8 +2430,9 @@ export async function getBracket(req: Request, res: Response) {
       if (!isBracketFormat) return count > 1 ? `Matchday ${r}` : 'Fixtures';
       const fromEnd = count - 1 - idx; // 0 = last round = final
       if (fromEnd === 0) return 'Final';
-      if (fromEnd === 1) return 'Semi-Finals';
-      if (fromEnd === 2) return 'Quarter-Finals';
+      // Audit #132: the app's words ("Semi-final"); 'Group Stage' stays as it is — 2.15.0 reads it as a key.
+      if (fromEnd === 1) return 'Semi-final';
+      if (fromEnd === 2) return 'Quarter-final';
       return `Round ${r}`;
     };
 
@@ -2439,14 +2440,14 @@ export async function getBracket(req: Request, res: Response) {
     const listed: Array<{ name: string; ms: any[]; bracket?: 'main' | 'back' | 'final' | 'ko' }> = roundKeys.map((r, idx) => {
       const name = roundName(r, idx);
       // Stage 11 · PB4: the main draw's rounds say so ("Main draw final").
-      return de && r > 0 ? { name: name === 'Final' ? 'Main draw final' : name === 'Semi-Finals' ? 'Main draw semi-finals' : name === 'Quarter-Finals' ? 'Main draw quarter-finals' : `Main draw round ${r}`, ms: byRound.get(r)!, bracket: 'main' as const } : { name, ms: byRound.get(r)! };
+      return de && r > 0 ? { name: name === 'Final' ? 'Main draw final' : name === 'Semi-final' ? 'Main draw semi-final' : name === 'Quarter-final' ? 'Main draw quarter-final' : `Main draw round ${r}`, ms: byRound.get(r)!, bracket: 'main' as const } : { name, ms: byRound.get(r)! };
     });
     if (thirdPlace.length) listed.push({ name: 'Third place', ms: thirdPlace });
     if (koRows.length) {
       const koKeys = [...new Set(koRows.filter((m: any) => !m.third_place).map((m: any) => Number(m.round)))].sort((a, b) => a - b);
       koKeys.forEach((r, idx) => {
         const fromEnd = koKeys.length - 1 - idx;
-        const name = fromEnd === 0 ? 'Final' : fromEnd === 1 ? 'Semi-Finals' : fromEnd === 2 ? 'Quarter-Finals' : `Knockout round ${r}`;
+        const name = fromEnd === 0 ? 'Final' : fromEnd === 1 ? 'Semi-final' : fromEnd === 2 ? 'Quarter-final' : `Knockout round ${r}`;
         listed.push({ name, ms: koRows.filter((m: any) => !m.third_place && Number(m.round) === r).sort((a: any, b: any) => (a.match_no ?? 0) - (b.match_no ?? 0)), bracket: 'ko' });
       });
       const koThird = koRows.filter((m: any) => m.third_place);

@@ -3316,6 +3316,9 @@ export async function recrownAfterVoidChange(matchId: string): Promise<void> {
       if (m.group_label) await maybeSeedKnockout(m.tournament_id as string);
       else if (t.format === 'league' || t.format === 'round_robin') await crownLeagueChampion(m.tournament_id as string);
       else if (t.format === 'swiss' && (m as { bracket?: string | null }).bracket !== 'ko') await swissAfterResult(m.tournament_id as string); // BUILD 4.15 · Stage 13 · CR9: not its knockout
+      // Audit #75: a voided (or restored) ladder challenge puts the ladder right; a box waits for its next round.
+      else if (t.format === 'ladder') await ladderAfterResult({ id: matchId, tournament_id: m.tournament_id as string, team_a_id: null, team_b_id: null, winner_team_id: null });
+      else if (t.format === 'box') { /* nothing moves until the organiser's next round */ }
       // BUILD 4.12: voiding the third-place match (or the final) can leave the
       // bracket finished — complete it then, as a completion would.
       else if (!m.next_match_id) await completeBracketIfDone(m.tournament_id as string);
@@ -4671,14 +4674,60 @@ async function ladderBusy(tournamentId: string): Promise<Set<string>> {
   return new Set(open.flatMap((m) => [m.team_a_id, m.team_b_id]).filter((x): x is string => !!x));
 }
 
-/** After a ladder challenge (team A challenged team B): the winner's place. Applied once — a challenger already above isn't moved again. */
-async function ladderAfterResult(m: LadderMatch): Promise<void> {
+type LadderMove = { before: string[]; after: string[]; at: string };
+
+/**
+ * After a ladder challenge (team A challenged team B): the winner's place.
+ * Audit #75: each move is kept on its match (the order before and after), so a
+ * corrected or voided result can be put right — the ladder goes back to the
+ * order before that match, then this match (as it now stands) and every move
+ * made since are applied again. Matches decided before this was kept (no move
+ * recorded) are applied once, as before.
+ */
+export async function ladderAfterResult(m: LadderMatch): Promise<void> {
+  const { data: row } = await supabase.from('matches').select('score_summary').eq('id', m.id).maybeSingle();
+  const prior = ((row as { score_summary?: Record<string, any> } | null)?.score_summary?.ladder_move ?? null) as LadderMove | null;
+  if (prior) { await ladderReplayFrom(m.tournament_id, m.id); return; }
   if (!m.winner_team_id || !m.team_a_id || !m.team_b_id) return;
   const { data: t } = await supabase.from('tournaments').select('settings').eq('id', m.tournament_id).maybeSingle();
   const rows = await ladderOrder(m.tournament_id);
   const order = rows.map((r) => r.team_id);
   const next = ladderAfter(order, m.team_a_id, m.team_b_id, m.winner_team_id === m.team_a_id, settingsOf(t as { settings?: unknown }).ladder?.move ?? 'leapfrog');
   await writeLadder(rows, next);
+  await recordLadderMove(m.id, { before: order, after: next, at: new Date().toISOString() });
+}
+
+async function recordLadderMove(matchId: string, move: LadderMove): Promise<void> {
+  const { data: row } = await supabase.from('matches').select('score_summary').eq('id', matchId).maybeSingle();
+  const ss = { ...(((row as { score_summary?: object } | null)?.score_summary ?? {}) as Record<string, unknown>), ladder_move: move };
+  await supabase.from('matches').update({ score_summary: ss }).eq('id', matchId);
+}
+
+/** Audit #75: the ladder again from the order before `matchId`'s move: that match as it now stands, then every later move. */
+async function ladderReplayFrom(tournamentId: string, matchId: string): Promise<void> {
+  const { data: t } = await supabase.from('tournaments').select('settings').eq('id', tournamentId).maybeSingle();
+  const how = settingsOf(t as { settings?: unknown }).ladder?.move ?? 'leapfrog';
+  const all = await allRows<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; voided_at: string | null; score_summary: Record<string, any> | null }>(() => supabase
+    .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, voided_at, score_summary').eq('tournament_id', tournamentId));
+  const moved = all.filter((x) => x.score_summary?.ladder_move).sort((a, b) => String(a.score_summary!.ladder_move.at).localeCompare(String(b.score_summary!.ladder_move.at)) || a.id.localeCompare(b.id));
+  const from = moved.findIndex((x) => x.id === matchId);
+  if (from < 0) return;
+  let order: string[] = [...(moved[from]!.score_summary!.ladder_move.before as string[])];
+  for (const x of moved.slice(from)) {
+    const before = [...order];
+    const counts = !x.voided_at && (x.status === 'completed' || x.status === 'abandoned') && x.winner_team_id && x.team_a_id && x.team_b_id;
+    if (counts) {
+      // Someone who joined since starts at the bottom, as they did.
+      for (const id of [x.team_a_id!, x.team_b_id!]) if (!order.includes(id)) order.push(id);
+      order = ladderAfter(order, x.team_a_id!, x.team_b_id!, x.winner_team_id === x.team_a_id, how);
+    }
+    await recordLadderMove(x.id, { ...(x.score_summary!.ladder_move as LadderMove), before, after: order });
+  }
+  // The ladder as it is now: everyone still on it, in the replayed order, then anyone who joined since.
+  const rows = await ladderOrder(tournamentId);
+  const on = new Set(rows.map((r) => r.team_id));
+  const finalOrder = [...order.filter((id) => on.has(id)), ...rows.map((r) => r.team_id).filter((id) => !order.includes(id))];
+  await writeLadder(rows, finalOrder);
 }
 
 /** The teams the caller plays for in this tournament (their entries). */

@@ -23,7 +23,7 @@ import { deletedIdSet } from '../utils/activeUser';
 import { targetUserHidden } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
 import { getSport, normSportSlug } from '../utils/sportCache';
-import { sportTerms } from '../utils/sportTerms';
+import { officialRoleLabel, sportTerms } from '../utils/sportTerms';
 import { LEADER_STATS, leaderUserIds, tournamentLeaders, type LeaderMatch, type StatsRow, type LeaderStat } from '../utils/tournamentLeaders';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -407,11 +407,14 @@ export async function addTournamentOfficial(req: Request, res: Response) {
     // via self-remove). Block-respecting, best-effort — never fail the assign.
     try {
       const { data: t } = await supabase.from('tournaments').select('name').eq('id', id).maybeSingle();
+      // Audit #86: the role in the sport's words ("Chief arbiter", "Match referee"), not the stored key.
+      const slug = (await getSport((tournament as { sport_id?: string }).sport_id ?? ''))?.slug ?? null;
+      const roleWords = officialRoleLabel(slug, role);
       await notifyUnlessBlocked(userId, {
         userId: user_id,
         type: 'assigned_as_official',
         title: 'You’re a tournament official',
-        body: `You were assigned as ${role} for ${t?.name ?? 'a tournament'}.`,
+        body: `You were assigned as ${/^[AEIOU]/.test(roleWords) ? 'an' : 'a'} ${roleWords.toLowerCase()} for ${t?.name ?? 'a tournament'}.`,
         data: { tournamentId: id, actorId: userId, role },
       });
     } catch { /* best-effort */ }

@@ -1,3 +1,4 @@
+import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { swissMaxRounds } from '../utils/tournamentSettings';
 import { deleteMatching } from '../utils/softDelete';
 import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
@@ -508,12 +509,29 @@ export async function createTournament(req: Request, res: Response) {
       if ('refusal' in probe) return res.status(400).json(probe.refusal);
     }
 
+    // Audit #68: a retry after a timeout returns the tournament the first try made.
+    const clientKey = requestKeyOf(req);
+    const firstTry = async (): Promise<Record<string, any> | null> => {
+      if (!clientKey) return null;
+      const { data: t } = await supabase.from('tournaments').select('*').eq('created_by', userId).eq('client_key', clientKey).maybeSingle();
+      if (!t) return null;
+      if (!withEvents) return t as Record<string, any>;
+      const { data: evs } = await supabase.from('tournaments').select('*').eq('parent_id', (t as { id: string }).id);
+      return { ...t, events: [...((evs ?? []) as Array<Record<string, any>>)].sort((a, b) => (a.event_order ?? 0) - (b.event_order ?? 0)) };
+    };
+    const made = await firstTry();
+    if (made) return res.json({ tournament: made, replayed: true });
+
     const entry_code = await freshEntryCode();
     const { data: tournament, error } = await supabase
       .from('tournaments')
-      .insert({ ...built.row, entry_code, created_by: userId })
+      .insert({ ...built.row, entry_code, created_by: userId, ...(clientKey ? { client_key: clientKey } : {}) })
       .select('*')
       .single();
+    if (error && clientKey && isUniqueClash(error)) {
+      const same = await firstTry();
+      if (same) return res.json({ tournament: same, replayed: true });
+    }
     if (error || !tournament) return res.status(500).json({ error: sanitizeError(error) || 'Failed to create tournament' });
 
     // Auto-create tournament group chat (best-effort). Store the chat reference

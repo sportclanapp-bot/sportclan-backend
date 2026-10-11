@@ -1,3 +1,4 @@
+import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { Request, Response } from 'express';
 import { selectAllIn } from '../utils/selectAll';
 import { isUuid } from '../utils/uuid';
@@ -1040,6 +1041,16 @@ export async function sendMessage(req: Request, res: Response) {
     content: body.trim(),
     reply_to_id: reply_to_id || null,
   };
+  // Audit #68: a retry after a timeout returns the message the first try sent.
+  const clientKey = requestKeyOf(req);
+  const sentBefore = async () => (clientKey
+    ? (await supabase.from('messages').select(`*, sender:users!sender_id(id, name, username, profile_picture_url)`).eq('sender_id', userId).eq('chat_id', id).eq('client_key', clientKey).maybeSingle()).data
+    : null);
+  {
+    const before = await sentBefore();
+    if (before) return res.status(201).json({ data: before, message: before, replayed: true });
+  }
+  if (clientKey) insertPayload.client_key = clientKey;
 
   const { data, error } = await supabase
     .from('messages')
@@ -1050,6 +1061,10 @@ export async function sendMessage(req: Request, res: Response) {
     `)
     .single();
 
+  if (error && clientKey && isUniqueClash(error)) {
+    const same = await sentBefore();
+    if (same) return res.status(201).json({ data: same, message: same, replayed: true });
+  }
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 
   // B13 (D18): a push to the other members — fire-and-forget, throttled.

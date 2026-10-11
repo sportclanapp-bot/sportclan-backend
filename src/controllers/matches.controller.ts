@@ -1,3 +1,4 @@
+import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
 import { teamSheetProblem } from './squads.controller';
 import { isAdminUser } from '../middleware/admin.middleware';
@@ -340,6 +341,13 @@ export async function createMatch(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
+    // Audit #68: a retry after a timeout returns the match the first try made.
+    const clientKey = requestKeyOf(req);
+    const firstTry = async () => (clientKey
+      ? (await supabase.from('matches').select('*').eq('created_by', userId).eq('client_key', clientKey).maybeSingle()).data
+      : null);
+    const made = await firstTry();
+    if (made) return res.json({ match: made, replayed: true });
     const {
       sport_id,
       team_a_id,
@@ -542,9 +550,14 @@ export async function createMatch(req: Request, res: Response) {
         is_ranked: !!is_ranked,
         join_policy: !singles && is_open ? joinPolicy : 'open',
         created_by: userId,
+        ...(clientKey ? { client_key: clientKey } : {}),
       })
       .select('*')
       .single();
+    if (error && clientKey && isUniqueClash(error)) {
+      const same = await firstTry();
+      if (same) return res.json({ match: same, replayed: true });
+    }
     if (error || !data) return res.status(500).json({ error: sanitizeError(error) || 'Failed to create match' });
 
     // SC-281: seed the CREATOR into an open/pickup match. A pickup organiser is

@@ -19,3 +19,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export function normalizeClientKey(raw: unknown): string | null {
   return typeof raw === 'string' && UUID_RE.test(raw) ? raw : null;
 }
+
+/**
+ * Audit #68: a create the app may retry after a timeout carries a key (body
+ * `idempotency_key`, or the Idempotency-Key header). The key the request
+ * carries, or null.
+ */
+export function requestKeyOf(req: { body?: any; header?: (name: string) => string | undefined }): string | null {
+  return normalizeClientKey(req.body?.idempotency_key ?? req.header?.('Idempotency-Key'));
+}
+
+/** Postgres's unique-violation code — the same key arrived twice at once. */
+export const isUniqueClash = (e: unknown): boolean => (e as { code?: string } | null)?.code === '23505';

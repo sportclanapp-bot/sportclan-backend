@@ -1,5 +1,6 @@
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
 import { teamSheetProblem } from './squads.controller';
+import { isAdminUser } from '../middleware/admin.middleware';
 import { consentedParticipants, isOnAnyTeam } from '../utils/matchConsent';
 import { matchEventsAll } from '../utils/matchEventsAll';
 import { sportTerms } from '../utils/sportTerms';
@@ -4095,10 +4096,7 @@ export async function completeMatch(req: Request, res: Response) {
 async function canVoidMatch(match: { created_by?: string | null; umpire_id?: string | null; tournament_id?: string | null }, userId: string): Promise<boolean> {
   // Cricket gap 3: a named scorer scores; voiding isn't theirs.
   if (await canOfficiateMatch(match as never, userId, { scorers: false })) return true;
-  const whitelist = (process.env.ADMIN_USER_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (whitelist.includes(userId)) return true;
-  const { data } = await supabase.from('users').select('is_admin').eq('id', userId).maybeSingle();
-  return (data as { is_admin?: boolean } | null)?.is_admin === true;
+  return isAdminUser(userId); // audit #26: the one admin answer
 }
 
 /**

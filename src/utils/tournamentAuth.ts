@@ -7,6 +7,7 @@
 // are creator-only, OR an admin (attributed via admin_actions). A co-organiser
 // canNOT do the carve-outs — they can't nuke the cup or lock the creator out.
 import { supabase } from './supabase';
+import { isAdminUser } from '../middleware/admin.middleware';
 import { familyLookupIds } from './tournamentEvents';
 
 /** Creator OR a co-organiser row. NO admin (admins only get the narrow carve-outs). */
@@ -28,12 +29,9 @@ export async function isTournamentOrganiser(
 
 export async function userIsAdmin(userId: string | null | undefined): Promise<boolean> {
   if (!userId) return false;
-  try {
-    const { data } = await supabase.from('users').select('is_admin').eq('id', userId).maybeSingle();
-    return (data as { is_admin?: boolean } | null)?.is_admin === true;
-  } catch {
-    return false;
-  }
+  // Audit #26: the ONE admin answer (ADMIN_USER_IDS and users.is_admin), the
+  // same as the admin routes — a whitelisted admin was refused here.
+  return isAdminUser(userId);
 }
 
 // Carve-out authorization: creator OR admin. Returns whether it's an ADMIN

@@ -18,7 +18,7 @@ import {
   generateRefreshToken,
   verifyRefreshToken,
 } from '../utils/jwt';
-import { setOtp, getOtp, deleteOtp, bumpCounter, readCounter } from '../utils/otpStore';
+import { setOtp, getOtp, deleteOtp, bumpCounter, readCounter, clearCounter } from '../utils/otpStore';
 import { normalizeAccountTypes } from '../constants/accountTypes';
 import { signupProfileProblem, USERNAME_RE, RESERVED_USERNAMES, GENDERS, GENDER_ERROR } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
@@ -33,6 +33,9 @@ export const SEND_PER_NUMBER_HOUR = 5;
 export const SEND_PER_NUMBER_DAY = 10;
 /** Audit #10: the number's daily total from anyone — the cost cap (the two above are per requester). */
 export const SEND_PER_NUMBER_DAY_ANYONE = 30;
+/** Audit #20: wrong passwords — per account and requester (15 min), per account from anywhere (1 hour). */
+export const PASSWORD_FAILS_PER_REQUESTER = 10;
+export const PASSWORD_FAILS_PER_ACCOUNT = 100;
 /** Audit #22: the codes that can sign in or finish a sign-up (not reset / change-phone codes). */
 export const SIGN_IN_PURPOSES = ['login', 'register'] as const;
 
@@ -726,8 +729,22 @@ export async function login(req: Request, res: Response) {
       : res.status(401).json({ error: 'Invalid credentials' });
   }
   if (!user.password_hash) return res.status(401).json({ error: 'Account uses OTP login only' });
+  // Audit #20 (11 Oct 2026): wrong passwords were limited only per IP, so a
+  // guesser could spread across many IPs. Now per account too: 10 wrong from
+  // one requester in 15 minutes stops THAT requester; 100 from anywhere in an
+  // hour pauses password sign-in for the account (sign-in by code still works,
+  // so nobody can lock the owner out completely).
+  const who = clientIpKey(req);
+  const [mine, anyone] = await Promise.all([readCounter(`pwf:${user.id}:${who}`), readCounter(`pwfa:${user.id}`)]);
+  if (mine >= PASSWORD_FAILS_PER_REQUESTER || anyone >= PASSWORD_FAILS_PER_ACCOUNT) {
+    return res.status(429).json({ error: 'Too many wrong passwords. Try again later, or sign in with a code.', code: 'PASSWORD_LOCKED' });
+  }
   const ok = await bcrypt.compare(password, user.password_hash);
-  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!ok) {
+    await Promise.all([bumpCounter(`pwf:${user.id}:${who}`, 15 * 60), bumpCounter(`pwfa:${user.id}`, 60 * 60)]);
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  await clearCounter(`pwf:${user.id}:${who}`);
   if (await isSuspended(user.id)) {
     return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
   }

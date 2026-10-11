@@ -1797,7 +1797,7 @@ export async function updateTournament(req: Request, res: Response) {
     if (typeof update.name === 'string') update.name = update.name.trim();
     // Badminton 7.12: the schedule settings, when edited, are checked.
     {
-      const sb = scheduleRefusal(update, tournament as Record<string, unknown>);
+      const sb = scheduleRefusal(update, tournament as Record<string, unknown>, normSportSlug((await getSport(String((tournament as { sport_id?: string }).sport_id)))?.slug));
       if (sb) return res.status(400).json(sb);
       if (Array.isArray(update.ground_names)) update.ground_names = update.ground_names.length ? (update.ground_names as string[]).map((x) => x.trim()) : null;
     }

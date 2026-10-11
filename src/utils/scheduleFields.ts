@@ -6,6 +6,7 @@
  */
 import type { Refusal } from './tournamentSettings';
 import { isCount } from './validation';
+import { sportTerms } from './sportTerms';
 
 const refuse = (error: string, field: string): Refusal & { field: string } => ({ error, code: 'BAD_SCHEDULE', field } as Refusal & { field: string });
 const TIME = /^([01]\d|2[0-3]):[0-5]\d(:\d\d)?$/;
@@ -13,7 +14,8 @@ const minutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)
 const isInt = (x: unknown, lo: number, hi: number) => typeof x === 'number' && Number.isInteger(x) && x >= lo && x <= hi;
 
 /** A worded problem with the schedule fields in an edit, or null. `cur` fills what isn't sent. */
-export function scheduleRefusal(body: Record<string, unknown>, cur: Record<string, unknown> = {}): (Refusal & { field: string }) | null {
+export function scheduleRefusal(body: Record<string, unknown>, cur: Record<string, unknown> = {}, sport?: string | null): (Refusal & { field: string }) | null {
+  const area = sportTerms(sport).area.toLowerCase(); // audit batch 4: the sport's own word (court, ground, table, board)
   const has = (k: string) => k in body && body[k] !== null && body[k] !== '';
   for (const k of ['daily_start_time', 'daily_end_time']) {
     if (has(k) && (typeof body[k] !== 'string' || !TIME.test(body[k] as string))) return refuse('Day hours are HH:MM, e.g. 08:00.', k);
@@ -27,13 +29,13 @@ export function scheduleRefusal(body: Record<string, unknown>, cur: Record<strin
   if (has('match_duration_minutes') && !isInt(body.match_duration_minutes, 1, Number.MAX_SAFE_INTEGER)) return refuse('A match is 1 minute or more.', 'match_duration_minutes');
   if (has('buffer_minutes') && !isInt(body.buffer_minutes, 0, Number.MAX_SAFE_INTEGER)) return refuse('The gap between matches is a whole number of minutes.', 'buffer_minutes');
   // Oct 2026: no cap on courts — at least one.
-  if (has('ground_count') && !isCount(body.ground_count, 1)) return refuse('At least one court or ground.', 'ground_count');
+  if (has('ground_count') && !isCount(body.ground_count, 1)) return refuse(`At least one ${area}.`, 'ground_count');
   if ('ground_names' in body && body.ground_names !== null) {
     const n = body.ground_names;
     if (!Array.isArray(n) || n.some((x) => typeof x !== 'string' || !x.trim() || x.trim().length > 40)) {
       return refuse('Each name is 1 to 40 characters.', 'ground_names');
     }
-    if (new Set(n.map((x: string) => x.trim().toLowerCase())).size !== n.length) return refuse('Two courts have the same name.', 'ground_names');
+    if (new Set(n.map((x: string) => x.trim().toLowerCase())).size !== n.length) return refuse(`Two ${sportTerms(sport).areas.toLowerCase()} have the same name.`, 'ground_names');
   }
   return null;
 }

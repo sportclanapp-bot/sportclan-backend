@@ -128,7 +128,28 @@ export function isAssistantRole(sport: string | null | undefined, role: string):
   return sportTerms(sport).assistants.some((a) => a.key === role);
 }
 
-/** Audit #121: "Kick-off time" for football, "Push-back time" for hockey, "Start time" for the rest. */
+/**
+ * Audit #121: "Kick-off time" (football), "Tip-off time" (basketball), "Start
+ * time" for the rest — hockey too ("push-back time" is not how anyone says it).
+ */
 export function startTimeLabel(sport: string | null | undefined): string {
-  return `${sportTerms(sport).start} time`;
+  const s = sportTerms(sport).start;
+  return s === 'Kick-off' || s === 'Tip-off' ? `${s} time` : 'Start time';
+}
+
+/** "before kick-off", "before tip-off", "before the push-back", "before the start". */
+export function beforeStart(sport: string | null | undefined): string {
+  const s = sportTerms(sport).start;
+  return s === 'Kick-off' || s === 'Tip-off' ? `before ${s.toLowerCase()}` : `before the ${s.toLowerCase()}`;
+}
+
+/**
+ * Audit #86 · who can give a disqualification or a default, in the sport's words:
+ * "the umpire or the referee" (badminton, table tennis), "the referee or the head
+ * referee" (pickleball), "the referee" (volleyball — its delegate doesn't).
+ */
+export function deciders(sport: string | null | undefined): string {
+  const t = sportTerms(sport);
+  const above = /delegate|commissioner|technical/i.test(t.referee) || t.referee === t.official ? null : t.referee.toLowerCase();
+  return `the ${t.official.toLowerCase()}${above ? ` or the ${above}` : ''}`;
 }

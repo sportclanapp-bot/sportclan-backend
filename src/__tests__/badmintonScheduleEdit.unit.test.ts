@@ -105,9 +105,12 @@ test('checked: worded, and against what is already set', async () => {
   // Stage 13 · CR3: no tops — the old tops (600 / 240) and above are fine.
   expect(scheduleRefusal({ match_duration_minutes: 1, buffer_minutes: 0 })).toBeNull();
   expect(scheduleRefusal({ match_duration_minutes: 601, buffer_minutes: 241 })).toBeNull();
-  expect(scheduleRefusal({ ground_count: 0 })!.error).toBe('At least one court or ground.');
+  // Audit batch 4: the sport's own word (no sport given: cricket's).
+  expect(scheduleRefusal({ ground_count: 0 })!.error).toBe('At least one ground.');
+  expect(scheduleRefusal({ ground_count: 0 }, {}, 'badminton')!.error).toBe('At least one court.');
+  expect(scheduleRefusal({ ground_names: ['T1', 't1'] }, {}, 'tabletennis')!.error).toBe('Two tables have the same name.');
   expect(scheduleRefusal({ ground_count: 120, ground_names: Array.from({ length: 120 }, (_, i) => `Court ${i + 1}`) })).toBeNull(); // Oct 2026: no cap
-  expect(scheduleRefusal({ ground_names: ['Court 1', 'court 1'] })!.error).toBe('Two courts have the same name.');
+  expect(scheduleRefusal({ ground_names: ['Court 1', 'court 1'] })!.error).toBe('Two grounds have the same name.') /* audit batch 4: no sport given → cricket's word */;
   // cleared values are fine (blank = not set); an untouched form is fine
   expect(scheduleRefusal({ daily_start_time: null, match_duration_minutes: null, ground_names: null })).toBeNull();
   expect(scheduleRefusal({ name: 'x' })).toBeNull();

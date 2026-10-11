@@ -24,12 +24,12 @@ type M = { id: string; team_a_id: string | null; team_b_id: string | null; team_
 
 const TITLES = { 1: 'Winner', 2: 'Runner-up', 3: 'Third', 4: 'Fourth' } as const;
 
-/** Pure: the knockout's placings from its matches (final, third-place match or semi-finals). */
-export /** Audit #65: a knockout match is decided when it has a winner — played, or a walkover (abandoned with a winner); not a voided one. */
+/** Audit #65: a knockout match is decided when it has a winner — played, or a walkover (abandoned with a winner); not a voided one. */
 const decided = <T extends { status: string; winner_team_id: string | null; voided_at?: string | null }>(m: T): m is T & { winner_team_id: string } =>
   !!m.winner_team_id && !m.voided_at && (m.status === 'completed' || m.status === 'abandoned');
 
-function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string }> {
+/** Pure: the knockout's placings from its matches (final, third-place match or semi-finals). */
+export function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string }> {
   const ko = matches.filter((m) => !m.voided_at && !m.group_label && (m.round ?? 0) >= 1);
   // Stage 11 · PB4: a double elimination — the deciding final (the reset if it was played), and third the back draw's final loser.
   if (ko.some((m) => m.bracket)) {

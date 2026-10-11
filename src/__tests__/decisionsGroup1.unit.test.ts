@@ -164,7 +164,7 @@ describe('5 · "Who can message you" also decides who can add you to a group', (
     mockNext = (q) => admin(q) ?? { ...base(q), count: 2 };
     const r = await call(msgs.addMember, { params: { id: CHAT }, body: { user_id: D } });
     expect(r.statusCode).toBe(200);
-    expect(joinChat).toHaveBeenCalledWith(CHAT, [{ user_id: D, role: 'member' }]);
+    expect(joinChat).toHaveBeenCalledWith(CHAT, [{ user_id: D, role: 'member' }], { byAdmin: true }); // audit #16: an admin's add may bring back a removed member
   });
 });
 

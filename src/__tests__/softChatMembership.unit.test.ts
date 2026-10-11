@@ -98,9 +98,10 @@ describe('every chat_participants READ ignores people who left', () => {
       expect(window).toMatch(/\.is\('left_at', null\)/);
     }
   });
-  it('the only unfiltered read is joinChat’s own lookup, which must see left rows to rejoin them', () => {
+  it('the only unfiltered reads are joinChat’s own lookup (to rejoin people who left) and the removed-by-an-admin check (audit #16)', () => {
     const s = code('utils/chatMembership.ts');
-    expect(s).toMatch(/select\('user_id, left_at'\)/);
+    expect(s).toMatch(/select\('user_id, left_at, removed_by'\)/);
+    expect(s).toMatch(/select\('left_at, removed_by'\)/);
   });
 });
 

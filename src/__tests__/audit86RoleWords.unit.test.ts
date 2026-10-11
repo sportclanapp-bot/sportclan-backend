@@ -1,7 +1,7 @@
 /** Audit #86 (11 Oct 2026): the "you're a tournament official" notice said "assigned as chief_referee" — now the sport's words. */
 import fs from 'fs';
 import path from 'path';
-import { officialRoleLabel } from '../utils/sportTerms';
+import { officialRoleLabel } from '../utils/officialRoleLabel';
 
 test('stored roles read in each sport’s words', () => {
   expect(officialRoleLabel('chess', 'chief_referee')).toBe('Chief arbiter');

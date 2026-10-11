@@ -23,7 +23,8 @@ import { deletedIdSet } from '../utils/activeUser';
 import { targetUserHidden } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
 import { getSport, normSportSlug } from '../utils/sportCache';
-import { officialRoleLabel, sportTerms } from '../utils/sportTerms';
+import { sportTerms } from '../utils/sportTerms';
+import { officialRoleLabel } from '../utils/officialRoleLabel';
 import { LEADER_STATS, leaderUserIds, tournamentLeaders, type LeaderMatch, type StatsRow, type LeaderStat } from '../utils/tournamentLeaders';
 
 // ────────────────────────────────────────────────────────────────────────────

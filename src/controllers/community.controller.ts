@@ -1493,13 +1493,31 @@ export async function searchMentions(req: Request, res: Response) {
   const blocked = await blockedUserIds(req.userId);
   let mentionQ = excludeDeleted(supabase
     .from('users')
-    .select('id, name, username, profile_picture_url')
+    .select('id, name, username, profile_picture_url, discoverability, tag_privacy')
     .or(`username.ilike.%${safe}%,name.ilike.%${safe}%`));
   if (await hideTestFor(req.userId)) mentionQ = excludeTest(mentionQ); // B03 (V245, D3)
-  const { data, error } = await excludeIds(mentionQ, 'id', blocked)
-    .limit(10);
+  // Audit #29: read more than shown, then honour "who can find you" and "who can
+  // tag you" (nobody → never; followers → only to people who follow them).
+  const { data: raw, error } = await excludeIds(mentionQ, 'id', blocked)
+    .limit(50);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
+  type Cand = { id: string; name: string; username: string; profile_picture_url: string | null; discoverability?: string | null; tag_privacy?: string | null };
+  const rows = (raw ?? []) as Cand[];
+  const restricted = rows.filter((u) => u.id !== req.userId && (u.discoverability === 'followers' || u.tag_privacy === 'followers')).map((u) => u.id);
+  const iFollow = new Set<string>();
+  if (restricted.length && req.userId) {
+    const { data: fr } = await supabase.from('follow_relationships').select('following_id').eq('follower_id', req.userId).in('following_id', restricted);
+    for (const f of (fr ?? []) as Array<{ following_id: string }>) iFollow.add(f.following_id);
+  }
+  const allowed = (setting: string | null | undefined, id: string) => {
+    const v = setting ?? 'everyone';
+    return v === 'everyone' || (v === 'followers' && iFollow.has(id));
+  };
+  const data = rows
+    .filter((u) => u.id === req.userId || (allowed(u.discoverability, u.id) && allowed(u.tag_privacy, u.id)))
+    .slice(0, 10)
+    .map(({ discoverability: _d, tag_privacy: _t, ...u }) => u);
   // Frontend uses { id, name, username, avatar_url } shape; map name → name
   const candidates = (data || []).map((u: any) => ({
     id: u.id,

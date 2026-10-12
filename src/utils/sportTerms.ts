@@ -52,6 +52,9 @@ export type SportTerms = {
    *  draws     whether a match can end level (the standings' D column, a
    *            team's DREW);
    *  credited  what a player scores: "runs", "goals", "points" — null for chess.
+   *  end       how a finished match is called (2.16.0, 12 Oct 2026): "Full time"
+   *            in football, hockey and kabaddi, "Final" in basketball, "Game over"
+   *            in chess — else "Match over" (a basketball match said "Full time").
    */
   icon: string;
   start: string;
@@ -59,10 +62,11 @@ export type SportTerms = {
   level: 'Draw' | 'Tied';
   draws: boolean;
   credited: 'runs' | 'goals' | 'points' | null;
+  end: string;
 };
 
 /** The words above that differ by sport (the rest default as for most sports). */
-type More = Partial<Pick<SportTerms, 'start' | 'shootout' | 'level' | 'draws' | 'credited' | 'deskRoles'>> & { icon: string };
+type More = Partial<Pick<SportTerms, 'start' | 'shootout' | 'level' | 'draws' | 'credited' | 'end' | 'deskRoles'>> & { icon: string };
 
 const key = (s: string | null | undefined): string => String(s ?? '').toLowerCase().replace(/[-_\s]/g, '');
 
@@ -72,7 +76,7 @@ const plural = (w: string): string => (/(ch|sh|s|x)$/i.test(w) ? `${w}es` : `${w
 const t = (more: More, area: string, official: string, assistants: AssistantRole[], venue: string, name: string, areaNames: string, referee = 'Referee', deputyReferee: string | null = 'Deputy referee'): SportTerms => ({
   area, areas: plural(area), official, officials: plural(official), assistants, venue, name, areaNames,
   referee, deputyReferee, assistant: `Assistant ${official.toLowerCase()}`, deskRoles: {},
-  start: 'Start', shootout: null, level: 'Draw', draws: false, credited: 'points', ...more,
+  start: 'Start', shootout: null, level: 'Draw', draws: false, credited: 'points', end: 'Match over', ...more,
 });
 
 /** Cricket's words: every screen's words before Stage 8, and the default. */
@@ -84,15 +88,15 @@ const CRICKET = t({ icon: '🏏', shootout: 'Super over', level: 'Tied', draws: 
 
 const TERMS: Record<string, SportTerms> = {
   cricket: CRICKET,
-  football: t({ icon: '⚽', start: 'Kick-off', shootout: 'Penalties', level: 'Draw', draws: true, credited: 'goals' }, 'Pitch', 'Referee', [
+  football: t({ icon: '⚽', start: 'Kick-off', shootout: 'Penalties', level: 'Draw', draws: true, credited: 'goals', end: 'Full time' }, 'Pitch', 'Referee', [
     { key: 'assistant_referee_1', label: 'Assistant referee 1' },
     { key: 'assistant_referee_2', label: 'Assistant referee 2' },
     { key: 'fourth_official', label: 'Fourth official' },
     { key: 'reserve_assistant_referee', label: 'Reserve assistant referee' },
   ], 'e.g. Hindu Gymkhana Turf', 'e.g. Bandra Sunday League 2026', 'e.g. Turf A, Turf B', 'Match commissioner', null),
-  hockey: t({ icon: '🏑', start: 'Push-back', shootout: 'Shoot-out', level: 'Draw', draws: true, credited: 'goals' }, 'Pitch', 'Umpire', [{ key: 'umpire_2', label: 'Second umpire' }, { key: 'technical_officer', label: 'Technical officer' }, { key: 'judge', label: 'Judge (timekeeper)' }, { key: 'reserve_umpire', label: 'Reserve umpire' }],
+  hockey: t({ icon: '🏑', start: 'Push-back', shootout: 'Shoot-out', level: 'Draw', draws: true, credited: 'goals', end: 'Full time' }, 'Pitch', 'Umpire', [{ key: 'umpire_2', label: 'Second umpire' }, { key: 'technical_officer', label: 'Technical officer' }, { key: 'judge', label: 'Judge (timekeeper)' }, { key: 'reserve_umpire', label: 'Reserve umpire' }],
     'e.g. Municipal Hockey Stadium', 'e.g. Pune Hockey Cup 2026', 'e.g. Pitch 1, Pitch 2', 'Technical delegate', null),
-  basketball: t({ icon: '🏀', start: 'Tip-off' }, 'Court', 'Referee', [{ key: 'umpire_1', label: 'Umpire 1' }, { key: 'umpire_2', label: 'Umpire 2' }, { key: 'table_official', label: 'Table official' }, { key: 'assistant_scorer', label: 'Assistant scorer' }, { key: 'timer', label: 'Timer' }, { key: 'shot_clock_operator', label: 'Shot clock operator' }],
+  basketball: t({ icon: '🏀', start: 'Tip-off', end: 'Final' }, 'Court', 'Referee', [{ key: 'umpire_1', label: 'Umpire 1' }, { key: 'umpire_2', label: 'Umpire 2' }, { key: 'table_official', label: 'Table official' }, { key: 'assistant_scorer', label: 'Assistant scorer' }, { key: 'timer', label: 'Timer' }, { key: 'shot_clock_operator', label: 'Shot clock operator' }],
     'e.g. City Indoor Stadium', 'e.g. Delhi 3x3 Cup 2026', 'e.g. Court 1, Court 2', 'Commissioner', null),
   volleyball: t({ icon: '🏐' }, 'Court', 'Referee', [{ key: 'second_referee', label: 'Second referee' }, { key: 'line_judge', label: 'Line judge' }, { key: 'assistant_scorer', label: 'Assistant scorer' }, { key: 'challenge_referee', label: 'Challenge referee' }, { key: 'reserve_referee', label: 'Reserve referee' }],
     'e.g. City Indoor Stadium', 'e.g. Goa Beach Volleyball Cup 2026', 'e.g. Court 1, Court 2', 'Referee delegate', null),
@@ -104,12 +108,12 @@ const TERMS: Record<string, SportTerms> = {
     'e.g. Community Hall', 'e.g. Thane TT Championship 2026', 'e.g. Table 1, Table 2'),
   pickleball: t({ icon: '🥒' }, 'Court', 'Referee', [{ key: 'line_judge', label: 'Line judge' }],
     'e.g. City Indoor Stadium', 'e.g. Bengaluru Pickleball Open 2026', 'e.g. Court 1, Court 2', 'Head referee', 'Deputy head referee'),
-  chess: t({ icon: '♟️', level: 'Draw', draws: true, credited: null, deskRoles: { pairings: 'Pairings arbiter', sector: 'Sector arbiter', fair_play: 'Anti-cheating arbiter' } }, // Stage 12 · CH11 (FIDE)
+  chess: t({ icon: '♟️', level: 'Draw', draws: true, credited: null, end: 'Game over', deskRoles: { pairings: 'Pairings arbiter', sector: 'Sector arbiter', fair_play: 'Anti-cheating arbiter' } }, // Stage 12 · CH11 (FIDE)
     'Board', 'Arbiter', [{ key: 'deputy_arbiter', label: 'Deputy arbiter' }],
     'e.g. Community Hall', 'e.g. Thane Rapid Open 2026', 'e.g. Board 1, Board 2', 'Chief arbiter', 'Deputy chief arbiter'),
   carrom: t({ icon: '⚪' }, 'Board', 'Umpire', [],
     'e.g. Dadar Club Hall', 'e.g. Dadar Carrom Championship 2026', 'e.g. Board 1, Board 2', 'Chief referee', 'Deputy chief referee'),
-  kabaddi: t({ icon: '🤼' }, 'Court', 'Referee', [{ key: 'umpire_1', label: 'Umpire 1' }, { key: 'umpire_2', label: 'Umpire 2' }],
+  kabaddi: t({ icon: '🤼', end: 'Full time' }, 'Court', 'Referee', [{ key: 'umpire_1', label: 'Umpire 1' }, { key: 'umpire_2', label: 'Umpire 2' }],
     'e.g. Shahu Stadium', 'e.g. Kolhapur Kabaddi Cup 2026', 'e.g. Court 1, Court 2', 'Technical delegate', null),
 };
 

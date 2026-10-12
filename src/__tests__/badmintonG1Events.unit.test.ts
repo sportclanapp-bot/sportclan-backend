@@ -163,12 +163,13 @@ describe('lists: grouped for apps that know events, flat for older apps', () => 
       if (q[0] === 'from:tournaments') return { data: [{ id: E1, parent_id: P, event_label: 'Men’s singles', event_order: 0, entry_kind: 'singles', status: 'upcoming' }] };
       return { data: null };
     };
-    return run(listTournaments, { headers });
+    // A status tab: one query (the "All" list runs one per status — profileSettingsTidy.unit.test).
+    return run(listTournaments, { headers, query: { status: 'upcoming' } });
   };
   test('an older app never gets the parent', async () => {
     await list({});
     const q = mockLog.find((x) => has(x, 'range:'))!;
-    expect(arg(q, 'eq')).toEqual(['is_parent', false]);
+    expect(q).toContain('eq:["is_parent",false]');
     expect(has(q, 'is:')).toBe(false);
   });
   test('the new app gets parents (with their events) and no events on their own', async () => {

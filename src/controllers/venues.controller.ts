@@ -283,3 +283,39 @@ export async function deleteVenue(req: Request, res: Response) {
   if (!data || data.length === 0) return res.status(404).json({ error: 'Venue not found.' });
   return res.json({ deleted: true, id });
 }
+
+// GET /venues/:id — Profile & Settings tidy-up (12 Oct 2026): a venue's own page.
+// Venues were a dead end: the list rows opened nothing, and a venue found in
+// Search opened the whole list. Name, address, city, its sport, surface, photo,
+// and who added it (so they can be messaged — not a deleted account, not one
+// either side has blocked).
+export async function getVenue(req: Request, res: Response) {
+  const { id } = req.params as { id: string };
+  if (!isUuid(id)) return res.status(404).json({ error: 'Venue not found', code: 'VENUE_NOT_FOUND' });
+  const { data: v, error } = await supabase
+    .from('venues')
+    .select('id, name, city_id, use_count, created_at, created_by, address, sport_id, surface, image_url, city:cities!city_id(name), sport:sports!sport_id(slug, name), owner:users!created_by(id, name, username, profile_picture_url, deleted_at)')
+    .eq('id', id)
+    .is('deleted_at', null)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: 'Could not load the venue' });
+  if (!v) return res.status(404).json({ error: 'Venue not found', code: 'VENUE_NOT_FOUND' });
+  const { city, sport, owner, ...rest } = v as any;
+  let contact: { id: string; name: string | null; username: string | null; profile_picture_url: string | null } | null = null;
+  if (owner && !owner.deleted_at && owner.id !== req.userId) {
+    const { data: block } = await supabase.from('user_blocks').select('id')
+      .or(`and(blocker_id.eq.${req.userId},blocked_id.eq.${owner.id}),and(blocker_id.eq.${owner.id},blocked_id.eq.${req.userId})`)
+      .maybeSingle();
+    if (!block) contact = { id: owner.id, name: owner.name ?? null, username: owner.username ?? null, profile_picture_url: owner.profile_picture_url ?? null };
+  }
+  return res.json({
+    venue: {
+      ...rest,
+      city: city?.name ?? null,
+      sport_slug: sport?.slug ?? null,
+      sport_name: sport?.name ?? null,
+      contact,
+      can_edit: !!req.userId && (rest.created_by === req.userId || (await isAdminUser(req.userId))),
+    },
+  });
+}

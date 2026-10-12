@@ -81,7 +81,7 @@ import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
-import { TOURNAMENT_STATUSES, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
+import { TOURNAMENT_STATUSES, ALL_LIST_ORDER, bucketSlices, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
 import { settingsRefusal, storedSettings, settingsOf, tiebreakRefusal, storedTiebreaks, changedDrawKey, categoryProblem, swissCreateRefusal, ladderCreateRefusal, swissRoundsProblem, tableInputs, amateurDeclarationRefusal, waitlistOn } from '../utils/tournamentSettings';
 import { CONSOLATION_ONLY, consolationWaiting, drawLinkProblem, enterInto, luckyLosers, onKnockoutDecided, qualifyingPending } from '../utils/drawLinks';
 import { promoteWaitlist } from '../utils/waitlist';
@@ -619,27 +619,57 @@ export async function listTournaments(req: Request, res: Response) {
     if (status === 'bad') return res.status(400).json({ error: `status must be one of: ${TOURNAMENT_STATUSES.join(', ')}` });
     const resolvedSportId = await resolveSportId(sport_id);
     const p = parsePagination(req.query as Record<string, unknown>);
-    let query = supabase
-      .from('tournaments')
-      // D2 (visual review): list cards show "🏆 <champion>" on a completed tournament.
-      .select('*, champion:teams!champion_team_id(id, name, short_name)', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range(p.from, p.to);
-    if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
-    if (city_id) query = query.eq('city_id', city_id);
-    if (status) query = query.eq('status', status);
-    if (mine === '1') query = query.eq('created_by', userId);
-    // B03 (V245, D3): test tournaments are hidden from real viewers' lists.
-    else if (await hideTestFor(userId)) query = excludeTest(query);
+    const hide = mine === '1' ? false : await hideTestFor(userId);
     // Badminton gap 1: an app that knows events lists a tournament made of
     // events once (its events inside it); an older app gets each event as a
     // tournament of its own ("Open · Men's singles") and never the parent,
     // which it couldn't enter or draw.
     const grouped = clientHas(req, 'events');
-    query = grouped ? query.is('parent_id', null) : query.eq('is_parent', false);
-    const { data, error, count } = await query;
-    if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
-    const rows = (data || []) as Array<Record<string, unknown>>;
+    // The same filters for every query below (the list, and the "All" buckets).
+    const filtered = (q: any, st: string | null) => {
+      if (resolvedSportId) q = q.eq('sport_id', resolvedSportId);
+      if (city_id) q = q.eq('city_id', city_id);
+      if (st) q = q.eq('status', st);
+      if (mine === '1') q = q.eq('created_by', userId);
+      // B03 (V245, D3): test tournaments are hidden from real viewers' lists.
+      else if (hide) q = excludeTest(q);
+      return grouped ? q.is('parent_id', null) : q.eq('is_parent', false);
+    };
+    // D2 (visual review): list cards show "🏆 <champion>" on a completed tournament.
+    const COLS = '*, champion:teams!champion_team_id(id, name, short_name)';
+    let rows: Array<Record<string, unknown>>;
+    let count: number | null;
+    if (!status && mine !== '1') {
+      // Profile & Settings tidy-up: "All" runs live → upcoming → completed →
+      // cancelled (it led with the newest-made, often cancelled, tournament).
+      // Within a bucket: live and completed by start date (latest first),
+      // upcoming soonest first, cancelled newest-made first.
+      const counts = Object.fromEntries(await Promise.all(ALL_LIST_ORDER.map(async (st) => {
+        const { count: n, error: e } = await filtered(supabase.from('tournaments').select('id', { count: 'exact', head: true }), st);
+        if (e && !isRangeError(e)) throw e;
+        return [st, n ?? 0] as const;
+      })));
+      const slices = bucketSlices(counts, p.from, p.to);
+      const parts = await Promise.all(slices.map(async (s) => {
+        let q = filtered(supabase.from('tournaments').select(COLS), s.status);
+        q = s.status === 'upcoming' ? q.order('start_date', { ascending: true, nullsFirst: false })
+          : s.status === 'cancelled' ? q.order('created_at', { ascending: false })
+          : q.order('start_date', { ascending: false, nullsFirst: false });
+        const { data: d, error: e } = await q.order('created_at', { ascending: false }).order('id', { ascending: true }).range(s.from, s.to);
+        if (e && !isRangeError(e)) throw e;
+        return (d || []) as Array<Record<string, unknown>>;
+      }));
+      rows = parts.flat();
+      count = ALL_LIST_ORDER.reduce((a, st) => a + (counts[st] ?? 0), 0);
+    } else {
+      const { data, error, count: c } = await filtered(
+        supabase.from('tournaments').select(COLS, { count: 'exact' }).order('created_at', { ascending: false }).range(p.from, p.to),
+        status,
+      );
+      if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
+      rows = (data || []) as Array<Record<string, unknown>>;
+      count = c ?? null;
+    }
     if (grouped) await attachEventSummaries(rows);
     return res.json({ tournaments: rows, ...pageMeta(count, p) });
   } catch (e) {

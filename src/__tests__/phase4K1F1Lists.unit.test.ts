@@ -71,7 +71,8 @@ describe('K1-34a (9cf1d71) · the shared pagination contract', () => {
   ];
   it.each(lists)('K1-34a (9cf1d71): %s — the page is range()d past 100 and the true total comes back', async (_n, fn, key, table) => {
     mockNext = (q) => (q[0] === table ? { data: [{ id: 't1' }], count: 437 } : { data: [] });
-    const r = await call(fn, { limit: '100', offset: '300' });
+    // Tournaments: a status tab (one query); "All" runs one per status (profileSettingsTidy.unit.test).
+    const r = await call(fn, { limit: '100', offset: '300', ...(key === 'tournaments' ? { status: 'live' } : {}) });
     expect(r.statusCode).toBe(200);
     expect(r.body[key]).toHaveLength(1);
     expect(r.body).toMatchObject({ total: 437, limit: 100, offset: 300, has_more: true });

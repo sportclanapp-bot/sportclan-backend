@@ -49,6 +49,8 @@ describe('V109 · the bracket carries the score and the void', () => {
 
 describe('D2 · the tournament list carries the champion’s name', () => {
   it('listTournaments embeds the champion team', () => {
-    expect(fnBody('listTournaments')).toMatch(/\.select\('\*, champion:teams!champion_team_id\(id, name, short_name\)', \{ count: 'exact' \}\)/);
+    // Profile & Settings tidy-up: one column list for the list and the "All" buckets.
+    expect(fnBody('listTournaments')).toMatch(/const COLS = '\*, champion:teams!champion_team_id\(id, name, short_name\)';/);
+    expect(fnBody('listTournaments')).toMatch(/\.select\(COLS, \{ count: 'exact' \}\)/);
   });
 });

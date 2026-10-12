@@ -29,6 +29,31 @@ export function listStatusFilter(raw: unknown): TournamentStatus | null | 'bad' 
   return (TOURNAMENT_STATUSES as readonly string[]).includes(raw) ? (raw as TournamentStatus) : 'bad';
 }
 
+/**
+ * Profile & Settings tidy-up (12 Oct 2026): the "All" list put the newest-made
+ * tournament first, so cancelled ones led it. It now runs live, then upcoming,
+ * then completed, then cancelled — each status a bucket in that order.
+ */
+export const ALL_LIST_ORDER: readonly TournamentStatus[] = ['live', 'upcoming', 'completed', 'cancelled'];
+
+/**
+ * Which slice of each bucket a page [from, to] (inclusive, 0-based) covers, given
+ * each bucket's size in ALL_LIST_ORDER. Pure — the controller runs one query per slice.
+ */
+export function bucketSlices(counts: Partial<Record<TournamentStatus, number>>, from: number, to: number): Array<{ status: TournamentStatus; from: number; to: number }> {
+  const out: Array<{ status: TournamentStatus; from: number; to: number }> = [];
+  let start = 0;
+  for (const status of ALL_LIST_ORDER) {
+    const n = Math.max(0, counts[status] ?? 0);
+    const end = start + n - 1; // this bucket's rows are [start, end] in the whole list
+    const a = Math.max(from, start);
+    const b = Math.min(to, end);
+    if (n > 0 && a <= b) out.push({ status, from: a - start, to: b - start });
+    start += n;
+  }
+  return out;
+}
+
 export const TOURNAMENT_NAME_MIN = 3;
 
 export function tournamentNameRefusal(name: unknown): Refusal | null {

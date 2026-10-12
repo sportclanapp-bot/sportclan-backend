@@ -50,7 +50,7 @@ export function decideInviteDedup(rows: InviteRowLite[], nowMs: number): InviteD
   }
   const reuse =
     pending ??
-    rows.find((r) => r.status === 'declined' || r.status === 'accepted' || r.status === 'expired');
+    rows.find((r) => r.status === 'declined' || r.status === 'accepted' || r.status === 'expired' || r.status === 'withdrawn');
   return reuse ? { action: 'reuse', id: reuse.id } : { action: 'insert' };
 }
 
@@ -197,12 +197,23 @@ export async function withdrawInvite(req: Request, res: Response) {
   if (invite.status !== 'pending') {
     return res.status(400).json({ error: 'Only a pending invite can be withdrawn.', code: 'INVITE_RESOLVED' });
   }
-  // Guarded delete: if the receiver responded between the read and here, 0 rows
-  // delete → clean 400 (race-safe), never a false success.
-  // Audit #24: archived (who and why), not erased.
-  const del = await deleteMatching('invites', (q) => q.eq('id', id).eq('sender_id', userId).eq('status', 'pending'), userId, 'withdrawn by its sender');
-  const deleted = del.ids;
-  if (del.error) return res.status(500).json({ error: sanitizeError({ message: del.error }) });
+  // Guarded update: if the receiver responded between the read and here, 0 rows
+  // change → clean 400 (race-safe), never a false success.
+  // Profile & Settings tidy-up (migration 153): the row stays, marked 'withdrawn',
+  // so the sender's Sent list can say so. Before 153 (no such status) it is
+  // deleted and archived as before (audit #24).
+  let deleted: string[] | null;
+  const upd = await supabase.from('invites').update({ status: 'withdrawn', responded_at: new Date().toISOString() })
+    .eq('id', id).eq('sender_id', userId).eq('status', 'pending').select('id');
+  if (upd.error && (upd.error as { code?: string }).code === '23514') {
+    const del = await deleteMatching('invites', (q) => q.eq('id', id).eq('sender_id', userId).eq('status', 'pending'), userId, 'withdrawn by its sender');
+    if (del.error) return res.status(500).json({ error: sanitizeError({ message: del.error }) });
+    deleted = del.ids;
+  } else if (upd.error) {
+    return res.status(500).json({ error: sanitizeError(upd.error) });
+  } else {
+    deleted = (upd.data ?? []).map((r: { id: string }) => r.id);
+  }
   if (!deleted || deleted.length === 0) {
     return res.status(400).json({ error: 'This invite was already responded to.', code: 'INVITE_RESOLVED' });
   }
@@ -224,11 +235,32 @@ export async function listInvites(req: Request, res: Response) {
   // counted from them. Now paged (limit / offset, has_more, total), with the
   // pending count from the database (fresh ones only — older are expired).
   const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 50, maxLimit: 100 });
+  // Profile & Settings tidy-up: ?box=sent — the invites YOU sent, each with its
+  // status (waiting / accepted / declined / expired / withdrawn) and who it went to.
+  if (req.query.box === 'sent') {
+    const [{ data, error, count }, { count: waiting }] = await Promise.all([
+      supabase
+        .from('invites')
+        .select('id, sender_id, receiver_id, sport_id, message, status, created_at, responded_at, receiver:receiver_id (id, name, username, profile_picture_url), sport:sport_id (id, name, emoji)', { count: 'exact' })
+        .eq('sender_id', userId)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(p.from, p.to),
+      supabase.from('invites').select('id', { count: 'exact', head: true })
+        .eq('sender_id', userId).eq('status', 'pending').gte('created_at', inviteFreshCutoffIso()),
+    ]);
+    if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
+    const nowMs = Date.now();
+    const invites = (data || []).map((inv: any) => (isInviteExpired(inv, nowMs) ? { ...inv, status: 'expired' } : inv));
+    return res.json({ invites, pending_count: waiting ?? 0, ...pageMeta(count, p) });
+  }
   const [{ data, error, count }, { count: pendingCount }] = await Promise.all([
     supabase
       .from('invites')
       .select('id, sender_id, receiver_id, sport_id, message, status, created_at, responded_at, sender:sender_id (id, name, username, profile_picture_url), sport:sport_id (id, name, emoji)', { count: 'exact' })
       .eq('receiver_id', userId)
+      // A withdrawn invite was deleted before migration 153; it stays out of the receiver's list.
+      .neq('status', 'withdrawn')
       .order('created_at', { ascending: false })
       .order('id', { ascending: false })
       .range(p.from, p.to),

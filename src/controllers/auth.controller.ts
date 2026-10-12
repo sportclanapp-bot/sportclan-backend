@@ -766,19 +766,21 @@ export async function login(req: Request, res: Response) {
 export async function refresh(req: Request, res: Response) {
   const { refreshToken } = req.body || {};
   if (!refreshToken) return res.status(400).json({ error: 'refreshToken is required' });
+  let payload: ReturnType<typeof verifyRefreshToken>;
   try {
-    const payload = verifyRefreshToken(refreshToken);
-    // Audit #19: found by the token's hash; a token a rotation already replaced
-    // is answered only within a short grace (a lost response) — later, it is a
-    // stolen or stale copy, and the whole sign-in is ended.
+    payload = verifyRefreshToken(refreshToken);
+  } catch {
+    return res.status(401).json({ error: 'Invalid refresh token' });
+  }
+  try {
+    // Audit #19: found by the token's hash. The token the latest rotation replaced
+    // is still answered (with a new rotation): the phone never got the new one —
+    // its reply was lost. The 2.16.0 release pass found that ending the sign-in
+    // after a 60-second grace signed people out after a dropped reply and a minute
+    // without signal. Any older token is refused.
     const found = await findSessionByToken(refreshToken);
     const row = found?.row;
-    if (!row || row.revoked || (row.user_id && row.user_id !== payload.userId)) return res.status(401).json({ error: 'Refresh token revoked' });
-    if (found.reused && !found.inGrace) {
-      await supabase.from('refresh_tokens').update({ revoked: true }).eq('id', row.id);
-      await denySessions([row.id]);
-      return res.status(401).json({ error: 'Refresh token revoked', code: 'REFRESH_REUSED' });
-    }
+    if (!found || !row || row.revoked || (row.user_id && row.user_id !== payload.userId)) return res.status(401).json({ error: 'Refresh token revoked' });
     // SC-213: a ban/deletion must bite mid-session — a suspended or soft-deleted
     // user must NOT be able to mint fresh access tokens off an old refresh token.
     // (Login/verify-otp already gate this; refresh was the evasion path.)
@@ -810,7 +812,9 @@ export async function refresh(req: Request, res: Response) {
     }
     return res.json({ accessToken });
   } catch {
-    return res.status(401).json({ error: 'Invalid refresh token' });
+    // The database (or a check) couldn't answer — not a dead session. A 401 here
+    // signed the phone out; a 503 makes it try again later and stay signed in.
+    return res.status(503).json({ error: 'Could not renew your sign-in right now. Try again.', code: 'REFRESH_UNAVAILABLE' });
   }
 }
 

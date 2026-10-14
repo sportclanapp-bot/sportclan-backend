@@ -1378,13 +1378,14 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     if (rules.players === DOUBLES_PLAYERS) parts.push('doubles'); // BUILD 3.65
     if (rules.gamesPerSet != null && rules.gamesPerSet !== 6) parts.push(rules.bestOf === 1 && (rules.gamesPerSet === 8 || rules.gamesPerSet === 9) ? `pro set to ${rules.gamesPerSet}` : `sets to ${rules.gamesPerSet}`); // Stage 9 · T2: 9 too
     if (rules.tiebreak === false) parts.push('advantage sets'); // BUILD 3.60
-    else if (rules.tiebreakTo === 10) parts.push('10-point tiebreaks'); // BUILD 3.61
+    else if (rules.tiebreakTo != null && rules.tiebreakTo !== 7 && !(rules.bestOf === 1 && rules.finalSetTiebreakTo != null)) parts.push(`${rules.tiebreakTo}-point tiebreaks`); // BUILD 3.61 · N-SPP1-TEN-3: any length but 7
     if (rules.matchTiebreak) parts.push('match tiebreak for the final set'); // BUILD 3.62
     if (rules.timeLimitMinutes) parts.push(`timed · ${rules.timeLimitMinutes} min`); // BUILD 3.66
     if (rules.adScoring === 'noad' || rules.adScoring === 'semiad') parts.push(rules.adScoring === 'noad' ? 'no-ad' : 'semi-ad'); // BUILD 3.63
     // Stage 9 · T2.
     if (rules.tiebreakAt != null && rules.tiebreakAt !== (rules.gamesPerSet ?? 6) && rules.tiebreak !== false) parts.push(`tiebreak at ${rules.tiebreakAt}–${rules.tiebreakAt}`);
-    if (rules.finalSetTiebreakTo != null) parts.push(`final-set tiebreak to ${rules.finalSetTiebreakTo}`);
+    // N-SPP1-TEN-1: one set is the final set — its tiebreak is that one.
+    if (rules.finalSetTiebreakTo != null && rules.tiebreak !== false) parts.push(rules.bestOf === 1 ? `${rules.finalSetTiebreakTo}-point tiebreak` : `final-set tiebreak to ${rules.finalSetTiebreakTo}`);
     if (rules.noLet === true) parts.push('no lets');
     if (rules.ballChange === true) parts.push('new balls 7/9'); // Stage 9 · T10
     return parts.length ? parts.join(' · ') : null;

@@ -1315,6 +1315,14 @@ const SIDE_LIMITS: Record<string, [number, number]> = {
  * BUILD 3.16+ · the rules of a timed team sport in words, for the pad and
  * Match Detail headers ("7-a-side"). Parts the match doesn't set are left out.
  */
+/**
+ * N-SPP1-TTN-3 (launch test plan): table tennis's expedite rule can come in until both players
+ * have this many points — 9 in a game to 11, 19 in a game to 21 (it was 9 whatever the target).
+ */
+export function expediteCutoff(target: number | null | undefined): number {
+  return Math.max(1, (target ?? 11) - 2);
+}
+
 export function timedRulesLabel(sport: string | null | undefined, rules: MatchRules): string | null {
   const key = lengthKey(sport);
   const parts: string[] = [];

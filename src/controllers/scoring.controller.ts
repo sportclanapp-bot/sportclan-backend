@@ -26,7 +26,7 @@ import { gameEndSuperOver, superOverWinner, allOutBySide, allowedOnFreeHit, bowl
 import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { FOUL_KINDS } from '../utils/basketballRules';
 import { gameShootout, shootoutKicksOf, shootoutProblem } from '../utils/shootoutRules'; // Stage 15 follow-up
-import { BASKETBALL_STAT_KEYS, goalHowFor, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
+import { BASKETBALL_STAT_KEYS, goalHowFor, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules, expediteCutoff } from '../utils/matchRules';
 import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsFor, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { trumpsFor } from '../utils/tieTrumps';
 import { sideOutReplay } from '../utils/pickleballCore';
@@ -565,8 +565,10 @@ export async function validateScoringEvent(
     const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
     if (slug !== 'tabletennis') return refuse(400, { error: 'The expedite rule is for table tennis.', code: 'BAD_NOTE' });
     const ss = (match.score_summary ?? {}) as { A?: { points?: number }; B?: { points?: number } };
-    if (Number(ss.A?.points ?? 0) >= 9 && Number(ss.B?.points ?? 0) >= 9) {
-      return refuse(409, { error: 'The expedite rule can’t come in once both players have 9 points.', code: 'EXPEDITE_TOO_LATE' });
+    // N-SPP1-TTN-3: by the game's target (19 in a game to 21), not 9 whatever it is.
+    const cut = expediteCutoff(rulesOf('tabletennis', match).target);
+    if (Number(ss.A?.points ?? 0) >= cut && Number(ss.B?.points ?? 0) >= cut) {
+      return refuse(409, { error: `The expedite rule can’t come in once both players have ${cut} points.`, code: 'EXPEDITE_TOO_LATE' });
     }
   }
 

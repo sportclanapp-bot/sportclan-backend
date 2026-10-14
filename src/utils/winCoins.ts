@@ -56,9 +56,10 @@ export async function reconcileWinCoins(matchId: string): Promise<void> {
   const participants = (parts ?? []) as Array<{ user_id: string; team_side: string | null }>;
   if (participants.length === 0) return;
 
-  const ss = (match.score_summary ?? {}) as { winner_side?: 'A' | 'B' | null };
-  const winnerSide: 'A' | 'B' | null =
-    match.winner_team_id && match.winner_team_id === match.team_a_id ? 'A'
+  const ss = (match.score_summary ?? {}) as { winner_side?: 'A' | 'B' | null; chess_tiebreak?: unknown };
+  // N-SPP1-CHS-4: a drawn chess game decided by a tie-break was a draw — no win to pay for.
+  const winnerSide: 'A' | 'B' | null = ss.chess_tiebreak ? null
+    : match.winner_team_id && match.winner_team_id === match.team_a_id ? 'A'
     : match.winner_team_id && match.winner_team_id === match.team_b_id ? 'B'
     : ss.winner_side === 'A' || ss.winner_side === 'B' ? ss.winner_side : null;
   const counts = match.status === 'completed' && !!match.is_ranked && !match.voided_at;

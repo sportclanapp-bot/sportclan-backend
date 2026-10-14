@@ -3498,13 +3498,17 @@ export async function completeMatch(req: Request, res: Response) {
     // empty, so the win-coins/streaks block and rating_change notifications below
     // are naturally skipped too). A forfeit is not a played game.
     const corePayloadProfiles: Array<Record<string, any>> = [];
+    // N-SPP1-CHS-4 (launch test plan): the result a record and rating count. A drawn knockout
+    // chess game decided by Armageddon or the organiser was a DRAW (FIDE rates the game by its own
+    // result); the tie-break only says who goes through, which the bracket still gets.
+    const ratedSide: 'A' | 'B' | null = chessTiebreak ? null : winnerSide;
     if (match.is_ranked && !unplayed && participants && participants.length > 0) {
       const teamA = participants.filter((p) => p.team_side === 'A').map((p) => p.user_id);
       const teamB = participants.filter((p) => p.team_side === 'B').map((p) => p.user_id);
       allPlayerIds = [...teamA, ...teamB];
 
       let outcome: 1 | 0 | 0.5 = 0.5;
-      if (winnerSide) outcome = winnerSide === 'A' ? 1 : 0;
+      if (ratedSide) outcome = ratedSide === 'A' ? 1 : 0;
 
       const { data: existingProfiles } = await supabase
         .from('user_sport_profiles')
@@ -3534,8 +3538,8 @@ export async function completeMatch(req: Request, res: Response) {
         const result = isTeamA ? resultA : resultB;
         const oldRating = profile.rating;
         const clampedRating = Math.max(100, Math.round((oldRating + result.delta) * 100) / 100);
-        const isWinner = winnerSide ? (isTeamA ? outcome === 1 : outcome === 0) : false;
-        const isLoser = winnerSide ? (isTeamA ? outcome === 0 : outcome === 1) : false;
+        const isWinner = ratedSide ? (isTeamA ? outcome === 1 : outcome === 0) : false;
+        const isLoser = ratedSide ? (isTeamA ? outcome === 0 : outcome === 1) : false;
         corePayloadProfiles.push({
           user_id: uid,
           sport_id: match.sport_id,
@@ -3544,14 +3548,14 @@ export async function completeMatch(req: Request, res: Response) {
           matches_played: profile.matches_played + 1,
           wins: profile.wins + (isWinner ? 1 : 0),
           losses: profile.losses + (isLoser ? 1 : 0),
-          draws: profile.draws + (!winnerSide ? 1 : 0),
+          draws: profile.draws + (!ratedSide ? 1 : 0),
           // SC-131 deltas — read by finalize_match (mig 054), applied ADDITIVELY so
           // concurrent completions of a player's different matches don't lose an update.
           // Both shapes travel together, so the JS is drop-in with either function version.
           rating_delta: Math.round(result.delta * 100) / 100,
           win_inc: isWinner ? 1 : 0,
           loss_inc: isLoser ? 1 : 0,
-          draw_inc: !winnerSide ? 1 : 0,
+          draw_inc: !ratedSide ? 1 : 0,
         });
         ratingHistoryRows.push({
           user_id: uid,
@@ -3590,7 +3594,7 @@ export async function completeMatch(req: Request, res: Response) {
         const aS = Number(ss?.A?.score ?? ss?.A?.runs ?? 0);
         const bS = Number(ss?.B?.score ?? ss?.B?.runs ?? 0);
         casualWinnerSide = aS > bS ? 'A' : bS > aS ? 'B' : null;
-        if (winnerSide) casualWinnerSide = winnerSide;
+        if (winnerSide) casualWinnerSide = ratedSide; // N-SPP1-CHS-4: a tie-break's winner played a draw
       } catch { /* no scores → draw */ }
       for (const p of participants) {
         const isWin = casualWinnerSide != null && p.team_side === casualWinnerSide;
@@ -3659,7 +3663,7 @@ export async function completeMatch(req: Request, res: Response) {
       const black = participants.filter((p) => p.team_side === 'B');
       if (white.length === 1 && black.length === 1) {
         try {
-          await recordChessTc(match as { id: string; rules?: unknown; format?: string | null; overs?: number | null }, white[0]!.user_id, black[0]!.user_id, winnerSide ?? null);
+          await recordChessTc(match as { id: string; rules?: unknown; format?: string | null; overs?: number | null }, white[0]!.user_id, black[0]!.user_id, ratedSide ?? null);
         } catch (tcErr) {
           console.warn('[3.71] time-control rating failed:', String(tcErr)); // eslint-disable-line no-console
         }
@@ -3899,8 +3903,9 @@ export async function completeMatch(req: Request, res: Response) {
       // gifts), a casual win must never mint currency.
       if (match.is_ranked && !unplayed && allPlayerIds.length > 0) {
         // Award 5 coins to winners — idempotent per (user,match) via coin_events.
-        if (winnerSide) {
-          const winnerIds = (participants ?? []).filter((p) => p.team_side === winnerSide).map((p) => p.user_id);
+        // N-SPP1-CHS-4: the game's own winner (a tie-break's drawn game pays nobody; winCoins agrees).
+        if (ratedSide) {
+          const winnerIds = (participants ?? []).filter((p) => p.team_side === ratedSide).map((p) => p.user_id);
           for (const uid of winnerIds) void awardCoins(uid, `win_match_${id}`, 5, 'Won a match');
         }
       }

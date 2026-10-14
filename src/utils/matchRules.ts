@@ -1397,7 +1397,8 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (rules.halfTimeMinutes != null) parts.push(`HT ${rules.halfTimeMinutes} min`);
   // BUILD 3.18: 3 penalties each is the turf-cup way; 5 is the standard, left unsaid.
   if (rules.extraTimeMinutes) parts.push(`ET 2 × ${rules.extraTimeMinutes} min`); // BUILD 3.19
-  if (key === 'football' && rules.drawAllowed === false) parts.push('no draws'); // BUILD 3.20
+  // BUILD 3.20 · N-R2-6 (found in Round 2): hockey's no-draw match said nothing either.
+  if ((key === 'football' || key === 'hockey') && rules.drawAllowed === false) parts.push('no draws');
   if (key === 'football' && walkoverGoalsOf(key, rules) !== 3) parts.push(`walkover ${walkoverGoalsOf(key, rules)}–0`); // BUILD 3.21 (3–0 left unsaid); F176: any typed score
   // BUILD 3.23: said only when they differ from the Laws.
   if (key === 'football' && rules.rollingSubs === true) parts.push('rolling subs');

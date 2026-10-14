@@ -3374,8 +3374,9 @@ export async function completeMatch(req: Request, res: Response) {
     {
       const slugNow = normSportSlug(sportRow?.slug);
       const levelNow = Number(canonical?.A?.score ?? 0) === Number(canonical?.B?.score ?? 0);
-      if (!walkover && !isBracketMatch && slugNow === 'football' && rulesOf(slugNow, match).drawAllowed === false && levelNow && !winner_team_id && !winnerSide) {
-        return res.status(400).json({ error: 'This match can’t end level — decide it on penalties.', code: 'DRAW_NOT_ALLOWED' });
+      // F183: hockey too (it was football only) — a no-draw hockey match goes to a shoot-out.
+      if (!walkover && !isBracketMatch && (slugNow === 'football' || slugNow === 'hockey') && rulesOf(slugNow, match).drawAllowed === false && levelNow && !winner_team_id && !winnerSide) {
+        return res.status(400).json({ error: slugNow === 'hockey' ? 'This match can’t end level — decide it in a shoot-out.' : 'This match can’t end level — decide it on penalties.', code: 'DRAW_NOT_ALLOWED' });
       }
     }
     if (isBracketMatch && !winner_team_id) {

@@ -341,7 +341,9 @@ export function tieNeed(spec: TieSpec): number {
  */
 export type RubberResult = { key: string; winner: TieSide | 'draw'; sets: { A: number[]; B: number[] }; units: { A: number; B: number }; /** F165: games won (tennis: games); absent = units */ games?: { A: number; B: number } };
 /** Stage 11 · PB3: `decider` — the tie went to its deciding match (the 3/2/1/0 table points read it). */
-export type TieOutcome = { rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: TieSide | 'draw' | null; finished: boolean; decider?: boolean };
+export type TieOutcome = { rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: TieSide | 'draw' | null; finished: boolean; decider?: boolean;
+  /** F165: games won (a rally sport's own count; the units where none is kept) — a 'games' tie's score. */
+  gamesA?: number; gamesB?: number };
 
 /**
  * Where the tie stands after these finished rubbers. Rubbers count what they're
@@ -351,7 +353,7 @@ export type TieOutcome = { rubbersA: number; rubbersB: number; unitsA: number; u
  * settled as before (most games / matches, else a draw).
  */
 export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>): TieOutcome {
-  let rubbersA = 0, rubbersB = 0, unitsA = 0, unitsB = 0;
+  let rubbersA = 0, rubbersB = 0, unitsA = 0, unitsB = 0, gamesA = 0, gamesB = 0;
   const regular = spec.rubbers.filter((r) => !r.decider).length;
   const hasDecider = regular < spec.rubbers.length;
   // Stage 11 follow-up: a trump match counts double for the side that picked it.
@@ -364,6 +366,7 @@ export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>):
       else if (r.winner === 'B') { rubbersB += worthFor(i, 'B'); rubbersA -= lostTrump(i, 'A'); }
     }
     unitsA += r.units.A; unitsB += r.units.B;
+    gamesA += (r.games ?? r.units).A; gamesB += (r.games ?? r.units).B;
   });
   const allRegular = results.length >= regular;
   const by = (a: number, b: number): TieSide | null => (a > b ? 'A' : b > a ? 'B' : null);
@@ -381,7 +384,7 @@ export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>):
     decided = spec.win === 'all' ? by(rubbersA, rubbersB) : by(regA, regB);
     level = !decided;
     // Stage 12 · CH5: chess — level on game points is a drawn match.
-    if (level && spec.level === 'draw' && regular === spec.rubbers.length) return { rubbersA, rubbersB, unitsA, unitsB, decided: 'draw', finished: true };
+    if (level && spec.level === 'draw' && regular === spec.rubbers.length) return { rubbersA, rubbersB, unitsA, unitsB, gamesA, gamesB, decided: 'draw', finished: true };
   }
   let decider = false;
   // Stage 12 · CH7: play-off sets (deciders with a `round`) and Armageddon.
@@ -419,7 +422,7 @@ export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>):
       decided = (spec.win === 'games' ? by(rubbersA, rubbersB) : by(unitsA, unitsB)) ?? 'draw';
     }
   }
-  return { rubbersA, rubbersB, unitsA, unitsB, decided, finished: decided !== null, ...(decider ? { decider: true } : {}) };
+  return { rubbersA, rubbersB, unitsA, unitsB, gamesA, gamesB, decided, finished: decided !== null, ...(decider ? { decider: true } : {}) };
 }
 
 /** One rubber's events read by the sport's engine: its winner (if decided; Stage 11 · PB9: 'draw' when it ended level), sets and units. */
@@ -461,6 +464,7 @@ export function splitTie<E extends { event_type: string }>(
     const partial = (): TieOutcome => ({
       rubbersA: results.filter((r) => r.winner === 'A').length, rubbersB: results.filter((r) => r.winner === 'B').length,
       unitsA: results.reduce((t, r) => t + r.units.A, 0), unitsB: results.reduce((t, r) => t + r.units.B, 0), decided: null, finished: false,
+      gamesA: results.reduce((t, r) => t + (r.games ?? r.units).A, 0), gamesB: results.reduce((t, r) => t + (r.games ?? r.units).B, 0),
     });
     const open = spec.rubbers.findIndex((r) => !done.has(r.key));
     return {

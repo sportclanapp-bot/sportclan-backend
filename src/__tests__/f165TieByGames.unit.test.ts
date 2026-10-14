@@ -20,3 +20,22 @@ it('the engine on the same results (units = games won)', () => {
 it('rules line: most games', () => {
   expect(timedRulesLabel('tabletennis', rules)).toContain('most games');
 });
+
+// F165, found on the phone (14 Oct): the hero said 8–7 but the stored result read 'won 157–88'
+// — the server's tie score (and so its result line) was still the points. A games tie scores games.
+import { rollupTieSpec } from '../controllers/scoring.controller';
+it('the server’s tie score is games won: 8–7, not 88–157', () => {
+  const events = typed.flatMap((sets) => sets.flatMap((g) => {
+    const out: { event_type: string; payload: { team_side: 'A' | 'B' } }[] = [];
+    // play each game's points so the winner of the game scores its last point
+    const w = g.a > g.b ? 'A' : 'B'; const l = w === 'A' ? 'B' : 'A';
+    const lose = Math.min(g.a, g.b), win = Math.max(g.a, g.b);
+    for (let i = 0; i < lose; i++) out.push({ event_type: 'score', payload: { team_side: l } });
+    for (let i = 0; i < win; i++) out.push({ event_type: 'score', payload: { team_side: w } });
+    return out;
+  }));
+  const t = rollupTieSpec('table-tennis', rules, spec, events, (p) => p.team_side);
+  expect(t.tie.decided).toBe('A');
+  expect([t.scoreA, t.scoreB]).toEqual([8, 7]);
+  expect([t.tie.unitsA, t.tie.unitsB]).toEqual([88, 157]); // the points stay recorded
+});

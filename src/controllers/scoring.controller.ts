@@ -1119,7 +1119,8 @@ export function rollupTieSpec(
   const cur = o.finished ? null : read(split.currentEvents, spec.rubbers[split.current] ?? spec.rubbers[0]!);
   const won = (a: number[], b: number[]) => a.filter((v, i) => v > (b[i] ?? 0)).length;
   return {
-    scoreA: spec.win === 'games' ? o.unitsA : o.rubbersA, scoreB: spec.win === 'games' ? o.unitsB : o.rubbersB,
+    // F165: a tie won on games scores the games won (a rally sport's units are its points).
+    scoreA: spec.win === 'games' ? (o.gamesA ?? o.unitsA) : o.rubbersA, scoreB: spec.win === 'games' ? (o.gamesB ?? o.unitsB) : o.rubbersB,
     setsA: [...split.results.flatMap((r) => r.sets.A), ...(cur ? cur.sets.A : [])], setsB: [...split.results.flatMap((r) => r.sets.B), ...(cur ? cur.sets.B : [])],
     gamesA: cur?.games.A ?? 0, gamesB: cur?.games.B ?? 0, curA: cur?.points.A ?? 0, curB: cur?.points.B ?? 0,
     rubber: o.finished ? split.results.length : split.results.length + 1,

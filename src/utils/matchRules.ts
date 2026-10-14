@@ -1362,7 +1362,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   // BUILD 3.18: 3 penalties each is the turf-cup way; 5 is the standard, left unsaid.
   if (rules.extraTimeMinutes) parts.push(`ET 2 × ${rules.extraTimeMinutes} min`); // BUILD 3.19
   if (key === 'football' && rules.drawAllowed === false) parts.push('no draws'); // BUILD 3.20
-  if (key === 'football' && rules.walkoverGoals === 5) parts.push('walkover 5–0'); // BUILD 3.21 (3–0 left unsaid)
+  if (key === 'football' && walkoverGoalsOf(key, rules) !== 3) parts.push(`walkover ${walkoverGoalsOf(key, rules)}–0`); // BUILD 3.21 (3–0 left unsaid); F176: any typed score
   // BUILD 3.23: said only when they differ from the Laws.
   if (key === 'football' && rules.rollingSubs === true) parts.push('rolling subs');
   if (key === 'football' && rules.offside === false) parts.push('no offside');
@@ -1392,11 +1392,14 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
 
 /**
  * BUILD 3.21 · the winner's goals when a match is a walkover (the loser's are
- * 0): football per its rules (3 or 5); other sports keep a walkover scoreless
- * (their own walkover score is BUILD 4.8).
+ * 0): football per its rules — 3 by the Laws, or the whole number the organiser
+ * typed (F176: a typed 10 or 4 used to be stored as 3–0); other sports keep a
+ * walkover scoreless (their own walkover score is BUILD 4.8).
  */
 export function walkoverGoalsOf(sport: string | null | undefined, rules: MatchRules): number | null {
-  return lengthKey(sport) === 'football' ? (rules.walkoverGoals === 5 ? 5 : 3) : null;
+  if (lengthKey(sport) !== 'football') return null;
+  const g = rules.walkoverGoals;
+  return typeof g === 'number' && Number.isInteger(g) && g >= 1 ? g : 3;
 }
 
 // ── BUILD 2.4 · a tournament's rules per stage ──────────────────────────────

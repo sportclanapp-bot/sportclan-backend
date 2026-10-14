@@ -1072,9 +1072,15 @@ export const TABLE_TENNIS_PRESETS = [11, 21] as const;
 export const PICKLEBALL_PRESETS = [11, 15, 21] as const;
 /** BUILD 3.45: what a badminton match with no stored rules plays (the pre-2026 game). */
 export const BADMINTON_LEGACY = { target: 21, cap: 30 } as const;
-/** The cap a badminton game gets when the form leaves it blank: the preset's, else none. */
+/**
+ * The cap a badminton game gets when the form leaves it blank: the one the tournament's own
+ * choices use (F166 — a casual game to 30 or to 11 had none: 32-32 and on), else none.
+ * 11 caps at 15 (BWF's 5 × 11 trial), 15 at 21, 21 at 30 (BWF), and a game to 30 ends at 30
+ * (29-all, the next point wins).
+ */
+export const BADMINTON_CAPS: Readonly<Record<number, number>> = { 11: 15, 15: 21, 21: 30, 30: 30 };
 export function badmintonCapFor(target: number): number | null {
-  return BADMINTON_PRESETS.find((p) => p.target === target)?.cap ?? null;
+  return BADMINTON_CAPS[target] ?? null;
 }
 
 /** BUILD 3.17: the periods and period lengths a timed sport may set (others stay standard). */

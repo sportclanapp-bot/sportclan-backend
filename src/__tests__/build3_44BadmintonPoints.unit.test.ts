@@ -11,7 +11,7 @@ test('the range, in games', () => {
   expect(bd({ target: 0, cap: null })?.error).toBe('Points to win a game must be 1 or more.');
   expect(bd({ target: 15, cap: 14 })?.error).toBe('The cap must be off, or 15 or more.');
   expect(timedRulesLabel('badminton', { ...standardRules('badminton'), target: 11, cap: null })).toBe('games to 11 · no cap');
-  expect([badmintonCapFor(15), badmintonCapFor(21), badmintonCapFor(11)]).toEqual([21, 30, null]);
+  expect([badmintonCapFor(15), badmintonCapFor(21), badmintonCapFor(11)]).toEqual([21, 30, 15]); // F166: as the tournament's '5 × 11 (cap 15)'
 });
 test('15 capped at 21: the server ends the game 21-20', () => {
   const pts = (side: string, n: number) => Array.from({ length: n }, () => ({ event_type: 'score', payload: { team_side: side, value: 1 } }));

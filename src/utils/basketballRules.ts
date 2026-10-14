@@ -91,6 +91,12 @@ export const FOUL_KINDS: ReadonlyArray<{ key: FoulKind; label: string; short: st
   { key: 'coach', label: 'Coach technical (C)', short: 'C', coach: true },
   { key: 'bench', label: 'Bench technical (B)', short: 'B', coach: true },
 ];
+/** N-RWD2-11 (launch test plan): the pad's 'who?' for a foul — 'Whose flagrant foul?' (it read 'Who got the flagrant?'). */
+export function foulQuestion(kind: FoulKind): string {
+  const label = (FOUL_KINDS.find((k) => k.key === kind)?.label ?? 'Personal').toLowerCase();
+  const paren = label.indexOf(' (');
+  return paren === -1 ? `Whose ${label} foul?` : `Whose ${label.slice(0, paren)} foul${label.slice(paren)}?`;
+}
 export const foulKindOf = (x: unknown): FoulKind => (FOUL_KINDS.some((k) => k.key === x) ? x as FoulKind : 'personal');
 export type FoulOpts = { regulation?: number; ejectAfter?: number; ejectCounts?: 'tech_flagrant' | 'flagrant'; coachC?: number; coachB?: number; flagrantTeamFouls?: number };
 export function foulTally(

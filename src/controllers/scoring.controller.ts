@@ -684,6 +684,20 @@ export async function validateScoringEvent(
           code: 'BOWLER_QUOTA_DONE',
         });
       }
+      // F144 (launch test plan; Law 17.8): no bowler bowls two overs in a row — only the app checked.
+      // Asked only at the start of an over (the summary's legal balls, a whole number of overs).
+      const batSide: 'A' | 'B' = payload.team_side === 'B' ? 'B' : 'A';
+      const ballsSoFar = Number((match.score_summary as Record<string, { balls?: unknown } | undefined> | null)?.[batSide]?.balls ?? 0);
+      if (ballsSoFar > 0 && ballsSoFar % 6 === 0) {
+        const log = ((await matchEventsAll(matchId, 'event_type, payload')) ?? []) as Array<{ event_type: string; payload: any }>; // audit #38
+        const series = !!tieSpecOf('cricket', rulesOf('cricket', match))?.series;
+        const inn = mainEvents(series ? cricketGameEvents(log, cricketGameOf(payload)) : log)
+          .filter((e) => e.payload?.team_side === batSide && isBallOfOver(e.event_type, e.payload));
+        const lastBowler = inn.length > 0 && inn.length % 6 === 0 ? inn[inn.length - 1]!.payload?.bowler_id : null;
+        if (lastBowler && lastBowler === bowlId) {
+          return refuse(409, { error: 'This bowler bowled the last over — someone else bowls this one.', code: 'BOWLER_CONSECUTIVE' });
+        }
+      }
     }
   }
 

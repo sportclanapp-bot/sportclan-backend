@@ -11,8 +11,20 @@
 const WICKET_FACTORS = [1.0, 0.95, 0.88, 0.80, 0.70, 0.59, 0.47, 0.35, 0.24, 0.14, 0.05];
 // Index = wickets lost (0-10)
 
-function resourcesRemaining(oversLeft: number, wicketsLost: number): number {
-  const wf = WICKET_FACTORS[Math.min(wicketsLost, 10)] ?? 0;
+/**
+ * F143 (launch test plan): the factor for `wicketsLost` of a side that is all out at `allOut`
+ * (players − 1, + 1 with last man stands). The table is for 10; a side of another size is read at
+ * the same SHARE of its wickets, between the table's rows — 11-a-side reads it exactly as before.
+ */
+function wicketFactor(wicketsLost: number, allOut = 10): number {
+  const w = Math.max(0, Math.min(10, (wicketsLost * 10) / Math.max(1, allOut)));
+  const lo = Math.floor(w); const hi = Math.min(10, lo + 1);
+  const a = WICKET_FACTORS[lo] ?? 0; const b = WICKET_FACTORS[hi] ?? 0;
+  return a + (b - a) * (w - lo);
+}
+
+function resourcesRemaining(oversLeft: number, wicketsLost: number, allOut = 10): number {
+  const wf = wicketFactor(wicketsLost, allOut);
   const overFraction = 1 - Math.pow(0.96, oversLeft);
   return 100 * overFraction * wf;
 }
@@ -46,11 +58,13 @@ export function calculateDLSTarget(
   team2OversLeft: number,
   team2Wickets: number,
   team2OversFaced = 0,
+  /** F143: the wickets that make Team 2 all out (10 for 11-a-side). */
+  allOut = 10,
 ): DLSResult {
-  const r1 = resourcesRemaining(totalOvers, 0); // Team 1 had full resources
+  const r1 = resourcesRemaining(totalOvers, 0, allOut); // Team 1 had full resources
   const faced = Math.max(0, Math.min(totalOvers, team2OversFaced));
   const leftAtStoppage = Math.max(team2OversLeft, totalOvers - faced);
-  const lost = resourcesRemaining(leftAtStoppage, team2Wickets) - resourcesRemaining(team2OversLeft, team2Wickets);
+  const lost = resourcesRemaining(leftAtStoppage, team2Wickets, allOut) - resourcesRemaining(team2OversLeft, team2Wickets, allOut);
   const r2 = r1 - lost;
 
   // Guard against zero/negative Team-1 resources (e.g. totalOvers=0) — the
@@ -101,6 +115,8 @@ export function dlsInputProblem(input: {
   team2Wickets: number;
   /** F138: overs Team 2 had batted when play stopped (optional; 0 = not started). */
   team2OversFaced?: number;
+  /** F143: the wickets that make Team 2 all out (10 for 11-a-side). */
+  allOut?: number;
 }): string | null {
   const { team1Score, totalOvers, team2OversLeft, team2Wickets } = input;
   const faced = input.team2OversFaced ?? 0;
@@ -109,8 +125,9 @@ export function dlsInputProblem(input: {
   }
   if (totalOvers < 1) return 'Total overs must be at least 1 — there is nothing to reduce from.';
   if (team1Score < 0) return "Team 1's score cannot be negative.";
-  if (team2Wickets < 0 || team2Wickets > 10) return 'Wickets lost is between 0 and 10.';
-  if (team2Wickets === 10) return 'Team 2 is all out — the innings is over, so there is no target to revise.';
+  const allOut = input.allOut != null && Number.isInteger(input.allOut) && input.allOut >= 1 ? input.allOut : 10;
+  if (team2Wickets < 0 || team2Wickets > allOut) return `Wickets lost is between 0 and ${allOut}.`;
+  if (team2Wickets === allOut) return 'Team 2 is all out — the innings is over, so there is no target to revise.';
   if (team2OversLeft < 0) return 'Overs remaining cannot be negative.';
   if (team2OversLeft > totalOvers) return 'Team 2 cannot have more overs left than the match allows.';
   if (team2OversLeft === 0) return 'No overs remain — there is nothing left to chase in.';

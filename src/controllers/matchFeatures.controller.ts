@@ -413,13 +413,17 @@ export async function applyDLS(req: Request, res: Response) {
     // side's legal balls) — the chase is never charged as if it had not started.
     const { data: match } = await supabase
       .from('matches')
-      .select('score_summary, toss_choice')
+      .select('score_summary, toss_choice, rules, format, overs')
       .eq('id', id)
       .maybeSingle();
     const ss = (match?.score_summary ?? {}) as Record<string, any>;
+    // F143: Team 2's own all-out (players − 1, + 1 with last man stands), not 10 for every side.
+    const { data: lineup } = await supabase.from('match_participants').select('team_side').eq('match_id', id);
+    const cr = rulesOf('cricket', (match ?? {}) as never);
     const chaser = chasingSide(ss.toss_winner_side ?? null, (match as { toss_choice?: string | null } | null)?.toss_choice ?? null, ss.first_batting_side ?? null);
     const facedFromMatch = chaser ? Number(ss[chaser]?.balls ?? 0) / 6 : 0;
     const faced = team2_overs_faced != null && Number.isFinite(Number(team2_overs_faced)) ? Number(team2_overs_faced) : facedFromMatch;
+    const allOut = allOutBySide((lineup ?? []) as Array<{ team_side: string }>, cr.players, cr.lastManStands)[chaser ?? 'B'];
 
     // F-44: before the gate this endpoint answered anything it was asked,
     // including a match of zero overs, and stored the answer on the match.
@@ -429,6 +433,7 @@ export async function applyDLS(req: Request, res: Response) {
       team2OversLeft: Number(team2_overs_remaining),
       team2Wickets: Number(team2_wickets),
       team2OversFaced: faced,
+      allOut,
     });
     if (problem) return res.status(400).json({ error: problem, code: 'DLS_IMPOSSIBLE' });
 
@@ -438,6 +443,7 @@ export async function applyDLS(req: Request, res: Response) {
       Number(team2_overs_remaining),
       Number(team2_wickets),
       faced,
+      allOut,
     );
 
     // Store in match score_summary

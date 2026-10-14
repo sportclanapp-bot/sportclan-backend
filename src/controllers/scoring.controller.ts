@@ -1,3 +1,4 @@
+import { plural } from '../utils/plural';
 import { inBackground } from '../utils/background';
 import { logThenDeleteEvent, recordScoreAfter } from '../utils/scoringAudit';
 import { Request, Response } from 'express';
@@ -568,7 +569,7 @@ export async function validateScoringEvent(
     // N-SPP1-TTN-3: by the game's target (19 in a game to 21), not 9 whatever it is.
     const cut = expediteCutoff(rulesOf('tabletennis', match).target);
     if (Number(ss.A?.points ?? 0) >= cut && Number(ss.B?.points ?? 0) >= cut) {
-      return refuse(409, { error: `The expedite rule can’t come in once both players have ${cut} points.`, code: 'EXPEDITE_TOO_LATE' });
+      return refuse(409, { error: `The expedite rule can’t come in once both players have ${plural(cut, 'point')}.`, code: 'EXPEDITE_TOO_LATE' });
     }
   }
 

@@ -1619,7 +1619,7 @@ export async function recomputeSummary(
   let carromBoardsPlayed: number | null = null; // A5: boards played in the carrom game in play
   let carromSlams: { A: number; B: number } | null = null; // Stage 13 · CR6: White / Black slams each side
   let tieRubbers: { rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw' }> } | null = null; // BUILD 3.49 · Stage 11 · PB9: a level timed match
-  let tieSummary: ReturnType<typeof rollupTieSpec>['tie'] | null = null; // Stage 9 · T3
+  let tieSummary: (ReturnType<typeof rollupTieSpec>['tie'] & { series?: boolean }) | null = null; // Stage 9 · T3 (N-FMT-5: a series says so)
   let sideOutServe: { side: 'A' | 'B'; number: 1 | 2 } | null = null; // BUILD 3.58
   let tennisBuzzer = false; // BUILD 3.66
   let rallyBuzzer = false; let rallyLevel = false; let rallyTimedWinner: 'A' | 'B' | null = null; // Stage 11 · PB9
@@ -1695,7 +1695,7 @@ export async function recomputeSummary(
     A.sets = t.setsA; B.sets = t.setsB;
     A.points = t.curA; B.points = t.curB;
     tieRubbers = { rubber: t.rubber, results: t.results };
-    tieSummary = t.tie;
+    tieSummary = { ...t.tie, series: true }; // N-FMT-5: the table reads a series' goals game by game
   } else if (slug === 'football' || slug === 'hockey') {
     for (const e of events) {
       const p: any = e.payload || {};

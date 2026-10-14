@@ -134,6 +134,12 @@ export function gamesWonOf(m: GMatch): { a: number; b: number } {
 
 function scoresOf(m: GMatch): { a: number; b: number } {
   const ss: any = m.score_summary ?? {};
+  // N-FMT-5 (launch test plan): a best-of-N series' score is games won — the table's goals (and
+  // GD) are each game's goals, summed (a series won 1–0, 1–1 is 2–1, not 2–0).
+  if (ss.tie?.series === true && Array.isArray(ss?.A?.sets) && Array.isArray(ss?.B?.sets) && ss.walkover !== true) {
+    const sum = (x: unknown[]) => x.reduce((n: number, v) => n + (Number.isFinite(Number(v)) ? Number(v) : 0), 0);
+    return { a: sum(ss.A.sets), b: sum(ss.B.sets) };
+  }
   return {
     a: parseScoreNum(ss.team_a_score ?? ss?.A?.score),
     b: parseScoreNum(ss.team_b_score ?? ss?.B?.score),

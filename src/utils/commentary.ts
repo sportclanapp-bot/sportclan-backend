@@ -37,6 +37,8 @@ const CHESS_REASON: Record<string, string> = {
   checkmate: 'checkmate', resignation: 'resignation', timeout: 'timeout',
   draw_agreement: 'by agreement', stalemate: 'stalemate', repetition: 'repetition',
   insufficient_material: 'insufficient material', fifty_move: '50-move rule',
+  // N-SPP1-CHS-1: the pad's own words (drawRules.chessReasonWords) — the timeline read the raw ids.
+  illegal_move: 'two illegal moves', device: 'a phone or device', conduct: 'arbiter decision',
 };
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
@@ -177,7 +179,12 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   // Stage 9 · T9: a code violation and its penalty (the points it gives are their own events).
   if (eventType === 'note' && p.kind === 'violation') {
     const vb = ctx.sport === 'volleyball';
-    const OFFENCE: Record<string, string> = { time: vb ? 'delay' : 'time', conduct: 'unsportsmanlike conduct', abuse: vb ? 'ball or equipment abuse' : 'racket or ball abuse', coaching: 'coaching', language: 'language', other: 'conduct' };
+    const OFFENCE: Record<string, string> = {
+      time: vb ? 'delay' : 'time', conduct: 'unsportsmanlike conduct', abuse: vb ? 'ball or equipment abuse' : 'racket or ball abuse', coaching: 'coaching', language: 'language', other: 'conduct',
+      // F158 (launch test plan): chess (FIDE Law 11) and carrom (ICF) offences said what the player did — they all read 'conduct'.
+      seat: 'left the seat', turn: 'played out of turn', board: 'disturbed the board', distraction: 'distracted the opponent',
+      refusal: ctx.sport === 'chess' ? 'refused the arbiter' : 'refused the umpire', disturbing: 'disturbed the opponent', talking: 'talked or analysed in play',
+    };
     const cw = conductWords(ctx.sport);
     // Stage 11 · PB6: each step in the sport's own words (CONDUCT_STEPS).
     return `⚠️ ${cw.title.charAt(0).toUpperCase()}${cw.title.slice(1)} — ${player ? `${player} (${team})` : team} · ${OFFENCE[String(p.offence)] ?? 'conduct'} · ${ladderStepDef(ctx.sport, String(p.penalty ?? 'warning')).label}`;

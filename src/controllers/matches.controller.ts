@@ -64,7 +64,7 @@ import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
 import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
 import { applyChessTcDeltas, recordChessTc } from '../utils/chessTcRatings';
-import { DOUBLES_PLAYERS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules, conductWords, tieSpecOf } from '../utils/matchRules';
+import { DOUBLES_PLAYERS, DOUBLES_SPORTS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules, conductWords, tieSpecOf } from '../utils/matchRules';
 import { tieTossOf, tieTossText, tieTrumpResultLines, tieTrumpText } from '../utils/tieCore';
 import { hasTrump, trumpsFor } from '../utils/tieTrumps';
 import { CRICKET_OVERS } from '../utils/cricketRules';
@@ -2355,7 +2355,7 @@ export async function addParticipants(req: Request, res: Response) {
     // makes (it adds to the one stored) may not put a third on either side.
     {
       const rules = rulesOf(lineupSlug, match);
-      if (lineupSlug === 'badminton' && rules.players === DOUBLES_PLAYERS) {
+      if (DOUBLES_SPORTS.includes(lineupSlug) && rules.players === DOUBLES_PLAYERS) { // F071: tennis and pickleball too
         const { data: cur } = await supabase.from('match_participants').select('user_id, team_side, role').eq('match_id', id);
         const side = new Map<string, string>(((cur ?? []) as Array<{ user_id: string; team_side: string; role?: string | null }>).filter((r) => !replace || staysOnReplace(r)).map((r) => [r.user_id, r.team_side]));
         for (const p of participants as Array<{ user_id: string; team_side: string }>) side.set(p.user_id, p.team_side);

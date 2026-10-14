@@ -1261,6 +1261,9 @@ export const DOUBLES_PLAYERS = 2;
  * typed-in team, which has no players to list). Rules without players = 2
  * (singles, other sports) are never refused here.
  */
+/** F071 (launch test plan): the sports whose doubles is two a side (it held only badminton). */
+export const DOUBLES_SPORTS: readonly string[] = ['badminton', 'tennis', 'pickleball'];
+
 export function doublesLineupProblem(
   sport: string | null | undefined,
   rules: MatchRules,
@@ -1268,7 +1271,7 @@ export function doublesLineupProblem(
   names: { A: string; B: string },
   phase: 'lineup' | 'start',
 ): string | null {
-  if (lengthKey(sport) !== 'badminton' || rules.players !== DOUBLES_PLAYERS) return null;
+  if (!DOUBLES_SPORTS.includes(lengthKey(sport)) || rules.players !== DOUBLES_PLAYERS) return null;
   for (const side of ['A', 'B'] as const) {
     const n = counts[side];
     if (n > DOUBLES_PLAYERS) return `Doubles is two a side — ${names[side]} has ${n}.`;

@@ -1,4 +1,5 @@
 import { privacyPolicyHtml } from './legal/privacyPage';
+import { limitReply } from './utils/limitReply';
 import 'dotenv/config';
 
 // FIRST, before anything else can throw. An error while wiring the app is
@@ -168,6 +169,7 @@ const authLimiter = rateLimit({
   skip: (req) => rateLimitBypassed(req) || !!refreshUserId(req),
   standardHeaders: true,
   legacyHeaders: false,
+  handler: limitReply('auth'), // F034: a sentence with the wait, not the default HTML
   store: new RedisRateLimitStore('auth', 'blocking'),
 });
 
@@ -234,6 +236,7 @@ const sendOtpLimiter = rateLimit({
   skip: rateLimitBypassed,
   standardHeaders: true,
   legacyHeaders: false,
+  handler: limitReply('otp'), // F034
   store: new RedisRateLimitStore('sendotp', 'blocking'),
 });
 

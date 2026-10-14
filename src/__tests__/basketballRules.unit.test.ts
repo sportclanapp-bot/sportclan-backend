@@ -1,4 +1,4 @@
-import { REGULATION_QUARTERS, periodLabel, isOvertime, canStartNextPeriod } from '../utils/basketballRules';
+import { REGULATION_QUARTERS, periodLabel, isOvertime, canStartNextPeriod, canStartNextPeriodOf } from '../utils/basketballRules';
 const CORE_REL = 'utils/basketballRules.ts';
 const OTHER_REPO = '../sportclan-v2';
 const OTHER_CORE_REL = 'src/scoring/basketballRules.ts';
@@ -24,7 +24,8 @@ describe('basketballRules', () => {
     expect(canStartNextPeriod(4, 81, 80)).toBe(false);
     expect(canStartNextPeriod(5, 90, 90)).toBe(true);
     expect(canStartNextPeriod(5, 92, 90)).toBe(false);
-    expect(canStartNextPeriod(4, 0, 0)).toBe(false); // BUILD 3.33: no overtime before a basket
+    expect(canStartNextPeriod(4, 0, 0)).toBe(true); // N-TC-1: 4 quarters played level at 0-0 go to overtime
+    expect(canStartNextPeriodOf(1, 0, 0, 1)).toBe(false); // BUILD 3.33: a fresh one-period game, nothing played
   });
 
   const here = path.join(__dirname, '..', CORE_REL);

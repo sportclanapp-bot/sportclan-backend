@@ -56,11 +56,12 @@ export function isOvertimeOf(n: number, regulation: number): boolean {
   return Math.floor(n) > regulation;
 }
 
-export function canStartNextPeriodOf(n: number, a: number, b: number, regulation: number): boolean {
+export function canStartNextPeriodOf(n: number, a: number, b: number, regulation: number, played = false): boolean {
   if (Math.floor(n) < regulation) return true;
-  // BUILD 3.33 (found on the device): level WITH points on the board — a
-  // one-period game offered OVERTIME at 0–0 before a basket was scored.
-  return a === b && a + b > 0;
+  // BUILD 3.33 (found on the device): a one-period game offered OVERTIME at 0–0 before a
+  // basket was scored. N-TC-1: but a game level at 0–0 that WAS played (periods gone by, or
+  // anything recorded — a tip-off, a foul) could then never end. Level and played: overtime.
+  return a === b && (a + b > 0 || Math.floor(n) > 1 || played);
 }
 
 /**

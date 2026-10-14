@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { findSessionByToken, hashRefreshToken } from '../utils/refreshTokenStore';
+import { findSessionByToken, hashRefreshToken, rememberOrphan } from '../utils/refreshTokenStore';
 import { notifyUser } from '../utils/notify';
 import { reauthRefusal } from '../utils/reauth';
 import { signOutOtherDevices } from './account.controller';
@@ -781,6 +781,16 @@ export async function refresh(req: Request, res: Response) {
     const found = await findSessionByToken(refreshToken);
     const row = found?.row;
     if (!found || !row || row.revoked || (row.user_id && row.user_id !== payload.userId)) return res.status(401).json({ error: 'Refresh token revoked' });
+    // F027 (launch test plan): this key was pushed aside when its predecessor came
+    // back as a "lost reply" — but it HAD been handed out, so that predecessor came
+    // from a second holder (a stolen copy). End the sign-in for both: the owner signs
+    // in again; the copy is dead. A real lost reply never trips this (its new key
+    // never reached anyone).
+    if (found.orphan) {
+      await supabase.from('refresh_tokens').update({ revoked: true }).eq('id', row.id);
+      await denySessions([row.id]);
+      return res.status(401).json({ error: 'This sign-in was also used somewhere else, so it was ended. Sign in again.', code: 'REFRESH_REUSED' });
+    }
     // SC-213: a ban/deletion must bite mid-session — a suspended or soft-deleted
     // user must NOT be able to mint fresh access tokens off an old refresh token.
     // (Login/verify-otp already gate this; refresh was the evasion path.)
@@ -802,6 +812,9 @@ export async function refresh(req: Request, res: Response) {
     const features = String(req.headers['x-client-features'] ?? '');
     if (/\brotate-refresh\b/.test(features)) {
       const next = generateRefreshToken(payload.userId);
+      // F027: forgiving the replaced key pushes aside the key the last renewal
+      // handed out; remember it, so its holder showing up later is noticed.
+      if (found.reused) await rememberOrphan(row.id, row.token_hash);
       const { error: rotErr } = await supabase.from('refresh_tokens').update({
         token: null,
         token_hash: hashRefreshToken(next),

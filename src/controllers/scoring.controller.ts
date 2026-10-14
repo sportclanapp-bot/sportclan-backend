@@ -22,7 +22,7 @@ import { tiedOnDlsTarget } from '../utils/matchResult';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
-import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber, cricketSeries, cricketGameEvents, cricketGameOf, sideTotals, wicketRuns } from '../utils/cricketRules';
+import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber, cricketSeries, cricketGameEvents, cricketGameOf, sideTotals, wicketRuns, outBatterOf, wicketShapeProblem } from '../utils/cricketRules';
 import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { FOUL_KINDS } from '../utils/basketballRules';
 import { gameShootout, shootoutKicksOf, shootoutProblem } from '../utils/shootoutRules'; // Stage 15 follow-up
@@ -231,6 +231,11 @@ export async function validateScoringEvent(
   }
   if (event_type === 'wicket' && payload && payload.wicket_type != null && !isKnownWicketType(payload.wicket_type)) {
     return refuse(400, { error: 'That isn’t a way a batter can be out.', code: 'BAD_WICKET_TYPE' });
+  }
+  // F141: the non-striker run out; a wicket off a wide or a no-ball — and nothing that can't happen.
+  if (event_type === 'wicket' && payload) {
+    const shape = wicketShapeProblem(payload);
+    if (shape) return refuse(400, { error: shape, code: 'BAD_WICKET' });
   }
   // Audit #48: a run-out's completed runs count (utils/cricketRules wicketRuns);
   // they're a whole number, 0 or more. Runs on any other wicket count for
@@ -1268,7 +1273,12 @@ export function aggregateCricketPlayers(
       const legalExtra = isBallOfOver('extra', p);
       delivery(batSide, bowlId, legalExtra, p.type === 'B' || p.type === 'Lb' ? 0 : Number(p.runs ?? 0));
     } else if (e.event_type === 'wicket' && isBallOfOver('wicket', p)) delivery(batSide, bowlId, true, wicketRuns(p)); // audit #48
-    if (e.event_type === 'ball' || e.event_type === 'extra' || (e.event_type === 'wicket' && isDismissal(p.wicket_type || p.type))) resumed(batId);
+    // F141: the batter a wicket puts out (the non-striker can be run out).
+    const outBat = e.event_type === 'wicket' ? outBatterOf(p) : null;
+    const outId: string | undefined = outBat?.id ?? batId;
+    const outName: string | undefined = outBat?.name ?? batName;
+    if (e.event_type === 'ball' || e.event_type === 'extra') resumed(batId);
+    else if (e.event_type === 'wicket' && isDismissal(p.wicket_type || p.type)) { resumed(batId); if (outId !== batId) resumed(outId); }
     if (e.event_type === 'ball') {
       const runs = Number(p.runs ?? 0);
       if (batId) {
@@ -1317,9 +1327,13 @@ export function aggregateCricketPlayers(
       const ro = wicketRuns(p);
       if (ro && bowlId) ensure(bowlId, bowlSide, bowlName).bowl_runs += ro;
       if (batId) {
-        const b = ensure(batId, batSide, batName);
-        if (!p.is_extra) b.balls += 1;
-        b.runs += ro;
+        // The batter who faced: the ball and any runs completed. F141: the one OUT may be the other.
+        const faced = ensure(batId, batSide, batName);
+        if (!p.is_extra) faced.balls += 1;
+        faced.runs += ro;
+      }
+      if (outId) {
+        const b = ensure(outId, batSide, outName);
         if (!isDismissal(wt)) {
           // Retired hurt: off the field, NOT out — "retired hurt" on the
           // scorecard until they bat again (see resumed() above).

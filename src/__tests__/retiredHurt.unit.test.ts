@@ -51,7 +51,7 @@ describe('source', () => {
     // Audit batch 4: the timeline's words moved to utils/commentary.
     const cm = fs.readFileSync(path.join(__dirname, '../utils/commentary.ts'), 'utf8');
     expect(cm).toContain(': `🩹 Retired hurt — ${batter}`);');
-    expect(cm).toContain('const batter = p.batsman_name || p.batsmanName ||');
+    expect(cm).toContain('|| p.batsman_name || p.batsmanName ||');
   });
 });
 

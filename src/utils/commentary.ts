@@ -327,14 +327,16 @@ export function wicketWords(kind: unknown, fielder?: unknown, bowler?: unknown):
 function cricketLine(eventType: string, p: Record<string, any>, ctx: CommentaryContext): TimelineLine | null {
   const out = (text: string, isWicket = false, isBoundary = false): TimelineLine => ({ text, isWicket, isBoundary });
   if (eventType === 'wicket' || (eventType === 'ball' && p.wicket)) {
-    const batter = p.batsman_name || p.batsmanName || p.player_name || p.batter || 'Batter';
+    // F141: the batter OUT — a run-out can be of the batter at the other end.
+    const batter = (eventType === 'wicket' && typeof p.out_batsman_name === 'string' && p.out_batsman_name) || p.batsman_name || p.batsmanName || p.player_name || p.batter || 'Batter';
     if (eventType === 'wicket' && !isDismissal(p.wicket_type ?? p.type)) {
       return out(String(p.wicket_type ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'retirednotout'
         ? `Retired not out — ${batter}` // BUILD 3.4: the retire-at-N rule
         : `🩹 Retired hurt — ${batter}`);
     }
     const how = wicketWords(p.wicket_type ?? p.type, p.fielder_name, p.bowler_name);
-    return out(`OUT! ${batter}${how ? ` — ${how}` : ''}${p.runs != null && Number(p.runs) > 0 ? ` — ${plural(Number(p.runs), 'run', 'runs')}` : ''}`, true);
+    const off = p.off === 'wide' ? ' · off a wide' : p.off === 'no_ball' ? ' · off a no-ball' : ''; // F141
+    return out(`OUT! ${batter}${how ? ` — ${how}` : ''}${off}${p.runs != null && Number(p.runs) > 0 ? ` — ${plural(Number(p.runs), 'run', 'runs')}` : ''}`, true);
   }
   if (eventType === 'ball') {
     const runs = Number(p.runs ?? 0);

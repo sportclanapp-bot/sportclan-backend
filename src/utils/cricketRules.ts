@@ -189,6 +189,37 @@ export function isDismissal(wicketType: unknown): boolean {
 }
 
 /**
+ * F141 (launch test plan) · the batter a wicket puts out. A run-out can be of the batter at the
+ * bowler's end (`out_batsman_id`); every other wicket — and every older one — is the batter
+ * who faced (`batsman_id`).
+ */
+export function outBatterOf(p: { batsman_id?: unknown; batsman_name?: unknown; out_batsman_id?: unknown; out_batsman_name?: unknown } | null | undefined): { id: string | null; name: string | null } {
+  if (typeof p?.out_batsman_id === 'string' && p.out_batsman_id) return { id: p.out_batsman_id, name: typeof p.out_batsman_name === 'string' ? p.out_batsman_name : null };
+  return { id: typeof p?.batsman_id === 'string' ? p.batsman_id : null, name: typeof p?.batsman_name === 'string' ? p.batsman_name : null };
+}
+
+/**
+ * F141 · a wicket off a wide or a no-ball (Laws 21, 22): the wide or no-ball is its own extra
+ * event (penalty and runs), then the wicket, `is_extra` (no ball of the over), says `off`.
+ * Off a wide a batter can be stumped, run out or out hit wicket; off a no-ball only run out.
+ * Only a run-out can be of the non-striker. Null when the wicket is possible.
+ */
+export const WICKET_OFF: Readonly<Record<'wide' | 'no_ball', readonly string[]>> = { wide: ['stumped', 'runout', 'hitwicket'], no_ball: ['runout'] };
+export function wicketShapeProblem(p: { wicket_type?: unknown; off?: unknown; batsman_id?: unknown; out_batsman_id?: unknown; is_extra?: unknown } | null | undefined): string | null {
+  const k = String(p?.wicket_type ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  if (p?.off != null) {
+    if (p.off !== 'wide' && p.off !== 'no_ball') return 'A wicket can be off a wide or a no-ball — nothing else.';
+    if (!WICKET_OFF[p.off].includes(k)) return p.off === 'wide' ? 'Off a wide a batter can only be stumped, run out or out hit wicket.' : 'Off a no-ball a batter can only be run out.';
+    if (p.is_extra !== true) return 'A wicket off a wide or a no-ball is no ball of the over.';
+  }
+  if (p?.out_batsman_id != null) {
+    if (k !== 'runout') return 'Only a run-out can be of the batter at the other end.';
+    if (typeof p.out_batsman_id !== 'string' || !p.out_batsman_id || p.out_batsman_id === p.batsman_id) return 'Name the batter at the other end who was run out.';
+  }
+  return null;
+}
+
+/**
  * Audit #48 (11 Oct 2026): runs completed before a run-out count — to the
  * total, the batter and the bowler, like runs off the bat. Only a run-out
  * carries them (`payload.runs`, a whole number, 0 or more); any other

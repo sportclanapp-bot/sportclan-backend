@@ -1647,11 +1647,13 @@ export async function getSportProfile(req: Request, res: Response) {
         // — so a player who never scores a match got 0 runs while the scorer was
         // credited with everyone's. Fall back to created_by only when the event
         // carries no batsman_id (older rows).
-        const mine = (events ?? []).filter((e: any) => {
+        const facedBy = (e: any) => {
           const pay: any = e.payload ?? {};
           const batter = pay.batsman_id ?? pay.batter_id ?? null;
           return batter ? batter === id : e.created_by === id;
-        });
+        };
+        // F141: a run-out of the batter at the other end is THEIR dismissal (out_batsman_id).
+        const mine = (events ?? []).filter((e: any) => facedBy(e) || (e.event_type === 'wicket' && (e.payload as any)?.out_batsman_id === id));
         // SC-371: highest_score used to track the max of the RUNNING CUMULATIVE
         // total, which is just the final total — so BEST always equalled RUNS,
         // a number that could never differ. Tally per match and take the best.
@@ -1668,9 +1670,10 @@ export async function getSportProfile(req: Request, res: Response) {
           }
           // Audit #83: here a wicket is the batter's own DISMISSAL (it was also
           // counted as a wicket taken). Retired hurt is not a dismissal.
-          if ((e.event_type === 'wicket' && isDismissal(pay.wicket_type ?? pay.type)) || (e.event_type !== 'wicket' && pay.wicket)) dismissals++;
-          // Audit #48: runs completed before a run-out are the batter's.
-          if (e.event_type === 'wicket') { const ro = wicketRuns(pay); runs += ro; if (ro) perMatch.set(e.match_id, (perMatch.get(e.match_id) ?? 0) + ro); }
+          const outHere = e.event_type === 'wicket' ? (pay.out_batsman_id ? pay.out_batsman_id === id : facedBy(e)) : false;
+          if ((outHere && isDismissal(pay.wicket_type ?? pay.type)) || (e.event_type !== 'wicket' && pay.wicket)) dismissals++;
+          // Audit #48: runs completed before a run-out are the batter's (the one who faced).
+          if (e.event_type === 'wicket' && facedBy(e)) { const ro = wicketRuns(pay); runs += ro; if (ro) perMatch.set(e.match_id, (perMatch.get(e.match_id) ?? 0) + ro); }
         }
         // Audit #83: wickets TAKEN are the ones bowled by this player (bowler_id),
         // the same rule as the scorecard — not run-outs or retirements.

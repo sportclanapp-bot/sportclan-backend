@@ -89,10 +89,10 @@ describe('wiring', () => {
   });
 
   test('completeMatch: rating outcome, W/L, draws and coins all read the SIDE', () => {
-    expect(complete).toContain("if (winnerSide) outcome = winnerSide === 'A' ? 1 : 0;");
+    expect(complete).toContain("if (ratedSide) outcome = ratedSide === 'A' ? 1 : 0;");
     expect(complete).not.toMatch(/outcome = winner_team_id ===/);
     expect(complete).not.toMatch(/draws: profile\.draws \+ \(!winner_team_id/);
-    expect(complete).toMatch(/if \(winnerSide\) \{\s*const winnerIds/);
+    expect(complete).toMatch(/if \(ratedSide\) \{\s*const winnerIds/); // N-SPP1-CHS-4: the game's own winner
     expect(complete).toContain('if (!winnerSide && !drawByRules) {'); // the decisive-sport guard
   });
 

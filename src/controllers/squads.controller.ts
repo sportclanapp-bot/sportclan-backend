@@ -10,13 +10,15 @@
  *   PUT   /tournaments/:id/squad-lock            { locked } — the organiser locks or reopens squads by hand
  *   GET   /tournaments/:id/discipline            the cards table and the bans still to serve (F5)
  *   GET   /matches/:id/banned                    who is banned from this fixture, per side (F5)
+ *   GET   /matches/:id/squad/:side               a side's squad as its line-up, for the match's officials (N-RWD2-2)
  * Any sport whose entries are teams. Soft deletes only (removed_at).
  */
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { isUuid } from '../utils/uuid';
 import { allRows, selectAllIn } from '../utils/selectAll';
-import { isTournamentOrganiser } from '../utils/tournamentAuth';
+import { canOfficiateMatch, isTournamentOrganiser } from '../utils/tournamentAuth';
+import { rulesOf } from '../utils/matchRules';
 import { settingsOf, storedSettings, womenOnCourtProblem, type SquadRules } from '../utils/tournamentSettings';
 import { possessive } from '../utils/possessive';
 import { notifyUser } from '../utils/notify';
@@ -406,6 +408,46 @@ export async function markGender(req: Request, res: Response) {
       });
     } catch { /* best-effort */ }
     return res.json({ ok: true, user_id: uid, gender });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/**
+ * N-RWD2-2 (launch test plan): a side's squad as its line-up — captain, then vice-captain, then the
+ * rest, up to `max` (was the app's squadLineup over GET /teams/:id). Ids only.
+ */
+export function squadLineupOf(members: ReadonlyArray<{ user_id: string | null; role: string | null }>, side: 'A' | 'B', max: number): Array<{ user_id: string; team_side: 'A' | 'B' }> {
+  const rank = (r: string | null) => (r === 'captain' ? 0 : r === 'vice_captain' ? 1 : 2);
+  return members.filter((m) => !!m.user_id)
+    .sort((x, y) => rank(x.role) - rank(y.role))
+    .slice(0, max)
+    .map((m) => ({ user_id: m.user_id!, team_side: side }));
+}
+
+/**
+ * GET /matches/:id/squad/:side — N-RWD2-2: typing a cricket score for a side with no line-up read
+ * the team's page, which a private team refuses to anyone outside it ('This team is private'), so
+ * the organiser couldn't enter it. The match's officials get that side's squad here (ids only).
+ */
+export async function getMatchSquad(req: Request, res: Response) {
+  if (!req.userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const mid = String(req.params.id);
+    const side = String(req.params.side);
+    if (!isUuid(mid)) return res.status(404).json({ error: 'Match not found' });
+    if (side !== 'A' && side !== 'B') return res.status(400).json({ error: 'Say which side, A or B.', code: 'BAD_SIDE' });
+    const { data: m } = await supabase.from('matches')
+      .select('id, tournament_id, created_by, umpire_id, scorer_id, team_a_id, team_b_id, rules, format, overs')
+      .eq('id', mid).maybeSingle();
+    if (!m) return res.status(404).json({ error: 'Match not found' });
+    const match = m as { team_a_id: string | null; team_b_id: string | null } & Parameters<typeof canOfficiateMatch>[0];
+    if (!(await canOfficiateMatch(match, req.userId))) return res.status(403).json({ error: 'Only the match’s officials can see its squads.', code: 'NOT_OFFICIAL' });
+    const teamId = side === 'A' ? match.team_a_id : match.team_b_id;
+    if (!teamId) return res.json({ lineup: [] });
+    const { data: rows } = await supabase.from('team_members').select('user_id, role').eq('team_id', teamId);
+    const max = rulesOf('cricket', m as never).players ?? 11;
+    return res.json({ lineup: squadLineupOf((rows ?? []) as Array<{ user_id: string | null; role: string | null }>, side, max) });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

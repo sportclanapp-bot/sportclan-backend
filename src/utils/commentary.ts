@@ -8,7 +8,7 @@ import { FOUL_KINDS } from './basketballRules';
  * now name the player when the scorer said who got it.
  */
 import { periodLabelOf } from './basketballRules';
-import { isDismissal, penaltyRunsOf } from './cricketRules';
+import { gameEndSuperOver, isDismissal, penaltyRunsOf } from './cricketRules';
 import { plural } from './plural';
 import { possessive } from './possessive';
 import { sportTerms } from './sportTerms';
@@ -217,7 +217,10 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     const won = p.winner === 'A' ? ctx.teamA : p.winner === 'B' ? ctx.teamB : null;
     const next = p.next_first === 'A' ? ctx.teamA : p.next_first === 'B' ? ctx.teamB : null;
     const nextWord = ctx.sport === 'cricket' ? 'bat' : 'start';
-    return `🏁 End${g === ' of the game' ? g : ` of game${g}`}${won ? ` — ${won} won it` : ''}${next && Number.isInteger(p.game) ? ` · ${next} ${nextWord} first in game ${p.game + 1}` : ''}`;
+    // N-R3A-2: a level game won on a typed super over says so.
+    const so = gameEndSuperOver(p);
+    const how = so && won ? ` on the super over (${Math.max(so.A, so.B)}–${Math.min(so.A, so.B)})` : '';
+    return `🏁 End${g === ' of the game' ? g : ` of game${g}`}${won ? ` — ${won} won it${how}` : ''}${next && Number.isInteger(p.game) ? ` · ${next} ${nextWord} first in game ${p.game + 1}` : ''}`;
   }
   // Stage 15 follow-up: a series game's shoot-out, apart from its goals.
   if (eventType === 'note' && p.kind === 'shootout' && Number.isInteger(p.A) && Number.isInteger(p.B)) {

@@ -22,7 +22,7 @@ import { tiedOnDlsTarget } from '../utils/matchResult';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
-import { allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber, cricketSeries, cricketGameEvents, cricketGameOf, sideTotals, wicketRuns, outBatterOf, wicketShapeProblem } from '../utils/cricketRules';
+import { gameEndSuperOver, superOverWinner, allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber, cricketSeries, cricketGameEvents, cricketGameOf, sideTotals, wicketRuns, outBatterOf, wicketShapeProblem } from '../utils/cricketRules';
 import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { FOUL_KINDS } from '../utils/basketballRules';
 import { gameShootout, shootoutKicksOf, shootoutProblem } from '../utils/shootoutRules'; // Stage 15 follow-up
@@ -73,6 +73,13 @@ async function fanoutScoreUpdate(
  * is exactly how a courier path quietly becomes more permissive than the direct
  * one.
  */
+/** N-R3A-2: a series game's deciding super over — typed in at its end, or the last one played ball by ball. */
+export function superOverOfGame(typed: { A: number; B: number } | undefined, gameEvents: readonly { event_type: string; payload: any }[], first: 'A' | 'B'): { super_over?: { A: number; B: number } } {
+  if (typed) return { super_over: typed };
+  const last = superOversOf(gameEvents, first).filter((so) => so.winner).pop();
+  return last ? { super_over: { A: last.A.runs, B: last.B.runs } } : {};
+}
+
 export async function authorizeScorer(matchId: string, userId: string, deviceId?: string | null) {
   const { data: match } = await supabase
     .from('matches')
@@ -439,6 +446,12 @@ export async function validateScoringEvent(
     if (payload.kind === 'game_end' && slug === 'cricket') {
       if (payload.winner != null && payload.winner !== 'A' && payload.winner !== 'B') return refuse(400, { error: 'A game’s winner is one of the two sides.', code: 'BAD_NOTE' });
       if (payload.next_first != null && payload.next_first !== 'A' && payload.next_first !== 'B') return refuse(400, { error: 'Say which side bats first next.', code: 'BAD_NOTE' });
+      // N-R3A-2: a typed super over — whole runs, not level, and its winner is the game's.
+      if (payload.super_over_runs != null) {
+        const so = gameEndSuperOver(payload);
+        if (!so) return refuse(400, { error: 'Enter each side’s super over runs — whole numbers, not level.', code: 'BAD_NOTE' });
+        if (payload.winner !== superOverWinner(so.A, so.B)) return refuse(400, { error: 'The game’s winner is the side that won the super over.', code: 'BAD_NOTE' });
+      }
       const t = (match.score_summary as { tie?: { decided?: unknown } } | null)?.tie;
       if (t?.decided === 'A' || t?.decided === 'B') return refuse(409, { error: 'The series is decided — end the match.', code: 'SERIES_DECIDED' });
     } else if (payload.kind === 'game_end') {
@@ -1872,7 +1885,9 @@ export async function recomputeSummary(
         const a = sideTotals(g, 'A', out2.A); const b = sideTotals(g, 'B', out2.B);
         return { key: `G${x.game}`, label: `Game ${x.game}`, winner: x.winner ?? 'draw', A: x.winner === 'A' ? 1 : 0, B: x.winner === 'B' ? 1 : 0, runsA: a.runs, wicketsA: a.wickets, runsB: b.runs, wicketsB: b.wickets,
           // Stage 15 follow-up: each game's balls and all out, for the table's net run rate over the whole series.
-          ballsA: a.balls, ballsB: b.balls, allOutA: a.wickets >= out2.A, allOutB: b.wickets >= out2.B };
+          ballsA: a.balls, ballsB: b.balls, allOutA: a.wickets >= out2.A, allOutB: b.wickets >= out2.B,
+          // N-R3A-2: how a level game was decided — a super over typed in, or the last one played.
+          ...superOverOfGame(x.superOver, cricketGameEvents(events, x.game), (x.game > 1 ? crSeries.ends[x.game - 2]?.nextFirst : null) ?? cricketFirstBat ?? 'A') };
       });
       summary.rubber = crSeries.current;
       // Who bats first in the game in play (game 2 on: the scorer's choice at the last game's end; game 1: the toss).

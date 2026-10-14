@@ -569,8 +569,9 @@ export function tieFallbackText(winnerName: string, how: TieFallback, b?: { w: n
 //
 // One fixture, several full matches. Each game's deliveries carry `game: n`
 // (untagged = game 1); a game ends with a note { kind: 'game_end', game: n,
-// winner: 'A' | 'B' | null, next_first?: 'A' | 'B' } — the winner from its
-// result (a super over, an award), and who bats first in the next game.
+// winner: 'A' | 'B' | null, next_first?: 'A' | 'B', super_over_runs?: { A, B } } — the winner from its
+// result (a super over, an award), and who bats first in the next game. N-R3A-2: a super over
+// typed in (played but not on this phone) keeps its runs on the note.
 
 /** The game a cricket event belongs to (1 when untagged). */
 export function cricketGameOf(payload: unknown): number {
@@ -578,7 +579,13 @@ export function cricketGameOf(payload: unknown): number {
   return typeof n === 'number' && Number.isInteger(n) && n >= 1 ? n : 1;
 }
 
-export type CricketGameEnd = { game: number; winner: 'A' | 'B' | null; nextFirst: 'A' | 'B' | null };
+export type CricketGameEnd = { game: number; winner: 'A' | 'B' | null; nextFirst: 'A' | 'B' | null; superOver?: { A: number; B: number } };
+
+/** N-R3A-2: a game-end note's typed super over, when it is a real one (whole runs, not level). */
+export function gameEndSuperOver(p: unknown): { A: number; B: number } | null {
+  const so = (p as P | null | undefined)?.super_over_runs as { A?: unknown; B?: unknown } | undefined; // not `super_over` — that numbers a super over's balls
+  return so && validSuperOver(so.A, so.B) ? { A: so.A as number, B: so.B as number } : null;
+}
 
 /** The series so far: each finished game, games won, the game in play, and the winner once a side has a majority of `games`. */
 export function cricketSeries(events: readonly Ev[], games: number): {
@@ -592,7 +599,8 @@ export function cricketSeries(events: readonly Ev[], games: number): {
   for (const e of events) {
     const p = (e.payload ?? {}) as P;
     if (e.event_type !== 'note' || p.kind !== 'game_end') continue;
-    ends.push({ game: ends.length + 1, winner: p.winner === 'A' || p.winner === 'B' ? p.winner : null, nextFirst: p.next_first === 'A' || p.next_first === 'B' ? p.next_first : null });
+    const so = gameEndSuperOver(p);
+    ends.push({ game: ends.length + 1, winner: p.winner === 'A' || p.winner === 'B' ? p.winner : null, nextFirst: p.next_first === 'A' || p.next_first === 'B' ? p.next_first : null, ...(so ? { superOver: so } : {}) });
   }
   const need = Math.floor(games / 2) + 1;
   const wonA = ends.filter((x) => x.winner === 'A').length; const wonB = ends.filter((x) => x.winner === 'B').length;

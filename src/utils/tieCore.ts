@@ -14,8 +14,8 @@
  *     one side has them (no dead rubbers);
  *   - 'all':   every rubber is played; most rubbers wins (level: most games or
  *     points, then a draw);
- *   - 'games': every rubber is played; most games (tennis) or points (the rally
- *     sports) in total wins (level: most rubbers, then a draw).
+ *   - 'games': every rubber is played; most games in total wins (tennis: games;
+ *     the rally sports: games won, F165; level: most rubbers, then a draw).
  * Each rubber is scored by the sport's own engine with the match's rules; this
  * file splits the match's events into rubbers with that engine (`rubberOf`), so
  * any sport with a per-match engine can be a tie: tennis, badminton, table
@@ -339,7 +339,7 @@ export function tieNeed(spec: TieSpec): number {
  * level), its sets (games / points per set), and the units it adds (tennis:
  * games; rally: points).
  */
-export type RubberResult = { key: string; winner: TieSide | 'draw'; sets: { A: number[]; B: number[] }; units: { A: number; B: number } };
+export type RubberResult = { key: string; winner: TieSide | 'draw'; sets: { A: number[]; B: number[] }; units: { A: number; B: number }; /** F165: games won (tennis: games); absent = units */ games?: { A: number; B: number } };
 /** Stage 11 · PB3: `decider` — the tie went to its deciding match (the 3/2/1/0 table points read it). */
 export type TieOutcome = { rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: TieSide | 'draw' | null; finished: boolean; decider?: boolean };
 
@@ -375,8 +375,9 @@ export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>):
     if (!decided && allRegular) { decided = by(rubbersA, rubbersB); level = !decided; }
   } else if (allRegular) {
     // Stage 12 · CH7: the regular matches' own games / points (not a play-off's).
-    const regA = results.slice(0, regular).reduce((t, r) => t + r.units.A, 0);
-    const regB = results.slice(0, regular).reduce((t, r) => t + r.units.B, 0);
+    // F165: a 'games' tie counts GAMES (a rally sport's units are its points).
+    const regA = results.slice(0, regular).reduce((t, r) => t + (spec.win === 'games' ? (r.games ?? r.units).A : r.units.A), 0);
+    const regB = results.slice(0, regular).reduce((t, r) => t + (spec.win === 'games' ? (r.games ?? r.units).B : r.units.B), 0);
     decided = spec.win === 'all' ? by(rubbersA, rubbersB) : by(regA, regB);
     level = !decided;
     // Stage 12 · CH5: chess — level on game points is a drawn match.
@@ -422,7 +423,7 @@ export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>):
 }
 
 /** One rubber's events read by the sport's engine: its winner (if decided; Stage 11 · PB9: 'draw' when it ended level), sets and units. */
-export type RubberRead = { winner: TieSide | 'draw' | null; sets: { A: number[]; B: number[] }; units: { A: number; B: number } };
+export type RubberRead = { winner: TieSide | 'draw' | null; sets: { A: number[]; B: number[] }; units: { A: number; B: number }; games?: { A: number; B: number } };
 
 /**
  * Split a match's events into the tie's rubbers. Every event belongs to the
@@ -452,7 +453,7 @@ export function splitTie<E extends { event_type: string }>(
       const rubber = spec.rubbers.find((r) => r.key === key)!;
       const r = rubberOf(evs.get(key)!, rubber);
       if (!r.winner) continue;
-      done.set(key, { key, winner: r.winner, sets: r.sets, units: r.units }); endAt.set(key, i);
+      done.set(key, { key, winner: r.winner, sets: r.sets, units: r.units, ...(r.games ? { games: r.games } : {}) }); endAt.set(key, i);
     }
     const order = spec.rubbers.filter((r) => done.has(r.key));
     const results = order.map((r) => done.get(r.key)!);
@@ -481,7 +482,7 @@ export function splitTie<E extends { event_type: string }>(
     const rubber = spec.rubbers[results.length]!;
     const r = rubberOf(cur, rubber);
     if (!r.winner) continue;
-    results.push({ key: rubber.key, winner: r.winner, sets: r.sets, units: r.units });
+    results.push({ key: rubber.key, winner: r.winner, sets: r.sets, units: r.units, ...(r.games ? { games: r.games } : {}) });
     ends.push(i);
     cur = [];
     outcome = tieOutcome(spec, results);
@@ -512,3 +513,19 @@ export function tieTrumpResultLines(spec: TieSpec, results: ReadonlyArray<Rubber
 
 /** The sum of a side's sets (tennis: games; the rally sports: points). */
 export const unitsOf = (sets: ReadonlyArray<number>): number => sets.reduce((n, x) => n + (Number(x) || 0), 0);
+
+/** Sports whose "sets" are each one game's POINTS (a rally scored to 11 / 15 / 21 / 25). */
+const RALLY_SET_SPORTS = ['badminton', 'tabletennis', 'pickleball', 'volleyball'];
+/** F165: does a 'games' tie in this sport count games won (its sets are points)? */
+export const countsGamesWon = (sport: string | null | undefined): boolean => RALLY_SET_SPORTS.includes((sport ?? '').toLowerCase().replace(/[-_\s]/g, ''));
+
+/**
+ * F165 (launch test plan, Round 1) · what a rubber adds to a 'games' tie: GAMES (RubberResult.games).
+ * Tennis sets are already games and team chess's are game points, so they are
+ * summed; a rally sport's sets are points, so it counts the games won. Summing
+ * points decided a UTT tie (8 of 15 games wins) for the side that won 7 games.
+ */
+export function unitsFor(sport: string | null | undefined, mine: ReadonlyArray<number>, theirs: ReadonlyArray<number>): number {
+  if (!countsGamesWon(sport)) return unitsOf(mine);
+  return mine.reduce((n, x, i) => n + ((Number(x) || 0) > (Number(theirs[i]) || 0) ? 1 : 0), 0);
+}

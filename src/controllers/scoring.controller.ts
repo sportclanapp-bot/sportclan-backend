@@ -26,7 +26,7 @@ import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport
 import { FOUL_KINDS } from '../utils/basketballRules';
 import { gameShootout, shootoutKicksOf, shootoutProblem } from '../utils/shootoutRules'; // Stage 15 follow-up
 import { BASKETBALL_STAT_KEYS, goalHowFor, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules } from '../utils/matchRules';
-import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
+import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsFor, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { trumpsFor } from '../utils/tieTrumps';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
@@ -1113,7 +1113,7 @@ export function rollupTieSpec(
   };
   const split = splitTie(events, spec, (evs, r) => {
     const x = read(evs, r);
-    return { winner: x.winner, sets: x.sets, units: { A: unitsOf(x.sets.A), B: unitsOf(x.sets.B) } };
+    return { winner: x.winner, sets: x.sets, units: { A: unitsOf(x.sets.A), B: unitsOf(x.sets.B) }, games: { A: unitsFor(slug, x.sets.A, x.sets.B), B: unitsFor(slug, x.sets.B, x.sets.A) } }; // F165: games won beside the points
   });
   const o = split.outcome;
   const cur = o.finished ? null : read(split.currentEvents, spec.rubbers[split.current] ?? spec.rubbers[0]!);

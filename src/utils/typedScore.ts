@@ -24,7 +24,7 @@
 import { gamesWinner, standardRules, tennisOptsOf, type MatchRules } from './matchRules';
 import { emptyTennis, tennisPoint, type TennisScore } from './tennisCore';
 import { sideOutRally, sideOutStart, type SideOutOpts } from './pickleballCore';
-import { boardPointsFor, boardWhite, tieOutcome, type RubberResult, type TieSpec } from './tieCore';
+import { boardPointsFor, boardWhite, tieOutcome, unitsFor, type RubberResult, type TieSpec } from './tieCore';
 import { carromReplay, type CarromItem, type CarromOpts } from './carromCore';
 import { scoreWithShootout, shootoutProblem, shootoutWinner } from './shootoutRules';
 import { plural } from './plural';
@@ -278,6 +278,8 @@ export function typedTiePoints(
   const points: TypedPoint[] = [];
   const results: RubberResult[] = [];
   const unitsOfSets = (sets: TypedSet[], side: TypedSide) => sets.reduce((n, x) => n + (side === 'A' ? x.a : x.b), 0);
+  // F165: a 'games' tie counts games won (a rally sport's sets are points; tennis sums its games).
+  const gamesOfSets = (sets: TypedSet[], side: TypedSide) => unitsFor(sport, sets.map((x) => (side === 'A' ? x.a : x.b)), sets.map((x) => (side === 'A' ? x.b : x.a)));
   for (let i = 0; i < rubbers.length; i++) {
     const rubber = spec.rubbers[i];
     if (!rubber) return { problem: `This tie has ${plural(spec.rubbers.length, 'match', 'matches')}.`, points, winner: null };
@@ -287,7 +289,7 @@ export function typedTiePoints(
     if (m.problem) return { problem: `${rubber.label}: ${m.problem}`, points, winner: null };
     points.push(...m.points);
     const sets = rubbers[i] as TypedSet[];
-    results.push({ key: rubber.key, winner: m.winner!, sets: { A: sets.map((x) => x.a), B: sets.map((x) => x.b) }, units: { A: unitsOfSets(sets, 'A'), B: unitsOfSets(sets, 'B') } });
+    results.push({ key: rubber.key, winner: m.winner!, sets: { A: sets.map((x) => x.a), B: sets.map((x) => x.b) }, units: { A: unitsOfSets(sets, 'A'), B: unitsOfSets(sets, 'B') }, games: { A: gamesOfSets(sets, 'A'), B: gamesOfSets(sets, 'B') } });
   }
   const o = tieOutcome(spec, results);
   if (!o.finished) return { problem: 'The tie isn’t decided yet — type the rest of its matches.', points, winner: null };

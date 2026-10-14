@@ -1295,7 +1295,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (rules.tie && !tieSpecProblem(rules.tie) && rules.tie.series) parts.push(rules.tie.rubbers.length === 1 ? 'one game' : `best of ${rules.tie.rubbers.length} games`); // Stage 15 · BB6
   else if (rules.tie && !tieSpecProblem(rules.tie)) {
     const n = rules.tie.rubbers.length;
-    parts.push(`team tie · ${n} ${n === 1 ? 'match' : 'matches'} · ${rules.tie.win === 'first' ? `first to ${tieNeedOf(rules.tie)}` : rules.tie.win === 'all' ? (tieWeighted(rules.tie) ? 'most matches by worth' : 'most matches') /* Stage 11 follow-up: a match worth more, or a trump */ : `most ${key === 'tennis' ? 'games' : 'points'}`}`);
+    parts.push(`team tie · ${n} ${n === 1 ? 'match' : 'matches'} · ${rules.tie.win === 'first' ? `first to ${tieNeedOf(rules.tie)}` : rules.tie.win === 'all' ? (tieWeighted(rules.tie) ? 'most matches by worth' : 'most matches') /* Stage 11 follow-up: a match worth more, or a trump */ : 'most games' /* F165: games won (tennis: games) */}`);
     // Stage 11 · PB3: a deciding match when level; a match worth more.
     const dec = rules.tie.rubbers.filter((x) => x.decider);
     if (dec.length) parts.push(`level: ${dec.map((x) => x.label).join(', ')} decides`);

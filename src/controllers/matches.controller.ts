@@ -65,7 +65,7 @@ import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/ma
 import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
 import { applyChessTcDeltas, recordChessTc } from '../utils/chessTcRatings';
 import { DOUBLES_PLAYERS, DOUBLES_SPORTS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules, conductWords, tieSpecOf } from '../utils/matchRules';
-import { tieTossOf, tieTossText, tieTrumpResultLines, tieTrumpText } from '../utils/tieCore';
+import { boardWhite, tieTossOf, tieTossText, tieTrumpResultLines, tieTrumpText } from '../utils/tieCore';
 import { hasTrump, trumpsFor } from '../utils/tieTrumps';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, superOverPlayedText, tieFallbackText, boundariesOf, type SuperOverState, type TieFallback, typedScoreRefusal, typedScoreWinner, typedOversToBalls, type UnfinishedEnd } from '../utils/cricketRules';
@@ -1687,6 +1687,9 @@ export async function getCommentary(req: Request, res: Response) {
     const teamB = match.team_b_name ?? 'Team B';
     let periods = 1;
     let moves = 0;
+    // N-SPP1-CHS-2 / CHS-3: a team chess match on clocks — each board's own moves, and its White.
+    const chessSpec = slug === 'chess' ? tieSpecOf('chess', rulesOf('chess', match)) : null;
+    const movesByBoard = new Map<string, number>();
     const legalBallsBySide: Record<'A' | 'B', number> = { A: 0, B: 0 };
     const enriched: Array<any> = [];
     for (const ev of events ?? []) {
@@ -1716,6 +1719,9 @@ export async function getCommentary(req: Request, res: Response) {
       let isBoundary = false;
       if (ev.event_type === 'period_change') periods += 1;
       if (ev.event_type === 'move') moves += 1;
+      const boardIdx = chessSpec && typeof p.board === 'string' ? chessSpec.rubbers.findIndex((r) => r.key === p.board) : -1;
+      if (boardIdx >= 0 && ev.event_type === 'move') movesByBoard.set(p.board, (movesByBoard.get(p.board) ?? 0) + 1);
+      const boardCtx = boardIdx >= 0 ? { board: chessSpec!.rubbers[boardIdx]!.label, boardWhiteTeam: boardWhite(chessSpec!, boardIdx), move: movesByBoard.get(p.board) ?? 0 } : {};
       // Audit batch 4 (#111 / #112 / #136): every line from one place (utils/commentary) — cricket too, and
       // plain words for anything else; it printed `note {…}` raw.
       const line = timelineLine(ev.event_type as string, p, {
@@ -1724,6 +1730,7 @@ export async function getCommentary(req: Request, res: Response) {
         periodMinutes: rulesOf(slug, match).periodMinutes ?? null, // BUILD 3.22: the timeline minute
         extraMinutes: (rulesOf(slug, match) as { extraTimeMinutes?: number | null }).extraTimeMinutes ?? null, // F186
         threeByThree: slug === 'basketball' && rulesOf(slug, match).pointSet === '12', // Stage 15 follow-up
+        ...boardCtx,
       });
       commentary = line.text;
       isWicket = line.isWicket;

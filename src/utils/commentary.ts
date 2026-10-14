@@ -31,6 +31,10 @@ export interface CommentaryContext {
   move?: number;
   /** Chess: the mover's clock after the move, in seconds. */
   clockSeconds?: number | null;
+  /** N-SPP1-CHS-3: a team chess match on clocks — the board this event is on ('Board 2'). */
+  board?: string | null;
+  /** N-SPP1-CHS-2: which team plays White on that board (boards alternate) — the pad sends colours. */
+  boardWhiteTeam?: 'A' | 'B' | null;
 }
 
 const CHESS_REASON: Record<string, string> = {
@@ -231,7 +235,7 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (ctx.sport === 'chess' && eventType === 'move') {
     const who = p.side === 'B' ? 'Black' : 'White';
     const left = typeof ctx.clockSeconds === 'number' ? ` · ${clock(ctx.clockSeconds)} left` : '';
-    return `♟️ ${who} moved · move ${ctx.move ?? '?'}${left}`;
+    return `♟️ ${who} moved${ctx.board ? ` · ${ctx.board}` : ''} · move ${ctx.move ?? '?'}${left}`; // N-SPP1-CHS-3: the board, its own move number
   }
   if (ctx.sport === 'chess' && eventType === 'result') {
     const why = typeof p.reason === 'string' ? CHESS_REASON[p.reason] ?? p.reason.replace(/_/g, ' ') : null;
@@ -266,8 +270,10 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if (eventType === 'note') {
     const secs = Number(p.seconds ?? 0) || 0;
     const dur = (n: number) => { const a = Math.abs(n); return a % 60 === 0 && a >= 60 ? `${a / 60} min` : `${a} s`; };
-    const named = p.side === 'B' ? ctx.teamB : ctx.teamA;
-    const opp = p.side === 'B' ? ctx.teamA : ctx.teamB;
+    // N-SPP1-CHS-2: on a team chess board the side is the COLOUR; where the second team has White, flip it.
+    const sideTeam = ctx.boardWhiteTeam === 'B' ? (p.side === 'B' ? 'A' : 'B') : (p.side === 'B' ? 'B' : 'A');
+    const named = sideTeam === 'B' ? ctx.teamB : ctx.teamA;
+    const opp = sideTeam === 'B' ? ctx.teamA : ctx.teamB;
     if (p.kind === 'kickoff') return ctx.sport === 'basketball' ? (ctx.period > 0 ? '⏱ Clock started' : '⏱ Tip-off') : ctx.sport === 'chess' ? '⏱ Clocks started' : '⏱ Clock started';
     if (p.kind === 'clock_pause') return '⏸ Clock stopped';
     if (p.kind === 'clock_resume') return '▶ Clock restarted';

@@ -1394,6 +1394,15 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (key === 'football' && rules.rollingSubs === true) parts.push('rolling subs');
   if (key === 'football' && rules.offside === false) parts.push('no offside');
   if (key === 'football' && rules.sinBinMinutes) parts.push(`sin bin ${rules.sinBinMinutes} min`); // BUILD 3.24
+  // F181 (launch test plan): the substitution limit and windows, golden goal and the fewest players — never said.
+  if (key === 'football') {
+    const w = rules.subWindows != null ? ` in ${plural(rules.subWindows, 'window')}` : '';
+    if (rules.maxSubs === 0) parts.push('no subs');
+    else if (rules.maxSubs != null) parts.push(`${plural(rules.maxSubs, 'sub')}${w}`);
+    else if (w) parts.push(`subs${w}`);
+    if (rules.goldenGoal === true) parts.push('golden goal');
+    if (rules.minOnPitch != null) parts.push(`at least ${rules.minOnPitch} on the pitch`);
+  }
   if (key === 'hockey' && rules.shootoutTakers != null && rules.shootoutTakers !== 5) parts.push(`shoot-out ${rules.shootoutTakers} each`); // BUILD 3.27
   if (key === 'hockey' && rules.yellowCardMinutes != null && rules.yellowCardMinutes !== 5) parts.push(`yellow ${rules.yellowCardMinutes} min`); // BUILD 3.29
   if (key === 'basketball' && rules.overtimeMinutes != null && rules.overtimeMinutes !== 5) parts.push(`OT ${rules.overtimeMinutes} min`); // BUILD 3.31
@@ -1413,7 +1422,8 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     if (rules.teamFoulBonus != null && rules.teamFoulBonus !== (rules.pointSet === '12' ? 7 : 5)) parts.push(`bonus from team foul ${rules.teamFoulBonus}`);
     if (rules.ejectAfter != null && rules.ejectAfter !== 2) parts.push(`out after ${rules.ejectAfter} technicals or flagrants`);
   }
-  if (rules.penaltyKicks === 3) parts.push('3 pens each');
+  // F181: any number other than the Laws' 5 (only 3 was said).
+  if (key === 'football' && rules.penaltyKicks != null && rules.penaltyKicks !== 5) parts.push(`${rules.penaltyKicks} pens each`);
   return parts.length ? parts.join(' · ') : null;
 }
 

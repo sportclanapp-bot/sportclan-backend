@@ -66,6 +66,8 @@ export function describeEvent(type: string | null | undefined, p: P | null | und
     case 'score': case 'point': case 'goal': {
       if (x.kind === 'own_goal') return `own goal by ${team}`;
       if (x.kind === 'goal' || t === 'goal' || ctx.sport === 'football' || ctx.sport === 'hockey') return `${team} goal${who ? ` (${who})` : ''}`;
+      // N-SPP1-PKB-3 (launch test plan): side-out pickleball's receivers win a rally but no point.
+      if (x.kind === 'rally' && x.side_out === true) return `${team} won the rally — side out, no point`;
       if (x.kind === 'ace') return `${team} ace`;
       if (x.kind === 'double_fault') return `double fault — ${team} point`;
       if (x.kind === 'board' || ctx.sport === 'carrom') return `${team} +${v || 1}`;
@@ -177,7 +179,9 @@ export function editLine(row: AuditRow, who: string, ctx: LogContext, label?: st
 
   if (row.action === 'undo' || row.action === 'delete') {
     const verb = row.action === 'undo' ? 'undid' : 'deleted';
-    return `${who} ${verb}: ${describeEvent(type, oldP, ctx)}${scorePart}`;
+    // N-SPP1-PKB-3: an older side-out rally (no side_out mark) that moved no score was no point either.
+    const sideOut = type === 'score' && oldP?.kind === 'rally' && oldP.side_out == null && before && after && before === after;
+    return `${who} ${verb}: ${describeEvent(type, sideOut ? { ...oldP, side_out: true } : oldP, ctx)}${scorePart}`;
   }
   if (row.action === 'edit') {
     const from = describeEvent(type, oldP, ctx);

@@ -317,7 +317,7 @@ export function tiebreakPresetsFor(sport: string | null | undefined, tie = false
       out.push({ key: 'fiba_3x3', label: 'FIBA 3x3 (win ratio, head-to-head, average points)', order: ['win_ratio', 'head_to_head', 'avg_points_capped'] });
       break;
     case 'volleyball':
-      out.push({ key: 'fivb', label: 'FIVB (wins, set ratio)', order: ['wins', 'score_ratio', 'head_to_head'] });
+      out.push({ key: 'fivb', label: 'FIVB (wins, match points, set ratio)', order: ['wins', 'match_points', 'score_ratio', 'head_to_head'] }); // F160: match points placed (they used to go first)
       // Stage 14 · VB5 · FIVB pools (Club World Championship, VNL): matches won, match points, set ratio, points ratio, then between them.
       out.push({ key: 'fivb_full', label: 'FIVB full (wins, match points, set ratio, points ratio)', order: ['wins', 'match_points', 'score_ratio', 'points_ratio', 'head_to_head'] });
       break;

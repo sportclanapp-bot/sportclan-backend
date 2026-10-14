@@ -55,7 +55,7 @@ describe('dlsInputProblem', () => {
       'Team 2 is all out — the innings is over, so there is no target to revise.',
       'Team 2 cannot have more overs left than the match allows.',
       'No overs remain — there is nothing left to chase in.',
-      'Wickets lost is between 0 and 10.',
+      'Wickets lost is between 0 and ${allOut}.', // F143: the side's own all-out
     ]) {
       expect(app).toContain(msg);
     }

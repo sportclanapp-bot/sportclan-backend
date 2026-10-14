@@ -102,7 +102,9 @@ describe('who reads the log', () => {
     const src = path.join(__dirname, '..');
     const all = ['controllers', 'utils', 'routes'].flatMap((d) =>
       fs.readdirSync(path.join(src, d)).filter((f) => f.endsWith('.ts')).map((f) => fs.readFileSync(path.join(src, d, f), 'utf8'))).join('\n');
-    expect((all.match(/from\('match_event_audit'\)\s*\.select/g) ?? []).length).toBe(1);
+    // N-RWD3-2 (Round 2): getMatch counts the edits (head: true — a number, no rows read).
+    expect((all.match(/from\('match_event_audit'\)\s*\.select/g) ?? []).length).toBe(2);
+    expect(code('controllers/matches.controller.ts')).toContain("from('match_event_audit').select('id', { count: 'exact', head: true }).eq('match_id', id).eq('action', 'edit')");
     expect(code('controllers/matchFeatures.controller.ts')).toMatch(/function getScoringEditLog[\s\S]*?from\('match_event_audit'\)\s*\.select/);
     expect((all.match(/from\('match_event_audit'\)\.(insert|update)/g) ?? []).length).toBe(3);
   });

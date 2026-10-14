@@ -956,6 +956,9 @@ export async function changePhone(req: Request, res: Response) {
     .limit(1)
     .maybeSingle();
   if (existing) return res.status(409).json({ error: 'Phone already in use' });
+  // F030: the number being replaced, for the alert below.
+  const { data: before } = await supabase.from('users').select('phone').eq('id', userId).maybeSingle();
+  const prevPhone = (before as { phone?: string | null } | null)?.phone ?? null;
   // Store the canonical form so the table converges on one shape.
   const { error } = await supabase
     .from('users')
@@ -963,10 +966,19 @@ export async function changePhone(req: Request, res: Response) {
     .eq('id', userId);
   if (error) return res.status(500).json({ error: error.message });
   await deleteOtp(p);
+  // F030 (launch test plan): tell EVERY phone of the account first — the sign-out
+  // below removes the other phones' push tokens, so sent afterwards the alert only
+  // reached the phone that made the change (whoever that was). It names both numbers.
+  // (No text or email to the old number: there is no email service, and an SMS notice
+  // needs its own registered SMS template — see ROUND1_FOR_DIPAK.md.)
+  try {
+    await notifyUser({
+      userId, type: 'account_phone_changed', title: 'Phone number changed',
+      body: `Your SportClan number was changed from ${maskPhone(canonicalisePhone(prevPhone ?? '') ?? (prevPhone ?? ''))} to ${maskPhone(canonicalisePhone(p) ?? p)}, and your other devices are being signed out. If this wasn’t you, sign in with your password and contact SportClan straight away.`,
+      data: { screen: 'Settings' },
+    });
+  } catch { /* best-effort */ }
   // Audit #11: every other device is signed out; this one gets a fresh token.
   const out = await signOutOtherDevices(req, userId);
-  try {
-    await notifyUser({ userId, type: 'account_phone_changed', title: 'Phone number changed', body: 'Your SportClan phone number was changed and your other devices were signed out. If this wasn’t you, contact support.', data: { screen: 'Settings' } });
-  } catch { /* best-effort */ }
   return res.json({ success: true, ...('accessToken' in out ? { accessToken: out.accessToken } : {}) });
 }

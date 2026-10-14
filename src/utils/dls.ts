@@ -117,7 +117,8 @@ export function dlsInputProblem(input: {
   if (!Number.isFinite(faced) || faced < 0) return 'Overs batted cannot be negative.';
   if (faced > 0 && team2OversLeft > totalOvers - faced + 1e-9) {
     const left = Math.round((totalOvers - faced) * 6) / 6;
-    return `Team 2 has batted ${oversWords(faced)} overs, so at most ${oversWords(left)} can be left.`;
+    const batted = oversWords(faced);
+    return `Team 2 has batted ${batted} ${batted === '1' ? 'over' : 'overs'}, so at most ${oversWords(left)} can be left.`;
   }
   return null;
 }

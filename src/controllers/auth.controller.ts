@@ -29,6 +29,8 @@ import { revokeSessionsNow } from '../utils/sessionRevocation';
 import { isOlderApp, updateRequired } from '../utils/clientVersion';
 
 const OTP_TTL_SECONDS = 300; // 5 minutes
+/** N-RWG4-12: a code proven for a number with no account stays good for sign-up this long (five steps of typing). */
+const SIGNUP_TTL_SECONDS = 60 * 60;
 /** Codes sent to one number (28 Sep): per hour and per day, whoever asks. */
 export const SEND_PER_NUMBER_HOUR = 5;
 export const SEND_PER_NUMBER_DAY = 10;
@@ -682,6 +684,14 @@ export async function otpLogin(req: Request, res: Response) {
   // number — this person is new, and goes to sign-up like anyone else.
   const deletedAt = (user as { deleted_at?: string | null } | null)?.deleted_at ?? null;
   if (!user || (deletedAt && !holdUntil(deletedAt))) {
+    // N-RWG4-12 (launch test plan): the app goes on to sign-up with THIS code, which
+    // Create account checks again five steps later — after the code's 5 minutes, so a
+    // new person lost everything they typed. The proven code is kept, as a verified
+    // marker (only this code matches it), for an hour of sign-up.
+    if (!isTestOtp(code)) {
+      const entry = await getOtp(p).catch(() => null);
+      if (entry) await setOtp(p, verifiedMarker(code), entry.purpose, SIGNUP_TTL_SECONDS).catch(() => undefined);
+    }
     return res.status(404).json({ error: 'Phone not registered', needsRegistration: true });
   }
   if (await isSuspended(user.id)) {

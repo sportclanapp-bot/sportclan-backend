@@ -123,7 +123,7 @@ describe('after 30 days: the number is free', () => {
   });
   test('sign-in treats an expired deleted account as no account (→ sign-up)', () => {
     const b = body('otpLogin');
-    expect(b).toMatch(/if \(!user \|\| \(deletedAt && !holdUntil\(deletedAt\)\)\) \{\s*return res\.status\(404\)\.json\(\{ error: 'Phone not registered', needsRegistration: true \}\);/);
+    expect(b).toMatch(/if \(!user \|\| \(deletedAt && !holdUntil\(deletedAt\)\)\) \{[\s\S]*?return res\.status\(404\)\.json\(\{ error: 'Phone not registered', needsRegistration: true \}\);/);
     expect(b).toMatch(/return res\.status\(403\)\.json\(deletedResponse\(holdUntil\(deletedAt\)\)\);/);
   });
   test('sign-up refuses while held and releases the number after', () => {

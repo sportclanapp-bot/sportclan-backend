@@ -91,6 +91,17 @@ export const FOUL_KINDS: ReadonlyArray<{ key: FoulKind; label: string; short: st
   { key: 'coach', label: 'Coach technical (C)', short: 'C', coach: true },
   { key: 'bench', label: 'Bench technical (B)', short: 'B', coach: true },
 ];
+/**
+ * N-SPP2-8 (found on the phone, Round 2): a player's line in the foul tally, keyed as the tally keys
+ * it — an account by its id, a guest or typed-in player by side and name (a guest's id is made on the
+ * phone that typed them). Looking a guest up by id found nothing, so a fouled-out guest came back on.
+ */
+export function foulLineOf<L extends { id: string }>(players: readonly L[], side: 'A' | 'B', p: { id?: string | null; name?: string | null }): L | undefined {
+  const named = p.name && p.name.trim() ? `name:${side}:${p.name.trim().toLowerCase()}` : null;
+  const key = p.id && !p.id.startsWith('guest:') ? p.id : named;
+  return key ? players.find((x) => x.id === key) : undefined;
+}
+
 /** N-RWD2-11 (launch test plan): the pad's 'who?' for a foul — 'Whose flagrant foul?' (it read 'Who got the flagrant?'). */
 export function foulQuestion(kind: FoulKind): string {
   const label = (FOUL_KINDS.find((k) => k.key === kind)?.label ?? 'Personal').toLowerCase();

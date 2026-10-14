@@ -1494,6 +1494,19 @@ export function shootoutSameTakersOf(sport: string | null | undefined, rules: Pa
 }
 
 /**
+ * N-R2-2 (launch test plan, found in Round 2): a side's players shown a red card — off for good
+ * (football; hockey's red is a permanent suspension). They can't score, assist or come back on.
+ */
+export function sentOffIds(events: ReadonlyArray<{ event_type: string; payload?: unknown }>, side: 'A' | 'B'): string[] {
+  const out = new Set<string>();
+  for (const e of events) {
+    const p = (e.payload ?? {}) as { team_side?: unknown; kind?: unknown; player_id?: unknown };
+    if (e.event_type === 'card' && p.kind === 'red' && (p.team_side === 'B' ? 'B' : 'A') === side && typeof p.player_id === 'string' && p.player_id) out.add(p.player_id);
+  }
+  return [...out];
+}
+
+/**
  * Stage 16 · HK7 · who can't take the next kick for a side: a sent-off player
  * never; in the first round, nobody twice; in sudden death, the same takers
  * (FIH) or nobody twice until all eligible have taken one (IFAB).

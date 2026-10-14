@@ -496,6 +496,15 @@ export async function validateScoringEvent(
     const slugG = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
     if (!goalHowFor(slugG).some((h) => h.key === payload.how)) return refuse(400, { error: 'That isn’t a way a goal is scored here.', code: 'BAD_GOAL_HOW' });
   }
+  // N-R2-2 (launch test plan, found in Round 2): a player sent off (a red) can't score, assist or come
+  // back on (football; hockey's red is permanent). Only the app's picker left them in.
+  if ((event_type === 'score' || event_type === 'assist' || event_type === 'sub') && payload && typeof payload.player_id === 'string' && payload.player_id) {
+    const slugR = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    if (slugR === 'football' || slugR === 'hockey') {
+      const { data: reds } = await supabase.from('match_events').select('id').eq('match_id', match.id).eq('event_type', 'card').eq('payload->>kind', 'red').eq('payload->>player_id', payload.player_id).limit(1);
+      if ((reds ?? []).length) return refuse(400, { error: event_type === 'sub' ? 'A player sent off can’t come back on.' : 'A player sent off can’t be credited — they’re off the field.', code: 'PLAYER_SENT_OFF' });
+    }
+  }
   // Stage 16 · HK7: a sent-off player can't take a shoot-out kick.
   if (event_type === 'note' && payload && payload.kind === 'shootout_kick' && typeof payload.player_id === 'string') {
     const { data: reds } = await supabase.from('match_events').select('id').eq('match_id', match.id).eq('event_type', 'card').eq('payload->>kind', 'red').eq('payload->>player_id', payload.player_id).limit(1);

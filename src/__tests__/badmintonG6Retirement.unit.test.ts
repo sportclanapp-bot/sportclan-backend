@@ -184,3 +184,32 @@ describe('ratings (Dipak, Oct 2026): a retirement was played, a walkover wasn’
     expect(finalize()?.p_results.profiles ?? []).toEqual([]);
   });
 });
+
+
+// F089 (launch test plan, Round 2): a retirement could only be named by TEAM, so a singles
+// match or a friendly between typed-in names (no team rows) could never record one.
+describe('F089 · a retirement by side', () => {
+  test('a singles match between names: the side that retired loses, the score stays', async () => {
+    mockSport = { slug: 'badminton', allows_draw: false };
+    setup({ status: 'live', team_a_id: null, team_b_id: null, tournament_id: null, team_a_name: 'Ravi', team_b_name: 'Kiran', score_summary: SCORE, rules: { v: 1, bestOf: 3, target: 21, cap: 30 }, format: 'bo3', overs: null });
+    const r = await call({ retired: true, retired_side: 'A', winner_side: 'B', walkover_reason: 'Injury' });
+    expect(r.statusCode).toBe(200);
+    expect(storedSummary()).toMatchObject({ retired: { team_id: null, side: 'A', reason: 'Injury' }, result: 'Kiran won (Ravi retired)' });
+  });
+  test('one saved team against a typed-in name, the name side retiring', async () => {
+    mockSport = { slug: 'tennis', allows_draw: false };
+    setup({ status: 'live', team_b_id: null, tournament_id: null, team_b_name: 'Kiran', score_summary: SCORE, rules: { v: 1, bestOf: 3 }, format: null, overs: null });
+    const r = await call({ retired: true, retired_side: 'B', winner_side: 'A', winner_team_id: TA });
+    expect(r.statusCode).toBe(200);
+    expect(storedSummary()).toMatchObject({ retired: { team_id: null, side: 'B' }, result: 'Lions won (Kiran retired)' });
+  });
+  test('the retired side can’t win; a side is needed; only while live', async () => {
+    mockSport = { slug: 'badminton', allows_draw: false };
+    setup({ status: 'live', team_a_id: null, team_b_id: null, tournament_id: null, team_a_name: 'Ravi', team_b_name: 'Kiran', score_summary: SCORE, rules: { v: 1, bestOf: 3 }, format: null, overs: null });
+    expect((await call({ retired: true, retired_side: 'A', winner_side: 'A' })).body.code).toBe('BAD_RETIREMENT');
+    expect((await call({ retired: true, winner_side: 'B' })).statusCode).toBe(400);
+    setup({ status: 'scheduled', team_a_id: null, team_b_id: null, tournament_id: null, team_a_name: 'Ravi', team_b_name: 'Kiran' });
+    expect((await call({ retired: true, retired_side: 'A', winner_side: 'B' })).body.code).toBe('NOT_LIVE');
+    expect(writes()).toHaveLength(0);
+  });
+});

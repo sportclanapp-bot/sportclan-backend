@@ -2915,6 +2915,9 @@ export async function completeMatch(req: Request, res: Response) {
     // reads "… won (… retired)".
     const retired = req.body?.retired === true;
     const retiredTeamId = typeof req.body?.retired_team_id === 'string' ? req.body.retired_team_id as string : null;
+    // F089 (launch test plan): …or its side, for a singles match or a friendly between
+    // typed-in names (a side with no team row) — as a default can be (below).
+    const retiredSideIn: 'A' | 'B' | null = req.body?.retired_side === 'A' || req.body?.retired_side === 'B' ? req.body.retired_side : null;
     // Stage 9 · T9: a default ("def.") — the referee or organiser defaults a side
     // during play (the end of the code-violation ladder): the other side wins
     // with the score as it stood. Played, so rated, like a retirement.
@@ -3122,8 +3125,15 @@ export async function completeMatch(req: Request, res: Response) {
     // decided result that advances the bracket. A walkover must name a winner.
     const teamless = !match.team_a_id && !match.team_b_id;
     const sideDefault = defaulted && teamless && !!defaultedSideIn && (winner_side === 'A' || winner_side === 'B') && winner_side !== defaultedSideIn;
-    if (walkover && !winner_team_id && !sideDefault) {
-      return res.status(400).json({ error: retired ? 'A retirement needs the side that goes through.' : 'A walkover needs a winning team.' });
+    // F089: a retirement named by side; the winner by side, or by its team.
+    const retireWinner: 'A' | 'B' | null = winner_side === 'A' || winner_side === 'B' ? winner_side
+      : winner_team_id && winner_team_id === match.team_a_id ? 'A' : winner_team_id && winner_team_id === match.team_b_id ? 'B' : null;
+    const sideRetire = retired && !retiredTeamId && !!retiredSideIn && !!retireWinner && retireWinner !== retiredSideIn
+      && (!winner_team_id || winner_team_id === (retireWinner === 'A' ? match.team_a_id : match.team_b_id));
+    if (walkover && !winner_team_id && !sideDefault && !sideRetire) {
+      return res.status(400).json(retired
+        ? { error: 'Name the side that retired; the other side wins.', code: 'BAD_RETIREMENT' }
+        : { error: 'A walkover needs a winning team.' });
     }
     if (defaulted) {
       const sides = [match.team_a_id, match.team_b_id];
@@ -3136,7 +3146,7 @@ export async function completeMatch(req: Request, res: Response) {
     }
     if (retired) {
       const sides = [match.team_a_id, match.team_b_id];
-      if (!retiredTeamId || !sides.includes(retiredTeamId) || !sides.includes(winner_team_id) || retiredTeamId === winner_team_id) {
+      if (!sideRetire && (!retiredTeamId || !sides.includes(retiredTeamId) || !sides.includes(winner_team_id) || retiredTeamId === winner_team_id)) {
         return res.status(400).json({ error: 'Name the side that retired; the other side wins.', code: 'BAD_RETIREMENT' });
       }
       if (match.status !== 'live') {
@@ -3811,8 +3821,9 @@ export async function completeMatch(req: Request, res: Response) {
         resultForNotice = ss.result;
       } else if (retired && derivedSide) {
         // Badminton gap 6: the score at retirement stays; the result says who retired.
-        const rName = retiredTeamId === match.team_a_id ? aName : bName;
-        ss.retired = { team_id: retiredTeamId, side: retiredTeamId === match.team_a_id ? 'A' : 'B', ...(walkover_reason ? { reason: String(walkover_reason).slice(0, 200) } : {}) };
+        const rSide: 'A' | 'B' = sideRetire ? retiredSideIn! : retiredTeamId === match.team_a_id ? 'A' : 'B';
+        const rName = rSide === 'A' ? aName : bName;
+        ss.retired = { team_id: (rSide === 'A' ? match.team_a_id : match.team_b_id) ?? null, side: rSide, ...(walkover_reason ? { reason: String(walkover_reason).slice(0, 200) } : {}) };
         ss.result = `${derivedSide === 'A' ? aName : bName} won (${rName} retired)`;
         resultForNotice = ss.result;
       } else if (walkover && derivedSide) {

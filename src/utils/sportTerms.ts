@@ -152,8 +152,10 @@ export function beforeStart(sport: string | null | undefined): string {
  * "the umpire or the referee" (badminton, table tennis), "the referee or the head
  * referee" (pickleball), "the referee" (volleyball — its delegate doesn't).
  */
-export function deciders(sport: string | null | undefined): string {
+export function deciders(sport: string | null | undefined, plus?: string): string {
   const t = sportTerms(sport);
   const above = /delegate|commissioner|technical/i.test(t.referee) || t.referee === t.official ? null : t.referee.toLowerCase();
-  return `the ${t.official.toLowerCase()}${above ? ` or the ${above}` : ''}`;
+  // F159 (launch test plan): one list with one 'or' — 'the umpire, the chief referee or the organiser'.
+  const who = [`the ${t.official.toLowerCase()}`, ...(above ? [`the ${above}`] : []), ...(plus ? [plus] : [])];
+  return who.length === 1 ? who[0]! : `${who.slice(0, -1).join(', ')} or ${who[who.length - 1]}`;
 }

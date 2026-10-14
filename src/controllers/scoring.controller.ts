@@ -1523,7 +1523,8 @@ export function aggregateRallyPlayers(events: { event_type: string; payload: any
     if (e.event_type !== 'score' && e.event_type !== 'point') continue;
     const line = (players[id] ??= { side: sideOfPayload(p), points: 0 });
     if (!line.name) { const nm = nameFromPayload(p); if (nm) line.name = nm; }
-    line.points += Number(p.value ?? 1);
+    // F167: a side-out rally (pickleball) is credited to the player who won it, but scores no point.
+    line.points += p.side_out === true ? 0 : Number(p.value ?? 1);
     // Stage 14 · VB8: how it was won (attack, block, ace…), counted per player.
     if (typeof p.how === 'string' && /^[a-z_]{1,20}$/.test(p.how)) line[`how_${p.how}`] = (line[`how_${p.how}`] ?? 0) + 1;
     else if (p.super_serve === true || (p.kind === 'ace' && e.event_type === 'score')) line.how_ace = (line.how_ace ?? 0) + 1;

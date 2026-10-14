@@ -49,6 +49,10 @@ export interface SideOutState {
   buzzer?: boolean;
   /** Stage 11 · PB9: the match ended level at time (no winner). */
   level?: boolean;
+  /** N-SPP1-PKB-2 (launch test plan): rallies played in the game in play (a side out is one). */
+  rallies?: number;
+  /** N-SPP1-PKB-1: who won the last point of the game in play. */
+  lastPoint?: PbSide | null;
 }
 
 const other = (s: PbSide): PbSide => (s === 'A' ? 'B' : 'A');
@@ -82,7 +86,7 @@ function gameWon(a: number, b: number, opts: SideOutOpts): PbSide | null {
 function addPoint(s: SideOutState, side: PbSide, opts: SideOutOpts): SideOutState {
   const cur = { ...s.cur, [side]: s.cur[side] + 1 };
   const w = gameWon(cur.A, cur.B, opts);
-  if (!w) return { ...s, cur };
+  if (!w) return { ...s, cur, lastPoint: side };
   const games = [...s.games, cur];
   const won = { ...s.won, [w]: s.won[w] + 1 };
   const need = Math.floor(opts.maxGames / 2) + 1;
@@ -93,10 +97,11 @@ function addPoint(s: SideOutState, side: PbSide, opts: SideOutOpts): SideOutStat
 
 export function sideOutRally(s: SideOutState, winner: PbSide, opts: SideOutOpts): SideOutState {
   if (s.winner || s.level) return s;
-  if (winner === s.server) return afterTime(addPoint(s, winner, opts));
+  const played = { ...s, rallies: (s.rallies ?? 0) + 1 }; // N-SPP1-PKB-2: play has restarted
+  if (winner === s.server) return afterTime(addPoint(played, winner, opts));
   // A fault on the serving side.
-  if (opts.doubles && s.serverNum === 1) return { ...s, serverNum: 2 };
-  return { ...s, server: other(s.server), serverNum: 1 };
+  if (opts.doubles && s.serverNum === 1) return { ...played, serverNum: 2 };
+  return { ...played, server: other(s.server), serverNum: 1 };
 }
 
 /**

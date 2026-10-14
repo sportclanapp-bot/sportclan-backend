@@ -1646,6 +1646,7 @@ export async function getCommentary(req: Request, res: Response) {
         sport: slug, teamA, teamB, period: periods - 1, move: moves, clockSeconds: (ev as any).clock_seconds ?? null,
         regulation: rulesOf(slug, match).periods ?? null, // BUILD 3.17: the match's own periods
         periodMinutes: rulesOf(slug, match).periodMinutes ?? null, // BUILD 3.22: the timeline minute
+        extraMinutes: (rulesOf(slug, match) as { extraTimeMinutes?: number | null }).extraTimeMinutes ?? null, // F186
         threeByThree: slug === 'basketball' && rulesOf(slug, match).pointSet === '12', // Stage 15 follow-up
       });
       commentary = line.text;

@@ -23,6 +23,8 @@ export interface CommentaryContext {
   periodMinutes?: number | null;
   /** BUILD 3.17: the match's regulation periods, when known (football 1–4). */
   regulation?: number | null;
+  /** F186: minutes an extra-time half (football), for the timeline minute in extra time. */
+  extraMinutes?: number | null;
   /** Stage 15 follow-up: a 3x3 game (its 1 is a shot inside the arc; free throws have their own kind). */
   threeByThree?: boolean;
   /** Chess: moves so far, including this one. */
@@ -44,10 +46,15 @@ const CARD = { yellow: '🟨 Yellow card', red: '🟥 Red card', green: '🟩 Gr
  * BUILD 3.22 · the timeline minute from a football / hockey event's match time:
  * 1' from the first second; past a period's length, "45+2'".
  */
-export function matchMinute(seconds: number, periodMinutes: number, period: number): string {
-  const base = (Math.max(1, period) - 1) * periodMinutes;
+export function matchMinute(seconds: number, periodMinutes: number, period: number, regulation?: number | null, extraMinutes?: number | null): string {
+  // F186 (launch test plan): past the regulation periods, extra-time halves of their own length
+  // (2 × 30 + 2 × 10: ET2 starts at 70'), as the app's clock (periods.ts periodSpan).
+  const p = Math.max(1, period);
+  const et = regulation != null && !!extraMinutes && p > regulation;
+  const base = et ? regulation! * periodMinutes + (p - regulation! - 1) * extraMinutes! : (p - 1) * periodMinutes;
+  const length = et ? extraMinutes! : periodMinutes;
   const minute = Math.floor(seconds / 60) + 1;
-  return minute > base + periodMinutes ? `${base + periodMinutes}+${minute - base - periodMinutes}'` : `${minute}'`;
+  return minute > base + length ? `${base + length}+${minute - base - length}'` : `${minute}'`;
 }
 
 export function sportCommentary(eventType: string, p: Record<string, any>, ctx: CommentaryContext): string | null {
@@ -59,7 +66,7 @@ export function sportCommentary(eventType: string, p: Record<string, any>, ctx: 
   if (line && goalSport && !shootoutKick && typeof ctx.clockSeconds === 'number' && ctx.periodMinutes) {
     // ctx.period counts periods ENDED (right for "End of Q3"); a goal is in the next one.
     const periodNow = eventType === 'period_change' ? ctx.period : ctx.period + 1;
-    return `${matchMinute(ctx.clockSeconds, ctx.periodMinutes, periodNow)} ${line}`;
+    return `${matchMinute(ctx.clockSeconds, ctx.periodMinutes, periodNow, ctx.regulation, ctx.extraMinutes)} ${line}`;
   }
   return line;
 }

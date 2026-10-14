@@ -396,8 +396,8 @@ app.listen(PORT, () => {
   // scheduler: decision D2 forbids a new Render service.
   const runMatchSweeps = async () => {
     try {
-      const { abandoned } = await sweepStaleLiveMatches();
-      if (abandoned) console.log(`[sweep-stale-live] abandoned ${abandoned}`); // eslint-disable-line no-console
+      const { abandoned, completed } = await sweepStaleLiveMatches();
+      if (abandoned || completed) console.log(`[sweep-stale-live] abandoned ${abandoned}, ended with their result ${completed}`); // eslint-disable-line no-console
     } catch (e) {
       console.warn('[sweep-stale-live] failed', e instanceof Error ? e.message : e); // eslint-disable-line no-console
     }

@@ -82,7 +82,7 @@ router.post('/expire-invites', async (_req, res) => {
 router.post('/sweep-matches', async (_req, res) => {
   const live = await sweepStaleLiveMatches();
   const unplayed = await sweepUnplayedScheduledMatches();
-  res.json({ staleLiveAbandoned: live.abandoned, unplayedAbandoned: unplayed.abandoned });
+  res.json({ staleLiveAbandoned: live.abandoned, staleLiveCompleted: live.completed, unplayedAbandoned: unplayed.abandoned }); // F191
 });
 
 export default router;

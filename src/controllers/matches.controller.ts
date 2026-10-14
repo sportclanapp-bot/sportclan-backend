@@ -1532,18 +1532,94 @@ async function abandonInChunks(ids: string[]): Promise<number> {
   return n;
 }
 
-export async function sweepStaleLiveMatches(): Promise<{ abandoned: number }> {
+/**
+ * F191 (launch test plan) · what a match's own rules say about it now: a side has won it (a best-of
+ * length, a team tie or series, a chess result, a cricket match that is over), a draw those rules
+ * allow, or null — not decided (a timed game nobody ended can't be judged from here).
+ */
+export function staleMatchOutcome(
+  slug: string,
+  cs: Record<string, any> | null | undefined,
+  match: { rules?: unknown; format?: string | null; overs?: number | null; toss_choice?: string | null },
+  lineup: Array<{ team_side: string }>,
+): { side: 'A' | 'B' | null } | null {
+  const tie = cs?.tie as { decided?: unknown; settled?: unknown } | undefined;
+  if (tie && (tie.decided === 'A' || tie.decided === 'B')) return { side: tie.decided };
+  if (tie && (tie.settled === 'A' || tie.settled === 'B')) return { side: tie.settled };
+  if (tie && (tie.decided === 'draw' || tie.settled === 'draw')) return { side: null };
+  if (slug === 'chess') {
+    const r = String(cs?.chess?.result ?? '');
+    return r === 'White wins' ? { side: 'A' } : r === 'Black wins' ? { side: 'B' } : r === 'Draw' ? { side: null } : null;
+  }
+  if (slug === 'cricket') {
+    const facts = (x: any) => ({ runs: Number(x?.runs ?? 0), wickets: Number(x?.wickets ?? 0), balls: Number(x?.balls ?? 0), declared: x?.declared === true });
+    const a = facts(cs?.A); const b = facts(cs?.B);
+    const chaser = chasingSide(cs?.toss_winner_side ?? null, match.toss_choice ?? null, cs?.first_batting_side ?? null);
+    if (!chaser) return null;
+    const first: 'A' | 'B' = chaser === 'A' ? 'B' : 'A';
+    const r = rulesOf('cricket', match as never);
+    const allOut = allOutBySide(lineup, r.players, r.lastManStands);
+    const dlsTarget = cs?.dls_applied ? Number(cs?.dls_target ?? 0) || null : null;
+    const stage = cricketStage({ first: first === 'A' ? a : b, chase: first === 'A' ? b : a, overs: r.overs ?? null, firstAllOut: allOut[first], chaseAllOut: allOut[chaser], dlsTarget });
+    if (stage !== 'over') return null;
+    const d = deriveResultText({ sport: 'cricket', teamAName: 'A', teamBName: 'B', aScore: a.runs, bScore: b.runs, aWickets: a.wickets, bWickets: b.wickets, aAllOut: allOut.A, bAllOut: allOut.B, tossWinnerSide: cs?.toss_winner_side ?? null, tossChoice: match.toss_choice ?? null, firstBattingSide: cs?.first_batting_side ?? null, dlsTarget });
+    return { side: d.winnerSide };
+  }
+  const bo = bestOfState(slug, cs, match);
+  if (bo?.decided && bo.leader) return { side: bo.leader };
+  return null;
+}
+
+/** F191: a stale match's outcome, read fresh (its summary rebuilt from its events). */
+async function staleOutcomeOf(id: string): Promise<{ side: 'A' | 'B' | null } | null> {
+  const { data: m } = await supabase.from('matches').select('id, sport_id, rules, format, overs, toss_choice, score_summary').eq('id', id).maybeSingle();
+  if (!m) return null;
+  const slug = normSportSlug((await getSport((m as { sport_id: string }).sport_id))?.slug);
+  const cs = { ...(((m as { score_summary?: object }).score_summary ?? {}) as object), ...((await recomputeSummary(id, { persist: false }).catch(() => null)) ?? {}) } as Record<string, any>;
+  const { data: lineup } = await supabase.from('match_participants').select('team_side').eq('match_id', id);
+  return staleMatchOutcome(slug, cs, m as never, (lineup ?? []) as Array<{ team_side: string }>);
+}
+
+/** F191: end a decided stale match as its creator would (the full completion: ratings, records, bracket). */
+async function completeStale(id: string, outcome: { side: 'A' | 'B' | null }): Promise<boolean> {
+  const { data: m } = await supabase.from('matches').select('id, created_by, team_a_id, team_b_id').eq('id', id).maybeSingle();
+  if (!m) return false;
+  const mm = m as { created_by: string | null; team_a_id: string | null; team_b_id: string | null };
+  const body = outcome.side
+    ? { winner_side: outcome.side, winner_team_id: (outcome.side === 'A' ? mm.team_a_id : mm.team_b_id) ?? undefined, idempotent: true }
+    : { is_draw: true, idempotent: true };
+  let status = 0;
+  const res: any = { status: (c: number) => { status = c; return res; }, json: () => res, setHeader: () => undefined };
+  res.statusCode = 200;
+  const req: any = { userId: mm.created_by, params: { id }, query: {}, body, headers: {}, get: () => undefined, header: () => undefined, [SYSTEM_COMPLETION]: true };
+  await completeMatch(req, res);
+  return status === 0 || status === 200;
+}
+
+export async function sweepStaleLiveMatches(deps: {
+  outcome?: (id: string) => Promise<{ side: 'A' | 'B' | null } | null>;
+  complete?: (id: string, outcome: { side: 'A' | 'B' | null }) => Promise<boolean>;
+} = {}): Promise<{ abandoned: number; completed: number }> {
+  const outcomeOf = deps.outcome ?? staleOutcomeOf;
+  const complete = deps.complete ?? completeStale;
   const cutoff = new Date(Date.now() - STALE_LIVE_HOURS * 3600_000).toISOString();
   const { data: stale, error } = await supabase
     .from('matches')
-    .select('id')
+    .select('id, tournament_id')
     .eq('status', 'live')
-    .lt('updated_at', cutoff)
-    // Audit #52: a tournament fixture is its organiser's to finish (it moves the
-    // bracket on); abandoning it here left the bracket stuck.
-    .is('tournament_id', null);
-  if (error || !stale || stale.length === 0) return { abandoned: 0 };
-  return { abandoned: await abandonInChunks(stale.map((m) => (m as { id: string }).id)) };
+    .lt('updated_at', cutoff);
+  if (error || !stale || stale.length === 0) return { abandoned: 0, completed: 0 };
+  // F191: a match its own rules say is decided is ENDED with that result (it was abandoned and
+  // the result lost). An undecided casual match is abandoned as before. Audit #52: an undecided
+  // tournament fixture is its organiser's to finish (abandoning it left the bracket stuck).
+  const abandon: string[] = [];
+  let completed = 0;
+  for (const row of stale as Array<{ id: string; tournament_id: string | null }>) {
+    const outcome = await outcomeOf(row.id).catch(() => null);
+    if (outcome && (await complete(row.id, outcome).catch(() => false))) { completed += 1; continue; }
+    if (!row.tournament_id) abandon.push(row.id);
+  }
+  return { abandoned: abandon.length ? await abandonInChunks(abandon) : 0, completed };
 }
 
 /**
@@ -2930,8 +3006,12 @@ export async function cancelMatch(req: Request, res: Response) {
 const SLOW_COMPLETE_MS = 2000;
 const SLOW_AFTER_MS = 5000;
 
+/** F191: set only by the server's own stale-match sweep (never from a request) — it ends a decided match. */
+export const SYSTEM_COMPLETION = Symbol('systemCompletion');
+
 export async function completeMatch(req: Request, res: Response) {
   const userId = req.userId;
+  const system = (req as unknown as Record<symbol, unknown>)[SYSTEM_COMPLETION] === true;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
@@ -3002,7 +3082,7 @@ export async function completeMatch(req: Request, res: Response) {
     if (!match) return res.status(404).json({ error: 'Match not found' });
     // Authorization before status (SC-33): a non-owner must get 403, not learn
     // the match state via a 400.
-    if (!(await canOfficiateMatch(match, userId))) {
+    if (!system && !(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can complete' : 'Only the creator or umpire can complete' });
     }
     if (defaulted && !(await canDefault(match, userId))) {
@@ -3047,7 +3127,7 @@ export async function completeMatch(req: Request, res: Response) {
       getSport(match.sport_id as string),
       canonicalP,
     ]);
-    if (!verdict.ok) {
+    if (!system && !verdict.ok) { // F191: the sweep ends a match the scorer's phone left
       return res.status(409).json(leaseRefusal(verdict, userId));
     }
     // F-02: completing is the most final way to start a match — Elo was applied

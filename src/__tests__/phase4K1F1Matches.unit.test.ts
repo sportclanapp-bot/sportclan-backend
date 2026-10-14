@@ -86,7 +86,7 @@ describe('K1-35b (8b7784b) · SC-16 stale live matches are abandoned', () => {
     mockNext = (q) => (q.some((c) => c.startsWith('select:')) ? { data: [{ id: 'm1' }, { id: 'm2' }] } : { data: null });
     const before = Date.now();
     const out = await sweepStaleLiveMatches();
-    expect(out).toEqual({ abandoned: 2 });
+    expect(out).toEqual({ abandoned: 2, completed: 0 }); // F191: none of these is decided
     const read = mockLog[0].join(' ');
     expect(read).toContain('eq:["status","live"]');
     const cutoff = JSON.parse(mockLog[0].find((c) => c.startsWith('lt:'))!.slice(3))[1];
@@ -98,7 +98,7 @@ describe('K1-35b (8b7784b) · SC-16 stale live matches are abandoned', () => {
   });
   it('K1-35b (8b7784b): nothing stale → nothing written', async () => {
     mockNext = () => ({ data: [] });
-    expect(await sweepStaleLiveMatches()).toEqual({ abandoned: 0 });
+    expect(await sweepStaleLiveMatches()).toEqual({ abandoned: 0, completed: 0 });
     expect(writes()).toHaveLength(0);
   });
   it('K1-35b (8b7784b): the hourly sweep actually calls it', () => {

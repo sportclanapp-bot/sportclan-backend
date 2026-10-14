@@ -3072,15 +3072,28 @@ export async function completeMatch(req: Request, res: Response) {
         });
       }
       // Stage 15 follow-up: a best-of-N series (any sport) ends once a side has won it, and that side is the winner.
-      const seriesTie = tieSpecOf(normSportSlug(sportRow?.slug), rulesOf(normSportSlug(sportRow?.slug), match))?.series ? (canonical as { tie?: { decided?: unknown; rubbersA?: number; rubbersB?: number } } | null)?.tie : null;
+      const seriesTie = tieSpecOf(normSportSlug(sportRow?.slug), rulesOf(normSportSlug(sportRow?.slug), match))?.series ? (canonical as { tie?: { decided?: unknown; settled?: unknown; rubbersA?: number; rubbersB?: number } } | null)?.tie : null;
       if (seriesTie && submittedSummary?.score_only !== true) {
+        // N-INV1-R2-1: a cricket series is settled once every game is played too (a no result
+        // counts as played) — by more games won, or as a drawn series.
+        const settled = seriesTie.settled ?? seriesTie.decided;
         const played = Number(seriesTie.rubbersA ?? 0) + Number(seriesTie.rubbersB ?? 0);
-        if (played > 0 && seriesTie.decided !== 'A' && seriesTie.decided !== 'B') {
+        if ((played > 0 || seriesTie.settled === 'draw') && settled !== 'A' && settled !== 'B' && settled !== 'draw') {
           return res.status(409).json({ error: 'The series isn’t decided yet — play the next game.', code: 'SERIES_NOT_DECIDED' });
         }
-        if ((seriesTie.decided === 'A' || seriesTie.decided === 'B') && winnerSide && winnerSide !== seriesTie.decided) {
-          const n = seriesTie.decided === 'A' ? match.team_a_name : match.team_b_name;
-          return res.status(409).json({ error: `The series says ${n ?? `Team ${seriesTie.decided}`} won it.`, code: 'WINNER_NOT_LEADER' });
+        if ((settled === 'A' || settled === 'B') && winnerSide && winnerSide !== settled) {
+          const n = settled === 'A' ? match.team_a_name : match.team_b_name;
+          return res.status(409).json({ error: `The series says ${n ?? `Team ${settled}`} won it.`, code: 'WINNER_NOT_LEADER' });
+        }
+        if (settled === 'draw' && winnerSide) {
+          // A level series has no winner — only a knockout must send a side through, and that is
+          // the organiser's call (the tournament's way: seeding or a toss).
+          if (!(await isKnockoutBracketMatch(match))) {
+            return res.status(409).json({ error: 'The series ended level — it’s a drawn series.', code: 'SERIES_LEVEL' });
+          }
+          if (!match.tournament_id || !(await isTournamentOrganiser(match.tournament_id as string, userId))) {
+            return res.status(403).json({ error: 'The series ended level — only the organiser can send a side through.', code: 'SERIES_LEVEL_ORGANISER_ONLY' });
+          }
         }
       }
     }
@@ -3749,8 +3762,11 @@ export async function completeMatch(req: Request, res: Response) {
       // but a result submitted with the score uses the flat one — reading only
       // the nested keys rendered every such match as "won 0-0" while the
       // standings, which do consult the flat keys, showed the real difference.
-      const aScore = Number(ss?.team_a_score ?? ss?.A?.score ?? ss?.A?.runs ?? 0);
-      const bScore = Number(ss?.team_b_score ?? ss?.B?.score ?? ss?.B?.runs ?? 0);
+      // N-INV1-R2-1: a cricket series is scored in games won — not the runs of its last game
+      // (a drawn series was given to whoever made more runs in game 3).
+      const seriesGames = cricketSeriesMatch ? (ss as { tie?: { series?: boolean; rubbersA?: number; rubbersB?: number } }).tie : null;
+      const aScore = seriesGames?.series ? Number(seriesGames.rubbersA ?? 0) : Number(ss?.team_a_score ?? ss?.A?.score ?? ss?.A?.runs ?? 0);
+      const bScore = seriesGames?.series ? Number(seriesGames.rubbersB ?? 0) : Number(ss?.team_b_score ?? ss?.B?.score ?? ss?.B?.runs ?? 0);
 
       // SC-441 (M1): derived in ONE place now. This block used to build the
       // sentence inline with NO wickets branch — for cricket it was always
@@ -3793,11 +3809,16 @@ export async function completeMatch(req: Request, res: Response) {
 
       ss.result = resultText;
       // Stage 15 follow-up: a series reads by its games — "Kings won the series 2–1".
-      const sTie = (ss as { tie?: { series?: boolean; rubbersA?: number; rubbersB?: number } }).tie;
-      const seriesSide = cricketSeriesMatch && sTie ? explicitWinner ?? derivedSide : null;
+      const sTie = (ss as { tie?: { series?: boolean; settled?: unknown; rubbersA?: number; rubbersB?: number } }).tie;
+      const seriesLevel = cricketSeriesMatch && sTie?.settled === 'draw'; // N-INV1-R2-1
+      const seriesSide = cricketSeriesMatch && sTie ? explicitWinner ?? (seriesLevel ? null : derivedSide) : null;
+      const games = sTie ? `${Math.max(sTie.rubbersA ?? 0, sTie.rubbersB ?? 0)}–${Math.min(sTie.rubbersA ?? 0, sTie.rubbersB ?? 0)}` : '';
       if (seriesSide) {
         const w = seriesSide === 'A' ? aName : bName;
-        ss.result = `${w} won the series ${Math.max(sTie!.rubbersA ?? 0, sTie!.rubbersB ?? 0)}–${Math.min(sTie!.rubbersA ?? 0, sTie!.rubbersB ?? 0)}`;
+        // A level series sends a side through only in a knockout, on the organiser's word.
+        ss.result = seriesLevel ? `${w} go through — the series ended level ${games}` : `${w} won the series ${games}`;
+      } else if (seriesLevel) {
+        ss.result = `Series drawn ${games}`;
       }
       ss.winner_side = seriesSide ?? derivedSide;
       resultForNotice = resultText;

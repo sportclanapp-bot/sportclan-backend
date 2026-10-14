@@ -1836,7 +1836,7 @@ export async function recomputeSummary(
     if (crSeries && crSpec) {
       const { data: lineup2 } = await supabase.from('match_participants').select('team_side').eq('match_id', matchId);
       const out2 = allOutBySide(lineup2 ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands);
-      summary.tie = { win: 'first', rubbersA: crSeries.wonA, rubbersB: crSeries.wonB, unitsA: crSeries.wonA, unitsB: crSeries.wonB, decided: crSeries.decided, series: true };
+      summary.tie = { win: 'first', rubbersA: crSeries.wonA, rubbersB: crSeries.wonB, unitsA: crSeries.wonA, unitsB: crSeries.wonB, decided: crSeries.decided, settled: crSeries.settled, series: true }; // N-INV1-R2-1: settled
       summary.rubbers = crSeries.ends.map((x) => {
         const g = mainEvents(cricketGameEvents(events, x.game));
         const a = sideTotals(g, 'A', out2.A); const b = sideTotals(g, 'B', out2.B);

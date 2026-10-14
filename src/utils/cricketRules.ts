@@ -583,6 +583,10 @@ export type CricketGameEnd = { game: number; winner: 'A' | 'B' | null; nextFirst
 /** The series so far: each finished game, games won, the game in play, and the winner once a side has a majority of `games`. */
 export function cricketSeries(events: readonly Ev[], games: number): {
   ends: CricketGameEnd[]; wonA: number; wonB: number; current: number; decided: 'A' | 'B' | null; need: number;
+  /** N-INV1-R2-1: every game played (a no result counts as played). */
+  finished: boolean;
+  /** N-INV1-R2-1: how it ends — decided, or once every game is played the side with more games, else a drawn series. */
+  settled: 'A' | 'B' | 'draw' | null;
 } {
   const ends: CricketGameEnd[] = [];
   for (const e of events) {
@@ -593,7 +597,9 @@ export function cricketSeries(events: readonly Ev[], games: number): {
   const need = Math.floor(games / 2) + 1;
   const wonA = ends.filter((x) => x.winner === 'A').length; const wonB = ends.filter((x) => x.winner === 'B').length;
   const decided = wonA >= need ? 'A' : wonB >= need ? 'B' : null;
-  return { ends, wonA, wonB, current: decided ? ends.length : Math.min(games, ends.length + 1), decided, need };
+  const finished = ends.length >= games;
+  const settled = decided ?? (finished ? (wonA > wonB ? 'A' : wonB > wonA ? 'B' : 'draw') : null);
+  return { ends, wonA, wonB, current: decided ? ends.length : Math.min(games, ends.length + 1), decided, need, finished, settled };
 }
 
 /** One game's events (its deliveries and its super overs), without the game-end notes. */

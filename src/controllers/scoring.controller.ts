@@ -504,7 +504,7 @@ export async function validateScoringEvent(
   if (event_type === 'note' && payload && payload.kind === 'shootout') {
     const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
     if ((slug !== 'football' && slug !== 'hockey') || !tieSpecOf(slug, rulesOf(slug, match))?.series) return refuse(400, { error: 'A shoot-out tally is kept this way only in a football or hockey series.', code: 'BAD_NOTE' });
-    const sp = shootoutProblem(payload.A, payload.B);
+    const sp = shootoutProblem(payload.A, payload.B, null, slug); // N-RWD3-1
     if (sp) return refuse(400, { error: sp, code: 'BAD_NOTE' });
   }
   // Stage 14 · VB1 / VB7 / VB12 / VB8: volleyball's court notes and its PVL extras, basketball's stats.

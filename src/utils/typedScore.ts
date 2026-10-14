@@ -377,7 +377,7 @@ export function typedPeriodPoints(
   }
   const level = a === b;
   if (level && k === 'basketball') return no('A basketball game can’t end level — add the overtime.');
-  if (level && r.drawAllowed === false) return no('This match can’t end level — a level knockout goes to penalties: score them on the pad.');
+  if (level && r.drawAllowed === false) return no(`This match can’t end level — a level knockout goes to ${k === 'hockey' ? 'a shoot-out' : 'penalties'}: score ${k === 'hockey' ? 'it' : 'them'} on the pad.`); // F182: hockey's word
   const events: TypedPeriodEvent[] = [];
   ps.forEach((p, i) => {
     if (i > 0) events.push({ event_type: 'period_change', payload: { kind: k === 'basketball' ? 'quarter' : regulation === 2 ? 'halftime' : 'period', typed: true } });

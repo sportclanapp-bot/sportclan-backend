@@ -41,12 +41,15 @@ export function validShootout(a: unknown, b: unknown, kicks?: number | null): bo
 }
 
 /** Why a shootout tally can't be, in the scorer's words — or null. */
-export function shootoutProblem(a: unknown, b: unknown, kicks?: number | null): string | null {
+export function shootoutProblem(a: unknown, b: unknown, kicks?: number | null, sport?: string | null): string | null {
+  // N-RWD3-1 (launch test plan): hockey's shoot-out takes attempts, not kicks.
+  const hockey = sport === 'hockey';
+  const so = hockey ? 'shoot-out' : 'shootout';
   const ok = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= SHOOTOUT_MAX;
-  if (!ok(a) || !ok(b)) return 'A shootout score is two whole numbers, 0 or more.';
-  if (a === b) return 'A shootout can’t end level.';
+  if (!ok(a) || !ok(b)) return `A ${so} score is two whole numbers, 0 or more.`;
+  if (a === b) return `A ${so} can’t end level.`;
   if (kicks && Math.max(a as number, b as number) > kicks && Math.abs((a as number) - (b as number)) !== 1) {
-    return `After ${plural(kicks, 'kick')} each it’s sudden death, so it ends by one goal (e.g. ${kicks + 1}–${kicks}).`;
+    return `After ${plural(kicks, hockey ? 'attempt' : 'kick')} each it’s sudden death, so it ends by one goal (e.g. ${kicks + 1}–${kicks}).`;
   }
   return null;
 }

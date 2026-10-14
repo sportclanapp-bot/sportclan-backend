@@ -3301,7 +3301,7 @@ export async function completeMatch(req: Request, res: Response) {
         return res.status(400).json({ error: 'A shootout decides only a level knockout football or hockey match.', code: 'SHOOTOUT_NOT_ALLOWED' });
       }
       // BUILD 3.18: the match's kicks each, then sudden death.
-      const problem = shootoutProblem(shootoutScore!.A, shootoutScore!.B, shootoutKicksOf(rulesOf(normSportSlug(sportRow?.slug), match)));
+      const problem = shootoutProblem(shootoutScore!.A, shootoutScore!.B, shootoutKicksOf(rulesOf(normSportSlug(sportRow?.slug), match)), normSportSlug(sportRow?.slug)); // N-RWD3-1
       if (problem) {
         return res.status(400).json({ error: problem, code: 'BAD_SHOOTOUT' });
       }

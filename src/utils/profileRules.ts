@@ -44,9 +44,26 @@ export function dobProblem(dob: unknown): string | null {
   if (dob == null || dob === '') return null;
   const d = new Date(dob as string);
   if (isNaN(d.getTime())) return 'Date of birth is not a valid date';
-  if (d.getTime() > Date.now()) return 'Date of birth can\u2019t be in the future';
-  if ((Date.now() - d.getTime()) / (365.25 * 24 * 60 * 60 * 1000) > 120) return 'Please enter a valid date of birth';
+  // N-RWG4-13 (launch test plan): by calendar DATE, as the app's picker offers it (today,
+  // back to the same day 120 years ago). Measuring 120 × 365.25 days from this instant
+  // refused the picker's own earliest date for most of the day. India's date, with a
+  // day's slack either side for a phone in another time zone.
+  const ymd = typeof dob === 'string' && /^\d{4}-\d{2}-\d{2}/.test(dob) ? dob.slice(0, 10) : d.toISOString().slice(0, 10);
+  const today = indiaYmd(new Date());
+  if (ymd > shiftYmd(today, 1)) return 'Date of birth can\u2019t be in the future';
+  const floor = `${String(Number(today.slice(0, 4)) - 120).padStart(4, '0')}${today.slice(4)}`;
+  if (ymd < shiftYmd(floor, -1)) return 'Please enter a valid date of birth';
   return null;
+}
+
+/** Today's date in India, YYYY-MM-DD. */
+function indiaYmd(now: Date): string {
+  return new Date(now.getTime() + 330 * 60_000).toISOString().slice(0, 10);
+}
+/** A YYYY-MM-DD date moved by whole days. */
+function shiftYmd(ymd: string, days: number): string {
+  const t = Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10))) + days * 86_400_000;
+  return new Date(t).toISOString().slice(0, 10);
 }
 
 /**

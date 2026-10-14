@@ -16,7 +16,7 @@ import { inviteFreshCutoffIso } from './invites.controller';
 import { resolveSportId } from '../utils/sportId';
 import { isSportInactive } from '../utils/sports';
 import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
-import { RESERVED_USERNAMES, EMAIL_RE, GENDERS, GENDER_ERROR } from '../utils/profileRules';
+import { RESERVED_USERNAMES, EMAIL_RE, GENDERS, GENDER_ERROR, dobProblem } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
@@ -522,19 +522,10 @@ export async function updateMe(req: Request, res: Response) {
     return res.status(400).json({ error: `Name must be ${LIMITS.teamNameMax} characters or fewer` });
   }
   // SC-248: a DOB can't be in the future or imply an implausible age (>120y).
+  // N-RWG4-13: the one rule sign-up uses too (utils/profileRules), by calendar date.
   if (patch.dob != null && patch.dob !== '') {
-    const dobDate = new Date(patch.dob as string);
-    if (isNaN(dobDate.getTime())) {
-      return res.status(400).json({ error: 'Date of birth is not a valid date' });
-    }
-    const now = new Date();
-    const age = (now.getTime() - dobDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
-    if (dobDate.getTime() > now.getTime()) {
-      return res.status(400).json({ error: 'Date of birth can’t be in the future' });
-    }
-    if (age > 120) {
-      return res.status(400).json({ error: 'Please enter a valid date of birth' });
-    }
+    const why = dobProblem(patch.dob);
+    if (why) return res.status(400).json({ error: why });
   }
   // SC-365: the display NAME could be saved empty or as pure whitespace, which
   // left a profile with no visible name anywhere it's rendered.

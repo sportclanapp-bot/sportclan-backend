@@ -771,13 +771,17 @@ export function bestPlacedAcrossGroups(
     return s && s.played > 0 ? f(s) / s.played : 0;
   };
   // Stage 8: the same order as the tables, per game played (groups can differ in
-  // size); head-to-head, run rate and the chess scores can't compare teams that
-  // never met, so they're left out. Then fair play, a draw of lots, the team id.
-  const order = tiebreakerRules ? buildOrder(tiebreakerRules) : (['points', 'score_diff', 'score_scored'] as Criterion[]);
+  // size); head-to-head and the chess scores can't compare teams that never met,
+  // so they're left out (run rate can: N-SPP2-1). Then fair play, a draw of lots, the team id.
+  // N-SPP2-1: with no order set, the tables' own default — for cricket that has net run rate.
+  const order = buildOrder(tiebreakerRules);
   const lotIndex = new Map((extra.lots ?? []).map((id, i) => [id, i]));
   const value = (id: string, c: Criterion): number | null => {
     if (c === 'fair_play') return extra.fairPlay?.get(id) ?? 0;
-    if (c === 'head_to_head' || isChessCriterion(c) || c === 'score_rate' || isBetween(c) || c === 'points_diff_vs_next') return null; // TT4: teams from different groups never met · CH1: nor the chess ones
+    // N-SPP2-1: net run rate is each team's own figure over all its games — it compares teams that
+    // never met (it was left out, so cricket fell to raw run difference). Not for a sport without it.
+    if (c === 'score_rate') return stats.get(id)?.nrr ?? null;
+    if (c === 'head_to_head' || isChessCriterion(c) || isBetween(c) || c === 'points_diff_vs_next') return null; // TT4: teams from different groups never met · CH1: nor the chess ones
     if (c === 'score_ratio') return GLOBAL_CRITERION.score_ratio(stats.get(id) ?? ({} as TeamStat));
     if (c === 'points_ratio') return GLOBAL_CRITERION.points_ratio(stats.get(id) ?? ({ rallyFor: 0, rallyAgainst: 0 } as TeamStat)); // Stage 14 · VB5: a ratio is already per game
     if (c === 'win_ratio' || c === 'avg_points_capped') return GLOBAL_CRITERION[c](stats.get(id) ?? ({} as TeamStat)); // Stage 15 · BB5: already per game

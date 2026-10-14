@@ -134,22 +134,26 @@ function tennisPoints(rules: MatchRules, sets: TypedSet[]): { problem: string | 
       if (!done || !done.tiebreak || done.tiebreak.A !== set.a || done.tiebreak.B !== set.b) return { problem: `Set ${k + 1} is the match tiebreak: ${label(set)} isn’t a finished one (to 10, win by 2).`, points, winner: null };
       continue;
     }
+    let inTiebreak = false;
     for (const g of interleave(winner, w, l)) {
       if (s.sets.length > before) break;
       if (s.tiebreak) {
-        // A set's tiebreak: the typed points (7-5), or the winner's points until it's won.
-        if (typedTb) {
-          const tw = winner === 'A' ? set.tbA! : set.tbB!; const tl = winner === 'A' ? set.tbB! : set.tbA!;
-          if (tw <= tl) return { problem: `Set ${k + 1}: the tiebreak ${set.tbA}–${set.tbB} goes the other way.`, points, winner: null };
-          for (const p of interleave(winner, tw, tl)) { if (s.sets.length > before) break; play(p); }
-        } else {
-          for (let guard = 0; guard < 40 && s.sets.length === before; guard++) play(winner);
-        }
+        inTiebreak = true;
+        // A set's tiebreak: its typed points (7-5). F164 (launch test plan): without them the winner
+        // was given every point — a 7–0 tiebreak nobody played, saved as 7–6(0). They're asked for.
+        if (!typedTb) return { problem: `Set ${k + 1} (${label(set)}) went to a tiebreak — type its points too (e.g. 7–5).`, points, winner: null };
+        const tw = winner === 'A' ? set.tbA! : set.tbB!; const tl = winner === 'A' ? set.tbB! : set.tbA!;
+        if (tw <= tl) return { problem: `Set ${k + 1}: the tiebreak ${set.tbA}–${set.tbB} goes the other way.`, points, winner: null };
+        for (const p of interleave(winner, tw, tl)) { if (s.sets.length > before) break; play(p); }
         break;
       }
       for (let p = 0; p < 4; p++) play(g);
     }
     const done = s.sets[before];
+    // N-RWD2-6: a typed tiebreak that doesn't finish (8–7) is the tiebreak's problem, not the set's.
+    if (inTiebreak && typedTb && (!done || !done.tiebreak || done.tiebreak.A !== set.tbA || done.tiebreak.B !== set.tbB)) {
+      return { problem: `Set ${k + 1}: the tiebreak ${set.tbA}–${set.tbB} isn’t a finished one (win by 2).`, points, winner: null };
+    }
     if (!done || done.A !== set.a || done.B !== set.b) {
       return { problem: `Set ${k + 1}: ${label(set)} isn’t a finished set under this match’s rules${done ? ` (it ends ${done.A}–${done.B})` : ''}.`, points, winner: null };
     }
@@ -298,7 +302,7 @@ export function typedTiePoints(
 
 /** "11-8, 9-11, 11-6" — the typed games for the timeline (a set's tiebreak in brackets). */
 export function typedScoreText(sets: TypedSet[]): string {
-  return sets.map((x) => `${x.a}–${x.b}${x.tbA != null && x.tbB != null ? ` (${Math.min(x.tbA, x.tbB)})` : ''}`).join(', ');
+  return sets.map((x) => `${x.a}–${x.b}${x.tbA != null && x.tbB != null ? `(${Math.min(x.tbA, x.tbB)})` : ''}`).join(', '); // F171: 7–6(5), as the score reads
 }
 
 /**

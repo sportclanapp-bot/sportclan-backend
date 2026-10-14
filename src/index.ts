@@ -1,6 +1,6 @@
+import 'dotenv/config';
 import { privacyPolicyHtml } from './legal/privacyPage';
 import { limitReply } from './utils/limitReply';
-import 'dotenv/config';
 
 // FIRST, before anything else can throw. An error while wiring the app is
 // precisely the error most worth reporting, and it is the one a reporter

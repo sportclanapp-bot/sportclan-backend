@@ -10,10 +10,13 @@ import { inningsFinished } from '../utils/cricketRules';
 import { tennisReplay } from '../utils/tennisCore';
 import { carromBoard, emptyCarrom } from '../utils/carromCore';
 
-test('5.3 · DLS answers as it did before the build', () => {
-  expect(calculateDLSTarget(150, 20, 10, 3)).toEqual({ revisedTarget: 74, resourcesTeam1: 55.8, resourcesTeam2: 26.81, method: 'DLS' });
+test('5.3 · DLS answers, pinned (re-pinned 14 Oct 2026 for F138: the chase is charged only the overs the rain took)', () => {
+  // F138: the old pins (74, 88) were the bug — they charged Team 2 as if it had batted nothing.
+  expect(calculateDLSTarget(150, 20, 10, 3, 10)).toEqual({ revisedTarget: 151, resourcesTeam1: 55.8, resourcesTeam2: 55.8, method: 'DLS' }); // 10 batted, none lost
+  expect(calculateDLSTarget(150, 20, 6, 3, 10)).toEqual({ revisedTarget: 126, resourcesTeam1: 55.8, resourcesTeam2: 46.37, method: 'DLS' }); // 4 overs lost
   expect(calculateDLSTarget(150, 20, 20, 0).revisedTarget).toBe(151); // no interruption, no change
-  expect(calculateDLSTarget(200, 50, 25, 5)).toEqual({ revisedTarget: 88, resourcesTeam1: 87.01, resourcesTeam2: 37.74, method: 'DLS' });
+  expect(calculateDLSTarget(150, 20, 12, 0, 0)).toEqual({ revisedTarget: 106, resourcesTeam1: 55.8, resourcesTeam2: 38.73, method: 'DLS' }); // cut to 12 before the chase
+  expect(calculateDLSTarget(200, 50, 15, 5, 25)).toEqual({ revisedTarget: 177, resourcesTeam1: 87.01, resourcesTeam2: 76.29, method: 'DLS' });
   expect(dlsInputProblem({ team1Score: 0, totalOvers: 0, team2OversLeft: 0, team2Wickets: 0 } as never)).not.toBeNull();
 });
 

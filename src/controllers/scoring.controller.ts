@@ -462,6 +462,21 @@ export async function validateScoringEvent(
   if (event_type === 'card' && payload && payload.minutes != null && !(Number.isInteger(payload.minutes) && payload.minutes > 0)) {
     return refuse(400, { error: 'A card’s length is a whole number of minutes.', code: 'BAD_CARD' });
   }
+  // N-TC-2 (launch test plan): once a shoot-out has started (and wasn't backed out of), the match's
+  // goals are over — a stray GOAL tap turned a level knockout into a win and orphaned the kicks.
+  if (event_type === 'score' && payload && match.sport_id) {
+    const slugS = normSportSlug((await getSport(match.sport_id))?.slug);
+    if (slugS === 'football' || slugS === 'hockey') {
+      const notes = (await matchEventsAll(match.id, 'event_type, payload', (q) => q.eq('event_type', 'note'))) as Array<{ payload?: { kind?: unknown } }> | null; // audit #38
+      let on = false;
+      for (const n of notes ?? []) {
+        const k = n.payload?.kind;
+        if (k === 'shootout_start') on = true;
+        else if (k === 'shootout_cancel' || k === 'game_end') on = false; // backed out of; or a series' next game
+      }
+      if (on) return refuse(409, { error: `The ${slugS === 'hockey' ? 'shoot-out' : 'penalty shoot-out'} has started — score its kicks, or go back to the match first.`, code: 'IN_SHOOTOUT' });
+    }
+  }
   // Stage 16 · HK2: how a goal was scored is one the sport has.
   if (event_type === 'score' && payload && payload.how != null && payload.kind === 'goal') {
     const slugG = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';

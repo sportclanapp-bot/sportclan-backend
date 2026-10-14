@@ -471,7 +471,7 @@ export const CONDUCT_STEPS: Readonly<Record<string, Readonly<Record<string, Ladd
     default: step('team default', 'match'), delay_warning: step('delay warning', 'none'), delay_penalty: step('delay penalty', 'points', 1),
   },
   chess: { warning: step('warning', 'none'), time: step('time to the opponent', 'time'), default: step('game lost', 'match') }, // Stage 12 · CH8
-  carrom: { warning: step('warning', 'none'), board: step('board lost', 'board'), default: step('match lost', 'match') }, // Stage 13 · CR7
+  carrom: { warning: step('warning', 'none'), board: step('board lost', 'board'), final_warning: step('final warning', 'none'), default: step('match lost', 'match') }, // Stage 13 · CR7 · N-SPP1-CRM-1: point carrom's second step
 };
 /**
  * Stage 14 · VB3 · a sport's separate ladder for delays (FIVB 16.2: the first a
@@ -536,7 +536,9 @@ export function conductLadder(sport: string | null | undefined, rules: Partial<M
   const std = CONDUCT_LADDERS[key];
   if (!std) return [];
   const own = rules?.penaltyLadder;
-  return (own && !ladderProblem(key, own) ? own : std).split(',') as LadderStep[];
+  const steps = (own && !ladderProblem(key, own) ? own : std).split(',') as LadderStep[];
+  // N-SPP1-CRM-1 (launch test plan): point carrom has no boards — 'the board lost' is a final warning there.
+  return key === 'carrom' && rules?.carromMode === 'points' ? steps.map((s) => (s === 'board' ? 'final_warning' : s)) : steps;
 }
 
 /** BUILD 3.59+ · the tennis core's options from a match's rules (tennisCore.TennisOpts). */

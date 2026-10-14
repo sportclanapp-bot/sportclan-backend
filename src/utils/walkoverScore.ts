@@ -10,13 +10,18 @@
  * the games / sets a win takes in the fixture's length (3–0 in a best of 5,
  * 2–0 in a best of 3) and 1–0 in chess.
  */
-import { walkoverGoalsOf, type MatchRules } from './matchRules';
+import { tieSpecOf, walkoverGoalsOf, type MatchRules } from './matchRules';
+import { tieNeed } from './tieCore';
 import { bestOfFor, lengthKey, winsNeeded } from './matchLength';
 
 export function walkoverScoreFor(sport: string | null | undefined, rules: MatchRules, tournamentSettings?: unknown): number | null {
   const w = tournamentSettings && typeof tournamentSettings === 'object' ? (tournamentSettings as { walkoverScore?: unknown }).walkoverScore : undefined;
   if (typeof w === 'number' && w > 0) return w;
   if (w === 'straight') {
+    // N-SPP1-TTN-1: a team tie (or a best-of series) is scored in matches — its walkover is the
+    // matches the tie needs (Swaythling 5–0), not the games one match needs (3–0).
+    const spec = tieSpecOf(sport, rules);
+    if (spec) return tieNeed(spec);
     if (lengthKey(sport) === 'chess') return 1;
     const bo = rules.bestOf ?? bestOfFor(sport, null);
     if (bo != null) return winsNeeded(bo);

@@ -142,6 +142,13 @@ describe('the server takes a super over ball only on a level knockout', () => {
     setup();
     expect(await v({ super_over: 1 })).toBeNull();
   });
+  test('F139: level on the DLS target counts as level (Lions 5; Tigers, set 5, make 4)', async () => {
+    setup();
+    summary = { A: { runs: 5, balls: 6 }, B: { runs: 4, balls: 4 }, dls_applied: true, dls_target: 5, first_batting_side: 'A' };
+    expect(await v({ super_over: 1 })).toBeNull();
+    summary = { A: { runs: 5, balls: 6 }, B: { runs: 5, balls: 4 }, dls_applied: true, dls_target: 5, first_batting_side: 'A' }; // level runs, but the target reached: won on DLS
+    expect((await v({ super_over: 1 }))?.body.code).toBe('SUPER_OVER_NOT_ALLOWED');
+  });
   test('not level, not a knockout, out of order, already decided, a bad number', async () => {
     setup();
     summary = { A: { runs: 5, balls: 6 }, B: { runs: 4, balls: 6 } };

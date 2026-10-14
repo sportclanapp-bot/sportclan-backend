@@ -16,7 +16,7 @@ import { myScheduledMatches, pickNextMatch } from '../utils/nextMatch';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
-import { dlsWinner, deriveResultText, chasingSide } from '../utils/matchResult';
+import { dlsWinner, deriveResultText, chasingSide, tiedOnDlsTarget } from '../utils/matchResult';
 import { ballWho, silentOnTimeline, timelineLine, wicketWords } from '../utils/commentary';
 export { ballWho, wicketWords }; // moved to utils/commentary (audit batch 4); still exported here for old importers
 import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease, isStale, STALE_AFTER_MS } from '../utils/scoringLease';
@@ -3236,8 +3236,14 @@ export async function completeMatch(req: Request, res: Response) {
     // recorded as its score; the named winner is the super over's.
     const superOver = (req.body?.super_over ?? null) as { A?: unknown; B?: unknown } | null;
     const superOverScore = superOver ? { A: Number(superOver.A), B: Number(superOver.B) } : null;
+    // F139: tied means level runs — or, with a DLS target in force, level on the target only
+    // (level runs can then be a DLS win).
+    const cricketMerged = { ...((match.score_summary ?? {}) as object), ...((canonical ?? {}) as object) } as { dls_applied?: unknown };
+    const cricketTied = cricketMerged.dls_applied
+      ? tiedOnDlsTarget(cricketMerged as never, match.toss_choice as string | null)
+      : Number(canonical?.A?.score ?? 0) === Number(canonical?.B?.score ?? 0);
     if (superOver) {
-      const level = Number(canonical?.A?.score ?? 0) === Number(canonical?.B?.score ?? 0);
+      const level = cricketTied;
       if (normSportSlug(sportRow?.slug) !== 'cricket' || !isBracketMatch || !level) {
         return res.status(400).json({ error: 'A super over decides only a tied knockout cricket match.', code: 'SUPER_OVER_NOT_ALLOWED' });
       }
@@ -3258,7 +3264,7 @@ export async function completeMatch(req: Request, res: Response) {
     const tieFallback = (req.body?.tie_fallback ?? null) as string | null;
     let fallbackBoundaries: { w: number; l: number } | null = null;
     if (!walkover && !superOver && normSportSlug(sportRow?.slug) === 'cricket' && isBracketMatch) {
-      const levelMain = Number(canonical?.A?.score ?? 0) === Number(canonical?.B?.score ?? 0);
+      const levelMain = cricketTied; // F139: on runs or on the DLS target
       if (tieFallback != null) {
         const configured = ((await tournamentSettingsOf(match.tournament_id as string | null)) as { tieFallback?: string } | null)?.tieFallback ?? 'seed';
         if (!levelMain || (lastSO?.done && lastSO.winner)) {
@@ -3389,7 +3395,9 @@ export async function completeMatch(req: Request, res: Response) {
         firstBattingSide: cs?.first_batting_side ?? null,
         dlsTarget: Number(cs?.dls_target ?? 0) || null,
       });
-      if (d && d.winnerSide !== (winnerSide ?? null)) {
+      // F139: a DLS tie is settled by a super over or the tournament's tie-break (checked above).
+      const tieSettled = !!d && d.winnerSide === null && (!!superOver || (!!lastSO?.done && !!lastSO.winner) || tieFallback != null);
+      if (d && !tieSettled && d.winnerSide !== (winnerSide ?? null)) {
         const who = d.winnerSide ? (d.winnerSide === 'A' ? match.team_a_name ?? 'Team A' : match.team_b_name ?? 'Team B') : null;
         return res.status(400).json({
           error: who ? `By the DLS target, ${who} won this match.` : 'By the DLS target, this match is tied.',

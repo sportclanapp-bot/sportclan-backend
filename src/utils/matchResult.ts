@@ -178,10 +178,26 @@ export function dlsWinner(input: Pick<ResultInput, 'aScore' | 'bScore' | 'tossWi
   return { winnerSide: o.winner === 'chaser' ? chaser : o.winner === 'defender' ? defender : null, runs: o.runs, chaser };
 }
 
+/**
+ * F139 (launch test plan): a rain-shortened chase that ended exactly on the DLS target's tie
+ * score is TIED, like level runs — a knockout settles it by a super over or the tournament's
+ * tie-break. `cs` is the match's summary (stored and recomputed, merged).
+ */
+export function tiedOnDlsTarget(cs: { dls_applied?: unknown; dls_target?: unknown; A?: { runs?: unknown }; B?: { runs?: unknown }; toss_winner_side?: Side | null; first_batting_side?: Side | null } | null | undefined, tossChoice: string | null | undefined): boolean {
+  if (!cs?.dls_applied) return false;
+  const d = dlsWinner({
+    aScore: Number(cs.A?.runs ?? 0), bScore: Number(cs.B?.runs ?? 0),
+    tossWinnerSide: cs.toss_winner_side ?? null, tossChoice: (tossChoice ?? null) as never, firstBattingSide: cs.first_batting_side ?? null,
+    dlsTarget: Number(cs.dls_target ?? 0) || null,
+  });
+  return !!d && d.winnerSide === null;
+}
+
 function dlsResult(input: ResultInput): { text: string; winnerSide: Side | null } | null {
   const d = dlsWinner(input);
   if (!d) return null;
-  if (!d.winnerSide) return { text: 'Tied (DLS)', winnerSide: null };
+  // F139: tied on the target; a super over or the tournament's tie-break names who goes through.
+  if (!d.winnerSide) return { text: 'Tied (DLS)', winnerSide: input.explicitWinner ?? null };
   const name = d.winnerSide === 'A' ? input.teamAName : input.teamBName;
   if (d.winnerSide === d.chaser) return { text: `${name} won by ${wicketsInHand(input, d.winnerSide)} (DLS)`, winnerSide: d.winnerSide };
   return { text: `${name} won by ${d.runs} run${d.runs === 1 ? '' : 's'} (DLS)`, winnerSide: d.winnerSide };

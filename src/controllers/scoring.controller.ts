@@ -18,6 +18,7 @@ import { isSportInactive } from '../utils/sports';
 import { isKnownEventType } from '../utils/scoringEvents';
 import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
+import { tiedOnDlsTarget } from '../utils/matchResult';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
@@ -203,7 +204,11 @@ export async function validateScoringEvent(
     const slugSo = normSportSlug((await getSport(String(match.sport_id)))?.slug);
     const ss = (match.score_summary ?? {}) as { A?: { runs?: number; balls?: number; wickets?: number }; B?: { runs?: number; balls?: number; wickets?: number }; super_overs?: Array<{ done?: boolean; winner?: string | null }> };
     const batted = (x?: { balls?: number; wickets?: number }) => Number(x?.balls ?? 0) > 0 || Number(x?.wickets ?? 0) > 0;
-    const level = batted(ss.A) && batted(ss.B) && Number(ss.A?.runs ?? 0) === Number(ss.B?.runs ?? 0);
+    // F139: level on the runs, or on a DLS target.
+    // F139: with a DLS target in force only the target says tied (level runs can be a DLS win).
+    const level = batted(ss.A) && batted(ss.B) && ((ss as { dls_applied?: unknown }).dls_applied
+      ? tiedOnDlsTarget(ss as never, (match as { toss_choice?: string | null }).toss_choice ?? null)
+      : Number(ss.A?.runs ?? 0) === Number(ss.B?.runs ?? 0));
     const bracket = await isKnockoutBracketMatch(match as { tournament_id: string | null; round: number | null; group_label: string | null });
     // Stage 15 follow-up: a tied game of a cricket series is decided by a super over too.
     const soSeries = slugSo === 'cricket' && !!tieSpecOf('cricket', rulesOf('cricket', match as never))?.series;

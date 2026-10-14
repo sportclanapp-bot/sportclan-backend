@@ -82,12 +82,13 @@ const over = (side: 'A' | 'B', runs: number) => [
   { event_type: 'ball', payload: { team_side: side, runs }, created_at: `2026-09-29T10:0${side === 'A' ? 0 : 1}:00Z` },
   ...Array.from({ length: 5 }, () => ({ event_type: 'ball', payload: { team_side: side, runs: 0 }, created_at: `2026-09-29T10:0${side === 'A' ? 0 : 1}:30Z` })),
 ];
+let storedSummary: Record<string, unknown> = {};
 const setup = () => {
   mockNext = (q) => {
     if (q[0] === 'from:matches') {
       return { data: { id: MATCH, created_by: ME, umpire_id: null, status: 'live', team_a_id: TA, team_b_id: TB, sport_id: 's',
         is_ranked: false, tournament_id: 'T', round: 1, next_match_id: null, group_label: null, team_a_name: 'Lions', team_b_name: 'Tigers',
-        score_summary: {}, voided_at: null, format: 'T1', overs: 1, rules: { v: 1, style: 'limited', overs: 1 }, toss_choice: null } };
+        score_summary: storedSummary, voided_at: null, format: 'T1', overs: 1, rules: { v: 1, style: 'limited', overs: 1 }, toss_choice: null } };
     }
     if (q[0] === 'from:tournaments') return { data: { format } };
     if (q[0] === 'from:match_events') return { data: events, count: events.length };
@@ -97,6 +98,7 @@ const setup = () => {
 };
 beforeEach(() => {
   mockLog = [];
+  storedSummary = {};
   mockSport = { slug: 'cricket', allows_draw: true };
   format = 'knockout';
   events = [...over('A', 4), ...over('B', 4)];
@@ -131,6 +133,34 @@ describe('a tied knockout cricket match', () => {
     format = 'knockout';
     mockSport = { slug: 'football', allows_draw: true };
     events = [];
+    expect((await call({ winner_team_id: TB, winner_side: 'B', super_over: { A: 7, B: 11 } })).body.code).toBe('SUPER_OVER_NOT_ALLOWED');
+  });
+});
+
+
+// F139 (launch test plan, Round 2): a knockout chase that ends exactly level on the DLS target
+// (Lions 4; Tigers, set 3 by DLS, make 2) couldn't be finished: the super over, the tournament's
+// tie-break, no winner and a named winner were all refused (each checked the raw runs).
+describe('F139 · tied on the DLS target', () => {
+  const dlsTie = () => { events = [...over('A', 4), ...over('B', 2)]; storedSummary = { dls_applied: true, dls_target: 3, first_batting_side: 'A' }; setup(); };
+  test('the super over (its runs) decides it', async () => {
+    dlsTie();
+    const r = await call({ winner_team_id: TB, winner_side: 'B', super_over: { A: 7, B: 11 } });
+    expect(r.statusCode).toBe(200);
+    const w = writes().map((q) => q.join()).join(' ');
+    expect(w).toContain('Tigers won the super over (11–7)');
+    expect(w).toContain('"winner_side":"B"');
+  });
+  test('a named winner without a tie-break is still refused (it is a tie)', async () => {
+    dlsTie();
+    expect((await call({ winner_team_id: TB, winner_side: 'B' })).body.code).toBe('SUPER_OVER_NEEDED');
+  });
+  test('level runs but the DLS target reached is a DLS win, not a tie', async () => {
+    events = [...over('A', 4), ...over('B', 4)]; storedSummary = { dls_applied: true, dls_target: 4, first_batting_side: 'A' }; setup();
+    expect((await call({ winner_team_id: TB, winner_side: 'B', super_over: { A: 7, B: 11 } })).body.code).toBe('SUPER_OVER_NOT_ALLOWED');
+  });
+  test('a chase that WON on DLS is not a tie: no super over', async () => {
+    events = [...over('A', 4), ...over('B', 3)]; storedSummary = { dls_applied: true, dls_target: 3, first_batting_side: 'A' }; setup();
     expect((await call({ winner_team_id: TB, winner_side: 'B', super_over: { A: 7, B: 11 } })).body.code).toBe('SUPER_OVER_NOT_ALLOWED');
   });
 });

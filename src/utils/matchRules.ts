@@ -451,7 +451,11 @@ export type LadderStepDef = { label: string; effect: LadderEffect; n?: number };
 const step = (label: string, effect: LadderEffect, n?: number): LadderStepDef => (n != null ? { label, effect, n } : { label, effect });
 /** Stage 11 · PB6: every step a sport's ladder may use, in that sport's words. */
 export const CONDUCT_STEPS: Readonly<Record<string, Readonly<Record<string, LadderStepDef>>>> = {
-  tennis: { warning: step('warning', 'none'), point: step('point penalty', 'points', 1), game: step('game penalty', 'game'), default: step('default', 'match') },
+  tennis: {
+    warning: step('warning', 'none'), point: step('point penalty', 'points', 1), game: step('game penalty', 'game'), default: step('default', 'match'),
+    // N-SPP1-TEN-2: time violations have their own track (CONDUCT_DELAY) — never a game or a default.
+    delay_warning: step('time violation warning', 'none'), delay_penalty: step('time violation · point penalty', 'points', 1),
+  },
   badminton: { warning: step('warning', 'none'), point: step('point penalty', 'points', 1), default: step('disqualification', 'match') },
   tabletennis: { warning: step('warning', 'none'), point: step('point penalty', 'points', 1), point2: step('two-point penalty', 'points', 2), default: step('disqualification', 'match') },
   pickleball: {
@@ -472,7 +476,7 @@ export const CONDUCT_STEPS: Readonly<Record<string, Readonly<Record<string, Ladd
  * delay warning, every later one a delay penalty — for the whole match), used
  * for the 'time' offence; other offences don't count delays, nor delays them.
  */
-export const CONDUCT_DELAY: Readonly<Record<string, string>> = { volleyball: 'delay_warning,delay_penalty' };
+export const CONDUCT_DELAY: Readonly<Record<string, string>> = { volleyball: 'delay_warning,delay_penalty', tennis: 'delay_warning,delay_penalty' }; // N-SPP1-TEN-2: tennis
 /** The steps a delay takes in this sport, or null when delays share the misconduct ladder. */
 export function delayLadder(sport: string | null | undefined): LadderStep[] | null {
   const d = CONDUCT_DELAY[lengthKey(sport)];

@@ -256,6 +256,8 @@ export const BASKETBALL_3X3 = { players: 3, pointSet: '12' as const, targetScore
 const is3x3 = (r: Partial<MatchRules>) => r.pointSet === '12';
 /** Stage 15 · the bonus team foul — the rules', else 3x3's 7th or 5x5's 5th (a 3x3 match from before showed the 5th: the bug fixed here). */
 export function teamFoulBonusOf(r: Partial<MatchRules> | null | undefined): number { return r?.teamFoulBonus ?? (r && is3x3(r) ? 7 : 5); }
+/** N-SPP2-9 (launch test plan): the personal fouls that put a player out — none in 3x3 (FIBA 3x3: no foul-out), else the match's (5). */
+export function foulOutOf(r: Partial<MatchRules> | null | undefined): number | null { return r && is3x3(r) ? null : r?.foulOut ?? 5; }
 export function teamFoulPossessionOf(r: Partial<MatchRules> | null | undefined): number | null { return r?.teamFoulPossessionAt ?? (r && is3x3(r) ? 10 : null); }
 /** Stage 15 · BB3: overtime to N points (3x3's 2), or null — the clock decides. */
 export function overtimeToOf(r: Partial<MatchRules> | null | undefined): number | null { return r?.overtimeTo ?? (r && is3x3(r) ? 2 : null); }

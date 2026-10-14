@@ -43,5 +43,14 @@ export function withWalkoverScore(
   ss[winnerSide] = { ...(ss[winnerSide] ?? {}), score: goals };
   ss[loser] = { ...(ss[loser] ?? {}), score: 0 };
   ss.walkover_score = { [winnerSide]: goals, [loser]: 0 };
+  // N-Q070 (launch test plan): a volleyball walkover in straight sets is each set to nil (FIVB: 25–0;
+  // the beach 21–0, as VOLLEYBALL_FOR_DIPAK.md), so it counts in the points ratio like a played match.
+  const straight = !!tournamentSettings && typeof tournamentSettings === 'object' && (tournamentSettings as { walkoverScore?: unknown }).walkoverScore === 'straight';
+  if (straight && lengthKey(sport) === 'volleyball' && !tieSpecOf(sport, rules)) {
+    const to = rules.target ?? 25;
+    ss[winnerSide] = { ...ss[winnerSide], sets: Array.from({ length: goals }, () => to) };
+    ss[loser] = { ...ss[loser], sets: Array.from({ length: goals }, () => 0) };
+    ss.walkover_sets = true;
+  }
   return ss;
 }

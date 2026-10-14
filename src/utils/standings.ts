@@ -117,7 +117,8 @@ export function pointsFor(sportSlug: string | null | undefined, settings?: any):
 export function rallyPointsOf(m: GMatch): { a: number; b: number } {
   const ss: any = m.score_summary ?? {};
   const sum = (x: unknown) => (Array.isArray(x) ? x.reduce((n: number, v: unknown) => n + (Number.isFinite(Number(v)) ? Number(v) : 0), 0) : 0);
-  if (ss.walkover === true) return { a: 0, b: 0 }; // a walkover played no rallies
+  // A walkover played no rallies — N-Q070: but a volleyball one in straight sets counts each set to nil.
+  if (ss.walkover === true && ss.walkover_sets !== true) return { a: 0, b: 0 };
   return { a: sum(ss?.A?.sets), b: sum(ss?.B?.sets) };
 }
 

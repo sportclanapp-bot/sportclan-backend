@@ -629,7 +629,9 @@ export function setConfigOf(rules: MatchRules): { target: number; cap?: number; 
     target: rules.target ?? 21,
     ...(rules.cap != null ? { cap: rules.cap } : {}),
     maxSets: rules.bestOf ?? 3,
-    ...(rules.finalTarget != null ? { finalTarget: rules.finalTarget } : {}),
+    // F153 (launch test plan): a deciding set only when there's more than one — a one-set volleyball
+    // match took its only set as the deciding one (15) and ended there.
+    ...(rules.finalTarget != null && (rules.bestOf ?? 3) > 1 ? { finalTarget: rules.finalTarget } : {}),
     winBy2: rules.winBy2 ?? true,
   };
 }

@@ -13,14 +13,14 @@
 
 import { supabase } from './supabase';
 import { calculateElo } from './ratingEngine';
-import { chessClockLabel, rulesOf } from './matchRules';
+import { chessSpeedOf, rulesOf } from './matchRules';
 
 export type TimeControl = 'bullet' | 'blitz' | 'rapid' | 'classical';
 
 /** The time control a chess match is played at, from its rules (or its stored format). */
 export function timeControlOf(match: { rules?: unknown; format?: string | null; overs?: number | null }): TimeControl {
   const r = rulesOf('chess', match);
-  return chessClockLabel(r.baseMinutes ?? 5, r.incrementSeconds ?? 0).toLowerCase() as TimeControl;
+  return chessSpeedOf(r).toLowerCase() as TimeControl; // F155: with the extra time, as its label
 }
 
 interface Line { user_id: string; rating: number; matches_played: number; wins: number; losses: number; draws: number }

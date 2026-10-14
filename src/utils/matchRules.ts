@@ -659,6 +659,14 @@ export function chessClockText(r: Partial<MatchRules>): string {
 }
 /** Stage 12 · CH6 · the extra minutes a second period adds inside FIDE's 60 moves. */
 export const chessExtraMinutes = (r: Partial<MatchRules>): number => (r.secondPeriodMoves && r.secondPeriodMoves < 60 ? r.secondPeriodMinutes ?? 0 : 0);
+/**
+ * F155 (launch test plan): a chess game's speed — Bullet / Blitz / Rapid / Classical — from its
+ * clock, counting extra time that comes before move 60. The one answer for its label, its
+ * rating and its penalties (the rating left the extra minutes out and could differ).
+ */
+export function chessSpeedOf(r: Partial<MatchRules>): string {
+  return chessClockLabel(r.baseMinutes ?? 5, r.incrementSeconds ?? 0, chessExtraMinutes(r));
+}
 
 /** BUILD 3.67: a chess clock's limits. Stage 12 · CH6 (Dipak): no top — the organiser's clock. */
 export const CHESS_BASE_MINUTES: [number, number] = [1, Number.MAX_SAFE_INTEGER];
@@ -682,7 +690,7 @@ export function legacyFromRules(
   if (key === 'chess') {
     const b = rules.baseMinutes ?? 5;
     const i = rules.incrementSeconds ?? 0;
-    return { format: `${chessClockLabel(b, i, chessExtraMinutes(rules))} · ${b}+${i}`, overs: null };
+    return { format: `${chessSpeedOf(rules)} · ${b}+${i}`, overs: null };
   }
   return { format: key || null, overs: null };
 }

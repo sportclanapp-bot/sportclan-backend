@@ -257,6 +257,8 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     if (p.kind === 'kickoff') return ctx.sport === 'basketball' ? (ctx.period > 0 ? '⏱ Clock started' : '⏱ Tip-off') : ctx.sport === 'chess' ? '⏱ Clocks started' : '⏱ Clock started';
     if (p.kind === 'clock_pause') return '⏸ Clock stopped';
     if (p.kind === 'clock_resume') return '▶ Clock restarted';
+    // F177: the number is time played; basketball's clock counts down, so it reads in time left.
+    if (p.kind === 'clock_adjust' && ctx.sport === 'basketball') return secs ? `⏱ Clock corrected ${secs < 0 ? '+' : '−'}${dur(secs)} left` : '⏱ Clock checked — no change';
     if (p.kind === 'clock_adjust') return secs ? `⏱ Clock corrected ${secs > 0 ? '+' : '−'}${dur(secs)}` : '⏱ Clock checked — no change'; // audit #114
     if (p.kind === 'buzzer') return '⏰ Time’s up';
     if (p.kind === 'serve_order') return `${sportTerms(ctx.sport).icon} Serving order set — player ${p.server === 2 ? 2 : 1} serves to player ${p.receiver === 2 ? 2 : 1}`; // audit #128: the sport's own icon

@@ -24,6 +24,7 @@ test('a running clock corrected: football / hockey with a period length only', a
   expect(await validateScoringEvent('m', m('football', { periodMinutes: 45 }), note({ kind: 'clock_adjust', seconds: -10 }))).toBeNull();
   expect(await validateScoringEvent('m', m('hockey', { periodMinutes: 15 }), note({ kind: 'clock_adjust', seconds: 60 }))).toBeNull();
   expect((await validateScoringEvent('m', m('football', { periodMinutes: null }), note({ kind: 'clock_adjust', seconds: 60 })))?.body.code).toBe('BAD_NOTE');
-  expect((await validateScoringEvent('m', m('basketball'), note({ kind: 'clock_adjust', seconds: 60 })))?.body.code).toBe('BAD_NOTE');
+  expect(await validateScoringEvent('m', m('basketball'), note({ kind: 'clock_adjust', seconds: 60 }))).toBeNull(); // F177: its countdown (Stage 15) can be corrected
+  expect((await validateScoringEvent('m', m('tennis'), note({ kind: 'clock_adjust', seconds: 60 })))?.body.code).toBe('BAD_NOTE');
   expect((await validateScoringEvent('m', m('football', { periodMinutes: 45 }), note({ kind: 'clock_adjust', seconds: 0 })))?.body.code).toBe('BAD_NOTE');
 });

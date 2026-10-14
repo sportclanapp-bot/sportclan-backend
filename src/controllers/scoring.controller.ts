@@ -511,9 +511,10 @@ export async function validateScoringEvent(
     }
   }
   // Stage 12 · CH8: the official corrects a running match clock (football, hockey) by whole seconds.
+  // F177: basketball's countdown too — it always has a clock (10-minute quarters unless set).
   if (event_type === 'note' && payload && payload.kind === 'clock_adjust') {
     const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
-    if ((slug !== 'football' && slug !== 'hockey') || !rulesOf(slug, match).periodMinutes) {
+    if (slug !== 'basketball' && ((slug !== 'football' && slug !== 'hockey') || !rulesOf(slug, match).periodMinutes)) {
       return refuse(400, { error: 'Only a running match clock can be corrected.', code: 'BAD_NOTE' });
     }
     if (typeof payload.seconds !== 'number' || !Number.isInteger(payload.seconds) || payload.seconds === 0) {

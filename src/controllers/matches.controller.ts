@@ -43,6 +43,7 @@ import { upsertVenue } from './venues.controller';
  */
 
 import { awardCoins } from '../utils/coins';
+import { deleteWithReason } from '../utils/softDelete';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
@@ -2185,6 +2186,12 @@ export async function addParticipants(req: Request, res: Response) {
     if (!Array.isArray(participants) || participants.length === 0) {
       return res.status(400).json({ error: 'participants array is required' });
     }
+    // F072 (launch test plan): `replace` — this is the whole line-up (the screen shows the saved
+    // one ticked); players left out are taken out. Without it, as before: added only.
+    const replace = req.body?.replace === true;
+    const inPayload = new Set((participants as Array<{ user_id?: unknown }>).map((p) => String(p?.user_id ?? '')));
+    // A team tie's rows belong to its tie line-up (tieLineup.controller), never to this save.
+    const staysOnReplace = (r: { user_id: string; role?: string | null }) => inPayload.has(r.user_id) || (typeof r.role === 'string' && r.role.startsWith('tie:'));
     // Oct 2026 (Dipak): no cap on a line-up's size (the sport's own rules still apply).
     const { data: match } = await supabase
       .from('matches')
@@ -2266,8 +2273,8 @@ export async function addParticipants(req: Request, res: Response) {
     {
       const rules = rulesOf(lineupSlug, match);
       if (lineupSlug === 'badminton' && rules.players === DOUBLES_PLAYERS) {
-        const { data: cur } = await supabase.from('match_participants').select('user_id, team_side').eq('match_id', id);
-        const side = new Map<string, string>(((cur ?? []) as Array<{ user_id: string; team_side: string }>).map((r) => [r.user_id, r.team_side]));
+        const { data: cur } = await supabase.from('match_participants').select('user_id, team_side, role').eq('match_id', id);
+        const side = new Map<string, string>(((cur ?? []) as Array<{ user_id: string; team_side: string; role?: string | null }>).filter((r) => !replace || staysOnReplace(r)).map((r) => [r.user_id, r.team_side]));
         for (const p of participants as Array<{ user_id: string; team_side: string }>) side.set(p.user_id, p.team_side);
         const sides = [...side.values()];
         const problem = doublesLineupProblem(lineupSlug, rules,
@@ -2279,7 +2286,8 @@ export async function addParticipants(req: Request, res: Response) {
     // Stage 8 · F3: a team with a saved squad plays from it, and starters fit the players a side.
     if (match.tournament_id) {
       const { data: cur } = await supabase.from('match_participants').select('user_id, team_side, role').eq('match_id', id);
-      const problem = await teamSheetProblem(match as never, participants as never, (cur ?? []) as never, lineupSlug, rulesOf(lineupSlug, match).players);
+      const curKept = ((cur ?? []) as Array<{ user_id: string; role?: string | null }>).filter((r) => !replace || staysOnReplace(r));
+      const problem = await teamSheetProblem(match as never, participants as never, curKept as never, lineupSlug, rulesOf(lineupSlug, match).players);
       if (problem) return res.status(409).json(problem);
     }
     const byUser = new Map<string, any>();
@@ -2297,6 +2305,19 @@ export async function addParticipants(req: Request, res: Response) {
     }));
     if (rows.length === 0) {
       return res.status(400).json({ error: 'participants array is required' });
+    }
+    if (replace) {
+      const { data: curRows, error: curErr } = await supabase.from('match_participants').select('id, user_id, team_side, role').eq('match_id', id);
+      if (curErr) return res.status(500).json({ error: sanitizeError(curErr) });
+      const gone = ((curRows ?? []) as Array<{ id: string; user_id: string; role?: string | null }>).filter((r) => !staysOnReplace(r));
+      // Once the match is live a player in it may already have scored: they stay.
+      if (gone.length && match.status === 'live') {
+        return res.status(409).json({ error: 'Players already in a live match stay in its line-up — you can add players, not take them out.', code: 'PLAYER_ALREADY_PLAYING', user_ids: gone.map((r) => r.user_id) });
+      }
+      if (gone.length) {
+        const out = await deleteWithReason('match_participants', gone.map((r) => r.id), userId, 'taken out of the line-up before the start');
+        if (out.error) return res.status(500).json({ error: 'Could not change the line-up. Try again.' });
+      }
     }
     // Upsert on the (match_id,user_id) unique key so re-saving a lineup (e.g.
     // editing the playing XI) doesn't collide — A5-003 P3.

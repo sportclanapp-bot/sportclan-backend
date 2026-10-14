@@ -1739,7 +1739,7 @@ export async function getMatch(req: Request, res: Response) {
     // best-effort exactly as before.
     const [
       { data: participants },
-      { count },
+      { count, editsCount },
       // Average match-quality rating from match_ratings on read — a handful per match.
       { data: ratings },
       // SC-428: what a VIEWER needs to judge whether a frozen scoreboard is a quiet
@@ -1759,7 +1759,13 @@ export async function getMatch(req: Request, res: Response) {
         .from('match_participants')
         .select('id, team_side, role, jersey_number, batting_order, user:user_id (id, name, username, profile_picture_url)')
         .eq('match_id', id),
-      supabase.from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id),
+      // N-RWD3-2: and how many times an event was CORRECTED — an edit changes no count, so a
+      // viewer polling on the count kept the old line on its timeline.
+      Promise.all([
+        supabase.from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id),
+        Promise.resolve(supabase.from('match_event_audit').select('id', { count: 'exact', head: true }).eq('match_id', id).eq('action', 'edit'))
+          .then((r) => r, () => ({ count: 0 })),
+      ]).then(([ev, edits]) => ({ count: ev.count, editsCount: (edits as { count?: number | null }).count ?? 0 })),
       supabase.from('match_ratings').select('match_quality').eq('match_id', id),
       getMatchLiveStatus(match as { id: string; status?: string | null; created_by?: string | null; umpire_id?: string | null })
         .catch(() => null), // the match payload matters more than the freshness hint
@@ -1879,7 +1885,7 @@ export async function getMatch(req: Request, res: Response) {
     timer.mark('attach');
     res.setHeader('Server-Timing', timer.header());
 
-    return res.json({ match: matchWithRating, participants: participants || [], events_count: count || 0 });
+    return res.json({ match: matchWithRating, participants: participants || [], events_count: count || 0, edits_count: editsCount });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -400,13 +400,26 @@ export async function applyDLS(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const { id } = req.params;
-    const { team1_score, total_overs, team2_overs_remaining, team2_wickets } = req.body || {};
+    const { team1_score, total_overs, team2_overs_remaining, team2_wickets, team2_overs_faced } = req.body || {};
 
     if (team1_score == null || total_overs == null || team2_overs_remaining == null || team2_wickets == null) {
       return res.status(400).json({ error: 'team1_score, total_overs, team2_overs_remaining, team2_wickets required' });
     }
     const gate = await loadScorableMatch(id, userId, deviceIdOf(req));
     if (gate.error) return res.status(gate.error.status).json({ error: gate.error.msg, ...(gate.error.code ? { code: gate.error.code } : {}) });
+
+    // F138: the overs Team 2 has already batted. Sent by the app since the fix;
+    // an older app doesn't, so it comes from the match itself (the chasing
+    // side's legal balls) — the chase is never charged as if it had not started.
+    const { data: match } = await supabase
+      .from('matches')
+      .select('score_summary, toss_choice')
+      .eq('id', id)
+      .maybeSingle();
+    const ss = (match?.score_summary ?? {}) as Record<string, any>;
+    const chaser = chasingSide(ss.toss_winner_side ?? null, (match as { toss_choice?: string | null } | null)?.toss_choice ?? null, ss.first_batting_side ?? null);
+    const facedFromMatch = chaser ? Number(ss[chaser]?.balls ?? 0) / 6 : 0;
+    const faced = team2_overs_faced != null && Number.isFinite(Number(team2_overs_faced)) ? Number(team2_overs_faced) : facedFromMatch;
 
     // F-44: before the gate this endpoint answered anything it was asked,
     // including a match of zero overs, and stored the answer on the match.
@@ -415,6 +428,7 @@ export async function applyDLS(req: Request, res: Response) {
       totalOvers: Number(total_overs),
       team2OversLeft: Number(team2_overs_remaining),
       team2Wickets: Number(team2_wickets),
+      team2OversFaced: faced,
     });
     if (problem) return res.status(400).json({ error: problem, code: 'DLS_IMPOSSIBLE' });
 
@@ -423,24 +437,17 @@ export async function applyDLS(req: Request, res: Response) {
       Number(total_overs),
       Number(team2_overs_remaining),
       Number(team2_wickets),
+      faced,
     );
 
     // Store in match score_summary
-    const { data: match } = await supabase
-      .from('matches')
-      .select('score_summary, toss_choice')
-      .eq('id', id)
-      .maybeSingle();
-    const ss = (match?.score_summary ?? {}) as Record<string, any>;
     ss.dls_target = result.revisedTarget;
     ss.dls_applied = true;
     // Audit #59: the overs the chase is now set (faced so far + those left), and
     // who chases — NRR charges both sides these overs (ICC).
-    const chaser = chasingSide(ss.toss_winner_side ?? null, (match as { toss_choice?: string | null } | null)?.toss_choice ?? null, ss.first_batting_side ?? null);
     if (chaser) {
-      const faced = Number(ss[chaser]?.balls ?? 0) / 6;
       ss.dls_chaser = chaser;
-      ss.dls_overs = Math.min(Number(total_overs), Math.round((faced + Number(team2_overs_remaining)) * 6) / 6);
+      ss.dls_overs = Math.min(Number(total_overs), Math.round((facedFromMatch + Number(team2_overs_remaining)) * 6) / 6);
     }
     ss.dls_resources = { team1: result.resourcesTeam1, team2: result.resourcesTeam2 };
 

@@ -31,15 +31,27 @@ export interface DLSResult {
  * @param totalOvers      - Total overs allocated per side before interruption
  * @param team2OversLeft  - Overs remaining for Team 2 after the interruption
  * @param team2Wickets    - Wickets lost by Team 2 at the point of interruption
+ * @param team2OversFaced - Overs Team 2 had already batted when play stopped
+ *                          (0 when the innings was cut before it started)
+ *
+ * F138 (launch test plan): Team 2 is charged only the resources the
+ * interruption took away — R2 = R(full innings) − [R(left at the stoppage, w) −
+ * R(left after it, w)] — not just what it has left. Using only what was left
+ * set a side on 100/2 after 10 of 20 overs a target of 60 (5 overs lost) and,
+ * with no overs lost at all, 107 instead of 201.
  */
 export function calculateDLSTarget(
   team1Score: number,
   totalOvers: number,
   team2OversLeft: number,
   team2Wickets: number,
+  team2OversFaced = 0,
 ): DLSResult {
   const r1 = resourcesRemaining(totalOvers, 0); // Team 1 had full resources
-  const r2 = resourcesRemaining(team2OversLeft, team2Wickets);
+  const faced = Math.max(0, Math.min(totalOvers, team2OversFaced));
+  const leftAtStoppage = Math.max(team2OversLeft, totalOvers - faced);
+  const lost = resourcesRemaining(leftAtStoppage, team2Wickets) - resourcesRemaining(team2OversLeft, team2Wickets);
+  const r2 = r1 - lost;
 
   // Guard against zero/negative Team-1 resources (e.g. totalOvers=0) — the
   // ratio would be NaN/Infinity and revisedTarget would come back NaN (A5-013).
@@ -87,8 +99,11 @@ export function dlsInputProblem(input: {
   totalOvers: number;
   team2OversLeft: number;
   team2Wickets: number;
+  /** F138: overs Team 2 had batted when play stopped (optional; 0 = not started). */
+  team2OversFaced?: number;
 }): string | null {
   const { team1Score, totalOvers, team2OversLeft, team2Wickets } = input;
+  const faced = input.team2OversFaced ?? 0;
   if (![team1Score, totalOvers, team2OversLeft, team2Wickets].every((n) => Number.isFinite(n))) {
     return 'Those are not all numbers.';
   }
@@ -99,5 +114,17 @@ export function dlsInputProblem(input: {
   if (team2OversLeft < 0) return 'Overs remaining cannot be negative.';
   if (team2OversLeft > totalOvers) return 'Team 2 cannot have more overs left than the match allows.';
   if (team2OversLeft === 0) return 'No overs remain — there is nothing left to chase in.';
+  if (!Number.isFinite(faced) || faced < 0) return 'Overs batted cannot be negative.';
+  if (faced > 0 && team2OversLeft > totalOvers - faced + 1e-9) {
+    const left = Math.round((totalOvers - faced) * 6) / 6;
+    return `Team 2 has batted ${oversWords(faced)} overs, so at most ${oversWords(left)} can be left.`;
+  }
   return null;
+}
+
+/** 10 → "10", 10.5 → "10.3" (cricket's overs.balls). */
+function oversWords(overs: number): string {
+  const balls = Math.round(overs * 6);
+  const whole = Math.floor(balls / 6); const rem = balls % 6;
+  return rem ? `${whole}.${rem}` : String(whole);
 }

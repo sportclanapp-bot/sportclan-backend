@@ -15,7 +15,19 @@ import { supabase } from './supabase';
 
 export const TEAM_DISBANDED = { error: 'This team was disbanded', code: 'TEAM_DISBANDED' } as const;
 
-export type TeamDisbandReason = 'captain_disband' | 'last_member_left';
+/**
+ * N-RWG2-9 (launch test plan): a team a moderator removed (an offensive name or
+ * logo, through a report — migration 158). The same soft mark as a disband, with
+ * deleted_reason 'moderator', and it says so. A moderator can restore it.
+ */
+export const TEAM_REMOVED = { error: 'This team was removed by a moderator', code: 'TEAM_REMOVED' } as const;
+
+export type TeamDisbandReason = 'captain_disband' | 'last_member_left' | 'moderator';
+
+/** N-RWG2-9: what a gone team answers — removed by a moderator, or disbanded. */
+export function teamGone(row: { deleted_reason?: string | null } | null | undefined) {
+  return row?.deleted_reason === 'moderator' ? TEAM_REMOVED : TEAM_DISBANDED;
+}
 
 /**
  * Only teams that are not disbanded. Applied to every list, search and picker.
@@ -76,6 +88,41 @@ export async function softDisbandTeam(id: string, by: string, reason: TeamDisban
  */
 export async function refuseDisbandedTeam(req: Request, res: Response, next: NextFunction) {
   const id = req.params.id;
-  if (id && (await isTeamDisbanded(id))) return res.status(410).json(TEAM_DISBANDED);
+  if (id) {
+    const { data } = await supabase.from('teams').select('deleted_at, deleted_reason').eq('id', id).maybeSingle();
+    const row = data as { deleted_at?: string | null; deleted_reason?: string | null } | null;
+    if (row?.deleted_at) return res.status(410).json(teamGone(row));
+  }
   return next();
+}
+
+/**
+ * N-RWG2-9: undo a moderator's removal. Only a moderator's — a captain's
+ * disband was their choice. False when the team isn't one a moderator removed.
+ */
+export async function restoreRemovedTeam(id: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('teams')
+    .update({ deleted_at: null, deleted_by: null, deleted_reason: null })
+    .eq('id', id)
+    .eq('deleted_reason', 'moderator')
+    .select('id');
+  if (error) throw error;
+  return !!data && data.length > 0;
+}
+
+/**
+ * N-RWG2-9: a team with matches or tournament entries is never marked gone (the
+ * disband guard — no match or tournament may point at a gone team). Null when it
+ * can go, else the reason.
+ */
+export async function teamHistoryRefusal(id: string): Promise<{ error: string; code: string } | null> {
+  const [{ count: matchCount }, { count: entryCount }] = await Promise.all([
+    supabase.from('matches').select('id', { count: 'exact', head: true }).or(`team_a_id.eq.${id},team_b_id.eq.${id}`),
+    supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('team_id', id),
+  ]);
+  if ((matchCount ?? 0) > 0 || (entryCount ?? 0) > 0) {
+    return { error: 'This team has matches or tournament entries, so it can’t be removed. Rename it instead.', code: 'TEAM_HAS_HISTORY' };
+  }
+  return null;
 }

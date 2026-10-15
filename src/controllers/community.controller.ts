@@ -19,6 +19,8 @@ import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
 import { isUuid } from '../utils/uuid';
+import { getTeamRole } from '../utils/teamAuth';
+import { teamGone } from '../utils/teamVisibility';
 import { notifyUsers } from '../utils/notify';
 import { taggableBy } from '../utils/tagPrivacy';
 
@@ -1299,12 +1301,16 @@ export async function reportContent(req: Request, res: Response) {
 
   // SC-209: 'message' is now reportable alongside post/comment/user.
   // 27 Sep 2026 (migration 108): so are wall posts and wall comments.
-  let resolvedType: 'post' | 'comment' | 'user' | 'message' | 'profile_post' | 'profile_comment' | null = null;
+  // N-RWG2-9 (launch test plan, migration 158): and teams — an offensive team
+  // name or logo had no way to reach a moderator.
+  let resolvedType: 'post' | 'comment' | 'user' | 'message' | 'profile_post' | 'profile_comment' | 'team' | null = null;
   let resolvedId: string | null = null;
   if (target_type && target_id) {
-    if (!['post', 'comment', 'user', 'message', 'profile_post', 'profile_comment'].includes(target_type)) {
-      return res.status(400).json({ error: 'target_type must be post, comment, user, message, profile_post or profile_comment' });
+    if (!['post', 'comment', 'user', 'message', 'profile_post', 'profile_comment', 'team'].includes(target_type)) {
+      return res.status(400).json({ error: 'target_type must be post, comment, user, message, profile_post, profile_comment or team' });
     }
+    // N-RWG2-9: an id the table can't hold was a 500 at the lookup.
+    if (target_type === 'team' && !isUuid(target_id)) return res.status(404).json({ error: 'Reported content not found' });
     resolvedType = target_type;
     resolvedId = target_id;
   } else if (comment_id) {
@@ -1352,6 +1358,15 @@ export async function reportContent(req: Request, res: Response) {
   } else if (resolvedType === 'message') {
     const { data: t } = await supabase.from('messages').select('sender_id').eq('id', resolvedId).maybeSingle();
     exists = !!t; ownerId = (t as { sender_id?: string } | null)?.sender_id ?? null;
+  } else if (resolvedType === 'team') {
+    // N-RWG2-9: a gone team (disbanded, or removed already) can't be reported;
+    // a tournament entry's hidden team isn't a team anyone sees. Its captain
+    // can't report their own team.
+    const { data: t } = await supabase.from('teams').select('id, kind, deleted_at, deleted_reason').eq('id', resolvedId).maybeSingle();
+    const team = t as { id: string; kind?: string | null; deleted_at?: string | null; deleted_reason?: string | null } | null;
+    if (team?.deleted_at) return res.status(410).json(teamGone(team));
+    exists = !!team && team.kind !== 'entry';
+    if (exists && (await getTeamRole(resolvedId, userId)) === 'captain') ownerId = userId;
   } else {
     const { data: t } = await supabase.from('users').select('id').eq('id', resolvedId).maybeSingle();
     exists = !!t; ownerId = (t as { id?: string } | null)?.id ?? null;

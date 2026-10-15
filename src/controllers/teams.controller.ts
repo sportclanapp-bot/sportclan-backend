@@ -1,6 +1,6 @@
 import { inBackground } from '../utils/background';
 import { deleteMatching } from '../utils/softDelete';
-import { TEAM_DISBANDED, liveTeams, softDisbandTeam } from '../utils/teamVisibility';
+import { TEAM_DISBANDED, liveTeams, softDisbandTeam, teamGone } from '../utils/teamVisibility';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { escapeLike } from '../utils/likeSearch';
 import { syncTournamentChatsForTeam, syncAfterSuccess } from '../utils/tournamentChat';
@@ -282,7 +282,7 @@ export async function getTeam(req: Request, res: Response) {
     // still read the expense history (read-only).
     if ((team as { deleted_at?: string | null }).deleted_at) {
       return res.status(410).json({
-        ...TEAM_DISBANDED,
+        ...teamGone(team as { deleted_reason?: string | null }), // N-RWG2-9: or removed by a moderator
         team: { id: (team as { id: string }).id, name: (team as { name: string }).name },
         former_member: !!membership,
       });

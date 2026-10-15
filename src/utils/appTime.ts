@@ -56,3 +56,13 @@ export function istWhen(iso: string | null | undefined): string | null {
   const clock = `${h % 12 === 0 ? 12 : h % 12}:${m} ${h < 12 ? 'am' : 'pm'}`;
   return `${DAYS[ist.getUTCDay()]} ${ist.getUTCDate()} ${MONTHS[ist.getUTCMonth()]} · ${clock}`;
 }
+
+/**
+ * N-RWG5-6 (launch test plan): a date in India time, the house way — "3 Nov 2026".
+ * (A UTC date in ISO form was a day early for anything between 00:00 and 05:30 IST.)
+ */
+export function istDate(d: Date): string {
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${ist.getUTCDate()} ${MONTHS[ist.getUTCMonth()]} ${ist.getUTCFullYear()}`;
+}

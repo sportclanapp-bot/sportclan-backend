@@ -22,7 +22,7 @@ import { isUuid } from '../utils/uuid';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
-import { istDay } from '../utils/appTime';
+import { istDate, istDay } from '../utils/appTime';
 import { isByeMatch } from '../utils/matchCounts';
 import { isRangeError, parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
@@ -714,8 +714,13 @@ export async function updateMe(req: Request, res: Response) {
         const lastChanged = new Date(current.last_username_changed_at);
         const nextAllowed = new Date(lastChanged.getTime() + USERNAME_COOLDOWN_DAYS * 24 * 60 * 60 * 1000);
         if (new Date() < nextAllowed) {
+          // N-RWG5-6 (launch test plan): the day in India time, the house way
+          // ("3 Nov 2026"); it was the UTC date as "2026-11-02" — a day early
+          // for a change made between 00:00 and 05:30 IST.
           return res.status(400).json({
-            error: `Username can only be changed once every 30 days. Next change available: ${nextAllowed.toISOString().split('T')[0]}`,
+            error: `Username can only be changed once every 30 days. Next change available: ${istDate(nextAllowed)}`,
+            code: 'USERNAME_COOLDOWN',
+            next_change_at: nextAllowed.toISOString(),
           });
         }
       }

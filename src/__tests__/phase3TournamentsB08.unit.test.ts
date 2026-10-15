@@ -404,3 +404,20 @@ describe('F13/F14/F19', () => {
     expect(src).toContain(".select('id, team_id, status, group_label, team:teams(id, name, short_name, logo_url)')");
   });
 });
+
+describe('F130 (launch test plan, Round 3) · a live tournament with matches played stays live', () => {
+  const live = (played: number) => (q: Q) => (q[0] === 'from:tournaments' && has(q, 'maybeSingle')
+    ? { data: { id: T, parent_id: null, is_parent: false, created_by: ME, status: 'live', name: 'P3', start_date: null, end_date: null } }
+    : q[0] === 'from:matches' ? { count: played } : { data: null, count: 0 });
+  test('matches played → 409 TOURNAMENT_STARTED, nothing written', async () => {
+    mockLog = []; mockNext = live(1);
+    const r = await call(updateTournament, { body: { status: 'upcoming' } });
+    expect([r.statusCode, r.body.code]).toEqual([409, 'TOURNAMENT_STARTED']);
+    expect(writes()).toEqual([]);
+  });
+  test('nothing played yet (a Start tapped by mistake) → may go back', async () => {
+    mockLog = []; mockNext = live(0);
+    const r = await call(updateTournament, { body: { status: 'upcoming' } });
+    expect(r.body?.code).not.toBe('TOURNAMENT_STARTED');
+  });
+});

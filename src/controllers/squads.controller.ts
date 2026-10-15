@@ -173,7 +173,13 @@ export async function setSquad(req: Request, res: Response) {
     const add = [...want.values()].map((c) => ({ tournament_id: tid, team_id: teamId, ...c, added_by: userId }));
     if (add.length) {
       const { error } = await supabase.from('tournament_squads').insert(add);
-      if (error) return res.status(409).json({ error: 'A player is already in another team’s squad.', code: 'IN_OTHER_SQUAD' });
+      // F132 (launch test plan): only the one-squad-per-tournament rule (a unique key, two saves at once) is a
+      // clash; any other database error said so too, which may not be true.
+      if (error) {
+        return (error as { code?: string }).code === '23505'
+          ? res.status(409).json({ error: 'A player is already in another team’s squad.', code: 'IN_OTHER_SQUAD' })
+          : res.status(500).json({ error: 'The squad wasn’t saved. Try again.', code: 'SQUAD_NOT_SAVED' });
+      }
     }
     req.params.teamId = teamId;
     return getSquad(req, res);

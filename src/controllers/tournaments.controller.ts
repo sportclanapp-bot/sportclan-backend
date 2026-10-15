@@ -1716,6 +1716,16 @@ export async function updateTournament(req: Request, res: Response) {
         code: 'TOURNAMENT_FINISHED',
       });
     }
+    // F130 (launch test plan): a tournament with matches being (or already) played isn't 'upcoming' again —
+    // any organiser could PATCH it back. Nothing played yet (a Start tapped by mistake) may still go back.
+    if (req.body?.status === 'upcoming' && tournament.status === 'live') {
+      const ids = await familyIds(id);
+      const { count: played } = await supabase.from('matches').select('id', { count: 'exact', head: true })
+        .in('tournament_id', ids).is('voided_at', null).in('status', ['live', 'completed', 'abandoned']);
+      if ((played ?? 0) > 0) {
+        return res.status(409).json({ error: 'Matches have been played, so this tournament can’t go back to upcoming.', code: 'TOURNAMENT_STARTED' });
+      }
+    }
     const isTerminalStatusChange = req.body?.status === 'cancelled' || req.body?.status === 'completed';
     let carveoutViaAdmin = false;
     if (isTerminalStatusChange) {

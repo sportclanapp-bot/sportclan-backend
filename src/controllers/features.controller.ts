@@ -20,7 +20,7 @@ import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCounts';
 import { plural } from '../utils/plural';
 import { deletedIdSet } from '../utils/activeUser';
-import { targetUserHidden } from '../utils/blocks';
+import { blockedUserIds, targetUserHidden } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { sportTerms } from '../utils/sportTerms';
@@ -637,7 +637,17 @@ export async function getSeasonRecap(req: Request, res: Response) {
 // B03 (V245, D3): two variants — what a real viewer sees (test accounts
 // removed) and what a test account sees (everyone) — so a test player can
 // neither leak into nor be missing from the other audience's cached answer.
-const potwCache = new Map<'real' | 'test', { data: any; at: number }>();
+// N-RWG4-15 (launch test plan): the cache held the finished strip, the same for
+// everyone for 24 hours — a player the viewer blocked kept showing, and an account
+// deleted today stayed up to a day (a tap opened 'This player doesn't exist'). It
+// holds the scored CANDIDATES now; each request drops the viewer's blocks and any
+// account deleted since, then picks the top per sport — so the next player takes
+// the card.
+type PotwCandidate = {
+  user_id: string; sport_id: string; rating: number; wins: number; matches_played: number;
+  score: number; matches_this_week: number | null; user: { id: string; name: string | null; username: string | null; profile_picture_url: string | null };
+};
+const potwCache = new Map<'real' | 'test', { data: PotwCandidate[]; at: number }>();
 const POTW_TTL = 24 * 60 * 60 * 1000; // 24h
 
 /**
@@ -667,45 +677,20 @@ async function matchesThisWeek(userIds: string[], since: string): Promise<Map<st
 export async function getPlayerOfWeek(req: Request, res: Response) {
   const hide = await hideTestFor(req.userId);
   const cacheKey = hide ? 'real' : 'test';
-  const cached = potwCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < POTW_TTL) {
-    return res.json(cached.data);
-  }
   try {
-    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-    // Get profiles with recent activity
-    const { data: profiles } = await supabase
-      .from('user_sport_profiles')
-      .select('user_id, sport_id, rating, wins, matches_played, last_match_at')
-      .gte('last_match_at', weekAgo)
-      .order('rating', { ascending: false })
-      .limit(100);
-
-    if (!profiles || profiles.length === 0) {
-      return res.json({ players: [] });
+    const cached = potwCache.get(cacheKey);
+    let candidates: PotwCandidate[];
+    if (cached && Date.now() - cached.at < POTW_TTL) {
+      candidates = cached.data;
+    } else {
+      candidates = await potwCandidates(hide);
+      // Nobody active yet is not kept — the first match this week shows at once.
+      if (candidates.length > 0) potwCache.set(cacheKey, { data: candidates, at: Date.now() });
     }
-
-    // B03: test accounts come out BEFORE the per-sport pick, or a sport whose
-    // top scorer is a test account would lose its card instead of showing the
-    // best real player.
-    const testIds = hide ? await testUserIdSet([...new Set(profiles.map((p) => p.user_id as string))]) : new Set<string>();
-
-    // Score = wins×3 + matches_played×1 + rating×0.01
-    // B02-F6: deleted accounts go before the per-sport pick too — dropped after
-    // it, a sport whose top scorer had deleted their account lost its card.
-    const deletedIds = await deletedIdSet([...new Set(profiles.map((p) => p.user_id as string))]);
-    const scored = profiles.filter((p) => !testIds.has(p.user_id as string) && !deletedIds.has(p.user_id as string)).map((p) => ({
-      ...p,
-      score: (p.wins ?? 0) * 3 + (p.matches_played ?? 0) * 1 + (p.rating ?? 0) * 0.01,
-    }));
-    scored.sort((a, b) => b.score - a.score);
-
-    // B04 (V001, D1): the card says "3 matches this week", so count them — the
-    // profile's matches_played is all-time. Completed, unvoided matches that
-    // finished in the last 7 days, per player and sport, from the line-ups
-    // (the same rows that give match credit). A candidate with none this week
-    // (last_match_at can move on a void) is not shown.
-    const weekly = await matchesThisWeek([...new Set(scored.map((p) => p.user_id as string))], weekAgo);
+    // N-RWG4-15: per viewer, on every read — their blocks (either way), and
+    // accounts deleted since the list was built.
+    const ids = [...new Set(candidates.map((c) => c.user_id))];
+    const [blocked, deletedNow] = await Promise.all([blockedUserIds(req.userId), deletedIdSet(ids)]);
 
     // Top per sport
     // Audit #110: one card per PERSON too — someone top in three sports showed
@@ -713,42 +698,84 @@ export async function getPlayerOfWeek(req: Request, res: Response) {
     // sport's next player.
     const seen = new Set<string>();
     const shownPeople = new Set<string>();
-    const top: typeof scored = [];
-    for (const p of scored) {
-      if (seen.has(p.sport_id) || shownPeople.has(p.user_id as string)) continue;
-      if (weekly && !weekly.get(`${p.user_id}:${p.sport_id}`)) continue;
-      seen.add(p.sport_id);
-      shownPeople.add(p.user_id as string);
-      top.push(p);
+    const top: PotwCandidate[] = [];
+    for (const c of candidates) {
+      if (blocked.has(c.user_id) || deletedNow.has(c.user_id)) continue;
+      if (seen.has(c.sport_id) || shownPeople.has(c.user_id)) continue;
+      seen.add(c.sport_id);
+      shownPeople.add(c.user_id);
+      top.push(c);
     }
-
-    // Enrich with user info
-    const userIds = top.map((p) => p.user_id);
-    const { data: users } = await supabase
-      .from('users')
-      .select('id, name, username, profile_picture_url')
-      .in('id', userIds)
-      .is('deleted_at', null); // SC-78: exclude soft-deleted players
-    const userMap = new Map((users ?? []).map((u: any) => [u.id, u]));
-
-    const result = {
-      // SC-78: drop players whose account is soft-deleted.
-      players: top.filter((p) => userMap.has(p.user_id)).slice(0, 11).map((p) => ({
-        user: userMap.get(p.user_id) ?? null,
-        sport_id: p.sport_id,
-        rating: p.rating,
-        wins: p.wins,
-        matches_played: p.matches_played,
-        matches_this_week: weekly?.get(`${p.user_id}:${p.sport_id}`) ?? null,
-        score: Math.round(p.score),
+    return res.json({
+      players: top.slice(0, 11).map((c) => ({
+        user: c.user,
+        sport_id: c.sport_id,
+        rating: c.rating,
+        wins: c.wins,
+        matches_played: c.matches_played,
+        matches_this_week: c.matches_this_week,
+        score: Math.round(c.score),
       })),
-    };
-
-    potwCache.set(cacheKey, { data: result, at: Date.now() });
-    return res.json(result);
+    });
   } catch {
     return res.status(500).json({ error: 'Could not compute player of the week' });
   }
+}
+
+/** N-RWG4-15: everyone who could take a card this week, best first (the shared, cached part). */
+async function potwCandidates(hide: boolean): Promise<PotwCandidate[]> {
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  // Get profiles with recent activity
+  const { data: profiles } = await supabase
+    .from('user_sport_profiles')
+    .select('user_id, sport_id, rating, wins, matches_played, last_match_at')
+    .gte('last_match_at', weekAgo)
+    .order('rating', { ascending: false })
+    .limit(100);
+  if (!profiles || profiles.length === 0) return [];
+
+  // B03: test accounts come out BEFORE the per-sport pick, or a sport whose
+  // top scorer is a test account would lose its card instead of showing the
+  // best real player.
+  const testIds = hide ? await testUserIdSet([...new Set(profiles.map((p) => p.user_id as string))]) : new Set<string>();
+
+  // Score = wins×3 + matches_played×1 + rating×0.01
+  // B02-F6: deleted accounts go before the per-sport pick too — dropped after
+  // it, a sport whose top scorer had deleted their account lost its card.
+  const deletedIds = await deletedIdSet([...new Set(profiles.map((p) => p.user_id as string))]);
+  const scored = profiles.filter((p) => !testIds.has(p.user_id as string) && !deletedIds.has(p.user_id as string)).map((p) => ({
+    ...p,
+    score: (p.wins ?? 0) * 3 + (p.matches_played ?? 0) * 1 + (p.rating ?? 0) * 0.01,
+  }));
+  scored.sort((a, b) => b.score - a.score);
+
+  // B04 (V001, D1): the card says "3 matches this week", so count them — the
+  // profile's matches_played is all-time. Completed, unvoided matches that
+  // finished in the last 7 days, per player and sport, from the line-ups
+  // (the same rows that give match credit). A candidate with none this week
+  // (last_match_at can move on a void) is not shown.
+  const weekly = await matchesThisWeek([...new Set(scored.map((p) => p.user_id as string))], weekAgo);
+  const inWeek = scored.filter((p) => !weekly || weekly.get(`${p.user_id}:${p.sport_id}`));
+
+  // Enrich with user info
+  const { data: users } = await supabase
+    .from('users')
+    .select('id, name, username, profile_picture_url')
+    .in('id', [...new Set(inWeek.map((p) => p.user_id as string))])
+    .is('deleted_at', null); // SC-78: exclude soft-deleted players
+  const userMap = new Map((users ?? []).map((u: any) => [u.id, u]));
+
+  // SC-78: drop players whose account is soft-deleted.
+  return inWeek.filter((p) => userMap.has(p.user_id)).map((p) => ({
+    user_id: p.user_id as string,
+    sport_id: p.sport_id as string,
+    rating: p.rating,
+    wins: p.wins,
+    matches_played: p.matches_played,
+    score: p.score,
+    matches_this_week: weekly?.get(`${p.user_id}:${p.sport_id}`) ?? null,
+    user: userMap.get(p.user_id),
+  }));
 }
 
 // ────────────────────────────────────────────────────────────────────────────

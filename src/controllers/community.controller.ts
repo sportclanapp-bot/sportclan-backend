@@ -504,6 +504,12 @@ export async function createPost(req: Request, res: Response) {
     }
   }
 
+  // F008 (launch test plan): the app stops at 4 photos and editing refuses a 5th,
+  // but creating stored every entry — so a new post could carry 6. Same cap, same words.
+  if (Array.isArray(media_urls) && media_urls.filter((u: unknown) => typeof u === 'string' && u !== '').length > 4) {
+    return res.status(400).json({ error: 'Maximum 4 images per post' });
+  }
+
   // B03-F8: a number or object as the content was a 500 at .trim().
   if (typeof bodyContent !== 'string' || bodyContent.trim().length === 0) {
     return res.status(400).json({ error: 'Content is required' });

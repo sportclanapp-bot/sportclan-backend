@@ -127,11 +127,22 @@ describe('K2-4 / K2-5 · the fire-and-forget @mention insert logs its failures (
 });
 
 describe('K2-6b · the chat list is paginated (SC-117)', () => {
-  it('K2-6b (cdba317): chats are read with .range() from ?limit/?offset', async () => {
-    mockNext = (q) => (q[0] === 'from:chat_participants' ? { data: [{ chat_id: CHAT }] } : { data: [] });
-    await call(msgs.listChats, { query: { limit: '10', offset: '20' } });
-    const c = mockLog.find((q) => q[0] === 'from:chats')!;
-    expect(c.find((x) => x.startsWith('range:'))).toBe('range:[20,29]');
+  // N-RWG4-1: the chats are ordered by last activity on the server, then the
+  // ?limit/?offset page is cut from that order (it was .range() on one read).
+  it('K2-6b (cdba317): ?limit/?offset pick the page', async () => {
+    const ids = Array.from({ length: 30 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    const at = (id: string) => new Date(Date.UTC(2026, 8, 1, 0, 59 - Number(id.slice(-12)))).toISOString();
+    mockNext = (q) => {
+      if (q[0] === 'from:chat_participants') return { data: ids.map((chat_id) => ({ chat_id })) };
+      if (q[0] === 'from:chats') {
+        const inIds = JSON.parse(q.find((x) => x.startsWith('in:["id"'))!.slice(3))[1] as string[];
+        return { data: inIds.map((id) => ({ id, last_message_at: at(id) })) };
+      }
+      return { data: [] };
+    };
+    const r = await call(msgs.listChats, { query: { limit: '10', offset: '20' } });
+    expect(r.body.chats.map((c: { id: string }) => c.id)).toEqual(ids.slice(20, 30));
+    expect(r.body).toMatchObject({ total: 30, limit: 10, offset: 20, has_more: false });
   });
 });
 
@@ -208,8 +219,9 @@ describe('K2-48 · a block / privacy setting also gates an EXISTING 1:1 thread (
 
 describe('K2-67 · chat list page metadata and a group never left without an admin (SC-299/301)', () => {
   it('K2-67a (9761183): listChats reports total / has_more for the page', async () => {
+    // N-RWG4-1: the total is the chats read (not a count from the page query).
     mockNext = (q) => (q[0] === 'from:chat_participants' ? { data: [{ chat_id: CHAT }, { chat_id: MSG }, { chat_id: D }] }
-      : q[0] === 'from:chats' ? { data: [{ id: CHAT }], count: 3 } : { data: [] });
+      : q[0] === 'from:chats' ? { data: [{ id: CHAT }, { id: MSG }, { id: D }] } : { data: [] });
     const r = await call(msgs.listChats, { query: { limit: '1', offset: '0' } });
     expect(r.body).toMatchObject({ total: 3, limit: 1, offset: 0, has_more: true });
   });

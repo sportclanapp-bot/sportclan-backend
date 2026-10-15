@@ -1,10 +1,10 @@
 import { inBackground } from '../utils/background';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { Request, Response } from 'express';
-import { selectAllIn } from '../utils/selectAll';
+import { allRows, selectAllIn } from '../utils/selectAll';
 import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
-import { chunks, IN_CHUNK } from '../utils/inChunks';
+import { chunks } from '../utils/inChunks';
 import { sanitizeError } from '../utils/response';
 import { isBlockedBetween, blockedUserIds, excludeIds } from '../utils/blocks';
 import { deletedIdSet } from '../utils/activeUser';
@@ -96,6 +96,13 @@ async function isDmBlocked(chatId: string, userId: string): Promise<boolean> {
   return isBlockedBetween(userId, other);
 }
 
+/**
+ * N-RWG1-5 (launch test plan): 'Followers' lets the people who follow this user
+ * write (the check is follower = the sender). It said "Only people they follow
+ * can message this user" — the opposite rule.
+ */
+export const FOLLOWERS_ONLY_DM = 'Only people who follow this user can message them.';
+
 // Send gate (sendMessage): block (either direction) AND the recipient's
 // message_privacy, mirroring getOrCreateDM so privacy→nobody/followers is
 // honoured in an existing thread too. Returns an error {status,error} or null.
@@ -126,7 +133,7 @@ async function dmSendGate(
       .limit(1)
       .maybeSingle();
     if (!follows) {
-      return { status: 403, error: 'Only people they follow can message this user.' };
+      return { status: 403, error: FOLLOWERS_ONLY_DM };
     }
   }
   return null;
@@ -163,63 +170,92 @@ async function markDeliveredForUser(chatIds: string[], userId: string): Promise<
 }
 
 // ─── LIST MY CHATS ──────────────────────────────────────────────────────────
+type ChatHead = { id: string; last_message_at: string | null; created_at: string | null };
+
+/**
+ * N-RWG4-2 (launch test plan): a chat's last activity — its newest message, else
+ * when it started (what the app shows as the row's time). Chats with no message
+ * were in no order at all (the only key was last_message_at, all null).
+ */
+export function chatActivityAt(c: { last_message_at?: string | null; created_at?: string | null }): string {
+  return c.last_message_at ?? c.created_at ?? '';
+}
+
+/** N-RWG4-2: newest activity first; equal times by id, so the order never shuffles. */
+export function byChatActivity(a: ChatHead, b: ChatHead): number {
+  const ta = Date.parse(chatActivityAt(a)) || 0;
+  const tb = Date.parse(chatActivityAt(b)) || 0;
+  if (ta !== tb) return tb - ta;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/** N-RWG4-1: the cursor after a row — its activity time and id. */
+export function chatCursor(c: ChatHead): string {
+  return `${new Date(Date.parse(chatActivityAt(c)) || 0).toISOString()}_${c.id}`;
+}
+
+/** N-RWG4-1: a `before` cursor back to the row it names, or null when it isn't one. */
+export function parseChatCursor(v: unknown): ChatHead | null {
+  if (typeof v !== 'string') return null;
+  const m = v.match(/^(.+)_([0-9a-f-]{36})$/i);
+  if (!m || Number.isNaN(Date.parse(m[1]))) return null;
+  return { id: m[2], last_message_at: m[1], created_at: null };
+}
+
 export async function listChats(req: Request, res: Response) {
   const userId = req.userId!;
 
-  // Get chat IDs for this user
-  const { data: participations, error: pErr } = await supabase
-    .from('chat_participants')
-    .select('chat_id')
-    .is('left_at', null)
-    .eq('user_id', userId);
-
-  if (pErr) return res.status(500).json({ error: sanitizeError(pErr) });
-
-  const chatIds = (participations || []).map((p) => p.chat_id);
+  // N-RWG4-1 (launch test plan): every chat this person is in. One read stopped at
+  // PostgREST's 1000 rows, so someone in more chats never saw the rest — the one
+  // with their newest message could be among the missing. Read 1000 at a time.
+  let chatIds: string[];
+  try {
+    const participations = await allRows<{ chat_id: string }>(() => supabase
+      .from('chat_participants')
+      .select('chat_id')
+      .is('left_at', null)
+      .eq('user_id', userId));
+    chatIds = [...new Set(participations.map((p) => p.chat_id))];
+  } catch (pErr) {
+    return res.status(500).json({ error: sanitizeError(pErr as { message?: string }) });
+  }
   if (chatIds.length === 0) return res.json({ data: [], chats: [] });
+
+  const before = req.query.before;
+  const cursor = before === undefined ? null : parseChatCursor(before);
+  if (before !== undefined && !cursor) {
+    return res.status(400).json({ error: 'before must be a cursor from the last page', code: 'INVALID_CURSOR' });
+  }
 
   // SC-341: the recipient's list poll is where "delivered" is stamped — their app
   // has now received these messages even though they haven't opened the thread.
   await markDeliveredForUser(chatIds, userId);
 
   const lcp = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
-  let chats: Array<Record<string, any>> | null;
-  let liveTotal: number | null;
-  if (chatIds.length <= IN_CHUNK) {
-    const r = await supabase
-      .from('chats')
-      // B09-F20: count the chats that are listed — a deleted one made `total` too big.
-      .select('*', { count: 'exact' })
-      .in('id', chatIds)
-      .is('deleted_at', null) // soft-deleted groups (098) are in no list
-      .order('last_message_at', { ascending: false, nullsFirst: false })
-      .range(lcp.from, lcp.to);
+  // BUILD 1.13: too many chats for one id list in the URL — read each chunk's
+  // order keys. N-RWG4-1/2: then order them all here by last activity (newest
+  // first, ties by id) and fetch just the page: by `offset`, or after the
+  // `before` cursor, which a new message moving a chat to the top can't shift.
+  const heads: ChatHead[] = [];
+  for (const part of chunks(chatIds)) {
+    const r = await supabase.from('chats').select('id, last_message_at, created_at').in('id', part)
+      .is('deleted_at', null); // soft-deleted groups (098) are in no list
     if (r.error) return res.status(500).json({ error: sanitizeError(r.error) });
-    chats = r.data;
-    liveTotal = r.count ?? null;
-  } else {
-    // BUILD 1.13: too many chats for one id list in the URL (it was a 500).
-    // Read each chunk's order key, order them here as the database would
-    // (newest message first, never-messaged last), then fetch just the page.
-    const heads: Array<{ id: string; last_message_at: string | null }> = [];
-    for (const part of chunks(chatIds)) {
-      const r = await supabase.from('chats').select('id, last_message_at').in('id', part).is('deleted_at', null);
-      if (r.error) return res.status(500).json({ error: sanitizeError(r.error) });
-      heads.push(...((r.data ?? []) as Array<{ id: string; last_message_at: string | null }>));
-    }
-    heads.sort((a, b) => {
-      if (a.last_message_at === b.last_message_at) return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-      if (a.last_message_at == null) return 1;
-      if (b.last_message_at == null) return -1;
-      return a.last_message_at < b.last_message_at ? 1 : -1;
-    });
-    const pageIds = heads.slice(lcp.from, lcp.to + 1).map((h) => h.id);
-    const r = pageIds.length > 0 ? await supabase.from('chats').select('*').in('id', pageIds) : { data: [], error: null };
-    if (r.error) return res.status(500).json({ error: sanitizeError(r.error) });
-    const byId = new Map(((r.data ?? []) as Array<Record<string, any>>).map((c) => [c.id as string, c]));
-    chats = pageIds.map((id) => byId.get(id)).filter((c): c is Record<string, any> => !!c);
-    liveTotal = heads.length;
+    heads.push(...((r.data ?? []) as ChatHead[]));
   }
+  heads.sort(byChatActivity);
+  const first = cursor ? heads.findIndex((h) => byChatActivity(h, cursor) > 0) : lcp.from;
+  const start = first < 0 ? heads.length : first;
+  const pageHeads = heads.slice(start, start + lcp.limit);
+  const pageIds = pageHeads.map((h) => h.id);
+  const r = pageIds.length > 0 ? await supabase.from('chats').select('*').in('id', pageIds) : { data: [], error: null };
+  if (r.error) return res.status(500).json({ error: sanitizeError(r.error) });
+  const byId = new Map(((r.data ?? []) as Array<Record<string, any>>).map((c) => [c.id as string, c]));
+  const chats = pageIds.map((id) => byId.get(id)).filter((c): c is Record<string, any> => !!c);
+  // B09-F20: count the chats that are listed — a deleted one made `total` too big.
+  const liveTotal = heads.length;
+  const page = { ...lcp, offset: start, from: start, to: start + lcp.limit - 1 };
+  const nextCursor = start + lcp.limit < liveTotal && pageHeads.length > 0 ? chatCursor(pageHeads[pageHeads.length - 1]) : null;
 
   const blocked = await blockedUserIds(userId);
   // Enrich with participants and last message
@@ -268,7 +304,8 @@ export async function listChats(req: Request, res: Response) {
   // SC-299: pagination envelope so the FE knows whether older chats remain. The
   // true total is the number of chats the user participates in (chatIds), not the
   // ranged page — so has_more is accurate regardless of the page window.
-  return res.json({ data: enriched, chats: enriched, ...pageMeta(liveTotal ?? chatIds.length, lcp) });
+  // N-RWG4-1: next_cursor asks for the page after this one (`?before=`).
+  return res.json({ data: enriched, chats: enriched, ...pageMeta(liveTotal, page), next_cursor: nextCursor });
 }
 
 // ─── ONE CHAT ────────────────────────────────────────────────────────────────
@@ -317,10 +354,13 @@ export async function getUnreadCount(req: Request, res: Response) {
   const userId = req.userId!;
 
   // Your chats and your block list are independent — one round, not two.
+  // N-R4-chatwallet-1 (found with N-RWG4-1): the memberships are read 1000 at a
+  // time — one read stopped at PostgREST's 1000, so chats past it never counted.
   const [{ data: participations, error: pErr }, blocked] = await Promise.all([
     // 098: current memberships of chats that still exist.
-    supabase.from('chat_participants').select('chat_id, chat:chats!inner(deleted_at)').is('left_at', null)
-      .is('chat.deleted_at', null).eq('user_id', userId),
+    allRows<{ chat_id: string }>(() => supabase.from('chat_participants').select('chat_id, chat:chats!inner(deleted_at)').is('left_at', null)
+      .is('chat.deleted_at', null).eq('user_id', userId))
+      .then((data) => ({ data, error: null }), (error) => ({ data: null, error: error as { message?: string } })),
     blockedUserIds(userId),
   ]);
   if (pErr) return res.status(500).json({ error: sanitizeError(pErr) });
@@ -433,7 +473,7 @@ export async function getOrCreateDM(req: Request, res: Response) {
         .limit(1)
         .maybeSingle();
       if (!follows) {
-        return res.status(403).json({ error: 'Only people they follow can message this user.' });
+        return res.status(403).json({ error: FOLLOWERS_ONLY_DM, code: 'MESSAGE_PRIVACY' });
       }
     }
   }
@@ -842,8 +882,8 @@ export async function leaveGroup(req: Request, res: Response) {
   await leaveChat(id, [userId]);
 
   // SC-301: if that was the LAST participant, the now-empty group is removed so
-  // it can't linger as an undeletable orphan (deleteGroup requires created_by,
-  // which a departed creator can no longer satisfy). 098: soft — deleted_at is
+  // it can't linger as an undeletable orphan (deleteGroup requires a current
+  // member who created it — N-RWG1-10: it checked only created_by). 098: soft — deleted_at is
   // set; the chat, its participants and messages all stay.
   const { count: remaining } = await supabase
     .from('chat_participants')
@@ -873,6 +913,11 @@ export async function deleteGroup(req: Request, res: Response) {
 
   if (!chat || chat.created_by !== userId) {
     return res.status(403).json({ error: 'Only the creator can delete the group' });
+  }
+  // N-RWG1-10 (launch test plan): a creator who left (or was removed) could still
+  // delete the group for everyone. Only a current member may.
+  if (!(await isActiveMember(id, userId))) {
+    return res.status(403).json({ error: 'You’re no longer in this group, so you can’t delete it.', code: 'NOT_A_MEMBER' });
   }
 
   // 098: "Delete group" is a soft delete — the group leaves every list and

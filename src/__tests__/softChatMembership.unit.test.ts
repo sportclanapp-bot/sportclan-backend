@@ -115,7 +115,8 @@ describe('no hard delete of chat membership or chats remains', () => {
 
 describe('deleted groups are in no list and take no messages', () => {
   const m = code('controllers/messages.controller.ts');
-  it('the chat list skips them', () => expect(m).toMatch(/\.in\('id', chatIds\)\s*\.is\('deleted_at', null\)/));
+  // N-RWG4-1: the list reads its chats a chunk of ids at a time.
+  it('the chat list skips them', () => expect(m).toMatch(/\.in\('id', part\)\s*\.is\('deleted_at', null\)/));
   it('the unread badge skips them', () => expect(m).toMatch(/chat:chats!inner\(deleted_at\)'\)\.is\('left_at', null\)\s*\.is\('chat\.deleted_at', null\)/));
   it('read, send, mark-read, typing and forward all gate on an active member of a live chat', () => {
     for (const fn of ['getMessages', 'sendMessage', 'markAsRead', 'setTyping']) {

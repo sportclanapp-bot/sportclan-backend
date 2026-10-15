@@ -21,6 +21,7 @@ import { parsePagination } from '../utils/pagination';
 import { isUuid } from '../utils/uuid';
 import { notifyUsers } from '../utils/notify';
 import { taggableBy } from '../utils/tagPrivacy';
+import { COIN_RULES } from '../utils/coinRules';
 
 /** Short display name for a user id, for notification bodies. Best-effort. */
 async function displayName(userId: string): Promise<string> {
@@ -689,6 +690,7 @@ export async function createPost(req: Request, res: Response) {
   }
 
   // Award coins: 2 per post, capped at 5/day via a date-scoped event type.
+  // F020 (launch test plan): the numbers are the shared coin rules the Wallet says.
   try {
     const { awardCoins } = await import('../utils/coins');
     // SC-92: bucket the daily coin award by IST day (agrees with check-in).
@@ -699,8 +701,8 @@ export async function createPost(req: Request, res: Response) {
       .eq('author_id', userId)
       .gte('created_at', istDayStartIso());
     const todayN = postsToday ?? 1;
-    if (todayN <= 5) {
-      inBackground(awardCoins(userId, `community_post_${today}_${todayN}`, 2, 'Community post'), 'awardCoins'); // audit #99
+    if (todayN <= COIN_RULES.postsPerDay) {
+      inBackground(awardCoins(userId, `community_post_${today}_${todayN}`, COIN_RULES.post, 'Community post'), 'awardCoins'); // audit #99
     }
   } catch {
     // best-effort

@@ -1,15 +1,17 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { awardCoins } from '../utils/coins';
+import { COIN_RULES } from '../utils/coinRules';
 
-const REFERRAL_COINS = 20;
+// F067 (launch test plan): the shared coin rules the Wallet says.
+const REFERRAL_COINS = COIN_RULES.referral;
 
 /**
  * Decision 9 (B10-D1): a friend's code is for new accounts — it can be applied
  * only within 30 days of sign-up. Before this, two long-standing friends could
  * apply each other's codes and both bank the coins.
  */
-export const REFERRAL_WINDOW_DAYS = 30;
+export const REFERRAL_WINDOW_DAYS = COIN_RULES.referralWindowDays;
 export function referralApplyUntil(createdAt: string | null | undefined): string | null {
   if (!createdAt) return null;
   const t = new Date(createdAt).getTime();

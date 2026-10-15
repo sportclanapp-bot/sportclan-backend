@@ -17,6 +17,7 @@ import { blockedUserIds } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
 import { isTeamManager, isTeamCaptain, getTeamRole } from '../utils/teamAuth';
 import { computeTeamRecord } from '../utils/teamRecord';
+import { detectProfanity } from '../utils/profanity';
 
 function generateJoinCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -91,11 +92,26 @@ async function joinGate(
  * characters. `name:""`, spaces or a number used to be stored as is, and a
  * blank title then showed across lists, match sides and chats.
  */
-export function cleanTeamName(name: unknown): { value?: string; error?: string } {
+export function cleanTeamName(name: unknown): { value?: string; error?: string; detected_words?: string[] } {
   if (typeof name !== 'string' || !name.trim()) return { error: 'Give the team a name.' };
   const v = name.trim();
   if (v.length > LIMITS.teamNameMax) return { error: `Team name must be ${LIMITS.teamNameMax} characters or fewer` };
+  // N-R3C-1 (launch test plan): posts and wall posts were checked for bad language
+  // but team names were not, so a team could be called something abusive. Same
+  // check, same answer (the app words PROFANITY_DETECTED as 'Please remove: …').
+  const detected = detectProfanity(v);
+  if (detected.length > 0) return { error: 'PROFANITY_DETECTED', detected_words: detected };
   return { value: v };
+}
+
+/** N-R3C-1: a refused name or short name, as the posts' profanity answer. */
+function nameRefusal(c: { error?: string; detected_words?: string[] }) {
+  return c.detected_words ? { error: c.error, detected_words: c.detected_words } : { error: c.error };
+}
+
+/** N-R3C-1: the short name (shown on match cards) gets the same check. */
+function shortNameProfanity(v: string | null | undefined): string[] {
+  return v ? detectProfanity(v) : [];
 }
 
 /** B07-F11: one value of a query param — a repeated param arrives as an array. */
@@ -117,7 +133,7 @@ export async function createTeam(req: Request, res: Response) {
       return res.status(400).json({ error: 'sport_id and name are required' });
     }
     const cleanName = cleanTeamName(name);
-    if (cleanName.error) return res.status(400).json({ error: cleanName.error });
+    if (cleanName.error) return res.status(400).json(nameRefusal(cleanName));
     // B07-F11: a malformed city id reached the uuid column (500).
     if (city_id != null && city_id !== '' && !isUuid(city_id)) {
       return res.status(400).json({ error: 'Pick a city from the list.' });
@@ -125,6 +141,8 @@ export async function createTeam(req: Request, res: Response) {
     // Migration 110: the short name the form always asked for is kept now.
     const shortName = normalizeShortName(short_name);
     if (shortName.error) return res.status(400).json({ error: shortName.error, code: 'INVALID_SHORT_NAME' });
+    const shortBad = shortNameProfanity(shortName.value);
+    if (shortBad.length > 0) return res.status(400).json({ error: 'PROFANITY_DETECTED', detected_words: shortBad });
     if (firstDisallowedImageUrl({ logo_url }, ['logo_url'])) {
       return res.status(400).json({ error: 'logo_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
     }
@@ -626,8 +644,8 @@ export async function updateTeam(req: Request, res: Response) {
     }
     const allowed: Record<string, any> = {};
     const { name, logo_url, city_id, is_public, join_policy, short_name } = req.body || {};
-    const cleanName = name !== undefined ? cleanTeamName(name) : {};
-    if (cleanName.error) return res.status(400).json({ error: cleanName.error });
+    const cleanName: ReturnType<typeof cleanTeamName> = name !== undefined ? cleanTeamName(name) : {};
+    if (cleanName.error) return res.status(400).json(nameRefusal(cleanName));
     if (city_id != null && city_id !== '' && !isUuid(city_id)) {
       return res.status(400).json({ error: 'Pick a city from the list.' });
     }
@@ -637,6 +655,8 @@ export async function updateTeam(req: Request, res: Response) {
     // Migration 110: short_name is saved on edit (it was silently dropped).
     const shortName = normalizeShortName(short_name);
     if (shortName.error) return res.status(400).json({ error: shortName.error, code: 'INVALID_SHORT_NAME' });
+    const shortBad = shortNameProfanity(shortName.value);
+    if (shortBad.length > 0) return res.status(400).json({ error: 'PROFANITY_DETECTED', detected_words: shortBad });
     if (firstDisallowedImageUrl({ logo_url }, ['logo_url'])) {
       return res.status(400).json({ error: 'logo_url must be an uploaded image URL', code: 'INVALID_IMAGE_URL' });
     }

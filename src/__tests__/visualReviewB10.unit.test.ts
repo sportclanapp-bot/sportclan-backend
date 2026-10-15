@@ -41,10 +41,12 @@ describe('D10 · can_disband', () => {
 });
 
 describe('V056 · my teams carry my role', () => {
-  it('listTeams attaches my_role from the membership rows', () => {
+  // N-RWG1-16: the role now comes from the viewer's membership joined in the database
+  // (nRwg116MyTeamsManyTeams has the behaviour).
+  it('listTeams attaches my_role from the viewer\'s membership', () => {
     const l = fn('listTeams');
-    expect(l).toMatch(/\.select\('team_id, role'\)/);
-    expect(l).toMatch(/my_role: myRoleByTeam\.get\(t\.id\)/);
+    expect(l).toMatch(/me:team_members!inner\(role, user_id\)/);
+    expect(l).toMatch(/my_role: myRole/);
   });
 });
 

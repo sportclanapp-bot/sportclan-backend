@@ -4,6 +4,8 @@
  * server awards by these numbers and the Wallet says them in these words — they
  * had drifted apart ("your first post each day", "both get coins on signup").
  */
+import { plural } from './plural';
+
 export const COIN_RULES = {
   /** Daily check-in, once per IST day. */
   checkIn: 5,
@@ -18,6 +20,6 @@ export const COIN_RULES = {
 
 /** What the Wallet's "Earn coins" rows say. */
 export const EARN_WORDS = {
-  post: `${COIN_RULES.post} coins for each of your first ${COIN_RULES.postsPerDay} posts a day`,
-  invite: `You both get ${COIN_RULES.referral} when they enter your code within ${COIN_RULES.referralWindowDays} days of joining`,
+  post: `${plural(COIN_RULES.post, 'coin')} for each of your first ${plural(COIN_RULES.postsPerDay, 'post')} a day`,
+  invite: `You both get ${COIN_RULES.referral} when they enter your code within ${plural(COIN_RULES.referralWindowDays, 'day')} of joining`,
 } as const;

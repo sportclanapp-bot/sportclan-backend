@@ -96,6 +96,13 @@ async function isDmBlocked(chatId: string, userId: string): Promise<boolean> {
   return isBlockedBetween(userId, other);
 }
 
+/**
+ * N-RWG1-5 (launch test plan): 'Followers' lets the people who follow this user
+ * write (the check is follower = the sender). It said "Only people they follow
+ * can message this user" — the opposite rule.
+ */
+export const FOLLOWERS_ONLY_DM = 'Only people who follow this user can message them.';
+
 // Send gate (sendMessage): block (either direction) AND the recipient's
 // message_privacy, mirroring getOrCreateDM so privacy→nobody/followers is
 // honoured in an existing thread too. Returns an error {status,error} or null.
@@ -126,7 +133,7 @@ async function dmSendGate(
       .limit(1)
       .maybeSingle();
     if (!follows) {
-      return { status: 403, error: 'Only people they follow can message this user.' };
+      return { status: 403, error: FOLLOWERS_ONLY_DM };
     }
   }
   return null;
@@ -433,7 +440,7 @@ export async function getOrCreateDM(req: Request, res: Response) {
         .limit(1)
         .maybeSingle();
       if (!follows) {
-        return res.status(403).json({ error: 'Only people they follow can message this user.' });
+        return res.status(403).json({ error: FOLLOWERS_ONLY_DM, code: 'MESSAGE_PRIVACY' });
       }
     }
   }
@@ -842,8 +849,8 @@ export async function leaveGroup(req: Request, res: Response) {
   await leaveChat(id, [userId]);
 
   // SC-301: if that was the LAST participant, the now-empty group is removed so
-  // it can't linger as an undeletable orphan (deleteGroup requires created_by,
-  // which a departed creator can no longer satisfy). 098: soft — deleted_at is
+  // it can't linger as an undeletable orphan (deleteGroup requires a current
+  // member who created it — N-RWG1-10: it checked only created_by). 098: soft — deleted_at is
   // set; the chat, its participants and messages all stay.
   const { count: remaining } = await supabase
     .from('chat_participants')
@@ -873,6 +880,11 @@ export async function deleteGroup(req: Request, res: Response) {
 
   if (!chat || chat.created_by !== userId) {
     return res.status(403).json({ error: 'Only the creator can delete the group' });
+  }
+  // N-RWG1-10 (launch test plan): a creator who left (or was removed) could still
+  // delete the group for everyone. Only a current member may.
+  if (!(await isActiveMember(id, userId))) {
+    return res.status(403).json({ error: 'You’re no longer in this group, so you can’t delete it.', code: 'NOT_A_MEMBER' });
   }
 
   // 098: "Delete group" is a soft delete — the group leaves every list and

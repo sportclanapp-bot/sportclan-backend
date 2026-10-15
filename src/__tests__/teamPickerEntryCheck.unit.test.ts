@@ -263,3 +263,13 @@ describe('GET /tournaments/:id/my-teams · Apply to enter in one request', () =>
   });
 });
 
+
+describe('N-R3R3B-1 (launch test plan, Round 3) · a team on the waitlist is entered', () => {
+  test('it isn’t offered again (entering it failed: "already entered")', async () => {
+    const base = mockNext;
+    mockNext = (q) => (q[0] === 'from:tournament_entries' && arg(q, 'select')?.[0] === 'team_id, status' ? { data: [{ team_id: PENDING, status: 'waitlisted' }] } : base(q));
+    const r = await run(entryCheck, { body: { team_ids: [PENDING], as: 'captain' } });
+    const v = (r.body.teams as Array<{ team_id: string; ok: boolean; code: string | null; reason: string | null }>)[0]!;
+    expect([v.ok, v.code, v.reason]).toEqual([false, 'ALREADY_ENTERED', 'Already entered — on the waitlist.']);
+  });
+});

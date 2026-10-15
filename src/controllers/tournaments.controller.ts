@@ -1250,8 +1250,11 @@ async function entryVerdicts(tournament: EntryTournament, ids: string[], asOrgan
     const team = teamById.get(teamId);
     if (team?.deleted_at) return no(teamId, 'TEAM_DISBANDED', 'This team was disbanded.');
     const st = live.get(teamId);
-    if (st === 'pending' || st === 'approved') {
+    // N-R3R3B-1 (launch test plan): a team on the waitlist is entered too — it was offered again, and
+    // entering it then failed ('This team is already entered in this tournament.').
+    if (st === 'pending' || st === 'approved' || st === 'waitlisted') {
       return no(teamId, 'ALREADY_ENTERED', st === 'approved' ? 'Already in this tournament.'
+        : st === 'waitlisted' ? 'Already entered — on the waitlist.'
         : asOrganiser ? 'Already entered — approve it under Entries.' : 'Already entered — waiting for the organiser.');
     }
     // entryRefusal's checks, in its order.

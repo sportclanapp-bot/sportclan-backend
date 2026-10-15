@@ -6,6 +6,10 @@
 -- the history, but no longer counted as played (or officiated). The rule is the
 -- server's isByeMatch (src/utils/matchCounts.ts): one side has a team and the
 -- other none, in a tournament (or the empty side is named BYE).
+-- N-R4-3 (found while fixing F189): Played also follows the Profile's rule for a
+-- casual match (SC-283, countsTowardRecord): it counts with two or more real
+-- players, so you against a typed-in name is listed but not played. A ranked
+-- match always counts.
 -- Same function, arguments and result shape as 150 (the whole function, so it
 -- also stands without 150): CREATE OR REPLACE, safe to run twice.
 
@@ -24,12 +28,14 @@ AS $$
     SELECT DISTINCT ON (id) id, side, played FROM mine ORDER BY id, played DESC
   ),
   hist AS (
-    SELECT u.id, u.side, u.played, m.status, m.voided_at,
+    SELECT u.id, u.side, u.played, m.status, m.voided_at, m.is_ranked,
            COALESCE(m.completed_at, m.updated_at, m.scheduled_at) AS at,
            m.team_a_name, m.team_b_name, m.team_a_id, m.team_b_id,
            -- a bye: one side has a team and the other none, in a tournament (or named BYE)
            ((m.team_a_id IS NULL) <> (m.team_b_id IS NULL)
-             AND (m.tournament_id IS NOT NULL OR 'BYE' IN (COALESCE(m.team_a_name, ''), COALESCE(m.team_b_name, '')))) AS bye
+             AND (m.tournament_id IS NOT NULL OR 'BYE' IN (COALESCE(m.team_a_name, ''), COALESCE(m.team_b_name, '')))) AS bye,
+           -- N-R4-3: the Profile's rule — ranked, or two or more real players
+           (COALESCE(m.is_ranked, false) OR (SELECT count(*) FROM match_participants p WHERE p.match_id = m.id) >= 2) AS real_game
     FROM uniq u JOIN matches m ON m.id = u.id
     WHERE m.status IN ('completed', 'abandoned')
   ),
@@ -47,7 +53,7 @@ AS $$
     SELECT id, side, played, at FROM shown ORDER BY at DESC NULLS LAST, id LIMIT GREATEST(p_limit, 0) OFFSET GREATEST(p_offset, 0)
   )
   SELECT jsonb_build_object(
-    'played_count', (SELECT count(*) FROM hist WHERE played = 1 AND status = 'completed' AND voided_at IS NULL AND NOT bye),
+    'played_count', (SELECT count(*) FROM hist WHERE played = 1 AND status = 'completed' AND voided_at IS NULL AND NOT bye AND real_game),
     'officiated_count', (SELECT count(*) FROM hist WHERE played = 0 AND status = 'completed' AND voided_at IS NULL AND NOT bye),
     'voided_count', (SELECT count(*) FROM named WHERE voided_at IS NOT NULL),
     'total', (SELECT count(*) FROM shown),

@@ -1,6 +1,6 @@
 import { inBackground } from '../utils/background';
 import { matchNamesForNotice } from '../utils/matchNames';
-import { isByeMatch } from '../utils/matchCounts';
+import { countParticipantsByMatch, countsTowardRecord, isByeMatch } from '../utils/matchCounts';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
 import { teamSheetProblem } from './squads.controller';
@@ -670,6 +670,8 @@ export function buildHistory(
   sideOf: Map<string, string>,
   offset: number,
   limit: number,
+  /** N-R4-3: real players per match (countParticipantsByMatch), for the Profile's rule. */
+  players?: Map<string, number>,
 ): { matches: any[]; played_count: number; officiated_count: number; has_more: boolean } {
   const at = (m: any) => Date.parse(m.completed_at ?? m.updated_at ?? m.scheduled_at ?? '') || 0;
   const sorted = [...rows].sort((x, y) => at(y) - at(x));
@@ -682,9 +684,14 @@ export function buildHistory(
   // profile's count (matches_played) never had it (13,348 here vs 13,316 there).
   const counts = (role: string) =>
     sorted.filter((m) => m.my_role === role && m.status === 'completed' && !m.voided_at && !isByeMatch(m)).length;
+  // N-R4-3 (launch test plan): Played is the Profile's own rule (SC-283) — a casual match
+  // counts with two or more real players, so you against a typed-in name is listed, not played.
+  const played = players
+    ? sorted.filter((m) => m.my_role === 'played' && countsTowardRecord(m, players.get(m.id) ?? 0)).length
+    : counts('played');
   return {
     matches: sorted.slice(offset, offset + limit),
-    played_count: counts('played'),
+    played_count: played,
     officiated_count: counts('officiated'),
     has_more: offset + limit < sorted.length,
   };
@@ -751,7 +758,9 @@ export async function matchHistory(req: Request, res: Response) {
     // The counts are over the whole history; the list can be narrowed — by a
     // team name (`q`) and with voided matches hidden (`voided=hide`) — on the
     // server, so a search finds a match on any page (it searched one page).
-    const all = buildHistory(rows, sideOf, 0, 0);
+    // N-R4-3: real players per casual match, for Played (a ranked match always counts).
+    const players = await countParticipantsByMatch(rows.filter((m) => sideOf.has(m.id) && !m.is_ranked && m.status === 'completed').map((m) => m.id));
+    const all = buildHistory(rows, sideOf, 0, 0, players);
     const q = typeof (req.query as any).q === 'string' ? String((req.query as any).q).trim().slice(0, 60) : '';
     const named = q ? await matchesNamed(rows, q) : rows;
     const voidedCount = named.filter((m) => !!m.voided_at).length;

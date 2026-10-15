@@ -204,7 +204,7 @@ test('story counts: every post this week is counted (one read stopped at 1000)',
 test('team insights: played / won count every match (1200)', async () => {
   mockDb = (q) => {
     if (q[0] === 'from:teams') return { one: { id: T, name: 'Lions', sport_id: 's' } };
-    if (q[0] === 'from:matches') return { rows: Array.from({ length: 1200 }, (_, i) => ({ id: uid(i), winner_team_id: T, team_a_id: T, scheduled_at: '2026-01-01' })) };
+    if (q[0] === 'from:matches') return { rows: Array.from({ length: 1200 }, (_, i) => ({ id: uid(i), winner_team_id: T, team_a_id: T, team_b_id: 'X', status: 'completed', scheduled_at: '2026-01-01' })) };
     return { rows: [] };
   };
   const r = await call(getTeamInsights, { params: { id: T }, query: {} });

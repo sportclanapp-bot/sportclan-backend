@@ -20,7 +20,7 @@ import {
 } from '../utils/jwt';
 import { setOtp, getOtp, deleteOtp, bumpCounter, readCounter, clearCounter } from '../utils/otpStore';
 import { normalizeAccountTypes } from '../constants/accountTypes';
-import { signupProfileProblem, USERNAME_RE, RESERVED_USERNAMES, GENDERS, GENDER_ERROR } from '../utils/profileRules';
+import { signupProfileProblem, cleanLocalArea, USERNAME_RE, RESERVED_USERNAMES, GENDERS, GENDER_ERROR } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { awardCoins } from '../utils/coins';
 import { denySessions } from '../utils/sessionDeny';
@@ -445,7 +445,7 @@ export async function verifyOtp(req: Request, res: Response) {
 //     phone, code,                       // required — OTP gate
 //     name, username,                    // required identity
 //     email?, gender?, dob?, link?,      // optional profile
-//     city_id?, bio?,
+//     city_id?, bio?, local_area?,      // F038: local_area optional (older apps don't send it)
 //     account_types?: string[],          // → user_account_types
 //     sport_ids?: string[],              // → user_sports
 //     coupon_code?: string               // → coupon_usages (best-effort)
@@ -460,7 +460,7 @@ export async function verifyOtp(req: Request, res: Response) {
 export async function register(req: Request, res: Response) {
   const {
     phone, code,
-    name, username, email, password, gender, dob, link, city_id, bio,
+    name, username, email, password, gender, dob, link, city_id, bio, local_area,
     account_types, sport_ids, coupon_code, profile_picture_url,
   } = req.body || {};
 
@@ -469,7 +469,7 @@ export async function register(req: Request, res: Response) {
   if (!name || !username) return res.status(400).json({ error: 'name and username are required' });
   // Phase 3 B01-F3: the rules Edit profile enforces, checked before the code
   // is used up. Sign-up checked none of them.
-  const rule = signupProfileProblem({ name, username, email, dob, bio, link, profile_picture_url });
+  const rule = signupProfileProblem({ name, username, email, dob, bio, link, profile_picture_url, local_area });
   if (rule) return res.status(rule.status).json({ error: rule.error, ...(rule.code ? { code: rule.code } : {}) });
   const cleanEmail = typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : null;
   // A password is OPTIONAL on signup, and it is the only way one is ever set at
@@ -601,6 +601,9 @@ export async function register(req: Request, res: Response) {
       // people looking for players (Dipak, 28 Sep). The column still defaults
       // to false until migration 113 runs; existing accounts keep their setting.
       is_available: true,
+      // F038 (launch test plan): the local area asked at sign-up was thrown away.
+      // Only written when given, so a sign-up from an older app is unchanged.
+      ...(cleanLocalArea(local_area) ? { local_area: cleanLocalArea(local_area) } : {}),
     })
     .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, referral_code, is_available, created_at')
     .single();

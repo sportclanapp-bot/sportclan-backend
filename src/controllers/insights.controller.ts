@@ -98,12 +98,14 @@ export async function getUserInsights(req: Request, res: Response) {
       score_summary: { winner_side?: 'A' | 'B' } | null;
       is_ranked?: boolean | null;
       voided_at?: string | null; // SC-424
+      team_a_name?: string | null; team_b_name?: string | null; tournament_id?: string | null; // F188/F189
     };
     const { data: parts } = await supabase
       .from('match_participants')
       // SC-413: is_ranked needed to apply the SC-283 rule.
       // SC-424: voided_at is selected so countsTowardRecord can exclude it.
-      .select('team_side, match:matches!inner(id, status, is_ranked, winner_team_id, team_a_id, team_b_id, score_summary, created_at, voided_at)')
+      // F188/F189: the sides' names and the tournament, so it can tell a bye.
+      .select('team_side, match:matches!inner(id, status, is_ranked, winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, tournament_id, score_summary, created_at, voided_at)')
       .eq('user_id', id);
 
     // SC-413: form/streak are a RECORD, so they obey the same SC-283 rule as

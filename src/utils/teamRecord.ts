@@ -16,21 +16,24 @@ export interface TeamRecord {
   win_rate: number; // percent, 0..100
 }
 
-export async function computeTeamRecord(teamId: string): Promise<TeamRecord> {
-  // Oct 2026: every match (an unpaged read stopped at 1000).
-  const rows = await allRows(() => supabase
-    .from('matches')
-    .select('winner_team_id, status, team_a_id, team_b_id')
-    .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`)
-    // Audit #70: a walkover counts the same however it came — completed, or
-    // abandoned with a winner (a withdrawal or a no-show).
-    .in('status', ['completed', 'abandoned'])
-    // SC-424: a voided match counts nowhere — not in a team’s record either.
-    .is('voided_at', null));
-  // Audit #70: a Swiss bye (no opponent) isn't a match, and an abandoned match
-  // with no winner is a no-result — neither is in the record.
-  const matches = ((rows ?? []) as Array<{ winner_team_id: string | null; status: string; team_a_id: string | null; team_b_id: string | null }>)
-    .filter((m) => m.team_a_id && m.team_b_id && (m.status === 'completed' || m.winner_team_id));
+/** The match columns the record needs (select at least these). */
+export const TEAM_RECORD_COLUMNS = 'winner_team_id, status, team_a_id, team_b_id';
+export type TeamRecordRow = { winner_team_id: string | null; status: string; team_a_id: string | null; team_b_id: string | null };
+
+/**
+ * F188 (launch test plan): the matches that are in a team's record — the rule,
+ * apart from the read, so Team insights counts the very same matches as the team
+ * page (it counted every completed match, byes as wins: 1,097 won vs 1,053).
+ * Audit #70: a Swiss bye (no opponent) isn't a match, and an abandoned match
+ * with no winner is a no-result — neither is in the record.
+ */
+export function inTeamRecord(m: TeamRecordRow): boolean {
+  return !!m.team_a_id && !!m.team_b_id && (m.status === 'completed' || !!m.winner_team_id);
+}
+
+/** F188: the record from the team's completed / abandoned, unvoided matches. */
+export function teamRecordFrom(teamId: string, rows: TeamRecordRow[]): TeamRecord {
+  const matches = rows.filter(inTeamRecord);
   let wins = 0;
   let losses = 0;
   let draws = 0;
@@ -41,4 +44,18 @@ export async function computeTeamRecord(teamId: string): Promise<TeamRecord> {
   }
   const played = matches.length;
   return { played, wins, losses, draws, win_rate: played ? Math.round((wins / played) * 100) : 0 };
+}
+
+export async function computeTeamRecord(teamId: string): Promise<TeamRecord> {
+  // Oct 2026: every match (an unpaged read stopped at 1000).
+  const rows = await allRows(() => supabase
+    .from('matches')
+    .select(TEAM_RECORD_COLUMNS)
+    .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`)
+    // Audit #70: a walkover counts the same however it came — completed, or
+    // abandoned with a winner (a withdrawal or a no-show).
+    .in('status', ['completed', 'abandoned'])
+    // SC-424: a voided match counts nowhere — not in a team’s record either.
+    .is('voided_at', null));
+  return teamRecordFrom(teamId, (rows ?? []) as TeamRecordRow[]);
 }

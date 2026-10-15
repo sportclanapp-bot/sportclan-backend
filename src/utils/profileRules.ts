@@ -70,9 +70,25 @@ function shiftYmd(ymd: string, days: number): string {
  * The sign-up fields, checked as Edit profile checks them. Returns the first
  * problem, or null. Doesn't touch the database (uniqueness is the caller's).
  */
+/**
+ * F038 (launch test plan): the local area ("Kothrud") — optional text, up to
+ * LIMITS.localAreaMax. Null when fine (or absent); else why not.
+ */
+export function localAreaProblem(v: unknown): string | null {
+  if (v == null || v === '') return null;
+  if (typeof v !== 'string') return 'Local area must be text.';
+  if (v.trim().length > LIMITS.localAreaMax) return `Local area must be ${LIMITS.localAreaMax} characters or fewer`;
+  return null;
+}
+
+/** F038: a local area as stored — trimmed, an empty one is none. */
+export function cleanLocalArea(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
 export function signupProfileProblem(f: {
   name?: unknown; username?: unknown; email?: unknown; dob?: unknown; bio?: unknown;
-  link?: unknown; profile_picture_url?: unknown;
+  link?: unknown; profile_picture_url?: unknown; local_area?: unknown;
 }): RuleProblem | null {
   if (typeof f.name !== 'string' || f.name.trim().length === 0) {
     return { status: 400, error: 'Name can\u2019t be empty.', code: 'INVALID_NAME' };
@@ -94,6 +110,8 @@ export function signupProfileProblem(f: {
   if (f.bio != null && (typeof f.bio !== 'string' || f.bio.length > LIMITS.bioMax)) {
     return { status: 400, error: `Bio must be ${LIMITS.bioMax} characters or fewer` };
   }
+  const area = localAreaProblem(f.local_area);
+  if (area) return { status: 400, error: area, code: 'INVALID_LOCAL_AREA' };
   const badLink = firstInvalidUrl(f as Record<string, unknown>, ['link']);
   if (badLink) return { status: 400, error: `${badLink} must be a valid URL` };
   if (firstDisallowedImageUrl(f as Record<string, unknown>, ['profile_picture_url'])) {

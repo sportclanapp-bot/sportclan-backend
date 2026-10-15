@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
 import { getTeamRole } from '../utils/teamAuth';
+import { inTeamRecord, teamRecordFrom, TEAM_RECORD_COLUMNS, type TeamRecordRow } from '../utils/teamRecord';
 import { isBlockedBetween } from '../utils/blocks';
 import { matchFormatName } from '../utils/displayNames';
 import { getSport } from '../utils/sportCache';
@@ -339,21 +340,20 @@ export async function getTeamInsights(req: Request, res: Response) {
     // Completed matches this team played (as side A or B).
     // Oct 2026 sweep: one read stopped at 1000 matches (PostgREST's cap), and
     // played / won / lost with it. Every page is read.
-    const matches = await selectAll<{ id: string; winner_team_id: string | null; scheduled_at: string | null; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null }>((from, to) => supabase
+    // F188 (launch test plan): the same matches as the team page's record
+    // (teamRecordFrom) — byes are not matches, and a walkover by withdrawal is.
+    // Insights counted every completed match, so each bye was a win.
+    const rows = await selectAll<TeamRecordRow & { id: string; scheduled_at: string | null; team_a_name: string | null; team_b_name: string | null }>((from, to) => supabase
       .from('matches')
-      .select('id, winner_team_id, scheduled_at, team_a_id, team_b_id, team_a_name, team_b_name')
+      .select(`id, scheduled_at, team_a_name, team_b_name, ${TEAM_RECORD_COLUMNS}`)
       .or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`)
-      .eq('status', 'completed')
+      .in('status', ['completed', 'abandoned'])
       .is('voided_at', null) // SC-424
       .order('scheduled_at', { ascending: false })
       .order('id', { ascending: true })
       .range(from, to));
-
-    let w = 0, l = 0, d = 0;
-    for (const m of matches) {
-      const r: Result = m.winner_team_id == null ? 'D' : (m.winner_team_id === teamId ? 'W' : 'L');
-      if (r === 'W') w++; else if (r === 'L') l++; else d++;
-    }
+    const matches = rows.filter(inTeamRecord);
+    const rec = teamRecordFrom(teamId, matches);
     // SC-336: recentForm carries per-match detail (result + opponent + date) so each
     // dot is tappable. Newest 10, reversed to oldest-first for display.
     const recentForm = matches.slice(0, 10).map((m) => ({
@@ -409,8 +409,8 @@ export async function getTeamInsights(req: Request, res: Response) {
 
     return res.json({
       team: { id: team.id, name: team.name },
-      played: matches.length,
-      record: { wins: w, losses: l, draws: d, winRate: matches.length ? Math.round((w / matches.length) * 100) : 0 },
+      played: rec.played,
+      record: { wins: rec.wins, losses: rec.losses, draws: rec.draws, winRate: rec.win_rate },
       recentForm,
       cricket,
       topScorers,

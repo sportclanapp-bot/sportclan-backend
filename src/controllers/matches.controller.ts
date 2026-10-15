@@ -1,5 +1,6 @@
 import { inBackground } from '../utils/background';
 import { matchNamesForNotice } from '../utils/matchNames';
+import { isByeMatch } from '../utils/matchCounts';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
 import { teamSheetProblem } from './squads.controller';
@@ -677,8 +678,10 @@ export function buildHistory(
     m.my_role = sideOf.has(m.id) ? 'played' : 'officiated';
     m.my_side = sideOf.get(m.id) ?? null;
   }
+  // F189 (launch test plan): a bye is listed but is not a match played — the
+  // profile's count (matches_played) never had it (13,348 here vs 13,316 there).
   const counts = (role: string) =>
-    sorted.filter((m) => m.my_role === role && m.status === 'completed' && !m.voided_at).length;
+    sorted.filter((m) => m.my_role === role && m.status === 'completed' && !m.voided_at && !isByeMatch(m)).length;
   return {
     matches: sorted.slice(offset, offset + limit),
     played_count: counts('played'),

@@ -16,14 +16,15 @@ import { inviteFreshCutoffIso } from './invites.controller';
 import { resolveSportId } from '../utils/sportId';
 import { isSportInactive } from '../utils/sports';
 import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
-import { RESERVED_USERNAMES, EMAIL_RE, GENDERS, GENDER_ERROR, dobProblem } from '../utils/profileRules';
+import { RESERVED_USERNAMES, EMAIL_RE, GENDERS, GENDER_ERROR, dobProblem, localAreaProblem, cleanLocalArea } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
-import { istDay } from '../utils/appTime';
+import { istDate, istDay } from '../utils/appTime';
 import { COIN_RULES } from '../utils/coinRules';
+import { isByeMatch } from '../utils/matchCounts';
 import { isRangeError, parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
 import { stepTimer } from '../utils/stepTimer';
@@ -35,7 +36,7 @@ import { aggregateGoalPlayers, aggregatePointPlayers } from './scoring.controlle
 // contact + wallet + account internals; NEVER serialize this to another viewer.
 // (Still never returns password_hash — that column is simply not listed.)
 const PUBLIC_FIELDS =
-  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, coin_balance, is_available, streak_count, referral_code, is_admin, notification_preferences, discoverability, message_privacy, tag_privacy, last_active_at, created_at';
+  'id, phone, name, username, email, city_id, local_area, account_type, profile_picture_url, bio, gender, dob, show_dob, link, coin_balance, is_available, streak_count, referral_code, is_admin, notification_preferences, discoverability, message_privacy, tag_privacy, last_active_at, created_at';
 
 // SC-344 · presence. "online" = active within this window; the FE heartbeats more
 // often than this so a continuously-active user stays green, and stops on
@@ -52,7 +53,7 @@ export function computeIsOnline(lastActiveAt: string | null | undefined): boolea
 // notification_preferences, message_privacy, discoverability, tag_privacy,
 // `dob` is included but nulled below unless show_dob.
 const PUBLIC_USER_FIELDS =
-  'id, name, username, profile_picture_url, bio, link, city_id, gender, account_type, is_available, streak_count, last_active_at, dob, show_dob, created_at';
+  'id, name, username, profile_picture_url, bio, link, city_id, local_area, gender, account_type, is_available, streak_count, last_active_at, dob, show_dob, created_at';
 
 // Fire smart engagement notifications lazily from /users/me. Best-effort,
 // never throws — failures here must not block the main profile response.
@@ -317,7 +318,10 @@ export async function getUserById(req: Request, res: Response) {
   // SC-344: real presence — computed from THIS user's last_active_at, never
   // hardcoded. last_active_at stays in the projection so the FE can show last-seen.
   safeUser.is_online = computeIsOnline(safeUser.last_active_at);
-  if (safeUser.show_dob === false) {
+  // N-RWG1-4 (launch test plan): only a person who switched "Show date of
+  // birth" on shares it (the profile now shows it). A missing setting (null)
+  // passed the date through, as only an explicit false hid it.
+  if (safeUser.show_dob !== true) {
     safeUser.dob = null;
   }
 
@@ -439,6 +443,7 @@ export async function getUserById(req: Request, res: Response) {
 // Change #4: NO size limit on profile_picture_url. We accept any URL.
 const ALLOWED_FIELDS = [
   'name', 'username', 'email', 'city_id', 'profile_picture_url', 'bio',
+  'local_area', // F038 (launch test plan): asked at sign-up, now kept and editable
   'link', 'gender', 'dob', 'show_dob', 'is_available',
   // A16-006 · notification preference toggles (jsonb { category: boolean }).
   'notification_preferences',
@@ -512,6 +517,88 @@ export async function pruneMutedChats(userId: string, prefs: unknown): Promise<u
   return { ...(prefs as Record<string, unknown>), muted_chats: (list as string[]).filter((id) => live.has(id)) };
 }
 
+/**
+ * F040 (launch test plan): the sports you play, checked — every id a real,
+ * active sport (SC-335), in display order (audit #1). A refusal or the ids.
+ * Shared by PATCH /me/sports and PATCH /me (Edit profile's one Save).
+ */
+async function checkSportIds(incoming: unknown): Promise<{ error: string; code?: string } | { ids: string[] }> {
+  if (!Array.isArray(incoming)) return { error: 'sport_ids must be an array' };
+  // Audit #79: no count cap — each id must be a real, active sport (below), so
+  // the list can't be longer than the sports there are.
+  const ids = Array.from(new Set(incoming.map((x: unknown) => String(x))));
+  let valid: string[] = [];
+  if (ids.length > 0) {
+    const { data: rows } = await supabase
+      .from('sports').select('id, display_order').in('id', ids).eq('is_active', true);
+    // Audit #1: kept in the app's display order (Cricket first), not tap or database order.
+    valid = inDisplayOrder(((rows ?? []) as Array<{ id: string; display_order?: number | null }>).map((r) => ({ sport_id: r.id, order: r.display_order ?? null })));
+    const unknown = ids.filter((i) => !valid.includes(i));
+    if (unknown.length > 0) return { error: 'One or more sports are not available', code: 'INVALID_SPORT' };
+  }
+  return { ids: valid };
+}
+
+/** F040: replace the sports you play (already checked). An error message, or null. */
+async function writeSports(userId: string, valid: string[]): Promise<string | null> {
+  const { error: delErr } = await supabase.from('user_sports').delete().eq('user_id', userId);
+  if (delErr) return sanitizeError(delErr);
+  if (valid.length > 0) {
+    const { error: insErr } = await supabase
+      .from('user_sports')
+      .insert(valid.map((sport_id) => ({ user_id: userId, sport_id })));
+    if (insErr) return sanitizeError(insErr);
+  }
+  return null;
+}
+
+/** F040: the account types, checked: de-duped, lowercase, one of the 10, 'player' first. */
+function checkAccountTypes(incoming: unknown): { error: string } | { ordered: string[] } {
+  if (!Array.isArray(incoming)) return { error: 'account_types must be an array' };
+  const cleaned = Array.from(
+    new Set(incoming.map((t: unknown) => String(t).toLowerCase().trim())),
+  );
+  if (cleaned.length === 0) return { error: 'Select at least one account type' };
+  const invalid = cleaned.filter((t) => !VALID_ACCOUNT_TYPES.includes(t as never));
+  if (invalid.length > 0) return { error: `Invalid account type(s): ${invalid.join(', ')}` };
+  // Order the result to keep 'player' first if present, otherwise preserve the
+  // user's order; the primary (legacy) column gets the first entry.
+  return {
+    ordered: [
+      ...cleaned.filter((t) => t === 'player'),
+      ...cleaned.filter((t) => t !== 'player'),
+    ],
+  };
+}
+
+/**
+ * F040: rewrite the account-type join table (already checked): snapshot →
+ * delete → insert, restoring the previous set if the insert fails so the user
+ * is never left with an empty join table (A6-010). An error message, or null.
+ */
+async function writeAccountTypes(userId: string, ordered: string[]): Promise<string | null> {
+  const { data: prevRows } = await supabase
+    .from('user_account_types')
+    .select('account_type')
+    .eq('user_id', userId);
+  const { error: delErr } = await supabase
+    .from('user_account_types')
+    .delete()
+    .eq('user_id', userId);
+  if (delErr) return delErr.message;
+  const rows = ordered.map((t) => ({ user_id: userId, account_type: t }));
+  const { error: insErr } = await supabase.from('user_account_types').insert(rows);
+  if (insErr) {
+    if (prevRows && prevRows.length > 0) {
+      await supabase
+        .from('user_account_types')
+        .insert(prevRows.map((r) => ({ user_id: userId, account_type: r.account_type })));
+    }
+    return insErr.message;
+  }
+  return null;
+}
+
 export async function updateMe(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -519,7 +606,26 @@ export async function updateMe(req: Request, res: Response) {
   for (const k of ALLOWED_FIELDS) {
     if (k in (req.body || {})) patch[k] = req.body[k];
   }
-  if (Object.keys(patch).length === 0) {
+  // F040 (launch test plan): Edit profile saved in three requests (profile, then
+  // account types, then sports), so a refusal of the second or third left the
+  // first saved. It may now send all three here (both optional; the separate
+  // endpoints stay for older apps): everything is checked first, and nothing is
+  // written unless all of it is fine.
+  const body = (req.body || {}) as Record<string, unknown>;
+  let types: string[] | null = null;
+  if ('account_types' in body) {
+    const t = checkAccountTypes(body.account_types);
+    if ('error' in t) return res.status(400).json({ error: t.error, code: 'INVALID_ACCOUNT_TYPES' });
+    types = t.ordered;
+  }
+  let sportIds: string[] | null = null;
+  if ('sport_ids' in body) {
+    const sp = await checkSportIds(body.sport_ids);
+    if ('error' in sp) return res.status(400).json({ error: sp.error, code: sp.code ?? 'INVALID_SPORT' });
+    sportIds = sp.ids;
+  }
+  if (types) patch.account_type = types[0]; // the legacy primary column, as PATCH /me/account-types
+  if (Object.keys(patch).length === 0 && !sportIds) {
     return res.status(400).json({ error: 'No updatable fields provided' });
   }
   // SC-383: validate the visibility enums here rather than letting the DB CHECK
@@ -561,6 +667,11 @@ export async function updateMe(req: Request, res: Response) {
     if (!city) return res.status(400).json({ error: 'Pick a city from the list.', code: 'INVALID_CITY' });
   }
   // Length caps (no cap existed before): bio + display name.
+  if ('local_area' in patch) {
+    const why = localAreaProblem(patch.local_area);
+    if (why) return res.status(400).json({ error: why, code: 'INVALID_LOCAL_AREA' });
+    patch.local_area = cleanLocalArea(patch.local_area);
+  }
   if (typeof patch.bio === 'string' && patch.bio.length > LIMITS.bioMax) {
     return res.status(400).json({ error: `Bio must be ${LIMITS.bioMax} characters or fewer` });
   }
@@ -652,8 +763,13 @@ export async function updateMe(req: Request, res: Response) {
         const lastChanged = new Date(current.last_username_changed_at);
         const nextAllowed = new Date(lastChanged.getTime() + USERNAME_COOLDOWN_DAYS * 24 * 60 * 60 * 1000);
         if (new Date() < nextAllowed) {
+          // N-RWG5-6 (launch test plan): the day in India time, the house way
+          // ("3 Nov 2026"); it was the UTC date as "2026-11-02" — a day early
+          // for a change made between 00:00 and 05:30 IST.
           return res.status(400).json({
-            error: `Username can only be changed once every 30 days. Next change available: ${nextAllowed.toISOString().split('T')[0]}`,
+            error: `Username can only be changed once every 30 days. Next change available: ${istDate(nextAllowed)}`,
+            code: 'USERNAME_COOLDOWN',
+            next_change_at: nextAllowed.toISOString(),
           });
         }
       }
@@ -681,7 +797,20 @@ export async function updateMe(req: Request, res: Response) {
     .select(PUBLIC_FIELDS)
     .single();
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ user: data });
+  // F040: the account types and sports, only after every check above passed.
+  if (types) {
+    const err = await writeAccountTypes(userId, types);
+    if (err) return res.status(500).json({ error: err });
+  }
+  if (sportIds) {
+    const err = await writeSports(userId, sportIds);
+    if (err) return res.status(500).json({ error: err });
+  }
+  return res.json({
+    user: types ? { ...data, account_types: types } : data,
+    ...(types ? { account_types: types } : {}),
+    ...(sportIds ? { sport_ids: sportIds } : {}),
+  });
 }
 
 /**
@@ -700,40 +829,13 @@ export async function updateMe(req: Request, res: Response) {
 export async function updateMySports(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-  const incoming = (req.body || {}).sport_ids;
-  if (!Array.isArray(incoming)) {
-    return res.status(400).json({ error: 'sport_ids must be an array' });
-  }
-  // Audit #79: no count cap — each id must be a real, active sport (below), so
-  // the list can't be longer than the sports there are.
-  const ids = Array.from(new Set(incoming.map((x: unknown) => String(x))));
-
   // Every id must be a real, ACTIVE sport (SC-335: no kabaddi/athletics via a
   // crafted request).
-  let valid: string[] = [];
-  if (ids.length > 0) {
-    const { data: rows } = await supabase
-      .from('sports').select('id, display_order').in('id', ids).eq('is_active', true);
-    // Audit #1: kept in the app's display order (Cricket first), not tap or database order.
-    valid = inDisplayOrder(((rows ?? []) as Array<{ id: string; display_order?: number | null }>).map((r) => ({ sport_id: r.id, order: r.display_order ?? null })));
-    const unknown = ids.filter((i) => !valid.includes(i));
-    if (unknown.length > 0) {
-      return res.status(400).json({ error: 'One or more sports are not available', code: 'INVALID_SPORT' });
-    }
-  }
-
-  const { error: delErr } = await supabase.from('user_sports').delete().eq('user_id', userId);
-  if (delErr) return res.status(500).json({ error: sanitizeError(delErr) });
-
-  if (valid.length > 0) {
-    const { error: insErr } = await supabase
-      .from('user_sports')
-      .insert(valid.map((sport_id) => ({ user_id: userId, sport_id })));
-    if (insErr) return res.status(500).json({ error: sanitizeError(insErr) });
-  }
-
-  return res.json({ sport_ids: valid }); // audit #1: in display order
+  const sp = await checkSportIds((req.body || {}).sport_ids);
+  if ('error' in sp) return res.status(400).json(sp.code ? { error: sp.error, code: sp.code } : { error: sp.error });
+  const err = await writeSports(userId, sp.ids);
+  if (err) return res.status(500).json({ error: err });
+  return res.json({ sport_ids: sp.ids }); // audit #1: in display order
 }
 
 // PATCH /users/me/account-types — replace the user's account-type set.
@@ -743,66 +845,20 @@ export async function updateMySports(req: Request, res: Response) {
 export async function updateAccountTypes(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-  const incoming = (req.body || {}).account_types;
-  if (!Array.isArray(incoming)) {
-    return res.status(400).json({ error: 'account_types must be an array' });
-  }
-
-  // De-dupe, lowercase, and validate.
-  const cleaned = Array.from(
-    new Set(incoming.map((t: unknown) => String(t).toLowerCase().trim())),
-  );
-  if (cleaned.length === 0) {
-    return res.status(400).json({ error: 'Select at least one account type' });
-  }
-  const invalid = cleaned.filter((t) => !VALID_ACCOUNT_TYPES.includes(t as never));
-  if (invalid.length > 0) {
-    return res.status(400).json({ error: `Invalid account type(s): ${invalid.join(', ')}` });
-  }
-
-  // Order the result to keep 'player' first if present, otherwise preserve the
-  // user's order; the primary (legacy) column gets the first entry.
-  const ordered = [
-    ...cleaned.filter((t) => t === 'player'),
-    ...cleaned.filter((t) => t !== 'player'),
-  ];
-  const primary = ordered[0];
-
-  // Rewrite the join table: snapshot → delete → insert, restoring the previous
-  // set if the insert fails so the user is never left with an empty join table
-  // (A6-010 — the old delete-then-insert had no rollback).
-  const { data: prevRows } = await supabase
-    .from('user_account_types')
-    .select('account_type')
-    .eq('user_id', userId);
-
-  const { error: delErr } = await supabase
-    .from('user_account_types')
-    .delete()
-    .eq('user_id', userId);
-  if (delErr) return res.status(500).json({ error: delErr.message });
-
-  const rows = ordered.map((t) => ({ user_id: userId, account_type: t }));
-  const { error: insErr } = await supabase.from('user_account_types').insert(rows);
-  if (insErr) {
-    if (prevRows && prevRows.length > 0) {
-      await supabase
-        .from('user_account_types')
-        .insert(prevRows.map((r) => ({ user_id: userId, account_type: r.account_type })));
-    }
-    return res.status(500).json({ error: insErr.message });
-  }
+  const t = checkAccountTypes((req.body || {}).account_types);
+  if ('error' in t) return res.status(400).json({ error: t.error });
+  const ordered = t.ordered;
+  const err = await writeAccountTypes(userId, ordered);
+  if (err) return res.status(500).json({ error: err });
 
   // Keep the legacy primary column in sync.
   const { data, error } = await supabase
     .from('users')
-    .update({ account_type: primary, updated_at: new Date().toISOString() })
+    .update({ account_type: ordered[0], updated_at: new Date().toISOString() })
     .eq('id', userId)
     .select(PUBLIC_FIELDS)
     .single();
   if (error) return res.status(500).json({ error: error.message });
-
   return res.json({ user: { ...data, account_types: ordered } });
 }
 
@@ -1219,7 +1275,7 @@ export async function getActivityHeatmap(req: Request, res: Response) {
     data = await allRows(() => supabase
       .from('match_participants')
       // SC-415: completed_at is the day the match was really played.
-      .select('team_side, match:matches(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, score_summary, updated_at, voided_at)')
+      .select('team_side, match:matches(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, tournament_id, score_summary, updated_at, voided_at)')
       .eq('user_id', id));
   } catch (error) {
     return res.status(500).json({ error: (error as { message?: string })?.message ?? 'Internal server error' });
@@ -1234,6 +1290,7 @@ export async function getActivityHeatmap(req: Request, res: Response) {
     if (!match) continue;
     if (match.status !== 'completed') continue;
     if (match.voided_at) continue; // SC-424: a voided match counts nowhere
+    if (isByeMatch(match)) continue; // F188/F189: a bye is not a match played (or won)
     // SC-415: prefer the real completion stamp (migration 085). updated_at moves
     // on ANY later edit, so a match's heatmap day used to drift whenever its row
     // was touched; completed_at is fixed at the moment the match ended.

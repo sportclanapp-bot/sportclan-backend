@@ -23,6 +23,7 @@ import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTyp
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
 import { istDay } from '../utils/appTime';
+import { COIN_RULES } from '../utils/coinRules';
 import { isRangeError, parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
 import { stepTimer } from '../utils/stepTimer';
@@ -2072,7 +2073,7 @@ export async function deleteReview(req: Request, res: Response) {
 // POST /users/me/check-in — grants CHECKIN_COINS once per IST calendar day
 // (idempotent via awardCoins' unique event key) and advances a check-in streak
 // (distinct from the match-play streak_count).
-const CHECKIN_COINS = 5;
+const CHECKIN_COINS = COIN_RULES.checkIn; // F020/F067: the shared coin rules (utils/coinRules)
 
 // istDay lives in ../utils/appTime (SC-93: one IST source of truth).
 

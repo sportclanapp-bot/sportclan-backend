@@ -56,6 +56,12 @@ const tpl = (win: number, draw: number, loss: number, extra: Partial<PointsTempl
 
 /** Stage 16 · HK1: the sports whose level league match can be decided by a tie-break (a shoot-out; cricket's super over). */
 export const SHOOTOUT_POINT_SPORTS: ReadonlySet<string> = new Set(['cricket', 'football', 'hockey']);
+/**
+ * F149 (launch test plan): the sports whose tie-break points can ever count — a cricket super over is
+ * played only in a knockout or a series game, never in the league or group matches a table counts.
+ * The form offers these; the server still takes cricket's (older apps send them), which count for nothing.
+ */
+export const SHOOTOUT_POINTS_OFFERED: ReadonlySet<string> = new Set(['football', 'hockey']);
 
 /** Stage 11 · PB3: the team-tie sports, whose ties can score a win in the deciding match apart (MLP: 3 / 2 / 1 / 0). */
 export const TIE_POINT_SPORTS: ReadonlySet<string> = new Set(['badminton', 'tennis', 'tabletennis', 'pickleball', 'carrom']); // Stage 12 · CH5: carrom team events too

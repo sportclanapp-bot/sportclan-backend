@@ -3,6 +3,7 @@ import { hideTestFor, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { deletedIdSet } from '../utils/activeUser';
+import { blockedUserIds } from '../utils/blocks';
 import { resolveSportId } from '../utils/sportId';
 import { isSportInactive } from '../utils/sports';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
@@ -94,6 +95,11 @@ export async function getLeaderboard(req: Request, res: Response) {
     // in the query (not after it), so the page, the total and every rank
     // number agree — dropping rows afterwards would leave gaps in the ranks.
     const hideTest = await hideTestFor(userId);
+    // N-RWG1-13 (launch test plan): someone the viewer blocked (or who blocked
+    // them) was still ranked here, and their row opened 'This player doesn't
+    // exist'. Their row is left out of the page — everyone else keeps their real
+    // rank (as a deleted account's row is dropped, SC-78), as search does (SC-82).
+    const blocked = await blockedUserIds(userId);
     const TU = hideTest ? ', tu:users!user_id!inner(is_test_seed)' : '';
     // A plain `string` (not a literal) so the typed select parser doesn't try to read TU.
     const withTU = (cols: string): string => cols + TU;
@@ -169,7 +175,9 @@ export async function getLeaderboard(req: Request, res: Response) {
       const userMap = await fetchUserMap(pageRows.map((r) => r.user_id));
       // B02-F7: rating_history carries no result, so monthly wins aren't known —
       // null says so; a 0 on every row read as "nobody won anything".
-      const leaderboard = pageRows.map((r, i) => ({ ...toEntry(r, compRank[p.offset + i], userMap.get(r.user_id)), wins: null }));
+      const leaderboard = pageRows
+        .map((r, i) => ({ ...toEntry(r, compRank[p.offset + i], userMap.get(r.user_id)), wins: null }))
+        .filter((e) => !blocked.has(e.user_id)); // N-RWG1-13
 
       const myIndex = ranked.findIndex((r) => r.user_id === userId);
       const me = myIndex >= 0
@@ -242,7 +250,7 @@ export async function getLeaderboard(req: Request, res: Response) {
     }
     const leaderboard = pageRows
       .map((r, i) => ({ r, rank: rankByIndex[i] }))
-      .filter((x) => !delAllTime.has(x.r.user_id))
+      .filter((x) => !delAllTime.has(x.r.user_id) && !blocked.has(x.r.user_id)) // N-RWG1-13: nor a blocked one
       .map((x) => toEntry(x.r, x.rank, userMap.get(x.r.user_id)));
 
     let me: any = null;

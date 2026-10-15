@@ -141,6 +141,12 @@ export async function callToCourt(req: Request, res: Response) {
     const body = (req.body ?? {}) as { court?: unknown };
     const court = typeof body.court === 'string' && body.court.trim() ? body.court.trim().slice(0, 40) : m.ground_label;
     if (!court) return res.status(400).json({ error: 'Pick a court.', code: 'NO_COURT' });
+    // F129 (launch test plan): a court with a match on it, or another called to it, isn't free — as
+    // 'next to court' already says. (Calling this match again to its own court is fine.)
+    const f = await loadFamily(m.tournament_id);
+    const taken = f.matches.find((x) => x.id !== m.id && !x.voided_at && x.ground_label === court
+      && (x.status === 'live' || (x.status === 'scheduled' && !!x.called_at)));
+    if (taken) return res.status(409).json({ error: `${court} isn’t free.`, code: 'COURT_BUSY' });
     const called = await callMatch(m, court, userId);
     if (!called) return res.status(409).json({ error: 'This match has just started or changed. Refresh.', code: 'NOT_SCHEDULED' });
     return res.json({ match: called });
@@ -160,8 +166,10 @@ export async function uncallMatch(req: Request, res: Response) {
     const m = data as M | null;
     if (!m || !m.tournament_id) return res.status(404).json({ error: 'Match not found' });
     if (!(await isTournamentOrganiser(m.tournament_id, userId))) return res.status(403).json({ error: 'Only the organiser can change a call.' });
-    await supabase.from('matches').update({ called_at: null, called_by: null }).eq('id', id).eq('status', 'scheduled');
-    return res.json({ match: { ...m, called_at: null, called_by: null } });
+    // F129: a match already being played can't be un-called — it said done and changed nothing.
+    const { data: undone } = await supabase.from('matches').update({ called_at: null, called_by: null }).eq('id', id).eq('status', 'scheduled').select(M_COLS).maybeSingle();
+    if (!undone) return res.status(409).json({ error: 'This match has started, so its call can’t be undone.', code: 'NOT_SCHEDULED' });
+    return res.json({ match: undone });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -211,6 +219,11 @@ export async function runningLate(req: Request, res: Response) {
     if (!f.rootRow) return res.status(404).json({ error: 'Tournament not found' });
     if (!(await isTournamentOrganiser(f.root, userId))) return res.status(403).json({ error: 'Only the organiser can move the schedule.' });
     const moving = f.matches.filter((m) => !m.voided_at && m.status === 'scheduled' && !m.called_at && m.scheduled_at);
+    // F129 (launch test plan): no top (CR3), but a time a calendar can hold — an absurd number of minutes
+    // was a server error (and moved nothing).
+    if (moving.some((m) => !Number.isFinite(new Date(Date.parse(m.scheduled_at!) + minutes * 60000).getTime()))) {
+      return res.status(400).json({ error: 'That’s further ahead than the calendar goes. Use fewer minutes.', code: 'BAD_MINUTES' });
+    }
     for (const m of moving) {
       const at = new Date(Date.parse(m.scheduled_at!) + minutes * 60000).toISOString();
       await supabase.from('matches').update({ scheduled_at: at }).eq('id', m.id).eq('status', 'scheduled');

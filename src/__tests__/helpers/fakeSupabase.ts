@@ -61,7 +61,12 @@ export function fakeDb(seed: Record<string, Row[]> = {}, opts: { maxRows?: numbe
       lt(c: string, v: any) { filters.push((r) => at(r, c) < v); return b; },
       lte(c: string, v: any) { filters.push((r) => at(r, c) <= v); return b; },
       ilike(c: string, p: string) { const re = new RegExp(`^${p.replace(/%/g, '.*')}$`, 'i'); filters.push((r) => re.test(String(at(r, c) ?? ''))); return b; },
-      or() { return b; },
+      // F117 (Round 3): a simple 'a.eq.x,b.eq.y' (any of them) is applied; anything fancier stays a no-op, as before.
+      or(expr?: string) {
+        const parts = String(expr ?? '').split(',').map((x) => x.match(/^([\w.>-]+)\.(eq|is)\.(.*)$/));
+        if (parts.length && parts.every(Boolean)) filters.push((r) => parts.some((m) => (m![2] === 'is' && m![3] === 'null' ? (at(r, m![1]) ?? null) === null : String(at(r, m![1])) === m![3])));
+        return b;
+      },
       order(c: string, o?: { ascending?: boolean }) { order.push([c, o?.ascending !== false]); return b; },
       limit(n: number) { lim = n; return b; },
       range(a: number, z: number) { range = [a, z]; return b; },

@@ -3764,6 +3764,14 @@ async function advanceTournamentWinnerInner(matchId: string): Promise<void> {
     .eq('id', m.next_match_id);
   // BUILD 4.12: a semi-final's loser goes to the third-place match.
   await placeSemiLoser(m as SemiRow, winnerId);
+  // F117: the side already waiting there has withdrawn — the arriving winner takes it by walkover.
+  const { data: next } = await supabase.from('matches').select('team_a_id, team_b_id, status').eq('id', m.next_match_id).maybeSingle();
+  const other = next && next.status === 'scheduled' ? (m.next_slot === 'A' ? next.team_b_id : next.team_a_id) as string | null : null;
+  if (other) {
+    const { data: gone } = await supabase.from('tournament_entries').select('team_id')
+      .eq('tournament_id', m.tournament_id).eq('team_id', other).eq('status', 'withdrawn').maybeSingle();
+    if (gone) await walkoverOnWithdraw(m.tournament_id, other);
+  }
 }
 
 type SemiRow = { tournament_id: string; next_match_id: string | null; match_no: number | null; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null };
@@ -3886,7 +3894,12 @@ export async function walkoverOnWithdraw(tournamentId: string, teamId: string): 
         .maybeSingle();
       opponentWithdrawn = oppEntry?.status === 'withdrawn';
     }
-    if (!opponentId || opponentWithdrawn) {
+    // F117 (launch test plan): the opponent isn't known yet (the other semi isn't played). Abandoning
+    // the final now left it abandoned for good — the other semi's winner filled a slot of a match
+    // that was over, and nobody was crowned. It stays scheduled; whoever arrives gets the walkover
+    // (advanceTournamentWinnerInner, below).
+    if (!opponentId) continue;
+    if (opponentWithdrawn) {
       // No one to advance — abandon the match, leave the next slot empty.
       await supabase.from('matches').update({ status: 'abandoned', updated_at: now }).eq('id', mt.id);
       continue;

@@ -57,55 +57,12 @@ function notifyEngagement(
 }
 
 // ─── Basic profanity word list ───────────────────────────────────────────────
-// SC-68: the original list was matched with a naive `lower.includes(w)` substring
-// test, so short entries blocked innocent words that merely CONTAIN them —
-// 'ass' killed association/class/pass/grass/assist, 'dick' killed Dickinson,
-// 'crap' killed scrap/scrape, 'retard' killed (fire) retardant, 'randi' killed
-// grandiose/brandish. Split the list by ambiguity:
-//
-//   PROFANITY_SUBSTRING — terms that never appear inside a normal word, so
-//   substring matching is safe AND desirable (it also catches compounds like
-//   'motherfucker', 'bullshit', 'dipshit').
-//
-//   PROFANITY_WORD — terms that DO occur inside innocent words, so match only as
-//   whole words via \bword\b. Offensive compounds that whole-word matching would
-//   otherwise miss (asshole, dumbass, dickhead, …) are listed explicitly so real
-//   slurs are still blocked.
-const PROFANITY_SUBSTRING = [
-  'fuck', 'shit', 'bitch', 'damn', 'bastard', 'piss', 'slut', 'whore',
-  'cunt', 'nigger', 'faggot',
-  'madarchod', 'bhenchod', 'chutiya', 'gaandu', 'harami',
-];
-
-const PROFANITY_WORD = [
-  'ass', 'asshole', 'asshat', 'asswipe', 'dumbass', 'jackass', 'smartass', 'badass',
-  'dick', 'dickhead',
-  'crap',
-  'retard', 'retarded',
-  'randi',
-];
-
-// Precompiled once. \b is a word boundary, so \bass\b matches "ass"/"kick his
-// ass"/"bad-ass" but NOT "association"/"class"/"badass" (the latter is caught by
-// its own explicit entry above).
-const PROFANITY_WORD_RES = PROFANITY_WORD.map((w) => ({
-  word: w,
-  re: new RegExp(`\\b${w}\\b`, 'i'),
-}));
-
 // SC-356: exported so profile posts run the SAME filter (and the same word list)
-// rather than growing a second copy that drifts.
-export function detectProfanity(text: string): string[] {
-  const lower = text.toLowerCase();
-  const hits = new Set<string>();
-  for (const w of PROFANITY_SUBSTRING) {
-    if (lower.includes(w)) hits.add(w);
-  }
-  for (const { word, re } of PROFANITY_WORD_RES) {
-    if (re.test(lower)) hits.add(word);
-  }
-  return [...hits];
-}
+// rather than growing a second copy that drifts. N-RWG6-2: it lives in
+// utils/profanity now (team names use it too); re-exported for the old importers.
+import { detectProfanity } from '../utils/profanity';
+
+export { detectProfanity };
 
 // SC-234: attach the viewer's OWN poll vote to each poll post so the FE can mark
 // the selected option (✓ + highlight) after a reload. votePoll returns

@@ -70,7 +70,8 @@ describe('every public discovery read applies it', () => {
     // Oct 2026 sweep: the list's filters live in one scope() (list and voided count alike).
     ['controllers/matches.controller.ts', /const hideTestRows = !mine && !team_id && !tournament_id && \(await hideTestFor\(userId\)\);[\s\S]*if \(hideTestRows\) x = excludeTest\(x\);/],
     ['controllers/matches.controller.ts', /const hideTest = await hideTestFor\(userId\);\s*if \(hideTest\) query = excludeTest\(query\);/], // open matches (and its count)
-    ['controllers/teams.controller.ts', /else if \(await hideTestFor\(userId\)\) query = excludeTest\(query\);/],
+    // N-RWG1-14: the browse branch also keeps to public teams.
+    ['controllers/teams.controller.ts', /else \{[\s\S]*?if \(await hideTestFor\(userId\)\) query = excludeTest\(query\);/],
     // Profile & Settings tidy-up: one filter scope for the list and the "All" buckets.
     ['controllers/tournaments.controller.ts', /const hide = mine === '1' \? false : await hideTestFor\(userId\);[\s\S]*else if \(hide\) q = excludeTest\(q\);/],
     ['controllers/leaderboard.controller.ts', /if \(hideTest\) qb = qb\.eq\('tu\.is_test_seed', false\);/],

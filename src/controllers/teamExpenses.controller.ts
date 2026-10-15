@@ -206,6 +206,10 @@ export async function listExpenses(req: Request, res: Response) {
     const denied = await requireLedgerAccess(id!, userId);
     if (denied) return res.status(denied.status).json(denied.body);
 
+    // F111 (launch test plan): whether the viewer may edit and delete anyone's expense (a captain or
+    // co-captain). The app read it from the team page, and when that failed a captain silently lost
+    // Edit / Delete on others' rows. (Older apps ignore it.)
+    const canManage = isTeamManager(id!, userId).catch(() => null);
     // Oct 2026 sweep: every expense, not the first 1000 (PostgREST's cap).
     let data: unknown[];
     try {
@@ -219,7 +223,8 @@ export async function listExpenses(req: Request, res: Response) {
     } catch (error) {
       return res.status(500).json({ error: sanitizeError(error as never) });
     }
-    return res.json({ expenses: data });
+    const manager = await canManage;
+    return res.json({ expenses: data, ...(typeof manager === 'boolean' ? { can_manage: manager } : {}) });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -176,27 +176,19 @@ export async function listTeams(req: Request, res: Response) {
     const q = oneQuery(qs.q);
     if (city_id && !isUuid(city_id)) return res.status(400).json({ error: 'Invalid city_id' });
 
-    let teamIdsFilter: string[] | null = null;
-    // V056 (visual review): "My teams" rows showed the join code but not the
-    // viewer's role. The membership rows are read here anyway.
-    const myRoleByTeam = new Map<string, string>();
-    if (mine === '1') {
-      const { data: memberships } = await supabase
-        .from('team_members')
-        .select('team_id, role')
-        .eq('user_id', userId);
-      for (const m of memberships || []) myRoleByTeam.set(m.team_id as string, m.role as string);
-      teamIdsFilter = (memberships || []).map((m: any) => m.team_id);
-      if (teamIdsFilter.length === 0) return res.json({ teams: [] });
-    }
-
+    // N-RWG1-16 (launch test plan): "My teams" read every membership, then sent every team id back
+    // in one `.in('id', …)` — a few hundred ids took the URL past what the gateway accepts, and the
+    // list was a 500 for anyone in that many teams. The viewer's membership is now an inner join
+    // filtered in the database (the Following feed's way), so the page, its total and the viewer's
+    // role (V056) come back in one request, however many teams they are in.
+    const myTeams = mine === '1';
     const resolvedSportId = await resolveSportId(sport_id);
     const p = parsePagination(req.query as Record<string, unknown>);
     let query = supabase
       .from('teams')
       // B05 (V027/V098): city and roster size, so same-named teams can be told
       // apart and the Sport Hub row says more than "Cricket team".
-      .select('*, city:cities!city_id(id, name), members:team_members(count)', { count: 'exact' })
+      .select(`*, city:cities!city_id(id, name), members:team_members(count)${myTeams ? ', me:team_members!inner(role, user_id)' : ''}`, { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(p.from, p.to);
     // Hard-delete list #6: a disbanded team is in no list — browse, the Sport
@@ -205,10 +197,16 @@ export async function listTeams(req: Request, res: Response) {
     if (resolvedSportId) query = query.eq('sport_id', resolvedSportId);
     if (city_id) query = query.eq('city_id', city_id);
     if (q) query = query.ilike('name', `%${escapeLike(String(q))}%`); // audit #30: % and _ are literal
-    if (teamIdsFilter) query = query.in('id', teamIdsFilter);
-    // B03 (V245, D3): test teams are hidden from a real viewer's browse lists
-    // (Sport hub Teams, Discover) — not from "my teams".
-    else if (await hideTestFor(userId)) query = excludeTest(query);
+    if (myTeams) query = query.eq('me.user_id', userId);
+    else {
+      // N-RWG1-14 (launch test plan): a private team showed in everyone's Discover and Sport Hub
+      // lists, and tapping it was a dead end (its page refuses non-members, SC-107). Browse lists
+      // are public teams only; a member finds their private team under "My teams".
+      query = query.eq('is_public', true);
+      // B03 (V245, D3): test teams are hidden from a real viewer's browse lists
+      // (Sport hub Teams, Discover) — not from "my teams".
+      if (await hideTestFor(userId)) query = excludeTest(query);
+    }
 
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
@@ -216,11 +214,13 @@ export async function listTeams(req: Request, res: Response) {
     // the viewer keeps the codes for teams they're actually in.
     const rows = data || [];
     const myIds = await myTeamIds(userId, rows.map((t: any) => t.id));
-    const safe = rows.map(({ members, ...t }: any) => {
+    const safe = rows.map(({ members, me, ...t }: any) => {
       t.member_count = Array.isArray(members) ? (members[0]?.count ?? 0) : null;
       t.city_name = t.city?.name ?? null;
       const row = stripJoinCode(t, myIds.has(t.id));
-      return myRoleByTeam.has(t.id) ? { ...row, my_role: myRoleByTeam.get(t.id) } : row;
+      // V056 (visual review): "My teams" rows carry the viewer's role.
+      const myRole = Array.isArray(me) ? me[0]?.role : me?.role;
+      return myTeams && myRole ? { ...row, my_role: myRole } : row;
     });
     return res.json({ teams: safe, ...pageMeta(count, p) });
   } catch (e) {

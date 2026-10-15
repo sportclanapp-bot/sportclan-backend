@@ -114,17 +114,25 @@ export async function createVenue(req: Request, res: Response) {
   if ('error' in details) return res.status(400).json({ error: details.error, code: 'BAD_VENUE_DETAIL' });
   // Decision 7: adding a venue that already exists is not a use of it — only
   // a match created there counts (createMatch passes countUse).
-  const row = await upsertVenue(clean, city_id || null, userId, { countUse: false });
+  const found = { existing: false };
+  const row = await upsertVenue(clean, city_id || null, userId, { countUse: false, found });
   if (!row) return res.status(500).json({ error: 'Could not save that venue.' });
   // The same venue may already exist (upsert by name + city). Its details are
   // filled in where empty — never overwritten, since someone else may have
   // added that venue first.
   const fill: Record<string, string> = {};
   for (const [k, v] of Object.entries(details.fields)) if (row[k] == null) fill[k] = v;
-  if (Object.keys(fill).length === 0) return res.json({ venue: row });
+  // F059 (launch test plan): the app said "Venue added" when nothing new was made and the details
+  // given were not used. Say so: `existing` when the venue was already listed, and `kept` — the
+  // details it already had, so the ones sent were not saved. (Older apps ignore both.)
+  const kept = found.existing
+    ? Object.entries(details.fields).filter(([k, v]) => row[k] != null && row[k] !== v).map(([k]) => k)
+    : [];
+  const said = found.existing ? { existing: true, kept } : {};
+  if (Object.keys(fill).length === 0) return res.json({ venue: row, ...said });
   const { data: updated, error } = await supabase.from('venues').update(fill).eq('id', row.id).select('*').single();
   if (error || !updated) return res.status(500).json({ error: 'Could not save the venue details.' });
-  return res.json({ venue: updated });
+  return res.json({ venue: updated, ...said });
 }
 
 /**
@@ -150,13 +158,25 @@ export async function findLiveVenue(name: string, cityId: string | null): Promis
   return { row: (live ?? [])[0] ?? null, failed: false };
 }
 
+/**
+ * F194 (launch test plan): the city a venue typed into New match belongs to — the match's city when
+ * it has one, else its creator's. New match sends no city, so every venue typed there was saved with
+ * none and never showed under Venues "In <your city>". Null when neither is known.
+ */
+export async function venueCityFor(matchCityId: unknown, userId: string): Promise<string | null> {
+  if (typeof matchCityId === 'string' && isUuid(matchCityId)) return matchCityId;
+  const { data } = await supabase.from('users').select('city_id').eq('id', userId).maybeSingle();
+  const c = (data as { city_id?: string | null } | null)?.city_id;
+  return typeof c === 'string' && c ? c : null;
+}
+
 // Shared helper used by createMatch to increment use_count on an existing
 // venue name or insert a new row. Best-effort — never throws.
 export async function upsertVenue(
   name: string,
   cityId: string | null,
   createdBy: string,
-  opts: { countUse?: boolean } = {},
+  opts: { countUse?: boolean; found?: { existing: boolean } } = {},
 ): Promise<any | null> {
   // Decision 7: use_count is the venue's rank in the directory, and it counts
   // matches created there. A repeat "Add venue" with a name that exists
@@ -178,9 +198,13 @@ export async function upsertVenue(
     // The temporary ILIKE fallback for the pre-migration window is gone (079 is
     // applied). A failure here is now a real failure, not a missing function.
     // Decision 7: deleted venues are skipped (findLiveVenue).
-    const { row: existing, failed } = await findLiveVenue(clean, cityId);
+    const { row: found, failed } = await findLiveVenue(clean, cityId);
     if (failed) return null;
+    // F194: the same name saved with no city (a match typed it before the city was kept) is this
+    // venue — it takes the city, rather than a second copy being made beside it.
+    const existing = found ?? (cityId ? await adoptCitylessVenue(clean, cityId) : null);
     if (existing) {
+      if (opts.found) opts.found.existing = true; // F059
       if (!countUse) return existing;
       await supabase
         .from('venues')
@@ -202,6 +226,17 @@ export async function upsertVenue(
   } catch {
     return null;
   }
+}
+
+/** F194: the live, city-less venue with this name, given the city — or null. */
+async function adoptCitylessVenue(name: string, cityId: string): Promise<any | null> {
+  const { data } = await supabase.from('venues').select('*')
+    .ilike('name', escapeLike(name)).is('city_id', null).is('deleted_at', null).limit(1);
+  const row = (data ?? [])[0];
+  if (!row) return null;
+  const { data: updated } = await supabase.from('venues').update({ city_id: cityId })
+    .eq('id', row.id).is('city_id', null).select('*').maybeSingle();
+  return updated ?? null;
 }
 
 // PATCH /venues/:id  { name?, city_id?, address?, sport_id?, surface?, image_url? }

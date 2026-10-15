@@ -317,7 +317,10 @@ export async function getUserById(req: Request, res: Response) {
   // SC-344: real presence — computed from THIS user's last_active_at, never
   // hardcoded. last_active_at stays in the projection so the FE can show last-seen.
   safeUser.is_online = computeIsOnline(safeUser.last_active_at);
-  if (safeUser.show_dob === false) {
+  // N-RWG1-4 (launch test plan): only a person who switched "Show date of
+  // birth" on shares it (the profile now shows it). A missing setting (null)
+  // passed the date through, as only an explicit false hid it.
+  if (safeUser.show_dob !== true) {
     safeUser.dob = null;
   }
 

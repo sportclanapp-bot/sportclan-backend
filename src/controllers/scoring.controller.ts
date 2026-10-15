@@ -774,6 +774,15 @@ export async function createEvent(req: Request, res: Response) {
       return res.status(400).json({ error: 'This sport is not available', code: 'SPORT_INACTIVE' });
     }
 
+    // N-R3-4 (launch test plan, found on the phone): an action this server already has (its idempotency
+    // key) is answered as already recorded, finished match or not — after a QR hand-off carried the
+    // scorer's actions and the result, the scorer's own phone sent the same actions and was told the
+    // match had ended elsewhere and they "weren't sent".
+    const knownKey = normalizeClientKey(idempotency_key);
+    if (knownKey && isTerminalMatchStatus(match.status)) {
+      const { data: had } = await supabase.from('match_events').select('*').eq('match_id', matchId).eq('client_key', knownKey).maybeSingle();
+      if (had) return res.json({ event: had, replayed: true });
+    }
     // SC-42: a finished match is immutable — no more scoring events.
     if (isTerminalMatchStatus(match.status)) {
       // B06-F5: a code, so the scorer's outbox can tell "ended elsewhere" from

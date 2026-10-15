@@ -130,7 +130,7 @@ describe('N1 · a voided match cannot be completed', () => {
   const start = m.indexOf('export async function completeMatch');
   const complete = m.slice(start, m.indexOf('export async function', start + 10));
   it('loads voided_at with the match', () => {
-    expect(complete).toMatch(/\.select\('[^']*voided_at'\)/);
+    expect(complete).toMatch(/\.select\('[^']*\bvoided_at\b[^']*'\)/);
   });
   it('refuses with 409 MATCH_VOIDED before anything is written', () => {
     expect(complete).toMatch(/match\.voided_at && match\.status !== 'completed'[\s\S]{0,200}409[\s\S]{0,200}MATCH_VOIDED/);

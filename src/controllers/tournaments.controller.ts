@@ -2421,6 +2421,15 @@ export async function reassignTournamentOrganiser(req: Request, res: Response) {
 //   3 matches → SF (2) → F (1)
 //   1 match  → F (1)
 // Ordering within a round uses scheduled_at.
+
+/** N-SPP2-5: how a fixture was decided when it wasn't played out (a walkover, a default, an award), else null. */
+export function decidedBy(m: { result_type?: string | null; score_summary?: any }): 'walkover' | 'default' | 'awarded' | null {
+  const rt = m.result_type;
+  if (rt === 'walkover' || rt === 'default' || rt === 'awarded') return rt;
+  if (m.score_summary?.walkover === true) return 'walkover';
+  if (m.score_summary?.defaulted) return 'default';
+  return null;
+}
 export async function getBracket(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -2440,7 +2449,7 @@ export async function getBracket(req: Request, res: Response) {
       // SC-433: next_match_id / next_slot say where each winner goes. The offline
       // hub needs them to show the next round locally — without them it would
       // have to guess a bracket shape the server would then disagree with.
-      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label, venue, ground_label, voided_at, next_match_id, next_slot, third_place, bracket, loser_next_match_id, loser_next_slot')
+      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label, venue, ground_label, voided_at, next_match_id, next_slot, third_place, bracket, loser_next_match_id, loser_next_slot, result_type')
       .eq('tournament_id', id)
       .order('round', { ascending: true })
       .order('match_no', { ascending: true })
@@ -2548,6 +2557,8 @@ export async function getBracket(req: Request, res: Response) {
           ...((m as any).third_place ? { third_place: true } : {}), // BUILD 4.12
           ...((m as any).bracket === 'ko' ? { ko: true, next_match_id: (m as any).next_match_id ?? null } : {}), // Stage 13 · CR9: the knockout after a Swiss
           ...((m as any).bracket === 'reset' && m.status === 'cancelled' ? { not_needed: true } : {}), // Stage 11 · PB4: the reset final wasn't needed
+          // N-SPP2-5 (launch test plan): a result not played out — the champion card said 'beat X 0–0'.
+          ...(decidedBy(m as any) ? { decided_by: decidedBy(m as any) } : {}),
           ...(de ? { next_match_id: (m as any).next_match_id ?? null } : {}), // Stage 11 · PB4: the back draw's lines follow the links
           ...(fmtLc === 'box' && m.group_label ? { group_label: m.group_label } : {}), // Stage 9 · T16: the match's box
         };

@@ -100,7 +100,10 @@ function teamTallies(matches: SportLeaderMatch[]): TTally[] {
       if (m.winner_team_id === id) me.won += 1;
       else if (m.winner_team_id) me.lost += 1;
       else me.drawn += 1;
-      if (tie || wo) continue;
+      // N-SPP1-TTN-5 (launch test plan): a team tie's games and points count, as in its table (99–63) — it
+      // was skipped, so 'Points difference' listed every team at 0–0. (Its A/B score is rubbers won, so the
+      // goal-based boards below still leave it out.)
+      if (wo) continue;
       const mine = nums(m.score_summary?.[side]?.sets); const theirs = nums(m.score_summary?.[other]?.sets);
       for (let i = 0; i < Math.min(mine.length, theirs.length); i++) {
         me.pf += mine[i]!; me.pa += theirs[i]!;
@@ -112,6 +115,7 @@ function teamTallies(matches: SportLeaderMatch[]): TTally[] {
         if (tb[side] > tb[other]) me.tbWon += 1; else if (tb[other] > tb[side]) me.tbLost += 1;
       }
       me.aces += n(Number(m.score_summary?.serve?.[side]?.aces ?? 0));
+      if (tie) continue;
       // A goal sport's score is A.score / B.score (the live rollup); `value` as a fallback.
       const goalsOf = (x: 'A' | 'B') => { const v = m.score_summary?.[x]?.score ?? m.score_summary?.[x]?.value; return typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null; };
       const conceded = goalsOf(other);

@@ -1850,7 +1850,7 @@ export async function getMatch(req: Request, res: Response) {
         Promise.resolve(supabase.from('match_event_audit').select('id', { count: 'exact', head: true }).eq('match_id', id).eq('action', 'edit'))
           .then((r) => r, () => ({ count: 0 })),
       ]).then(([ev, edits]) => ({ count: ev.count, editsCount: (edits as { count?: number | null }).count ?? 0 })),
-      supabase.from('match_ratings').select('match_quality').eq('match_id', id),
+      supabase.from('match_ratings').select('match_quality, rater_id').eq('match_id', id),
       getMatchLiveStatus(match as { id: string; status?: string | null; created_by?: string | null; umpire_id?: string | null })
         .catch(() => null), // the match payload matters more than the freshness hint
       getLease(id).then((l) => leaseWithHolder(l)).then((v) => ({ ok: true as const, v }), () => ({ ok: false as const })),
@@ -1888,6 +1888,10 @@ export async function getMatch(req: Request, res: Response) {
       matchWithRating.avg_rating = Math.round((sum / ratings.length) * 10) / 10;
       matchWithRating.rating_count = ratings.length;
     }
+    // F077 (launch test plan): whether THIS viewer has rated. The app hid the stars
+    // for everyone once any one player had rated (it only had the average to go on).
+    const mine = userId ? (ratings ?? []).find((r: any) => r.rater_id === userId) : undefined;
+    matchWithRating.my_rating = (mine as { match_quality?: number } | undefined)?.match_quality ?? null;
 
     // Follow state (SC-A1) — is the caller following this match, and how many
     // followers does it have.

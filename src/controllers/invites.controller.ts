@@ -298,6 +298,17 @@ export async function sweepExpiredInvites(): Promise<{ expired: number }> {
   return { expired: ids.length };
 }
 
+/**
+ * F049 (launch test plan): an invite the sender withdrew answered 'You already
+ * answered this invite.' — the receiver hadn't. It says it was withdrawn now
+ * (INVITE_WITHDRAWN), so the app can drop it from the pending list.
+ */
+export function notPendingRefusal(status: string | null | undefined): { error: string; code: string } {
+  if (status === 'withdrawn') return { error: 'They withdrew this invite.', code: 'INVITE_WITHDRAWN' };
+  if (status === 'expired') return { error: 'This invite has expired.', code: 'INVITE_EXPIRED' };
+  return { error: 'You already answered this invite.', code: 'INVITE_RESOLVED' };
+}
+
 // PATCH /invites/:id  { status: 'accepted' | 'declined' }
 export async function respondToInvite(req: Request, res: Response) {
   const userId = req.userId;
@@ -322,9 +333,7 @@ export async function respondToInvite(req: Request, res: Response) {
   }
   // Phase 3 B05-F9: an invite is answered once. Accept → decline → accept all
   // returned 200 and notified the sender each time.
-  if (existing.status !== 'pending') {
-    return res.status(409).json({ error: 'You already answered this invite.', code: 'INVITE_RESOLVED' });
-  }
+  if (existing.status !== 'pending') return res.status(409).json(notPendingRefusal(existing.status));
   const { data, error } = await supabase
     .from('invites')
     .update({ status, responded_at: new Date().toISOString() })
@@ -334,8 +343,12 @@ export async function respondToInvite(req: Request, res: Response) {
     .select('id, status, sender_id, sport_id')
     .maybeSingle();
   if (error) return res.status(500).json({ error: sanitizeError(error) });
-  // Lost a race with another answer from the same person.
-  if (!data) return res.status(409).json({ error: 'You already answered this invite.', code: 'INVITE_RESOLVED' });
+  // Lost a race — with another answer from the same person, or the sender
+  // withdrawing it (F049): say which.
+  if (!data) {
+    const { data: now } = await supabase.from('invites').select('status').eq('id', id).maybeSingle();
+    return res.status(409).json(notPendingRefusal((now as { status?: string } | null)?.status));
+  }
 
   // Notify the SENDER that their invite was accepted/declined (block-respecting,
   // best-effort — never fail the response).

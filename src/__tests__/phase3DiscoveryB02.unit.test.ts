@@ -28,7 +28,7 @@ jest.mock('../utils/supabase', () => {
   };
   return { supabase: { from: jest.fn((t: string) => { const q = make(); queries[queries.length - 1].push(`from:${t}`); return q; }) } };
 });
-jest.mock('../utils/blocks', () => ({ blockedUserIds: jest.fn(async () => []), excludeIds: jest.fn((q: unknown) => q) }));
+jest.mock('../utils/blocks', () => ({ blockedUserIds: jest.fn(async () => new Set<string>()), excludeIds: jest.fn((q: unknown) => q) }));
 jest.mock('../utils/testContent', () => ({
   hideTestFor: jest.fn(async () => false), excludeTest: jest.fn((q: unknown) => q),
   excludeTestEmbed: jest.fn((q: unknown) => q), testUserIdSet: jest.fn(async () => new Set()),

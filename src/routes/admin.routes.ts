@@ -10,6 +10,9 @@ import {
   adminUpdateUser,
   adminListFeedback,
   adminUpdateFeedback,
+  adminUpdateTeam,
+  adminRemoveTeam,
+  adminRestoreTeam,
 } from '../controllers/admin.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 import { requireAdmin } from '../middleware/admin.middleware';
@@ -32,5 +35,9 @@ router.patch('/users/:id', adminUpdateUser);
 // Decision 10: Admin › Feedback.
 router.get('/feedback', adminListFeedback);
 router.patch('/feedback/:id', adminUpdateFeedback);
+// N-RWG2-9: rename a team / clear its logo, remove it (soft), restore it.
+router.patch('/teams/:id', adminUpdateTeam);
+router.delete('/teams/:id', adminRemoveTeam);
+router.post('/teams/:id/restore', adminRestoreTeam);
 
 export default router;

@@ -66,7 +66,8 @@ describe('moderator removal of wall items', () => {
 describe('reporting them', () => {
   const R = () => fnBody('controllers/community.controller.ts', 'reportContent');
   test('the two new target types are accepted', () => {
-    expect(R()).toMatch(/\['post', 'comment', 'user', 'message', 'profile_post', 'profile_comment'\]\.includes\(target_type\)/);
+    // N-RWG2-9 (Round 4): and 'team' after them.
+    expect(R()).toMatch(/\['post', 'comment', 'user', 'message', 'profile_post', 'profile_comment', 'team'\]\.includes\(target_type\)/);
   });
   test('a gone wall post / comment (or a comment on a gone wall post) can\'t be reported; self-reports refused as before', () => {
     expect(R()).toMatch(/resolvedType === 'profile_post'[\s\S]*?t\?\.deleted\) return res\.status\(410\)\.json\(postGone\(t\)\)/);

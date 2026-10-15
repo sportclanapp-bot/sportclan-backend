@@ -19,6 +19,8 @@ import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { istDay, istDayStartIso, istMonthStartIso } from '../utils/appTime';
 import { parsePagination } from '../utils/pagination';
 import { isUuid } from '../utils/uuid';
+import { getTeamRole } from '../utils/teamAuth';
+import { teamGone } from '../utils/teamVisibility';
 import { notifyUsers } from '../utils/notify';
 import { taggableBy } from '../utils/tagPrivacy';
 import { COIN_RULES } from '../utils/coinRules';
@@ -58,55 +60,12 @@ function notifyEngagement(
 }
 
 // ─── Basic profanity word list ───────────────────────────────────────────────
-// SC-68: the original list was matched with a naive `lower.includes(w)` substring
-// test, so short entries blocked innocent words that merely CONTAIN them —
-// 'ass' killed association/class/pass/grass/assist, 'dick' killed Dickinson,
-// 'crap' killed scrap/scrape, 'retard' killed (fire) retardant, 'randi' killed
-// grandiose/brandish. Split the list by ambiguity:
-//
-//   PROFANITY_SUBSTRING — terms that never appear inside a normal word, so
-//   substring matching is safe AND desirable (it also catches compounds like
-//   'motherfucker', 'bullshit', 'dipshit').
-//
-//   PROFANITY_WORD — terms that DO occur inside innocent words, so match only as
-//   whole words via \bword\b. Offensive compounds that whole-word matching would
-//   otherwise miss (asshole, dumbass, dickhead, …) are listed explicitly so real
-//   slurs are still blocked.
-const PROFANITY_SUBSTRING = [
-  'fuck', 'shit', 'bitch', 'damn', 'bastard', 'piss', 'slut', 'whore',
-  'cunt', 'nigger', 'faggot',
-  'madarchod', 'bhenchod', 'chutiya', 'gaandu', 'harami',
-];
-
-const PROFANITY_WORD = [
-  'ass', 'asshole', 'asshat', 'asswipe', 'dumbass', 'jackass', 'smartass', 'badass',
-  'dick', 'dickhead',
-  'crap',
-  'retard', 'retarded',
-  'randi',
-];
-
-// Precompiled once. \b is a word boundary, so \bass\b matches "ass"/"kick his
-// ass"/"bad-ass" but NOT "association"/"class"/"badass" (the latter is caught by
-// its own explicit entry above).
-const PROFANITY_WORD_RES = PROFANITY_WORD.map((w) => ({
-  word: w,
-  re: new RegExp(`\\b${w}\\b`, 'i'),
-}));
-
 // SC-356: exported so profile posts run the SAME filter (and the same word list)
-// rather than growing a second copy that drifts.
-export function detectProfanity(text: string): string[] {
-  const lower = text.toLowerCase();
-  const hits = new Set<string>();
-  for (const w of PROFANITY_SUBSTRING) {
-    if (lower.includes(w)) hits.add(w);
-  }
-  for (const { word, re } of PROFANITY_WORD_RES) {
-    if (re.test(lower)) hits.add(word);
-  }
-  return [...hits];
-}
+// rather than growing a second copy that drifts. N-RWG6-2: it lives in
+// utils/profanity now (team names use it too); re-exported for the old importers.
+import { detectProfanity } from '../utils/profanity';
+
+export { detectProfanity };
 
 // SC-234: attach the viewer's OWN poll vote to each poll post so the FE can mark
 // the selected option (✓ + highlight) after a reload. votePoll returns
@@ -505,6 +464,12 @@ export async function createPost(req: Request, res: Response) {
     }
   }
 
+  // F008 (launch test plan): the app stops at 4 photos and editing refuses a 5th,
+  // but creating stored every entry — so a new post could carry 6. Same cap, same words.
+  if (Array.isArray(media_urls) && media_urls.filter((u: unknown) => typeof u === 'string' && u !== '').length > 4) {
+    return res.status(400).json({ error: 'Maximum 4 images per post' });
+  }
+
   // B03-F8: a number or object as the content was a 500 at .trim().
   if (typeof bodyContent !== 'string' || bodyContent.trim().length === 0) {
     return res.status(400).json({ error: 'Content is required' });
@@ -885,7 +850,18 @@ export async function deletePost(req: Request, res: Response) {
     return res.status(500).json({ error: sanitizeError(err as { message?: string }) });
   }
   // SC-32: a 0-row delete (wrong owner, missing, or already deleted) must 404.
-  if (!deleted) return res.status(404).json({ error: 'Post not found or not yours' });
+  // N-INV1-R4-2 (launch test plan): except the author deleting their own post
+  // again (from an old feed on another phone) — it IS deleted, which is what they
+  // asked for, so that's a success (the app put it back with 'Could not delete').
+  // A moderator's removal says so (410).
+  if (!deleted) {
+    const t = await postForWrite(id).catch(() => null);
+    if (t && t.author_id === userId && t.deleted) {
+      if (t.removed) return res.status(410).json(postGone(t));
+      return res.json({ success: true, already_deleted: true });
+    }
+    return res.status(404).json({ error: 'Post not found or not yours' });
+  }
   return res.json({ success: true });
 }
 
@@ -1338,12 +1314,16 @@ export async function reportContent(req: Request, res: Response) {
 
   // SC-209: 'message' is now reportable alongside post/comment/user.
   // 27 Sep 2026 (migration 108): so are wall posts and wall comments.
-  let resolvedType: 'post' | 'comment' | 'user' | 'message' | 'profile_post' | 'profile_comment' | null = null;
+  // N-RWG2-9 (launch test plan, migration 158): and teams — an offensive team
+  // name or logo had no way to reach a moderator.
+  let resolvedType: 'post' | 'comment' | 'user' | 'message' | 'profile_post' | 'profile_comment' | 'team' | null = null;
   let resolvedId: string | null = null;
   if (target_type && target_id) {
-    if (!['post', 'comment', 'user', 'message', 'profile_post', 'profile_comment'].includes(target_type)) {
-      return res.status(400).json({ error: 'target_type must be post, comment, user, message, profile_post or profile_comment' });
+    if (!['post', 'comment', 'user', 'message', 'profile_post', 'profile_comment', 'team'].includes(target_type)) {
+      return res.status(400).json({ error: 'target_type must be post, comment, user, message, profile_post, profile_comment or team' });
     }
+    // N-RWG2-9: an id the table can't hold was a 500 at the lookup.
+    if (target_type === 'team' && !isUuid(target_id)) return res.status(404).json({ error: 'Reported content not found' });
     resolvedType = target_type;
     resolvedId = target_id;
   } else if (comment_id) {
@@ -1391,6 +1371,15 @@ export async function reportContent(req: Request, res: Response) {
   } else if (resolvedType === 'message') {
     const { data: t } = await supabase.from('messages').select('sender_id').eq('id', resolvedId).maybeSingle();
     exists = !!t; ownerId = (t as { sender_id?: string } | null)?.sender_id ?? null;
+  } else if (resolvedType === 'team') {
+    // N-RWG2-9: a gone team (disbanded, or removed already) can't be reported;
+    // a tournament entry's hidden team isn't a team anyone sees. Its captain
+    // can't report their own team.
+    const { data: t } = await supabase.from('teams').select('id, kind, deleted_at, deleted_reason').eq('id', resolvedId).maybeSingle();
+    const team = t as { id: string; kind?: string | null; deleted_at?: string | null; deleted_reason?: string | null } | null;
+    if (team?.deleted_at) return res.status(410).json(teamGone(team));
+    exists = !!team && team.kind !== 'entry';
+    if (exists && (await getTeamRole(resolvedId, userId)) === 'captain') ownerId = userId;
   } else {
     const { data: t } = await supabase.from('users').select('id').eq('id', resolvedId).maybeSingle();
     exists = !!t; ownerId = (t as { id?: string } | null)?.id ?? null;

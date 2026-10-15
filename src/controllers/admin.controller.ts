@@ -13,6 +13,10 @@ import {
   profilePostForWrite, restoreRemovedContent, softDeleteComment, softDeletePost,
 } from '../utils/postVisibility';
 import { logAdminAction } from '../utils/tournamentAuth';
+import { restoreRemovedTeam, softDisbandTeam, teamHistoryRefusal } from '../utils/teamVisibility';
+import { cleanTeamName } from './teams.controller';
+import { normalizeShortName } from '../utils/validation';
+import { detectProfanity } from '../utils/profanity';
 import { sendPushToTokens } from '../utils/expoPush';
 
 /**
@@ -132,6 +136,13 @@ export async function getReports(req: Request, res: Response) {
     // Wall posts and wall comments (migration 108) — deleted ones included too.
     const wallPostIds = [...new Set(rows.filter((r) => r.target_type === 'profile_post').map((r) => r.target_id))];
     const wallCommentIds = [...new Set(rows.filter((r) => r.target_type === 'profile_comment').map((r) => r.target_id))];
+    // N-RWG2-9: reported teams (migration 158) — gone ones included too.
+    const teamIds = [...new Set(rows.filter((r) => r.target_type === 'team').map((r) => r.target_id))];
+    type HeldTeam = { id: string; name: string; short_name?: string | null; logo_url?: string | null; created_by?: string | null; deleted_at?: string | null; deleted_reason?: string | null };
+    const teamsRes = teamIds.length
+      ? await supabase.from('teams').select('id, name, short_name, logo_url, created_by, deleted_at, deleted_reason').in('id', teamIds)
+      : { data: [] as any[] };
+    const teamMap = new Map(((teamsRes.data ?? []) as HeldTeam[]).map((t) => [t.id, t]));
     type Held = { id: string; content: string; author_id: string; deleted_at?: string | null; deleted_by?: string | null; deleted_reason?: string | null };
     const [wallPostsRes, wallCommentsRes] = await Promise.all([
       wallPostIds.length
@@ -172,6 +183,7 @@ export async function getReports(req: Request, res: Response) {
       ...comments.map((c) => c.author_id),
       ...messages.map((m) => m.sender_id),
       ...[...wallMap.values()].map((w) => w.author_id),
+      ...[...teamMap.values()].map((t) => t.created_by ?? ''),
     ].filter(Boolean))];
     const usersRes = userIds.length
       ? await supabase.from('users').select('id, name, username').in('id', userIds)
@@ -191,6 +203,7 @@ export async function getReports(req: Request, res: Response) {
       let content_deleted_by_author = false;
       // #3: removed by a moderator — Restore is offered for this one.
       let content_removed_by_moderator = false;
+      let team_logo_url: string | null = null;
       if (r.target_type === 'post') {
         const p = postMap.get(r.target_id);
         content_exists = !!p;
@@ -225,9 +238,19 @@ export async function getReports(req: Request, res: Response) {
         content_exists = !!u;
         content_preview = u ? `@${u.username} · ${u.name}` : null;
         if (u) content_author = { id: u.id, name: u.name };
+      } else if (r.target_type === 'team') {
+        // N-RWG2-9: the team's name (and short name), its logo, and who made it.
+        const t = teamMap.get(r.target_id);
+        content_exists = !!t;
+        content_preview = t ? `${t.name}${t.short_name ? ` (${t.short_name})` : ''}` : null;
+        if (t?.created_by) content_author = { id: t.created_by, name: userMap.get(t.created_by)?.name ?? null };
+        content_deleted_at = t?.deleted_at ?? null;
+        content_removed_by_moderator = t?.deleted_reason === 'moderator';
+        if (t) team_logo_url = t.logo_url ?? null;
       }
       return {
         ...r,
+        ...(r.target_type === 'team' ? { team_logo_url } : {}),
         reporter_name: reporter?.name ?? null,
         reporter_username: reporter?.username ?? null,
         content_preview,
@@ -276,6 +299,39 @@ export async function resolveReport(req: Request, res: Response) {
     const type = report.target_type as ModeratedType;
     const resolution = (resolved_action: 'dismissed' | 'removed' | 'restored') =>
       ({ resolved: true, resolved_at: now, resolved_by: adminId, resolved_action });
+
+    // N-RWG2-9: a reported team — removed (the disband's soft mark, reason
+    // 'moderator') or restored, with the other open reports on it resolved too.
+    if (report.target_type === 'team' && (action === 'remove' || action === 'restore')) {
+      if (action === 'restore') {
+        const restored = await restoreRemovedTeam(report.target_id);
+        if (!restored) {
+          return res.status(409).json({ error: 'Only a team a moderator removed can be restored.', code: 'NOT_REMOVED' });
+        }
+        const { error: updErr } = await supabase
+          .from('content_reports')
+          .update(resolution('restored'))
+          .eq('target_type', 'team')
+          .eq('target_id', report.target_id)
+          .eq('resolved_action', 'removed');
+        if (updErr) return res.status(500).json({ error: updErr.message });
+        await logAdminAction(adminId, 'restore_team', 'team', report.target_id, `via report ${id}`);
+        return res.json({ ok: true, action, contentRestored: true });
+      }
+      const removed = await removeTeamAsModerator(report.target_id, adminId, `via report ${id}`);
+      if ('status' in removed) return res.status(removed.status).json(removed.body);
+      const { error: e1 } = await supabase.from('content_reports').update(resolution('removed')).eq('id', id);
+      if (e1) return res.status(500).json({ error: e1.message });
+      const { error: e2 } = await supabase
+        .from('content_reports')
+        .update({ ...resolution('removed'), actioned_via: id })
+        .eq('target_type', 'team')
+        .eq('target_id', report.target_id)
+        .eq('resolved', false)
+        .neq('id', id);
+      if (e2) return res.status(500).json({ error: e2.message });
+      return res.json({ ok: true, action, contentRemoved: true });
+    }
 
     if (action === 'restore') {
       if (!isContent) return res.status(400).json({ error: 'Only a post or comment can be restored' });
@@ -573,6 +629,99 @@ export async function adminUpdateUser(req: Request, res: Response) {
     return res.json({ user: data });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed to update user' });
+  }
+}
+
+/**
+ * N-RWG2-9 (launch test plan): remove a team as a moderator — the same soft mark
+ * a captain's disband leaves (migration 106; reason 'moderator', migration 158).
+ * The row, its former members and its expenses all stay, and it can be restored.
+ * A team with matches or tournament entries is refused (no match may point at a
+ * gone team) — rename it instead.
+ */
+async function removeTeamAsModerator(teamId: string, adminId: string, summary: string | null): Promise<{ ok: true } | { status: number; body: Record<string, unknown> }> {
+  const { data: team } = await supabase.from('teams').select('id, deleted_at, deleted_reason').eq('id', teamId).maybeSingle();
+  if (!team) return { status: 404, body: { error: 'Team not found' } };
+  const row = team as { deleted_at?: string | null; deleted_reason?: string | null };
+  if (row.deleted_at && row.deleted_reason === 'moderator') return { ok: true }; // already removed
+  if (row.deleted_at) return { status: 409, body: { error: 'Its captain already disbanded this team.', code: 'ALREADY_DELETED' } };
+  const history = await teamHistoryRefusal(teamId);
+  if (history) return { status: 409, body: history };
+  if (await softDisbandTeam(teamId, adminId, 'moderator')) {
+    await logAdminAction(adminId, 'remove_team', 'team', teamId, summary);
+  }
+  return { ok: true };
+}
+
+/**
+ * N-RWG2-9 · PATCH /admin/teams/:id  { name?, short_name?, logo_url: null }
+ * An admin renames a team, or clears its logo — the captain-only edit had no
+ * moderator way in. The name gets create's checks (length, bad language).
+ */
+export async function adminUpdateTeam(req: Request, res: Response) {
+  const { id } = req.params;
+  const body = req.body || {};
+  const { data: team } = await supabase.from('teams').select('id, name, deleted_at').eq('id', id).maybeSingle();
+  if (!team) return res.status(404).json({ error: 'Team not found' });
+  const patch: Record<string, unknown> = {};
+  if (body.name !== undefined) {
+    const clean = cleanTeamName(body.name);
+    if (clean.error) {
+      return res.status(400).json(clean.detected_words ? { error: clean.error, detected_words: clean.detected_words } : { error: clean.error });
+    }
+    patch.name = clean.value;
+  }
+  if (body.short_name !== undefined) {
+    const sn = normalizeShortName(body.short_name);
+    if (sn.error) return res.status(400).json({ error: sn.error, code: 'INVALID_SHORT_NAME' });
+    const bad = sn.value ? detectProfanity(sn.value) : [];
+    if (bad.length > 0) return res.status(400).json({ error: 'PROFANITY_DETECTED', detected_words: bad });
+    patch.short_name = sn.value ?? null;
+  }
+  // An offensive logo is cleared, never replaced by an admin's own upload.
+  if (body.logo_url !== undefined) {
+    if (body.logo_url !== null) return res.status(400).json({ error: 'An admin can only clear a team’s logo (logo_url: null).' });
+    patch.logo_url = null;
+  }
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: 'Provide at least one of: name, short_name, logo_url (null)' });
+  }
+  try {
+    const { data, error } = await supabase.from('teams').update(patch).eq('id', id).select('id, name, short_name, logo_url, deleted_at').single();
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
+    const was = (team as { name?: string }).name ?? '';
+    const what = [
+      'name' in patch ? `name “${was}” → “${String(patch.name)}”` : null,
+      'short_name' in patch ? 'short name' : null,
+      'logo_url' in patch ? 'logo cleared' : null,
+    ].filter(Boolean).join(', ');
+    await logAdminAction(req.userId!, 'update_team', 'team', String(id), what);
+    return res.json({ team: data });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Failed to update team' });
+  }
+}
+
+/** N-RWG2-9 · DELETE /admin/teams/:id — remove a team as a moderator (soft; see removeTeamAsModerator). */
+export async function adminRemoveTeam(req: Request, res: Response) {
+  try {
+    const r = await removeTeamAsModerator(String(req.params.id), req.userId!, null);
+    if ('status' in r) return res.status(r.status).json(r.body);
+    return res.json({ ok: true, removed: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Failed to remove team' });
+  }
+}
+
+/** N-RWG2-9 · POST /admin/teams/:id/restore — undo a moderator's removal. */
+export async function adminRestoreTeam(req: Request, res: Response) {
+  try {
+    const restored = await restoreRemovedTeam(String(req.params.id));
+    if (!restored) return res.status(409).json({ error: 'Only a team a moderator removed can be restored.', code: 'NOT_REMOVED' });
+    await logAdminAction(req.userId!, 'restore_team', 'team', String(req.params.id), null);
+    return res.json({ ok: true, restored: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Failed to restore team' });
   }
 }
 

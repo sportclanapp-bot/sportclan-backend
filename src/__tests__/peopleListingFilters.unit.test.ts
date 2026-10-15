@@ -75,13 +75,16 @@ describe('the services directory specifically', () => {
 });
 
 describe('what this sweep deliberately does NOT cover', () => {
-  it('the leaderboard hides deleted accounts but not blocked ones', () => {
-    // On purpose. A ranking is a statement about a competition, not a list of
-    // people to contact; punching a viewer-shaped hole in it would renumber
-    // everyone below and make two players disagree about who is third.
+  it('the leaderboard never renumbers around a block', () => {
+    // A ranking is a statement about a competition; renumbering around a viewer's
+    // blocks would make two players disagree about who is third. N-RWG1-13
+    // (Round 4): a blocked player's ROW is left out (it opened 'This player
+    // doesn't exist'), but every rank stays the real one — the row is dropped
+    // after the ranks are numbered, as a deleted account's is.
     const src = read('controllers/leaderboard.controller.ts');
     expect(src).toMatch(/deletedIdSet/);
-    expect(src).not.toMatch(/blockedUserIds/);
+    expect(src).toMatch(/\.filter\(\(x\) => !delAllTime\.has\(x\.r\.user_id\) && !blocked\.has\(x\.r\.user_id\)\)/);
+    expect(src).toMatch(/compRank\[p\.offset \+ i\][\s\S]*?\.filter\(\(e\) => !blocked\.has\(e\.user_id\)\)/);
   });
 
   it('notifications are block-gated when SENT, not when listed', () => {

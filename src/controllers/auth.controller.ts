@@ -591,7 +591,6 @@ export async function register(req: Request, res: Response) {
       // Checked against the storage allowlist by signupProfileProblem above.
       profile_picture_url: profile_picture_url || null,
       city_id: city_id || null,
-      ...(cleanLocalArea(local_area) ? { local_area: cleanLocalArea(local_area) } : {}), // F038: only when given
       account_type: primaryAccountType,
       coin_balance: 0,
       referral_code: referralCode,
@@ -602,6 +601,9 @@ export async function register(req: Request, res: Response) {
       // people looking for players (Dipak, 28 Sep). The column still defaults
       // to false until migration 113 runs; existing accounts keep their setting.
       is_available: true,
+      // F038 (launch test plan): the local area asked at sign-up was thrown away.
+      // Only written when given, so a sign-up from an older app is unchanged.
+      ...(cleanLocalArea(local_area) ? { local_area: cleanLocalArea(local_area) } : {}),
     })
     .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, referral_code, is_available, created_at')
     .single();

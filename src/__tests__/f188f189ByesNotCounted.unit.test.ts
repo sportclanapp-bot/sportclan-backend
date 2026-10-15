@@ -121,7 +121,7 @@ console.log('@@' + JSON.stringify(out));`;
     const out = pg([
       `CREATE TABLE teams (id uuid primary key, name text);`,
       `CREATE TABLE users (id uuid primary key);`, // the file's second part (F038) adds a column to it
-      `CREATE TABLE matches (id uuid primary key, status text, voided_at timestamptz, completed_at timestamptz, updated_at timestamptz, scheduled_at timestamptz, team_a_name text, team_b_name text, team_a_id uuid, team_b_id uuid, umpire_id uuid, tournament_id uuid, is_ranked boolean DEFAULT false);`,
+      `CREATE TABLE matches (id uuid primary key, status text, voided_at timestamptz, completed_at timestamptz, updated_at timestamptz, scheduled_at timestamptz, team_a_name text, team_b_name text, team_a_id uuid, team_b_id uuid, umpire_id uuid, tournament_id uuid, is_ranked boolean DEFAULT false, score_summary jsonb);`,
       `CREATE TABLE match_participants (match_id uuid, user_id uuid, team_side text);`,
       `INSERT INTO matches VALUES
         ('${id(1)}', 'completed', null, '2026-10-01', null, null, 'Me', 'You', '${id(900)}', '${id(901)}', null, '${TOUR}'),

@@ -672,6 +672,8 @@ export function buildHistory(
   limit: number,
   /** N-R4-3: real players per match (countParticipantsByMatch), for the Profile's rule. */
   players?: Map<string, number>,
+  /** N-R4-3: whose history this is — a result that names whose record it counted decides for them. */
+  userId?: string,
 ): { matches: any[]; played_count: number; officiated_count: number; has_more: boolean } {
   const at = (m: any) => Date.parse(m.completed_at ?? m.updated_at ?? m.scheduled_at ?? '') || 0;
   const sorted = [...rows].sort((x, y) => at(y) - at(x));
@@ -684,10 +686,16 @@ export function buildHistory(
   // profile's count (matches_played) never had it (13,348 here vs 13,316 there).
   const counts = (role: string) =>
     sorted.filter((m) => m.my_role === role && m.status === 'completed' && !m.voided_at && !isByeMatch(m)).length;
-  // N-R4-3 (launch test plan): Played is the Profile's own rule (SC-283) — a casual match
-  // counts with two or more real players, so you against a typed-in name is listed, not played.
+  // N-R4-3 (launch test plan): Played is what the Profile counted. A result since Audit #56 says
+  // whose record it changed (attributed_user_ids — only players who agreed, no walkover, …);
+  // an older one goes by the Profile's rule (SC-283): ranked, or two or more real players.
+  const counted = (m: any) => {
+    const who = m.score_summary?.attributed_user_ids;
+    if (userId && Array.isArray(who)) return countsTowardRecord(m, 2) && who.includes(userId);
+    return countsTowardRecord(m, players?.get(m.id) ?? 0);
+  };
   const played = players
-    ? sorted.filter((m) => m.my_role === 'played' && countsTowardRecord(m, players.get(m.id) ?? 0)).length
+    ? sorted.filter((m) => m.my_role === 'played' && counted(m)).length
     : counts('played');
   return {
     matches: sorted.slice(offset, offset + limit),
@@ -760,7 +768,7 @@ export async function matchHistory(req: Request, res: Response) {
     // server, so a search finds a match on any page (it searched one page).
     // N-R4-3: real players per casual match, for Played (a ranked match always counts).
     const players = await countParticipantsByMatch(rows.filter((m) => sideOf.has(m.id) && !m.is_ranked && m.status === 'completed').map((m) => m.id));
-    const all = buildHistory(rows, sideOf, 0, 0, players);
+    const all = buildHistory(rows, sideOf, 0, 0, players, target);
     const q = typeof (req.query as any).q === 'string' ? String((req.query as any).q).trim().slice(0, 60) : '';
     const named = q ? await matchesNamed(rows, q) : rows;
     const voidedCount = named.filter((m) => !!m.voided_at).length;

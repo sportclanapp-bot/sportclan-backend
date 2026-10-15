@@ -27,6 +27,17 @@ describe('the server fallback', () => {
   });
 });
 
+describe('a match that says whose record it counted (attributed_user_ids, since Audit #56)', () => {
+  it('the fallback counts it as played only for those people (a player who never agreed is listed, not played)', () => {
+    const rows = [
+      { id: 'agreed', status: 'completed', completed_at: '2026-10-02', is_ranked: false, team_a_name: 'Reds', team_b_name: 'Blues', score_summary: { attributed_user_ids: ['me', 'you'] } },
+      { id: 'not', status: 'completed', completed_at: '2026-10-03', is_ranked: false, team_a_name: 'Reds', team_b_name: 'Blues', score_summary: { attributed_user_ids: [] } },
+    ];
+    const h = buildHistory(rows, new Map([['agreed', 'A'], ['not', 'A']]), 0, 10, new Map([['agreed', 2], ['not', 2]]), 'me');
+    expect(h.played_count).toBe(1);
+  });
+});
+
 describe('migration 159: the database function', () => {
   const RUNNER = `
 import { PGlite } from '@electric-sql/pglite';
@@ -59,12 +70,16 @@ console.log('@@' + JSON.stringify(out));`;
         ('${id(2)}', 'completed', null, '2026-10-02', null, null, 'Reds', 'Blues', null, null, null, null, false),
         ('${id(3)}', 'completed', null, '2026-10-03', null, null, 'Me', 'Street XI', null, null, null, null, false);`,
       `INSERT INTO match_participants VALUES ('${id(1)}', '${U}', 'A'), ('${id(2)}', '${U}', 'A'), ('${id(2)}', '${OTHER}', 'B'), ('${id(3)}', '${U}', 'A');`,
+      // 4: casual, two players, but the result counted nobody (the other never agreed — Audit #6/#56)
+      `ALTER TABLE matches ADD COLUMN score_summary jsonb;`,
+      `INSERT INTO matches (id, status, completed_at, team_a_name, team_b_name, is_ranked, score_summary) VALUES ('${id(4)}', 'completed', '2026-10-04', 'Reds', 'Blues', false, '{"attributed_user_ids": []}');`,
+      `INSERT INTO match_participants VALUES ('${id(4)}', '${U}', 'A'), ('${id(4)}', '${OTHER}', 'B');`,
       MIG,
       `SELECT match_history_page('${U}', 0, 10) AS h;`,
     ]);
     expect(out.filter((o) => o.error)).toEqual([]);
     const h = out[out.length - 1]!.rows![0].h;
-    expect(h.played_count).toBe(2); // 1 and 2 — not the solo match
-    expect(h.total).toBe(3); // still listed
+    expect(h.played_count).toBe(2); // 1 and 2 — not the solo match, nor 4 (counted for nobody)
+    expect(h.total).toBe(4); // still listed
   });
 });

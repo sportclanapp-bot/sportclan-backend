@@ -6,10 +6,11 @@
 -- the history, but no longer counted as played (or officiated). The rule is the
 -- server's isByeMatch (src/utils/matchCounts.ts): one side has a team and the
 -- other none, in a tournament (or the empty side is named BYE).
--- N-R4-3 (found while fixing F189): Played also follows the Profile's rule for a
--- casual match (SC-283, countsTowardRecord): it counts with two or more real
--- players, so you against a typed-in name is listed but not played. A ranked
--- match always counts.
+-- N-R4-3 (found while fixing F189): Played is what the Profile counted. A result
+-- since Audit #56 says whose record it changed (score_summary.attributed_user_ids:
+-- only players who agreed to the match, nobody for a walkover); an older one goes
+-- by the Profile's rule (SC-283): ranked, or two or more real players — so you
+-- against a typed-in name is listed but not played.
 -- Same function, arguments and result shape as 150 (the whole function, so it
 -- also stands without 150): CREATE OR REPLACE, safe to run twice.
 
@@ -34,8 +35,10 @@ AS $$
            -- a bye: one side has a team and the other none, in a tournament (or named BYE)
            ((m.team_a_id IS NULL) <> (m.team_b_id IS NULL)
              AND (m.tournament_id IS NOT NULL OR 'BYE' IN (COALESCE(m.team_a_name, ''), COALESCE(m.team_b_name, '')))) AS bye,
-           -- N-R4-3: the Profile's rule — ranked, or two or more real players
-           (COALESCE(m.is_ranked, false) OR (SELECT count(*) FROM match_participants p WHERE p.match_id = m.id) >= 2) AS real_game
+           -- N-R4-3: what the Profile counted — the result's own list, else ranked or two or more real players
+           (CASE WHEN jsonb_typeof(m.score_summary -> 'attributed_user_ids') = 'array'
+                 THEN (m.score_summary -> 'attributed_user_ids') ? p_user::text
+                 ELSE COALESCE(m.is_ranked, false) OR (SELECT count(*) FROM match_participants p WHERE p.match_id = m.id) >= 2 END) AS real_game
     FROM uniq u JOIN matches m ON m.id = u.id
     WHERE m.status IN ('completed', 'abandoned')
   ),

@@ -2422,6 +2422,9 @@ export async function addParticipants(req: Request, res: Response) {
   }
 }
 
+/** N-R3C2-8: 'This match already has a referee.' — in the sport's word ('an umpire' for cricket). */
+const hasOfficial = (off: string) => `This match already has ${/^[aeiou]/i.test(off) ? 'an' : 'a'} ${off.toLowerCase()}.`;
+
 // POST /matches/:id/umpire/self-assign
 // Lets a user officiate a match they didn't create. Gated to accounts holding
 // the umpire/referee role, and only for matches still open for officiating
@@ -2479,7 +2482,7 @@ export async function answerUmpireOffer(req: Request, res: Response) {
       } catch { /* best-effort */ }
       return res.json({ match: data, accepted: false });
     }
-    if (match.umpire_id) return res.status(409).json({ error: 'Match already has an umpire' });
+    if (match.umpire_id) return res.status(409).json({ error: hasOfficial(off) });
     if (match.voided_at || ['completed', 'cancelled', 'abandoned'].includes(String(match.status))) {
       return res.status(409).json({ error: 'This match is no longer open for officiating.' });
     }
@@ -2497,7 +2500,7 @@ export async function answerUmpireOffer(req: Request, res: Response) {
       .select('*')
       .maybeSingle();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
-    if (!data) return res.status(409).json({ error: 'Match already has an umpire' });
+    if (!data) return res.status(409).json({ error: hasOfficial(off) });
     try {
       await notifyUser({ userId: offerBy, type: 'match_official_named', title: `You’re the ${off.toLowerCase()}`, body: `Your offer was accepted: you’re the ${off.toLowerCase()} for ${label}. You can score it in the app.`, data: { matchId: id, screen: 'MatchDetail' } });
     } catch { /* best-effort */ }
@@ -2535,9 +2538,12 @@ export async function selfAssignUmpire(req: Request, res: Response) {
     if (match.voided_at || match.status === 'completed' || match.status === 'cancelled' || match.status === 'abandoned') {
       return res.status(409).json({ error: 'This match is no longer open for officiating.' });
     }
+    // N-R3C2-8 (launch test plan): the sport's word for its official ('This match already has a referee.') —
+    // it said 'umpire' for every sport, with no full stop.
+    const off = sportTerms(await sportSlugOf((match as { sport_id?: string | null }).sport_id)).official;
     if (match.umpire_id) {
       return res.status(409).json({
-        error: match.umpire_id === userId ? 'You are already officiating this match.' : 'Match already has an umpire',
+        error: match.umpire_id === userId ? 'You are already officiating this match.' : hasOfficial(off),
       });
     }
     // F-33 (decision 2026-09-25): a ranked match's umpire is neutral. Someone in
@@ -2547,7 +2553,7 @@ export async function selfAssignUmpire(req: Request, res: Response) {
       const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', id);
       if (await viewerCanPlay(match, userId, (parts ?? []).map((p: { user_id: string }) => p.user_id))) {
         return res.status(409).json({
-          error: 'You play in this ranked match, so you can’t be its umpire.',
+          error: `You play in this ranked match, so you can’t be its ${off.toLowerCase()}.`,
           code: 'UMPIRE_IS_PLAYER',
         });
       }
@@ -2560,7 +2566,6 @@ export async function selfAssignUmpire(req: Request, res: Response) {
     //  · A casual match: the match's creator takes it straight away; anyone else
     //    OFFERS to officiate and the creator accepts or declines.
     const mode = await selfOfficiateMode(match as SelfOfficiateMatch, userId);
-    const off = sportTerms(await sportSlugOf((match as { sport_id?: string | null }).sport_id)).official;
     if (mode === 'none') {
       return res.status(403).json({
         error: `The tournament organiser names this match’s ${off.toLowerCase()}.`,
@@ -2586,7 +2591,7 @@ export async function selfAssignUmpire(req: Request, res: Response) {
         .select('*')
         .maybeSingle();
       if (offerErr) return res.status(500).json({ error: sanitizeError(offerErr) });
-      if (!offered) return res.status(409).json({ error: 'Match already has an umpire' });
+      if (!offered) return res.status(409).json({ error: hasOfficial(off) });
       if (match.created_by && !pending) {
         const { data: me } = await supabase.from('users').select('name').eq('id', userId).maybeSingle();
         try {
@@ -2612,7 +2617,7 @@ export async function selfAssignUmpire(req: Request, res: Response) {
       .select('*')
       .maybeSingle();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
-    if (!data) return res.status(409).json({ error: 'Match already has an umpire' });
+    if (!data) return res.status(409).json({ error: hasOfficial(off) });
 
     // Let the creator know someone picked up officiating (best-effort).
     if (match.created_by && match.created_by !== userId) {

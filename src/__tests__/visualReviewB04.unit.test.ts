@@ -66,7 +66,8 @@ describe('most active this week · a real weekly count', () => {
     expect(body).toMatch(/\.gte\('match\.completed_at', since\)/);
   });
   it('a player with no match this week is not shown, and the count is returned', () => {
-    expect(f).toMatch(/if \(weekly && !weekly\.get\(`\$\{p\.user_id\}:\$\{p\.sport_id\}`\)\) continue;/);
+    // N-RWG4-15 (Round 4): the same rule, applied when the cached candidates are built.
+    expect(f).toMatch(/scored\.filter\(\(p\) => !weekly \|\| weekly\.get\(`\$\{p\.user_id\}:\$\{p\.sport_id\}`\)\)/);
     expect(f).toMatch(/matches_this_week: weekly\?\.get\(/);
   });
 });

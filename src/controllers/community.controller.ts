@@ -848,7 +848,18 @@ export async function deletePost(req: Request, res: Response) {
     return res.status(500).json({ error: sanitizeError(err as { message?: string }) });
   }
   // SC-32: a 0-row delete (wrong owner, missing, or already deleted) must 404.
-  if (!deleted) return res.status(404).json({ error: 'Post not found or not yours' });
+  // N-INV1-R4-2 (launch test plan): except the author deleting their own post
+  // again (from an old feed on another phone) — it IS deleted, which is what they
+  // asked for, so that's a success (the app put it back with 'Could not delete').
+  // A moderator's removal says so (410).
+  if (!deleted) {
+    const t = await postForWrite(id).catch(() => null);
+    if (t && t.author_id === userId && t.deleted) {
+      if (t.removed) return res.status(410).json(postGone(t));
+      return res.json({ success: true, already_deleted: true });
+    }
+    return res.status(404).json({ error: 'Post not found or not yours' });
+  }
   return res.json({ success: true });
 }
 

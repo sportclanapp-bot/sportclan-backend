@@ -117,6 +117,14 @@ export async function setMatchAssistants(req: Request, res: Response) {
     }
     const now = new Date().toISOString();
     const current = await liveAssistants(m.id);
+    // N-R3C2-9 (launch test plan): one person, one officiating seat — the same person was named umpire,
+    // second, third and fourth umpire at once (and told four times). The seats as they'd be after this:
+    const after = new Map(current.map((c) => [c.role, c.user_id as string | null]));
+    for (const a of list) after.set(a.role as string, (a.user_id as string | null) ?? null);
+    const seated = [...after.values()].filter((v): v is string => !!v);
+    if (new Set(seated).size !== seated.length || (m.umpire_id && seated.includes(m.umpire_id))) {
+      return res.status(409).json({ error: 'One person can hold only one official’s seat in a match.', code: 'OFFICIAL_TWICE' });
+    }
     const label = m.team_a_name && m.team_b_name ? `${m.team_a_name} vs ${m.team_b_name}` : 'a match';
     for (const a of list) {
       const role = a.role as string;

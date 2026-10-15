@@ -2702,6 +2702,12 @@ export async function setMatchOfficials(req: Request, res: Response) {
         }
       }
     }
+    // N-R3C2-9 (launch test plan): one person, one officiating seat — the main official can't also be
+    // one of the match's assistants (second / third umpire, assistant referee…). The scorer is not a seat.
+    if (typeof body.umpire_id === 'string') {
+      const { data: seats } = await supabase.from('match_officials').select('user_id').eq('match_id', id).is('removed_at', null).eq('user_id', body.umpire_id).limit(1);
+      if ((seats ?? []).length) return res.status(409).json({ error: 'One person can hold only one official’s seat in a match.', code: 'OFFICIAL_TWICE', field: 'umpire_id' });
+    }
     const before = { umpire_id: match.umpire_id ?? null, scorer_id: (match as { scorer_id?: string | null }).scorer_id ?? null };
     const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
     for (const k of fields) update[k] = body[k];

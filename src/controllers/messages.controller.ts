@@ -354,10 +354,13 @@ export async function getUnreadCount(req: Request, res: Response) {
   const userId = req.userId!;
 
   // Your chats and your block list are independent — one round, not two.
+  // N-R4-chatwallet-1 (found with N-RWG4-1): the memberships are read 1000 at a
+  // time — one read stopped at PostgREST's 1000, so chats past it never counted.
   const [{ data: participations, error: pErr }, blocked] = await Promise.all([
     // 098: current memberships of chats that still exist.
-    supabase.from('chat_participants').select('chat_id, chat:chats!inner(deleted_at)').is('left_at', null)
-      .is('chat.deleted_at', null).eq('user_id', userId),
+    allRows<{ chat_id: string }>(() => supabase.from('chat_participants').select('chat_id, chat:chats!inner(deleted_at)').is('left_at', null)
+      .is('chat.deleted_at', null).eq('user_id', userId))
+      .then((data) => ({ data, error: null }), (error) => ({ data: null, error: error as { message?: string } })),
     blockedUserIds(userId),
   ]);
   if (pErr) return res.status(500).json({ error: sanitizeError(pErr) });

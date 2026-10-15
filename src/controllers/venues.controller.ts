@@ -150,6 +150,18 @@ export async function findLiveVenue(name: string, cityId: string | null): Promis
   return { row: (live ?? [])[0] ?? null, failed: false };
 }
 
+/**
+ * F194 (launch test plan): the city a venue typed into New match belongs to — the match's city when
+ * it has one, else its creator's. New match sends no city, so every venue typed there was saved with
+ * none and never showed under Venues "In <your city>". Null when neither is known.
+ */
+export async function venueCityFor(matchCityId: unknown, userId: string): Promise<string | null> {
+  if (typeof matchCityId === 'string' && isUuid(matchCityId)) return matchCityId;
+  const { data } = await supabase.from('users').select('city_id').eq('id', userId).maybeSingle();
+  const c = (data as { city_id?: string | null } | null)?.city_id;
+  return typeof c === 'string' && c ? c : null;
+}
+
 // Shared helper used by createMatch to increment use_count on an existing
 // venue name or insert a new row. Best-effort — never throws.
 export async function upsertVenue(
@@ -178,8 +190,11 @@ export async function upsertVenue(
     // The temporary ILIKE fallback for the pre-migration window is gone (079 is
     // applied). A failure here is now a real failure, not a missing function.
     // Decision 7: deleted venues are skipped (findLiveVenue).
-    const { row: existing, failed } = await findLiveVenue(clean, cityId);
+    const { row: found, failed } = await findLiveVenue(clean, cityId);
     if (failed) return null;
+    // F194: the same name saved with no city (a match typed it before the city was kept) is this
+    // venue — it takes the city, rather than a second copy being made beside it.
+    const existing = found ?? (cityId ? await adoptCitylessVenue(clean, cityId) : null);
     if (existing) {
       if (!countUse) return existing;
       await supabase
@@ -202,6 +217,17 @@ export async function upsertVenue(
   } catch {
     return null;
   }
+}
+
+/** F194: the live, city-less venue with this name, given the city — or null. */
+async function adoptCitylessVenue(name: string, cityId: string): Promise<any | null> {
+  const { data } = await supabase.from('venues').select('*')
+    .ilike('name', escapeLike(name)).is('city_id', null).is('deleted_at', null).limit(1);
+  const row = (data ?? [])[0];
+  if (!row) return null;
+  const { data: updated } = await supabase.from('venues').update({ city_id: cityId })
+    .eq('id', row.id).is('city_id', null).select('*').maybeSingle();
+  return updated ?? null;
 }
 
 // PATCH /venues/:id  { name?, city_id?, address?, sport_id?, surface?, image_url? }

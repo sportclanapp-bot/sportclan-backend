@@ -28,7 +28,7 @@ import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers, matchAudienceIds, matchFollowerIds } from '../utils/notify';
 import { isTournamentOrganiser, canOfficiateMatch, canDefault } from '../utils/tournamentAuth';
 import { blockedUserIds } from '../utils/blocks';
-import { upsertVenue } from './venues.controller';
+import { upsertVenue, venueCityFor } from './venues.controller';
 
 /**
  * SC-367: normalise a free-text venue.
@@ -625,7 +625,8 @@ export async function createMatch(req: Request, res: Response) {
     // Best-effort venue upsert — tracks frequently-used venues for the
     // autocomplete in CreateMatchScreen. Errors are swallowed.
     if (cleanVenue) {
-      inBackground(upsertVenue(cleanVenue, city_id ?? null, userId, { countUse: true }), 'upsertVenue'); // audit #99
+      // F194 (launch test plan): with the match's city, or its creator's — New match sends none.
+      inBackground(venueCityFor(city_id, userId).then((cityId) => upsertVenue(cleanVenue, cityId, userId, { countUse: true })), 'upsertVenue'); // audit #99
     }
 
     return res.json({ match: data });

@@ -452,19 +452,63 @@ export const EMAIL_CHECKS_PER_DAY = 20;
 // SC-365 RESERVED_USERNAMES / EMAIL_RE live in utils/profileRules — sign-up
 // applies the same rules (Phase 3 B01-F3).
 
+/**
+ * F042 (launch test plan): the most chats (or teams) a person can mute. The lists
+ * live in users.notification_preferences, which every push reads for every
+ * recipient, and each save rewrites the whole list — so it stays bounded (an
+ * anti-abuse limit Dipak kept, 7 Oct). A muted chat you have since left or that
+ * was deleted no longer counts (see pruneMutedChats).
+ */
+export const MUTED_MAX = 200;
+
+/** F042: the plain words when a mute list is full. */
+export function mutedFullText(k: 'muted_teams' | 'muted_chats'): string {
+  return k === 'muted_chats'
+    ? `You can mute up to ${MUTED_MAX} chats. Unmute one to mute this chat.`
+    : `You can mute up to ${MUTED_MAX} teams. Unmute one to mute this team.`;
+}
+
 /** B13: why a notification_preferences value is refused, or null when it's fine. */
 export function notificationPrefsProblem(v: unknown): string | null {
-  if (v == null || typeof v !== 'object' || Array.isArray(v)) return 'Notification settings must be an object.';
+  return notificationPrefsRefusal(v)?.error ?? null;
+}
+
+/** F042: the refusal with its code — a full list said "must be a list of ids". */
+export function notificationPrefsRefusal(v: unknown): { error: string; code: string } | null {
+  const bad = (error: string) => ({ error, code: 'INVALID_NOTIFICATION_PREFS' });
+  if (v == null || typeof v !== 'object' || Array.isArray(v)) return bad('Notification settings must be an object.');
   for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
     if (k === 'muted_teams' || k === 'muted_chats') {
-      if (!Array.isArray(val) || val.length > 200 || !val.every((t) => typeof t === 'string' && /^[0-9a-f-]{36}$/i.test(t))) {
-        return `${k} must be a list of ids.`;
+      if (!Array.isArray(val) || !val.every((t) => typeof t === 'string' && /^[0-9a-f-]{36}$/i.test(t))) {
+        return bad(`${k} must be a list of ids.`);
       }
+      if (val.length > MUTED_MAX) return { error: mutedFullText(k), code: 'MUTE_LIMIT' };
     } else if (typeof val !== 'boolean') {
-      return `Notification setting "${k}" must be on or off.`;
+      return bad(`Notification setting "${k}" must be on or off.`);
     }
   }
   return null;
+}
+
+/**
+ * F042: when the muted-chats list is over the limit, drop the chats this person
+ * has left or that were deleted — nothing ever took them out, so old mutes filled
+ * the list and a new mute failed. Only a list just over the limit is looked up
+ * (the app adds one at a time); a far bigger one is refused as it stands.
+ */
+export async function pruneMutedChats(userId: string, prefs: unknown): Promise<unknown> {
+  if (prefs == null || typeof prefs !== 'object' || Array.isArray(prefs)) return prefs;
+  const list = (prefs as Record<string, unknown>).muted_chats;
+  if (!Array.isArray(list) || list.length <= MUTED_MAX || list.length > MUTED_MAX * 2) return prefs;
+  if (!list.every((t) => typeof t === 'string' && isUuid(t))) return prefs;
+  // A failed look-up keeps the list as sent (the save is then refused as full).
+  const rows = await selectAllIn<{ chat_id: string }>(list as string[], (ids, from, to) => supabase
+    .from('chat_participants').select('chat_id, chat:chats!inner(deleted_at)')
+    .eq('user_id', userId).is('left_at', null).is('chat.deleted_at', null).in('chat_id', ids)
+    .order('chat_id').range(from, to)).catch(() => null);
+  if (!rows) return prefs;
+  const live = new Set(rows.map((r) => r.chat_id));
+  return { ...(prefs as Record<string, unknown>), muted_chats: (list as string[]).filter((id) => live.has(id)) };
 }
 
 export async function updateMe(req: Request, res: Response) {
@@ -492,8 +536,9 @@ export async function updateMe(req: Request, res: Response) {
   // B13: notification_preferences had no shape check at all. Category switches
   // are booleans; muted_teams (D18) is a bounded list of team ids.
   if ('notification_preferences' in patch) {
-    const problem = notificationPrefsProblem(patch.notification_preferences);
-    if (problem) return res.status(400).json({ error: problem, code: 'INVALID_NOTIFICATION_PREFS' });
+    patch.notification_preferences = await pruneMutedChats(userId, patch.notification_preferences);
+    const refusal = notificationPrefsRefusal(patch.notification_preferences);
+    if (refusal) return res.status(400).json(refusal);
   }
   // B04-F1: these went to the DB unchecked, so a bad value was a 500 (a CHECK,
   // a uuid cast or a missing FK) instead of a worded 400.

@@ -31,7 +31,8 @@ describe('D21 · leaderboard ties break by matches played', () => {
 describe('V027/V098 · team rows say how big the team is', () => {
   it('the team list embeds the city and a roster count', () => {
     const t = code('controllers/teams.controller.ts');
-    expect(t).toMatch(/select\('\*, city:cities!city_id\(id, name\), members:team_members\(count\)'/);
+    // N-RWG1-16: "My teams" adds the viewer's membership to the same select.
+    expect(t).toMatch(/select\(`\*, city:cities!city_id\(id, name\), members:team_members\(count\)\$\{myTeams/);
     expect(t).toMatch(/t\.member_count = Array\.isArray\(members\) \? \(members\[0\]\?\.count \?\? 0\) : null;/);
     expect(t).toMatch(/t\.city_name = t\.city\?\.name \?\? null;/);
   });

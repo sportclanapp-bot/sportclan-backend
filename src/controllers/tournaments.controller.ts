@@ -2642,6 +2642,11 @@ export async function updateFixtures(req: Request, res: Response) {
         if (upd[idKey] === null) { patch[`team_${side}_name`] = null; continue; }
         const { data: team } = await supabase.from('teams').select('name').eq('id', upd[idKey]).maybeSingle();
         if (!team) { badTeam = true; break; }
+        // N-RWD3-7 (launch test plan): only a team entered in this tournament — any team in the app was
+        // taken, and its members got 'Match rescheduled' pushes from a tournament they never entered.
+        const { data: entered } = await supabase.from('tournament_entries').select('team_id')
+          .eq('tournament_id', String(id)).eq('team_id', upd[idKey]).eq('status', 'approved').maybeSingle();
+        if (!entered) { badTeam = true; break; }
         patch[`team_${side}_name`] = team.name;
       }
       if (badTeam) { skip('That team isn’t in this tournament.'); continue; }

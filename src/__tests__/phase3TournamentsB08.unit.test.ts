@@ -322,6 +322,7 @@ describe('F5/F10 · the fixture editor', () => {
   const on = (cur: object, child: object = { status: 'scheduled' }) => (q: Q) => {
     if (q[0] === 'from:tournaments') return { data: { created_by: ME } };
     if (q[0] === 'from:teams') return { data: { name: 'P3 Spare' } };
+    if (q[0] === 'from:tournament_entries') return { data: { team_id: 'entered' } }; // N-RWD3-7: a team put in a fixture is entered
     if (q[0] === 'from:matches' && has(q, 'update:') && has(q, `"${FIX}"`)) return { data: { id: FIX, ...cur } };
     if (q[0] === 'from:matches' && has(q, 'select:["status"]')) return { data: child };
     if (q[0] === 'from:matches' && has(q, `eq:["id","${FIX}"]`)) return { data: cur };

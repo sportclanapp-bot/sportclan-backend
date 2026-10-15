@@ -591,9 +591,7 @@ export async function register(req: Request, res: Response) {
       // Checked against the storage allowlist by signupProfileProblem above.
       profile_picture_url: profile_picture_url || null,
       city_id: city_id || null,
-      // F038 (launch test plan): the local area asked at sign-up was thrown away.
-      // Only written when given, so a sign-up from an older app is unchanged.
-      ...(cleanLocalArea(local_area) ? { local_area: cleanLocalArea(local_area) } : {}),
+      ...(cleanLocalArea(local_area) ? { local_area: cleanLocalArea(local_area) } : {}), // F038: only when given
       account_type: primaryAccountType,
       coin_balance: 0,
       referral_code: referralCode,

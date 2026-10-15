@@ -421,3 +421,15 @@ describe('F130 (launch test plan, Round 3) · a live tournament with matches pla
     expect(r.body?.code).not.toBe('TOURNAMENT_STARTED');
   });
 });
+
+describe('N-RWG1-15 (launch test plan, Round 3) · a deleted account is no longer an official', () => {
+  test('it isn’t listed (it was offered as "Deleted User", and naming it failed)', async () => {
+    mockNext = (q) => (q[0] === 'from:tournaments' ? { data: { id: T } }
+      : q[0] === 'from:tournament_officials' ? { data: [
+        { id: 'o1', role: 'umpire', created_at: '', user: { id: 'u1', name: 'Anil', username: 'anil', profile_picture_url: null, deleted_at: null } },
+        { id: 'o2', role: 'scorer', created_at: '', user: { id: 'u2', name: 'Deleted User', username: null, profile_picture_url: null, deleted_at: '2026-10-01T00:00:00Z' } },
+      ] } : { data: null });
+    const r = await call(getTournamentOfficials, {});
+    expect(r.body.officials).toEqual([{ id: 'o1', role: 'umpire', created_at: '', user: { id: 'u1', name: 'Anil', username: 'anil', profile_picture_url: null } }]);
+  });
+});

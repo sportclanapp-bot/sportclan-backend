@@ -460,10 +460,15 @@ export async function getTournamentOfficials(req: Request, res: Response) {
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     const { data, error } = await supabase
       .from('tournament_officials')
-      .select('id, role, created_at, user:users!user_id(id, name, username, profile_picture_url)')
+      .select('id, role, created_at, user:users!user_id(id, name, username, profile_picture_url, deleted_at)')
       .eq('tournament_id', id);
     if (error) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ officials: data ?? [] });
+    // N-RWG1-15 (launch test plan): a deleted account isn't an official any more — it was offered as
+    // 'Deleted User' to name as a match's umpire / scorer, and saving it failed.
+    const live = ((data ?? []) as Array<{ user?: { deleted_at?: string | null } | null }>)
+      .filter((o) => o.user && !o.user.deleted_at)
+      .map((o) => ({ ...o, user: o.user ? (({ deleted_at: _gone, ...u }) => u)(o.user) : o.user }));
+    return res.json({ officials: live });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -5,7 +5,7 @@ import type { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { deviceIdOf } from '../utils/deviceHeader';
 import {
-  verifyHandoff, handoffRefusal, isEventOp, isResultOp,
+  verifyHandoff, handoffRefusal, isEventOp, isResultOp, completeFieldsOf,
   type HandoffResultOp,
 } from '../utils/qrHandoff';
 import { checkAndRecordDiscrepancy, checkResultBeforeRecording, recordUnsentPlayForFinalMatch } from '../utils/discrepancy';
@@ -335,7 +335,9 @@ async function applyResultOp(
       headers: { 'x-device-id': deviceId },
       body: {
         winner_team_id: op.r.w,
-        is_draw: op.r.w === null,
+        // F093: a winner named by side (typed-in names) isn't a draw; and how it ended rides along.
+        is_draw: op.r.w === null && !op.r.c?.side,
+        ...completeFieldsOf(op.r.c),
         idempotent: true,
         ...(op.r.summary ? { score_summary: op.r.summary } : {}),
       },

@@ -62,7 +62,55 @@ export interface HandoffResultOp {
   k: string;
   s: number;
   t: 'result';
-  r: { w: string | null; summary?: Record<string, unknown> | null };
+  r: { w: string | null; summary?: Record<string, unknown> | null; c?: HandoffResultHow };
+}
+
+/**
+ * F093 (launch test plan): HOW the match ended — what completeMatch needs beyond a team id, so a match
+ * between typed-in names (no team ids: the side), or one decided by a shoot-out, a super over, DLS / an
+ * award or a chess tie-break, isn't read as a draw at the other end. Only this match's own outcome —
+ * still nothing that can reshape a draw (completeMatch checks each against the match's rules).
+ */
+export interface HandoffResultHow {
+  side?: 'A' | 'B' | null;
+  so?: { A: number; B: number } | null;
+  sov?: { A: number; B: number } | null;
+  un?: 'award' | 'dls' | null;
+  ct?: boolean | { method: 'armageddon' | 'organiser'; armageddon?: 'white' | 'black' | 'draw' } | null;
+  tf?: 'seed' | 'boundaries' | 'toss' | null;
+}
+const pair = (v: unknown) => v === null || v === undefined || (typeof v === 'object' && !Array.isArray(v)
+  && Object.keys(v as object).every((k) => k === 'A' || k === 'B')
+  && [ (v as { A: unknown }).A, (v as { B: unknown }).B ].every((n) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n < 1000));
+/** F093: the `c` of a result op, checked as narrowly as the rest — unknown keys or shapes refuse it. */
+export function isResultHow(c: unknown): c is HandoffResultHow {
+  if (c === undefined) return true;
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return false;
+  const h = c as Record<string, unknown>;
+  if (Object.keys(h).some((k) => !['side', 'so', 'sov', 'un', 'ct', 'tf'].includes(k))) return false;
+  if (!(h.side == null || h.side === 'A' || h.side === 'B')) return false;
+  if (!pair(h.so) || !pair(h.sov)) return false;
+  if (!(h.un == null || h.un === 'award' || h.un === 'dls')) return false;
+  if (!(h.tf == null || h.tf === 'seed' || h.tf === 'boundaries' || h.tf === 'toss')) return false;
+  if (h.ct != null && typeof h.ct !== 'boolean') {
+    const ct = h.ct as Record<string, unknown>;
+    if (typeof ct !== 'object' || Array.isArray(ct) || Object.keys(ct).some((k) => k !== 'method' && k !== 'armageddon')) return false;
+    if (ct.method !== 'armageddon' && ct.method !== 'organiser') return false;
+    if (!(ct.armageddon == null || ['white', 'black', 'draw'].includes(String(ct.armageddon)))) return false;
+  }
+  return true;
+}
+/** F093: the completeMatch body fields a result op's `c` stands for (the queue sends the same ones). */
+export function completeFieldsOf(c: HandoffResultHow | undefined): Record<string, unknown> {
+  if (!c) return {};
+  return {
+    ...(c.side ? { winner_side: c.side } : {}),
+    ...(c.so ? { shootout: c.so } : {}),
+    ...(c.sov ? { super_over: c.sov } : {}),
+    ...(c.un ? { unfinished: c.un } : {}),
+    ...(c.ct ? { chess_tiebreak: c.ct } : {}),
+    ...(c.tf ? { tie_fallback: c.tf } : {}),
+  };
 }
 
 export type HandoffOp = HandoffEventOp | HandoffResultOp;
@@ -168,8 +216,9 @@ export function isResultOp(o: HandoffOp): o is HandoffResultOp {
   if (!(r.w === null || (typeof r.w === 'string' && UUID_RE.test(r.w)))) return false;
   if (r.summary !== undefined && r.summary !== null
     && (typeof r.summary !== 'object' || Array.isArray(r.summary))) return false;
-  const allowed = new Set(['w', 'summary']);
+  const allowed = new Set(['w', 'summary', 'c']); // F093: c — how it ended
   if (Object.keys(r).some((k) => !allowed.has(k))) return false;
+  if (!isResultHow(r.c)) return false;
   // And nothing may ride along on the op itself either.
   const opAllowed = new Set(['k', 's', 't', 'r']);
   return !Object.keys(o).some((k) => !opAllowed.has(k));

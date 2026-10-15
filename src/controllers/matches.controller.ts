@@ -3082,7 +3082,7 @@ export async function completeMatch(req: Request, res: Response) {
       // who was chasing, and a cricket win is described by wickets or by runs
       // depending on the answer. It was missing, so a successful chase reported
       // "won by N runs". See the note at the derivation call below.
-      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, scorer_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice, format, overs, rules, voided_at')
+      .select('id, sport_id, team_a_id, team_b_id, status, created_by, umpire_id, scorer_id, team_a_name, team_b_name, is_ranked, tournament_id, round, group_label, next_match_id, score_summary, toss_choice, format, overs, rules, voided_at, winner_team_id')
       .eq('id', id)
       .maybeSingle();
     timer.mark('load');
@@ -3201,6 +3201,21 @@ export async function completeMatch(req: Request, res: Response) {
       // already holds. Callers that don't opt in keep the old 400, so the manual
       // "Complete match" button still tells a human they were too late.
       if (idempotent) {
+        // F119 (launch test plan): a "replay" naming a DIFFERENT winner isn't a replay — a second hub
+        // phone sending its own result for the same match. It answered 200 'already completed' and
+        // that phone said SENT; the disagreement was lost. It's refused as a dispute now.
+        const askedSide = winner_side === 'A' || winner_side === 'B' ? winner_side
+          : typeof winner_team_id === 'string' && winner_team_id ? (winner_team_id === match.team_a_id ? 'A' : winner_team_id === match.team_b_id ? 'B' : 'other')
+          : is_draw === true ? 'draw' : null;
+        const ss = (match.score_summary ?? {}) as { winner_side?: unknown };
+        const hasSide = ss.winner_side === 'A' || ss.winner_side === 'B' ? ss.winner_side as 'A' | 'B'
+          : match.winner_team_id ? (match.winner_team_id === match.team_a_id ? 'A' : match.winner_team_id === match.team_b_id ? 'B' : 'other') : 'draw';
+        if (askedSide !== null && askedSide !== hasSide) {
+          return res.status(409).json({
+            error: 'This match already has a different result on the server. Nothing was changed — an organiser needs to decide.',
+            code: 'RESULT_DISPUTED',
+          });
+        }
         // FORMATS (28 Sep, live): a completion cut off after the result was
         // written but before the tournament step (a restart mid-request) left
         // the winner un-advanced, or the last league fixture un-crowned, and

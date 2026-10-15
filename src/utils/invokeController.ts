@@ -46,7 +46,14 @@ export async function invokeController<T = unknown>(
   let status = 200;
   let body: unknown;
   let settled = false;
+  // N-R3-3 (launch test plan, found on the phone): completeMatch sets a Server-Timing header after the
+  // result is written. With no setHeader here that threw, so every QR-handed-off result was saved and
+  // then answered 500 — the courier saw "Internal server error" and the hub filed it as a dispute.
+  const resHeaders: Record<string, unknown> = {};
   const res = {
+    setHeader(name: string, value: unknown) { resHeaders[name.toLowerCase()] = value; return this; },
+    getHeader(name: string) { return resHeaders[name.toLowerCase()]; },
+    set(name: string, value: unknown) { resHeaders[name.toLowerCase()] = value; return this; },
     status(code: number) { status = code; return this; },
     json(payload: unknown) { body = payload; settled = true; return this; },
     send(payload: unknown) { body = payload; settled = true; return this; },

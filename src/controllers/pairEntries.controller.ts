@@ -34,6 +34,7 @@ import { syncTournamentChatMembers, syncAfterSuccess } from '../utils/tournament
 import { ENTER_AN_EVENT } from '../utils/tournamentEvents';
 import { LIMITS } from '../utils/validation';
 import { eventLimitRefusal } from '../utils/eventLimits';
+import { isEntryCapError } from '../utils/entryCap';
 
 type T = {
   id: string; name: string | null; status: string; sport_id: string | null; max_teams: number | null;
@@ -180,6 +181,7 @@ async function makeEntry(t: T, userIds: string[], status: 'pending' | 'approved'
   if (error || !entry) {
     await supabase.from('teams').delete().eq('id', team.id);
     const dup = (error as { code?: string } | null)?.code === '23505';
+    if (isEntryCapError(error)) return { error: 'This event is full.' }; // F120: filled meanwhile
     return { error: dup ? 'Already entered.' : sanitizeError(error) || 'Couldn’t make the entry.' };
   }
   await supabase.from('tournament_pair_invites')

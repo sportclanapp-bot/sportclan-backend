@@ -79,6 +79,7 @@ import {
 import { isTournamentOrganiser, authorizeCarveout, logAdminAction, swissTakesLateEntries } from '../utils/tournamentAuth';
 import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
+import { ENTRY_CAP_BODY, isEntryCapError } from '../utils/entryCap';
 import { notifyUnlessBlocked, notifyUsers, matchAudienceIds } from '../utils/notify';
 import { possessive } from '../utils/possessive';
 import { TOURNAMENT_STATUSES, ALL_LIST_ORDER, bucketSlices, listStatusFilter, tournamentNameRefusal, tournamentDetailsRefusal } from '../utils/tournamentRules';
@@ -1374,6 +1375,7 @@ export async function directAddTeam(req: Request, res: Response) {
         .insert({ tournament_id: id, team_id, status: 'approved' })
         .select('*')
         .single();
+    if (isEntryCapError(error)) return res.status(400).json(ENTRY_CAP_BODY); // F120: filled meanwhile
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     void awardTournamentBadges(team_id); // SC-316: Tournament Veteran
     return res.json({ entry: data });
@@ -1498,6 +1500,7 @@ async function enterTeam(tournamentId: string, teamId: unknown, userId: string, 
     if (code === '23505' || /duplicate|unique/i.test(error.message || '')) {
       return { status: 400, body: { error: 'This team is already entered in this tournament.', code: 'ALREADY_ENTERED' } };
     }
+    if (isEntryCapError(error)) return { status: 400, body: ENTRY_CAP_BODY }; // F120: filled meanwhile
     return { status: 500, body: { error: sanitizeError(error) } };
   }
   await notifyEntryRequested(data.id);
@@ -1636,6 +1639,7 @@ export async function updateEntry(req: Request, res: Response) {
       .eq('id', entryId)
       .select('*')
       .single();
+    if (isEntryCapError(error)) return res.status(400).json(ENTRY_CAP_BODY); // F120: filled meanwhile
     if (error) return res.status(500).json({ error: sanitizeError(error) });
 
     // SC-316: an approval moves the team's roster into a new tournament → re-check
@@ -4731,7 +4735,11 @@ export async function addLuckyLoser(req: Request, res: Response) {
     const { count } = await supabase.from('tournament_entries').select('id', { count: 'exact', head: true }).eq('tournament_id', tt.id).eq('status', 'approved');
     if ((count ?? 0) >= tt.max_teams) return res.status(409).json({ error: 'The draw is full: a lucky loser takes a withdrawn place.', code: 'TOURNAMENT_FULL' });
   }
-  await enterInto(tt.id, teamId, 'LL');
+  // F120: the database has the last word on a full draw (two at once).
+  if (!(await enterInto(tt.id, teamId, 'LL'))) {
+    const { data: now } = await supabase.from('tournament_entries').select('status').eq('tournament_id', tt.id).eq('team_id', teamId).maybeSingle();
+    if ((now as { status?: string } | null)?.status !== 'approved') return res.status(409).json({ error: 'The draw is full: a lucky loser takes a withdrawn place.', code: 'TOURNAMENT_FULL' });
+  }
   return res.json({ ok: true });
 }
 

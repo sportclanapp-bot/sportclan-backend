@@ -38,8 +38,8 @@ export async function enterInto(tournamentId: string, teamId: string, tag: 'Q' |
   const { data: had } = await supabase.from('tournament_entries').select('id, status').eq('tournament_id', tournamentId).eq('team_id', teamId).maybeSingle();
   if (had) {
     if ((had as { status: string }).status === 'approved') return false;
-    await supabase.from('tournament_entries').update({ status: 'approved', ...(tag ? { entry_tag: tag } : {}) }).eq('id', (had as { id: string }).id);
-    return true;
+    const { error } = await supabase.from('tournament_entries').update({ status: 'approved', ...(tag ? { entry_tag: tag } : {}) }).eq('id', (had as { id: string }).id);
+    return !error; // F120: a full draw (migration 157) refuses it
   }
   const { error } = await supabase.from('tournament_entries').insert({ tournament_id: tournamentId, team_id: teamId, status: 'approved', ...(tag ? { entry_tag: tag } : {}) });
   return !error;

@@ -9,6 +9,7 @@
 import { supabase } from './supabase';
 import { notifyUsers } from './notify';
 import { settingsOf } from './tournamentSettings';
+import { isEntryCapError } from './entryCap';
 
 const PAGE = 500;
 
@@ -39,8 +40,9 @@ export async function promoteWaitlist(tournamentId: string): Promise<string[]> {
     if (rows.length === 0) break;
     for (const r of rows) {
       // Only if still waiting (two promotions at once can't move it twice).
-      const { data: up } = await supabase.from('tournament_entries').update({ status: landing })
+      const { data: up, error: upErr } = await supabase.from('tournament_entries').update({ status: landing })
         .eq('id', r.id).eq('status', 'waitlisted').select('id').maybeSingle();
+      if (isEntryCapError(upErr)) { free = 0; break; } // F120: the place was taken meanwhile
       if (up) { moved.push(r); free -= 1; }
       if (free <= 0) break;
     }

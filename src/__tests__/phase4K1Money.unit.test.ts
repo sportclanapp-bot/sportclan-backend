@@ -58,7 +58,7 @@ describe('K1-29a (1b1d38b, A4-005) · a gift is charged with a balance floor, at
     mockRpc.mockImplementation(async () => ({ data: { status: 'insufficient' }, error: null }));
     const r = await call(sendGift, { body: { receiverId: OTHER, giftId: 'flowers' } });
     expect(r.statusCode).toBe(400);
-    expect(r.body.error).toBe('Insufficient coins');
+    expect(r.body).toMatchObject({ code: 'INSUFFICIENT_COINS', required: 5 }); // N-R3C2-5: plain words, a code
     expect(mockLog.some((q) => q[0] === 'from:gift_transactions')).toBe(false);
   });
   describe('the pre-052 fallback path (send_gift not deployed)', () => {
@@ -78,7 +78,7 @@ describe('K1-29a (1b1d38b, A4-005) · a gift is charged with a balance floor, at
       mockRpc.mockImplementation(async (name: unknown) => (name === 'send_gift' ? missing : { data: null, error: null }));
       const r = await call(sendGift, { body: { receiverId: OTHER, giftId: 'flowers' } });
       expect(r.statusCode).toBe(400);
-      expect(r.body.error).toBe('Insufficient coins');
+      expect(r.body).toMatchObject({ code: 'INSUFFICIENT_COINS', required: 5 }); // N-R3C2-5: plain words, a code
       expect(mockLog.some((q) => q[0] === 'from:gift_transactions')).toBe(false);
     });
     test('K1-29a (1b1d38b): the gift insert fails after the charge → the coins are refunded', async () => {

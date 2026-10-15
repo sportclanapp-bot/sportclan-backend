@@ -62,6 +62,21 @@ function notifyGiftReceived(
 }
 
 // POST /gifts/send  { receiverId, giftId, message? }
+/**
+ * N-R3C2-5 (launch test plan): a gift the balance can't cover was refused with the
+ * bare words "Insufficient coins" (the app showed them as they were). Plain words,
+ * a code the app can act on, and the old fields kept (`required`, `current`).
+ */
+export function notEnoughCoins(gift: { name: string; cost: number }, current?: number) {
+  const have = typeof current === 'number' ? ` You have ${current}.` : '';
+  return {
+    error: `Not enough coins: ${gift.name} costs ${gift.cost}.${have}`,
+    code: 'INSUFFICIENT_COINS',
+    required: gift.cost,
+    ...(typeof current === 'number' ? { current } : {}),
+  };
+}
+
 export async function sendGift(req: Request, res: Response) {
   const senderId = req.userId!;
   const { receiverId, giftId, message, idempotency_key } = req.body || {};
@@ -101,11 +116,7 @@ export async function sendGift(req: Request, res: Response) {
   // SC-434: sending a gift needed Premium. It now needs only coins, which is the
   // point of coins.
   if (sender.coin_balance < gift.cost) {
-    return res.status(400).json({
-      error: 'Insufficient coins',
-      required: gift.cost,
-      current: sender.coin_balance,
-    });
+    return res.status(400).json(notEnoughCoins(gift, sender.coin_balance));
   }
 
   // Check receiver exists — and is a live account (Phase 3 B10-F16): a stale
@@ -139,7 +150,7 @@ export async function sendGift(req: Request, res: Response) {
       .rpc('deduct_coins_if_sufficient', { target_user_id: senderId, amount: gift.cost });
     if (deductErr) return res.status(500).json({ error: 'Could not deduct coins' });
     if (newBalance === null || newBalance === undefined) {
-      return res.status(400).json({ error: 'Insufficient coins', required: gift.cost });
+      return res.status(400).json(notEnoughCoins(gift));
     }
     const { data: giftTx, error } = await supabase
       .from('gift_transactions')
@@ -170,7 +181,7 @@ export async function sendGift(req: Request, res: Response) {
   if (rpc.error) return res.status(500).json({ error: sanitizeError(rpc.error) });
   const out = (rpc.data ?? {}) as { status?: string; gift?: any; new_balance?: number };
   if (out.status === 'insufficient') {
-    return res.status(400).json({ error: 'Insufficient coins', required: gift.cost });
+    return res.status(400).json(notEnoughCoins(gift));
   }
   // 'sent' or 'duplicate' — duplicate = an idempotent retry (no double charge).
   // SC-206: notify the receiver ONLY on a genuine 'sent' — a 'duplicate' retry

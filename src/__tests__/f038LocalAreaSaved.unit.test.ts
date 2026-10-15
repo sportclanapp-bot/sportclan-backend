@@ -119,7 +119,7 @@ console.log('@@' + JSON.stringify(out));`;
     const out = pg([
       `CREATE TABLE users (id int primary key);`,
       `CREATE TABLE teams (id uuid primary key, name text);`,
-      `CREATE TABLE matches (id uuid primary key, status text, voided_at timestamptz, completed_at timestamptz, updated_at timestamptz, scheduled_at timestamptz, team_a_name text, team_b_name text, team_a_id uuid, team_b_id uuid, umpire_id uuid, tournament_id uuid);`,
+      `CREATE TABLE matches (id uuid primary key, status text, voided_at timestamptz, completed_at timestamptz, updated_at timestamptz, scheduled_at timestamptz, team_a_name text, team_b_name text, team_a_id uuid, team_b_id uuid, umpire_id uuid, tournament_id uuid, is_ranked boolean);`,
       `CREATE TABLE match_participants (match_id uuid, user_id uuid, team_side text);`,
       MIG, MIG,
       `INSERT INTO users VALUES (1);`,

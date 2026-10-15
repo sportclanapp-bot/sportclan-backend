@@ -2544,7 +2544,7 @@ export async function joinByCode(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const { entry_code, team_id } = req.body || {};
+    const { entry_code, team_id, declared_amateur } = req.body || {};
     if (!entry_code || !team_id) return res.status(400).json({ error: 'entry_code and team_id are required' });
     if (typeof entry_code !== 'string' || entry_code.trim().length > 20) {
       return res.status(400).json({ error: 'That doesn’t look like a join code.', code: 'INVALID_CODE' });
@@ -2558,7 +2558,7 @@ export async function joinByCode(req: Request, res: Response) {
     // B08-F2: the code only names the tournament — the entry itself is the same
     // routine as the entry form, with every rule and the organiser's notification.
     syncAfterSuccess(res, () => syncTournamentChatMembers(String(tournament.id)));
-    const out = await enterTeam(String(tournament.id), team_id, userId);
+    const out = await enterTeam(String(tournament.id), team_id, userId, declared_amateur) /* N-INV1-R2-3: the amateur declaration too */;
     if (out.status !== 200) return res.status(out.status).json(out.body);
     return res.json({ ...out.body, tournament_id: tournament.id });
   } catch (e) {

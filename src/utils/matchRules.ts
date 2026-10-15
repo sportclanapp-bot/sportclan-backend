@@ -381,7 +381,10 @@ function playUnits(key: string, r: Partial<MatchRules>): number | null {
     const target = r.target ?? null;
     if (!target) return null;
     const sideOut = key === 'pickleball' && r.scoring === 'sideout' ? 1.5 : 1;
-    const games = r.rubbers ? r.rubbers * expectedUnits(r.bestOf ?? 3) : expectedUnits(r.bestOf ?? 1);
+    // N-SPP1-BDM-1 (launch test plan): a custom tie (PBL's 5 matches, 3 doubles…) is its matches too —
+    // it was given one match's time (30 min) while the standard 5-rubber tie got 150.
+    const matches = r.tie?.rubbers?.length || r.rubbers;
+    const games = matches ? matches * expectedUnits(r.bestOf ?? 3) : expectedUnits(r.bestOf ?? 1);
     return games * target * sideOut;
   }
   return null;

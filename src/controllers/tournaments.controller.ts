@@ -4920,10 +4920,13 @@ async function boxRoundRows(
 }
 
 /** Each box's table for the current round, box 1 first (team ids, top first). */
-async function boxTables(tournamentId: string, t: { settings?: unknown; tiebreaker_rules?: unknown; sport_id?: string }): Promise<string[][]> {
+export async function boxTables(tournamentId: string, t: { settings?: unknown; tiebreaker_rules?: unknown; sport_id?: string }): Promise<string[][]> {
   const round = settingsOf(t).box?.round ?? 1;
-  const entries = await allRows<{ team_id: string; group_label: string | null }>(() => supabase
-    .from('tournament_entries').select('team_id, group_label, seed').eq('tournament_id', tournamentId).eq('status', 'approved').not('group_label', 'is', null).order('seed', { ascending: true, nullsFirst: false }));
+  // N-FMT-4 (launch test plan): a player who withdrew still PLAYED their games — ranked with them (as the
+  // Boxes tab ranks), then left out of moving up and of the crown. Leaving them out of the ranking
+  // dropped every game against them, so the box's top could differ from the one the Boxes tab showed.
+  const entries = await allRows<{ team_id: string; group_label: string | null; status: string }>(() => supabase
+    .from('tournament_entries').select('team_id, group_label, seed, status').eq('tournament_id', tournamentId).in('status', ['approved', 'withdrawn']).not('group_label', 'is', null).order('seed', { ascending: true, nullsFirst: false }));
   const matches = await allRows(() => supabase
     .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, overs, group_label')
     .eq('tournament_id', tournamentId).eq('round', round).in('status', ['completed', 'abandoned']).is('voided_at', null));
@@ -4932,7 +4935,8 @@ async function boxTables(tournamentId: string, t: { settings?: unknown; tiebreak
   const labels = Array.from(new Set(entries.map((e) => e.group_label!))).sort((a, b) => Number(a) - Number(b));
   return labels.map((g) => {
     const ids = entries.filter((e) => e.group_label === g).map((e) => e.team_id);
-    return rankTeams(ids, (matches as any[]).filter((m) => m.group_label === g), ((t.tiebreaker_rules ?? []) as any[]), pts, extraFor(g)).filter((x) => ids.includes(x));
+    const playing = new Set(entries.filter((e) => e.group_label === g && e.status === 'approved').map((e) => e.team_id));
+    return rankTeams(ids, (matches as any[]).filter((m) => m.group_label === g), ((t.tiebreaker_rules ?? []) as any[]), pts, extraFor(g)).filter((x) => playing.has(x));
   });
 }
 

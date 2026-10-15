@@ -628,11 +628,18 @@ export async function listTournaments(req: Request, res: Response) {
     // which it couldn't enter or draw.
     const grouped = clientHas(req, 'events');
     // The same filters for every query below (the list, and the "All" buckets).
+    // N-RWG4-10 (launch test plan): "Mine" is every tournament this person organises — the ones they
+    // made AND the ones they co-organise (an event's organisers are its parent's). It was created_by only.
+    const coOrganised = mine === '1' && userId
+      ? ((await supabase.from('tournament_organisers').select('tournament_id').eq('user_id', userId)).data ?? []).map((r: { tournament_id: string }) => r.tournament_id).filter((x: string) => isUuid(x))
+      : [];
     const filtered = (q: any, st: string | null) => {
       if (resolvedSportId) q = q.eq('sport_id', resolvedSportId);
       if (city_id) q = q.eq('city_id', city_id);
       if (st) q = q.eq('status', st);
-      if (mine === '1') q = q.eq('created_by', userId);
+      if (mine === '1') q = coOrganised.length
+        ? q.or(`created_by.eq.${userId},id.in.(${coOrganised.join(',')}),parent_id.in.(${coOrganised.join(',')})`)
+        : q.eq('created_by', userId);
       // B03 (V245, D3): test tournaments are hidden from real viewers' lists.
       else if (hide) q = excludeTest(q);
       return grouped ? q.is('parent_id', null) : q.eq('is_parent', false);

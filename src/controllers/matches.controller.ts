@@ -3641,10 +3641,17 @@ export async function completeMatch(req: Request, res: Response) {
     // 1v1. Casual matches have no such requirement.
     // SC-254: a walkover is exempt from the lineup requirement — a forfeited
     // match has no lineup by definition; it just records the winner + advances.
+    // N-R3-1 (launch test plan, found on the phone): a result the organiser records at the venue desk
+    // (the offline hub, `desk: true`) is the organiser's record, as the fixture editor's is — nobody can set a
+    // line-up at a desk with no signal, so it was refused. With no line-up it moves nobody's rating.
+    let deskNoRoster = false;
     if (match.is_ranked && !unplayed) {
       const aCount = (participants ?? []).filter((p) => p.team_side === 'A').length;
       const bCount = (participants ?? []).filter((p) => p.team_side === 'B').length;
-      if (aCount < 1 || bCount < 1) {
+      if ((aCount < 1 || bCount < 1) && req.body?.desk === true && match.tournament_id
+          && await isTournamentOrganiser(match.tournament_id, userId).catch(() => false)) {
+        deskNoRoster = true;
+      } else if (aCount < 1 || bCount < 1) {
         const lined = (partsRes.data ?? []) as Array<{ team_side: string }>;
         if (lined.some((p) => p.team_side === 'A') && lined.some((p) => p.team_side === 'B')) {
           return res.status(400).json({ error: 'Nobody on one side has said they’re playing yet. A ranked result needs at least one player a side who tapped “In”.', code: 'SIDE_NOT_CONFIRMED' });
@@ -3665,7 +3672,7 @@ export async function completeMatch(req: Request, res: Response) {
     // chess game decided by Armageddon or the organiser was a DRAW (FIDE rates the game by its own
     // result); the tie-break only says who goes through, which the bracket still gets.
     const ratedSide: 'A' | 'B' | null = chessTiebreak ? null : winnerSide;
-    if (match.is_ranked && !unplayed && participants && participants.length > 0) {
+    if (match.is_ranked && !unplayed && !deskNoRoster && participants && participants.length > 0) {
       const teamA = participants.filter((p) => p.team_side === 'A').map((p) => p.user_id);
       const teamB = participants.filter((p) => p.team_side === 'B').map((p) => p.user_id);
       allPlayerIds = [...teamA, ...teamB];

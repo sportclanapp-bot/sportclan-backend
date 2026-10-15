@@ -73,3 +73,8 @@ test('a page of entries: by status, in entry order, with the total', async () =>
   // the page size is capped at 100 (paging, not a cap on entries)
   expect((await run(getEntriesPage, ME, { query: { status: 'approved', limit: '5000' } })).body.entries).toHaveLength(100);
 });
+
+test('N-R3-6 (launch test plan): the viewer’s own entries are marked mine, so the app needn’t download their every team', async () => {
+  const r = await run(getTournament, ME, { headers: { 'x-client-features': 'events,pairs,entries_paged' } });
+  expect(r.body.entries.every((e: any) => e.mine === true)).toBe(true);
+});

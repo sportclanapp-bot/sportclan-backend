@@ -749,7 +749,10 @@ async function keyEntries(tournamentId: string, userId: string, organiser: boole
       ? supabase.from('tournament_entries').select(entryCols(organiser)).eq('tournament_id', tournamentId).eq('team_id', championTeamId).maybeSingle().then((r) => r.data as unknown as Record<string, unknown> | null)
       : Promise.resolve(null),
   ]);
-  const out = mine.map(({ mem: _mem, ...e }) => e);
+  // N-R3-6 (launch test plan, found on the phone): the viewer's own entries say so — the app worked it out
+  // by downloading every team the viewer is in (1,848 pages' worth for a busy captain), and showed
+  // 'Apply to enter' to a captain already entered (or on the waitlist) until that finished, or for good.
+  const out: Array<Record<string, unknown>> = mine.map(({ mem: _mem, ...e }) => ({ ...e, mine: true }));
   if (champ && !out.some((e) => e.id === champ.id)) out.push(champ);
   return out;
 }

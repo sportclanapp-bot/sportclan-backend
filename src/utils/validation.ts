@@ -34,6 +34,7 @@ export const LIMITS = {
   venueMax: 120,
   postTextMax: 500, // matches the community_posts / post_comments DB CHECK
   bioMax: 500,
+  localAreaMax: 80, // F038: the neighbourhood asked at sign-up (migration 159's check)
   teamNameMax: 60,
   // SC-95 length caps for previously-unbounded user text.
   tournamentNameMax: 120,

@@ -16,7 +16,7 @@ import { inviteFreshCutoffIso } from './invites.controller';
 import { resolveSportId } from '../utils/sportId';
 import { isSportInactive } from '../utils/sports';
 import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
-import { RESERVED_USERNAMES, EMAIL_RE, GENDERS, GENDER_ERROR, dobProblem } from '../utils/profileRules';
+import { RESERVED_USERNAMES, EMAIL_RE, GENDERS, GENDER_ERROR, dobProblem, localAreaProblem, cleanLocalArea } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
 import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
@@ -35,7 +35,7 @@ import { aggregateGoalPlayers, aggregatePointPlayers } from './scoring.controlle
 // contact + wallet + account internals; NEVER serialize this to another viewer.
 // (Still never returns password_hash — that column is simply not listed.)
 const PUBLIC_FIELDS =
-  'id, phone, name, username, email, city_id, account_type, profile_picture_url, bio, gender, dob, show_dob, link, coin_balance, is_available, streak_count, referral_code, is_admin, notification_preferences, discoverability, message_privacy, tag_privacy, last_active_at, created_at';
+  'id, phone, name, username, email, city_id, local_area, account_type, profile_picture_url, bio, gender, dob, show_dob, link, coin_balance, is_available, streak_count, referral_code, is_admin, notification_preferences, discoverability, message_privacy, tag_privacy, last_active_at, created_at';
 
 // SC-344 · presence. "online" = active within this window; the FE heartbeats more
 // often than this so a continuously-active user stays green, and stops on
@@ -52,7 +52,7 @@ export function computeIsOnline(lastActiveAt: string | null | undefined): boolea
 // notification_preferences, message_privacy, discoverability, tag_privacy,
 // `dob` is included but nulled below unless show_dob.
 const PUBLIC_USER_FIELDS =
-  'id, name, username, profile_picture_url, bio, link, city_id, gender, account_type, is_available, streak_count, last_active_at, dob, show_dob, created_at';
+  'id, name, username, profile_picture_url, bio, link, city_id, local_area, gender, account_type, is_available, streak_count, last_active_at, dob, show_dob, created_at';
 
 // Fire smart engagement notifications lazily from /users/me. Best-effort,
 // never throws — failures here must not block the main profile response.
@@ -439,6 +439,7 @@ export async function getUserById(req: Request, res: Response) {
 // Change #4: NO size limit on profile_picture_url. We accept any URL.
 const ALLOWED_FIELDS = [
   'name', 'username', 'email', 'city_id', 'profile_picture_url', 'bio',
+  'local_area', // F038 (launch test plan): asked at sign-up, now kept and editable
   'link', 'gender', 'dob', 'show_dob', 'is_available',
   // A16-006 · notification preference toggles (jsonb { category: boolean }).
   'notification_preferences',
@@ -617,6 +618,11 @@ export async function updateMe(req: Request, res: Response) {
     if (!city) return res.status(400).json({ error: 'Pick a city from the list.', code: 'INVALID_CITY' });
   }
   // Length caps (no cap existed before): bio + display name.
+  if ('local_area' in patch) {
+    const why = localAreaProblem(patch.local_area);
+    if (why) return res.status(400).json({ error: why, code: 'INVALID_LOCAL_AREA' });
+    patch.local_area = cleanLocalArea(patch.local_area);
+  }
   if (typeof patch.bio === 'string' && patch.bio.length > LIMITS.bioMax) {
     return res.status(400).json({ error: `Bio must be ${LIMITS.bioMax} characters or fewer` });
   }

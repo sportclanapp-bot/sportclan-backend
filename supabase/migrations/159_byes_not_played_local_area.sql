@@ -1,4 +1,4 @@
--- 159 · F189 (launch test plan, 16 Oct 2026): Match history said "Played
+-- 159 (first part) · F189 (launch test plan, 16 Oct 2026): Match history said "Played
 -- 13,348" while the Profile said 13,316 matches for the same person. The 32
 -- extra were tournament byes (a round with no opponent, won without a game),
 -- which match_history_page (150) counted as matches played; the Profile's count
@@ -63,6 +63,20 @@ BEGIN
   EXECUTE 'REVOKE EXECUTE ON FUNCTION match_history_page(uuid, integer, integer, text, boolean) FROM PUBLIC' || COALESCE(', ' || pub_roles, '');
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
     EXECUTE 'GRANT EXECUTE ON FUNCTION match_history_page(uuid, integer, integer, text, boolean) TO service_role';
+  END IF;
+END
+$$;
+
+-- 159 (second part) · F038 (launch test plan, 16 Oct 2026): sign-up asks for a
+-- "Local area (optional)" (e.g. Kothrud) and the answer was thrown away — there
+-- was nowhere to keep it. A nullable column, at most 80 characters (the
+-- server's LIMITS.localAreaMax). Additive and safe to run twice. The server
+-- reads this column on every profile, so run this BEFORE deploying the server.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS local_area text;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_local_area_len') THEN
+    ALTER TABLE users ADD CONSTRAINT users_local_area_len CHECK (local_area IS NULL OR char_length(local_area) <= 80);
   END IF;
 END
 $$;

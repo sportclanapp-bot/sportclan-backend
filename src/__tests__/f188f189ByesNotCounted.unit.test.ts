@@ -113,13 +113,14 @@ console.log('@@' + JSON.stringify(out));`;
   };
   const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
   const U = id(1000);
-  const file = path.join(ROOT, 'supabase', 'migrations', '159_history_byes_not_played.sql');
+  const file = path.join(ROOT, 'supabase', 'migrations', '159_byes_not_played_local_area.sql');
   it('migration 159: the database function leaves byes out of Played', () => {
     expect(fs.existsSync(file)).toBe(true);
     const MIG = fs.readFileSync(file, 'utf8');
     // 1: a real tournament game · 2: a knockout bye · 3: a Swiss bye (named) · 4: casual vs a typed-in name · 5: casual, no teams
     const out = pg([
       `CREATE TABLE teams (id uuid primary key, name text);`,
+      `CREATE TABLE users (id uuid primary key);`, // the file's second part (F038) adds a column to it
       `CREATE TABLE matches (id uuid primary key, status text, voided_at timestamptz, completed_at timestamptz, updated_at timestamptz, scheduled_at timestamptz, team_a_name text, team_b_name text, team_a_id uuid, team_b_id uuid, umpire_id uuid, tournament_id uuid);`,
       `CREATE TABLE match_participants (match_id uuid, user_id uuid, team_side text);`,
       `INSERT INTO matches VALUES
@@ -133,7 +134,7 @@ console.log('@@' + JSON.stringify(out));`;
       `SELECT match_history_page('${U}', 0, 10) AS h;`,
     ]);
     expect(out.filter((o) => o.error)).toEqual([]);
-    const h = out[7]!.rows![0].h;
+    const h = out[8]!.rows![0].h;
     expect(h.played_count).toBe(3); // 1, 4, 5 — not the byes
     expect(h.total).toBe(5); // still listed
   });

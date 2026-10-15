@@ -28,6 +28,28 @@ export interface CountableMatch {
   status?: string | null;
   /** SC-424: set when the match has been voided. A voided match counts nowhere. */
   voided_at?: string | null;
+  /** F188/F189 (launch test plan): the sides and the tournament, to tell a bye. */
+  team_a_id?: string | null;
+  team_b_id?: string | null;
+  team_a_name?: string | null;
+  team_b_name?: string | null;
+  tournament_id?: string | null;
+}
+
+/**
+ * F188/F189 (launch test plan): a bye — a tournament round with no opponent,
+ * marked won (or half a point) without a game. It is not a match: not played,
+ * not won, in no count of matches (the team page, Team insights, Match history,
+ * the profile, the heatmap). One side has a team and the other has none, in a
+ * tournament (or the empty side is named "BYE"). A casual match against a
+ * typed-in opponent also has one side without a team, but no tournament and no
+ * "BYE", so it is not a bye. Migration 159 (match_history_page) states the same
+ * rule in SQL.
+ */
+export function isByeMatch(match: CountableMatch | null | undefined): boolean {
+  if (!match) return false;
+  if (!match.team_a_id === !match.team_b_id) return false;
+  return match.tournament_id != null || match.team_a_name === 'BYE' || match.team_b_name === 'BYE';
 }
 
 /**
@@ -53,6 +75,9 @@ export function countsTowardRecord(
   // which is why the SC-424 sweep added it to each one.
   if (match.voided_at != null) return false;
   if (match.status !== 'completed') return false;
+  // F188/F189: a bye is not a match (a knockout bye is ranked and has one
+  // participant, so the rule below let it through).
+  if (isByeMatch(match)) return false;
   if (match.is_ranked) return true;
   return participantCount >= 2;
 }

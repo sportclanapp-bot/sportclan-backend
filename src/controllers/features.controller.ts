@@ -553,7 +553,8 @@ export async function getSeasonRecap(req: Request, res: Response) {
       selectAll((from, to) => supabase.from('match_participants')
         // SC-413: is_ranked is required to apply the SC-283 rule below.
         // SC-424: voided_at is selected so countsTowardRecord can exclude it.
-        .select('match_id, team_side, match:matches!inner(id, sport_id, status, is_ranked, winner_team_id, team_a_id, team_b_id, score_summary, created_at, voided_at)')
+        // F188/F189: the sides' names and the tournament, so it can tell a bye.
+        .select('match_id, team_side, match:matches!inner(id, sport_id, status, is_ranked, winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, tournament_id, score_summary, created_at, voided_at)')
         .eq('user_id', id)
         .gte('match.created_at', since)
         .order('match_id', { ascending: true })

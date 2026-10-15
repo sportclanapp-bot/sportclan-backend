@@ -23,6 +23,7 @@ import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTyp
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
 import { istDay } from '../utils/appTime';
+import { isByeMatch } from '../utils/matchCounts';
 import { isRangeError, parsePagination } from '../utils/pagination';
 import { notifyUsers, notifyUser } from '../utils/notify';
 import { stepTimer } from '../utils/stepTimer';
@@ -1173,7 +1174,7 @@ export async function getActivityHeatmap(req: Request, res: Response) {
     data = await allRows(() => supabase
       .from('match_participants')
       // SC-415: completed_at is the day the match was really played.
-      .select('team_side, match:matches(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, score_summary, updated_at, voided_at)')
+      .select('team_side, match:matches(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, tournament_id, score_summary, updated_at, voided_at)')
       .eq('user_id', id));
   } catch (error) {
     return res.status(500).json({ error: (error as { message?: string })?.message ?? 'Internal server error' });
@@ -1188,6 +1189,7 @@ export async function getActivityHeatmap(req: Request, res: Response) {
     if (!match) continue;
     if (match.status !== 'completed') continue;
     if (match.voided_at) continue; // SC-424: a voided match counts nowhere
+    if (isByeMatch(match)) continue; // F188/F189: a bye is not a match played (or won)
     // SC-415: prefer the real completion stamp (migration 085). updated_at moves
     // on ANY later edit, so a match's heatmap day used to drift whenever its row
     // was touched; completed_at is fixed at the moment the match ended.

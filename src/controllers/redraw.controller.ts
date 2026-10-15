@@ -16,8 +16,13 @@ import { refreshParentOf } from '../utils/tournamentEvents';
 
 type M = { id: string; status: string; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null; score_summary: unknown; voided_at: string | null };
 
-/** A bye: one side only, decided without being played. */
+/**
+ * A bye: one side only, decided without being played. F121 (launch test plan): or a row with NO team
+ * on either side — a double-elimination back-draw 'BYE v BYE' is set to cancelled when the draw is
+ * made; nobody can have played it, but it counted as started and the draw could never be made again.
+ */
 export function isBye(m: M): boolean {
+  if (!m.team_a_id && !m.team_b_id) return m.status === 'cancelled' || (m.team_a_name === 'BYE' && m.team_b_name === 'BYE');
   return (!!m.team_a_id !== !!m.team_b_id) && (m.team_a_name === 'BYE' || m.team_b_name === 'BYE' || m.status === 'completed');
 }
 

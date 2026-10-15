@@ -143,6 +143,10 @@ async function searchTeams(res: Response, q: string, sportId: string | undefined
     .ilike('name', `%${escapeLike(q)}%`)
     .is('deleted_at', null) // hard-delete list #6: a disbanded team is not found
     .eq('kind', 'club') // badminton gap 2: nor a singles / doubles entry's hidden team
+    // N-R4-2 (launch test plan): a private team was found by name, and its page refuses anyone
+    // outside it (SC-107) — as in Discover (N-RWG1-14), search finds public teams; a member finds
+    // their private team under "My teams".
+    .eq('is_public', true)
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging (no overlap/gaps)
     .range(p.from, p.to);
 

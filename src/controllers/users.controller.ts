@@ -150,6 +150,28 @@ async function runSmartNotifications(userId: string): Promise<void> {
   }
 }
 
+/**
+ * N-RWG4-6 (launch test plan): follower / following numbers counted every row,
+ * deleted accounts included — while the lists (getFollowers / getFollowing) hide
+ * them — so a profile could say 5 followers over a list of 4. Only follows whose
+ * other side is a live account count now, matching the lists.
+ */
+function countLiveFollows(side: 'following_id' | 'follower_id', id: string, other: 'follower_id' | 'following_id') {
+  return supabase
+    .from('follow_relationships')
+    .select(`id, u:${other}!inner(id)`, { count: 'exact', head: true })
+    .eq(side, id)
+    .is('u.deleted_at', null);
+}
+/** [followers, following] — live accounts only (N-RWG4-6). */
+export async function followCounts(userId: string): Promise<readonly [number, number]> {
+  const [f1, f2] = await Promise.all([
+    countLiveFollows('following_id', userId, 'follower_id'),
+    countLiveFollows('follower_id', userId, 'following_id'),
+  ]);
+  return [f1.count ?? 0, f2.count ?? 0] as const;
+}
+
 // GET /users/me — self profile with premium lazy expiry check.
 // Wired to Fix 1: on every app-startup fetch we reconcile subscription state.
 export async function getMe(req: Request, res: Response) {
@@ -200,10 +222,7 @@ export async function getMe(req: Request, res: Response) {
     safe(supabase.from('user_sport_profiles').select('matches_played').eq('user_id', userId)
       .then(({ data: sp }) => (sp ?? []) as Array<{ matches_played?: number | null }>), []),
     // SC-49: follower/following counts for the own-profile header.
-    safe(Promise.all([
-      supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('following_id', userId),
-      supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('follower_id', userId),
-    ]).then(([f1, f2]) => [f1.count ?? 0, f2.count ?? 0] as const), [0, 0] as const),
+    safe(followCounts(userId), [0, 0] as const), // N-RWG4-6: live accounts only
     // Phase 3: the server says who is an admin (DB flag OR the env whitelist), and
     // umpires see how many matches they have officiated.
     isAdminUser(userId),
@@ -351,8 +370,9 @@ export async function getUserById(req: Request, res: Response) {
 
   // Counts (followers/following) — best-effort, never fail the request.
   const [followersRes, followingRes, giftsRes] = await Promise.all([
-    supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('following_id', id),
-    supabase.from('follow_relationships').select('id', { count: 'exact', head: true }).eq('follower_id', id),
+    // N-RWG4-6: deleted accounts are not counted (the lists already hide them).
+    countLiveFollows('following_id', id, 'follower_id'),
+    countLiveFollows('follower_id', id, 'following_id'),
     // Aggregate gifts received grouped by gift type for the profile display.
     // Oct 2026 sweep: it grouped the newest 100, so the counts stopped there.
     selectAll<{ gift_id: string; gift_emoji: string; gift_name: string }>((from, to) => supabase.from('gift_transactions')

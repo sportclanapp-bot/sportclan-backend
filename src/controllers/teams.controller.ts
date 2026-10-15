@@ -198,9 +198,15 @@ export async function listTeams(req: Request, res: Response) {
     if (city_id) query = query.eq('city_id', city_id);
     if (q) query = query.ilike('name', `%${escapeLike(String(q))}%`); // audit #30: % and _ are literal
     if (myTeams) query = query.eq('me.user_id', userId);
-    // B03 (V245, D3): test teams are hidden from a real viewer's browse lists
-    // (Sport hub Teams, Discover) — not from "my teams".
-    else if (await hideTestFor(userId)) query = excludeTest(query);
+    else {
+      // N-RWG1-14 (launch test plan): a private team showed in everyone's Discover and Sport Hub
+      // lists, and tapping it was a dead end (its page refuses non-members, SC-107). Browse lists
+      // are public teams only; a member finds their private team under "My teams".
+      query = query.eq('is_public', true);
+      // B03 (V245, D3): test teams are hidden from a real viewer's browse lists
+      // (Sport hub Teams, Discover) — not from "my teams".
+      if (await hideTestFor(userId)) query = excludeTest(query);
+    }
 
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });

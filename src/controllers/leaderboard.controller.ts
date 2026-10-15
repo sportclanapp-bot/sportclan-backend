@@ -100,7 +100,9 @@ export async function getLeaderboard(req: Request, res: Response) {
     if (scope === 'city') {
       const { data: me } = await supabase.from('users').select('city_id').eq('id', userId).maybeSingle();
       const myCityId = me?.city_id ?? null;
-      if (!myCityId) return res.json({ leaderboard: [], me: null, ...pageMeta(0, p) });
+      // F060 (launch test plan): no city set — say so (needs_city), so the app can
+      // ask for one instead of "No ranked players yet".
+      if (!myCityId) return res.json({ leaderboard: [], me: null, needs_city: true, ...pageMeta(0, p) });
       const { data: cityUsers } = await supabase.from('users').select('id').eq('city_id', myCityId);
       cityUserIds = (cityUsers || []).map((u: any) => u.id);
       if (cityUserIds.length === 0) return res.json({ leaderboard: [], me: null, ...pageMeta(0, p) });

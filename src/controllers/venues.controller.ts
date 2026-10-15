@@ -114,17 +114,25 @@ export async function createVenue(req: Request, res: Response) {
   if ('error' in details) return res.status(400).json({ error: details.error, code: 'BAD_VENUE_DETAIL' });
   // Decision 7: adding a venue that already exists is not a use of it — only
   // a match created there counts (createMatch passes countUse).
-  const row = await upsertVenue(clean, city_id || null, userId, { countUse: false });
+  const found = { existing: false };
+  const row = await upsertVenue(clean, city_id || null, userId, { countUse: false, found });
   if (!row) return res.status(500).json({ error: 'Could not save that venue.' });
   // The same venue may already exist (upsert by name + city). Its details are
   // filled in where empty — never overwritten, since someone else may have
   // added that venue first.
   const fill: Record<string, string> = {};
   for (const [k, v] of Object.entries(details.fields)) if (row[k] == null) fill[k] = v;
-  if (Object.keys(fill).length === 0) return res.json({ venue: row });
+  // F059 (launch test plan): the app said "Venue added" when nothing new was made and the details
+  // given were not used. Say so: `existing` when the venue was already listed, and `kept` — the
+  // details it already had, so the ones sent were not saved. (Older apps ignore both.)
+  const kept = found.existing
+    ? Object.entries(details.fields).filter(([k, v]) => row[k] != null && row[k] !== v).map(([k]) => k)
+    : [];
+  const said = found.existing ? { existing: true, kept } : {};
+  if (Object.keys(fill).length === 0) return res.json({ venue: row, ...said });
   const { data: updated, error } = await supabase.from('venues').update(fill).eq('id', row.id).select('*').single();
   if (error || !updated) return res.status(500).json({ error: 'Could not save the venue details.' });
-  return res.json({ venue: updated });
+  return res.json({ venue: updated, ...said });
 }
 
 /**
@@ -168,7 +176,7 @@ export async function upsertVenue(
   name: string,
   cityId: string | null,
   createdBy: string,
-  opts: { countUse?: boolean } = {},
+  opts: { countUse?: boolean; found?: { existing: boolean } } = {},
 ): Promise<any | null> {
   // Decision 7: use_count is the venue's rank in the directory, and it counts
   // matches created there. A repeat "Add venue" with a name that exists
@@ -196,6 +204,7 @@ export async function upsertVenue(
     // venue — it takes the city, rather than a second copy being made beside it.
     const existing = found ?? (cityId ? await adoptCitylessVenue(clean, cityId) : null);
     if (existing) {
+      if (opts.found) opts.found.existing = true; // F059
       if (!countUse) return existing;
       await supabase
         .from('venues')

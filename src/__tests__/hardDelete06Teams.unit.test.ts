@@ -115,7 +115,8 @@ describe('a disbanded team does not show', () => {
     expect(s.slice(i, i + 900)).toMatch(/\.is\('deleted_at', null\)/);
   });
   test('its page: 410 "This team was disbanded", saying whether you were a member', () => {
-    expect(fnBody(T, 'getTeam')).toMatch(/deleted_at\) \{\s*return res\.status\(410\)\.json\(\{\s*\.\.\.TEAM_DISBANDED,[\s\S]*?former_member: !!membership/);
+    // N-RWG2-9 (Round 4): TEAM_DISBANDED, or TEAM_REMOVED for a moderator's removal (teamGone).
+    expect(fnBody(T, 'getTeam')).toMatch(/deleted_at\) \{\s*return res\.status\(410\)\.json\(\{\s*\.\.\.teamGone\([\s\S]*?former_member: !!membership/);
   });
   test('pickers: a new match, a tournament entry (captain, by code, organiser adding) refuse it', () => {
     // Phase 3 B05: the team checks moved into teamIdsRefusal, shared by create and edit.

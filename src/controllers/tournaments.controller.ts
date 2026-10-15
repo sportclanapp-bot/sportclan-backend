@@ -1,7 +1,7 @@
 import { inBackground } from '../utils/background';
 import { sportKeyOf, storedPoints, pointsPresetFor, type TournamentSettings } from '../utils/tournamentSettings';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
-import { swissMaxRounds } from '../utils/tournamentSettings';
+import { swissMaxRounds, swissDefaultTiebreaks } from '../utils/tournamentSettings';
 import { deleteMatching } from '../utils/softDelete';
 import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
 import { rankExtrasFor } from '../utils/rankExtras';
@@ -365,8 +365,10 @@ async function tournamentRowFrom(body: Record<string, any>, kind: 'single' | 'pa
       banner_url: banner_url || null,
       logo_url: logo_url || null,
       // BUILD 4.2; BUILD 4.15: a Swiss without its own order ranks on Buchholz, then Sonneborn-Berger, then wins.
+      // N-FMT-2 (launch test plan): for CHESS. Any other sport's Swiss got chess's order too — one the
+      // server refuses for that sport, and not the order its form shows: it takes the sport's own standard.
       tiebreaker_rules: !parent && Array.isArray(tiebreaker_rules) && tiebreaker_rules.length ? storedTiebreaks(tiebreaker_rules)
-        : !parent && format === 'swiss' ? ['buchholz', 'sonneborn_berger', 'wins'] : [],
+        : !parent && format === 'swiss' ? swissDefaultTiebreaks(createSportSlug) : [],
       sport_metadata: metadata,
       sponsor_name: sponsor_name || null,
       sponsor_logo_url: sponsor_logo_url || null,

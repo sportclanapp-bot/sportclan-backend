@@ -292,6 +292,15 @@ export function defaultTiebreaks(sport: string | null | undefined): TiebreakToke
   return (['head_to_head', 'nrr', 'score_diff', 'score_scored'] as TiebreakToken[]).filter((t) => t !== 'nrr' || key === 'cricket');
 }
 
+/**
+ * N-FMT-2 (launch test plan): a Swiss's order when the organiser sets none — chess's Buchholz order
+ * for chess (BUILD 4.15), the sport's own standard for every other sport (the form showed that, and
+ * the server refuses Buchholz for them).
+ */
+export function swissDefaultTiebreaks(sport: string | null | undefined): TiebreakToken[] {
+  return sportKeyOf(sport) === 'chess' ? ['buchholz', 'sonneborn_berger', 'wins'] : defaultTiebreaks(sport);
+}
+
 /** Stage 14 · VB5 · the FIVB-style ratios for any rally sport's pools: matches won, match points, games ratio, points ratio, then between them. */
 const RATIOS_PRESET: { key: string; label: string; order: TiebreakToken[] } = { key: 'ratios', label: 'Ratios (wins, match points, games ratio, points ratio)', order: ['wins', 'match_points', 'score_ratio', 'points_ratio', 'head_to_head'] };
 

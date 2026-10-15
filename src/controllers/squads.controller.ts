@@ -11,6 +11,7 @@
  *   GET   /tournaments/:id/discipline            the cards table and the bans still to serve (F5)
  *   GET   /matches/:id/banned                    who is banned from this fixture, per side (F5)
  *   GET   /matches/:id/squad/:side               a side's squad as its line-up, for the match's officials (N-RWD2-2)
+ *   GET   /matches/:id/roster/:side              a side's members with names, for the match's officials (N-GF2-B2)
  * Any sport whose entries are teams. Soft deletes only (removed_at).
  */
 import { Request, Response } from 'express';
@@ -19,6 +20,7 @@ import { isUuid } from '../utils/uuid';
 import { allRows, selectAllIn } from '../utils/selectAll';
 import { canOfficiateMatch, isTournamentOrganiser } from '../utils/tournamentAuth';
 import { rulesOf } from '../utils/matchRules';
+import { excludeDeletedEmbed } from '../utils/activeUser';
 import { settingsOf, storedSettings, womenOnCourtProblem, type SquadRules } from '../utils/tournamentSettings';
 import { possessive } from '../utils/possessive';
 import { notifyUser } from '../utils/notify';
@@ -448,6 +450,35 @@ export async function getMatchSquad(req: Request, res: Response) {
     const { data: rows } = await supabase.from('team_members').select('user_id, role').eq('team_id', teamId);
     const max = rulesOf('cricket', m as never).players ?? 11;
     return res.json({ lineup: squadLineupOf((rows ?? []) as Array<{ user_id: string | null; role: string | null }>, side, max) });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/**
+ * GET /matches/:id/roster/:side — N-GF2-B2 (launch test plan): the pad's "who scored / select the
+ * bowler" read each side's team page, which a private team refuses to anyone outside it, so the
+ * scorer could credit nobody of that side ("check your connection"). The match's officials get the
+ * side's members here — names to credit, nothing else of the team.
+ */
+export async function getMatchRoster(req: Request, res: Response) {
+  if (!req.userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const mid = String(req.params.id);
+    const side = String(req.params.side);
+    if (!isUuid(mid)) return res.status(404).json({ error: 'Match not found' });
+    if (side !== 'A' && side !== 'B') return res.status(400).json({ error: 'Say which side, A or B.', code: 'BAD_SIDE' });
+    const { data: m } = await supabase.from('matches')
+      .select('id, tournament_id, created_by, umpire_id, scorer_id, team_a_id, team_b_id').eq('id', mid).maybeSingle();
+    if (!m) return res.status(404).json({ error: 'Match not found' });
+    const match = m as { team_a_id: string | null; team_b_id: string | null } & Parameters<typeof canOfficiateMatch>[0];
+    if (!(await canOfficiateMatch(match, req.userId))) return res.status(403).json({ error: 'Only the match’s officials can see its rosters.', code: 'NOT_OFFICIAL' });
+    const teamId = side === 'A' ? match.team_a_id : match.team_b_id;
+    if (!teamId) return res.json({ members: [] });
+    const { data: rows } = await excludeDeletedEmbed(supabase.from('team_members')
+      .select('id, role, jersey_number, joined_at, user:user_id!inner (id, name, username, profile_picture_url)')
+      .eq('team_id', teamId), 'user');
+    return res.json({ members: rows ?? [] });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

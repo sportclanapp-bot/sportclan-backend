@@ -1,6 +1,6 @@
 import { typedScore } from '../controllers/scoring.controller';
 import { Router } from 'express';
-import { getBannedForMatch, getMatchSquad, getWomenOnCourt, markGender } from '../controllers/squads.controller';
+import { getBannedForMatch, getMatchRoster, getMatchSquad, getWomenOnCourt, markGender } from '../controllers/squads.controller';
 import { decideMatch } from '../controllers/matchDecision.controller';
 import { getMatchAssistants, setMatchAssistants, setOfficialReport } from '../controllers/matchOfficials.controller';
 import { callToCourt, uncallMatch } from '../controllers/courtBoard.controller';
@@ -78,6 +78,7 @@ router.post('/:id/decide', authenticateToken, decideMatch);
 // Stage 8 · F5: who is banned from this fixture.
 router.get('/:id/banned', authenticateToken, getBannedForMatch);
 router.get('/:id/squad/:side', authenticateToken, getMatchSquad); // N-RWD2-2
+router.get('/:id/roster/:side', authenticateToken, getMatchRoster); // N-GF2-B2
 // SC-424: void keeps the match and its events and stops it counting anywhere.
 router.post('/:id/void', authenticateToken, voidMatch);
 router.post('/:id/unvoid', authenticateToken, unvoidMatch);

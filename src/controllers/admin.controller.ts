@@ -320,6 +320,25 @@ export async function resolveReport(req: Request, res: Response) {
     const type = report.target_type as ModeratedType;
     const resolution = (resolved_action: 'dismissed' | 'removed' | 'restored') =>
       ({ resolved: true, resolved_at: now, resolved_by: adminId, resolved_action });
+    // N-R5-ops-2 (launch test plan, Round 5): Remove claims this report while it is still
+    // open — the same 'first one wins' as Dismiss — BEFORE it touches the content. If the
+    // removal is then refused, the claim is handed back (the report is open again).
+    const claimForRemove = async (): Promise<'ok' | 'handled' | { error: string }> => {
+      const { data: claimed, error: claimErr } = await supabase
+        .from('content_reports')
+        .update(resolution('removed'))
+        .eq('id', id)
+        .eq('resolved', false)
+        .select('id');
+      if (claimErr) return { error: claimErr.message };
+      return claimed && claimed.length > 0 ? 'ok' : 'handled';
+    };
+    const unclaim = () => supabase
+      .from('content_reports')
+      .update({ resolved: false, resolved_at: null, resolved_by: null, resolved_action: null })
+      .eq('id', id)
+      .eq('resolved_by', adminId)
+      .eq('resolved_at', now);
 
     // N-RWG2-9: a reported team — removed (the disband's soft mark, reason
     // 'moderator') or restored, with the other open reports on it resolved too.
@@ -339,10 +358,14 @@ export async function resolveReport(req: Request, res: Response) {
         await logAdminAction(adminId, 'restore_team', 'team', report.target_id, `via report ${id}`);
         return res.json({ ok: true, action, contentRestored: true });
       }
+      const claim = await claimForRemove();
+      if (typeof claim === 'object') return res.status(500).json({ error: claim.error });
+      if (claim === 'handled') return res.status(409).json({ error: ALREADY_HANDLED_TEXT, code: 'ALREADY_HANDLED' });
       const removed = await removeTeamAsModerator(report.target_id, adminId, `via report ${id}`);
-      if ('status' in removed) return res.status(removed.status).json(removed.body);
-      const { error: e1 } = await supabase.from('content_reports').update(resolution('removed')).eq('id', id);
-      if (e1) return res.status(500).json({ error: e1.message });
+      if ('status' in removed) {
+        await unclaim();
+        return res.status(removed.status).json(removed.body);
+      }
       const { error: e2 } = await supabase
         .from('content_reports')
         .update({ ...resolution('removed'), actioned_via: id })
@@ -381,6 +404,9 @@ export async function resolveReport(req: Request, res: Response) {
         // Its author already deleted it; there is nothing left to remove.
         return res.status(409).json({ error: 'Its author already deleted this.', code: 'ALREADY_DELETED' });
       }
+      const claim = await claimForRemove();
+      if (typeof claim === 'object') return res.status(500).json({ error: claim.error });
+      if (claim === 'handled') return res.status(409).json({ error: ALREADY_HANDLED_TEXT, code: 'ALREADY_HANDLED' });
       if (!target.deleted) {
         const removed = type === 'post'
           ? await softDeletePost(report.target_id, adminId, { reason: 'moderator' })
@@ -389,10 +415,8 @@ export async function resolveReport(req: Request, res: Response) {
             : await moderatorRemoveWallItem(type, report.target_id, adminId);
         if (removed) await logAdminAction(adminId, `remove_${type}`, type, report.target_id, `via report ${id}`);
       }
-      // This report, then the other open ones on the same content — kept, and
-      // shown as already actioned through this one.
-      const { error: e1 } = await supabase.from('content_reports').update(resolution('removed')).eq('id', id);
-      if (e1) return res.status(500).json({ error: e1.message });
+      // This report (claimed above), then the other open ones on the same content —
+      // kept, and shown as already actioned through this one.
       const { error: e2 } = await supabase
         .from('content_reports')
         .update({ ...resolution('removed'), actioned_via: id })

@@ -2,8 +2,8 @@
  * F048 (launch test plan, Round 5) · the general request budgets (every request, signed-in
  * scoring writes, the per-address ceiling) answered a 429 with express-rate-limit's default
  * HTML page — no sentence, no wait — so dozens of screens showed 'Request failed with status
- * code 429'. They now answer JSON words with the wait, and no code (an app reads a bare 429
- * as "busy" and keeps using Retry-After).
+ * code 429'. They now answer JSON words with the wait (and, since N-R5-layout-4, a code
+ * saying whose budget it was).
  */
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-test-secret-test-secret';
 import fs from 'fs';
@@ -28,16 +28,18 @@ it('the browsing budget says it in words with the wait (JSON, no code, Retry-Aft
     expect(r.status).toBe(429);
     expect(r.headers.get('content-type')).toMatch(/json/);
     const body = await r.json();
-    expect(body.error).toMatch(/^Too many requests from you just now\. Try again in \d+ minutes?\.$/);
-    expect(body.code).toBeUndefined();
+    // N-R5-layout-4: not signed in, so it is this connection's budget, said so, with a code.
+    expect(body.error).toMatch(/^Too many requests from this connection just now\. Try again in \d+ minutes?\.$/);
+    expect(body.code).toBe('CONNECTION_BUSY');
     expect(Number(r.headers.get('retry-after'))).toBeGreaterThan(0);
   } finally { s.close(); }
 }, 60000);
 
 it('the scoring budget and the per-address ceiling use the same words', () => {
   const lim = fs.readFileSync(path.join(__dirname, '../utils/budgetLimiters.ts'), 'utf8');
-  expect(lim.match(/handler: limitReply\('busy'\)/g)?.length).toBe(2);
+  expect(lim).toMatch(/handler: \(req, res, next, options\) => limitReply\(budgetUserId\(req\) \? 'account' : 'connection'\)/);
+  expect(lim).toMatch(/handler: limitReply\('account'\)/);
   const idx = fs.readFileSync(path.join(__dirname, '../index.ts'), 'utf8');
   const ceiling = idx.slice(idx.indexOf('const ipCeilingLimiter'), idx.indexOf('app.use(globalLimiter)'));
-  expect(ceiling).toMatch(/handler: limitReply\('busy'\)/);
+  expect(ceiling).toMatch(/handler: limitReply\('connection'\)/);
 });

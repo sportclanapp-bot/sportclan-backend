@@ -9,14 +9,16 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { Options } from 'express-rate-limit';
 
-const WORDS: Record<'otp' | 'auth' | 'busy', { code?: string; text: string }> = {
+const WORDS: Record<'otp' | 'auth' | 'account' | 'connection', { code: string; text: string }> = {
   otp: { code: 'OTP_IP_LIMIT', text: 'Too many codes asked for from this connection.' },
   auth: { code: 'AUTH_IP_LIMIT', text: 'Too many sign-in tries from this connection.' },
   // F048 (launch test plan, Round 5): the general request budgets (every request, scoring
   // writes, the per-address ceiling) said the same default HTML, and dozens of screens showed
-  // 'Request failed with status code 429'. No code on purpose: an app reads a bare 429 as
-  // "busy" and words the wait from Retry-After; one that shows the text as is reads this.
-  busy: { text: 'Too many requests from you just now.' },
+  // 'Request failed with status code 429'. N-R5-layout-4: in the words of the budget that was
+  // spent — a signed-in person's own (per account), or one address's (per connection) — with a
+  // code, so the app shows these words rather than guessing ('from this connection' for an account).
+  account: { code: 'ACCOUNT_BUSY', text: 'Too many requests from your account just now.' },
+  connection: { code: 'CONNECTION_BUSY', text: 'Too many requests from this connection just now.' },
 };
 
 export function limitReply(kind: keyof typeof WORDS) {
@@ -26,7 +28,7 @@ export function limitReply(kind: keyof typeof WORDS) {
     const mins = Math.max(1, Math.ceil(ms / 60_000));
     res.status(options.statusCode).json({
       error: `${WORDS[kind].text} Try again in ${mins} ${mins === 1 ? 'minute' : 'minutes'}.`,
-      ...(WORDS[kind].code ? { code: WORDS[kind].code } : {}),
+      code: WORDS[kind].code,
       retry_after_seconds: Math.max(1, Math.ceil(ms / 1000)),
     });
   };

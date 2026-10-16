@@ -29,7 +29,9 @@ export function makeBudgetLimiters(store: (name: string) => Store) {
     skip: (req) => rateLimitBypassed(req) || (isScoringWrite(req) && !!budgetUserId(req)) || !!refreshUserId(req),
     standardHeaders: true,
     legacyHeaders: false,
-    handler: limitReply('busy'), // F048: a sentence with the wait, not the default HTML
+    // F048: a sentence with the wait, not the default HTML. N-R5-layout-4: a signed-in person spent
+    // their own budget (per account); otherwise the address's (per connection).
+    handler: (req, res, next, options) => limitReply(budgetUserId(req) ? 'account' : 'connection')(req, res, next, options),
     store: store('global'),
   });
   const scoringLimiter = rateLimit({
@@ -39,7 +41,7 @@ export function makeBudgetLimiters(store: (name: string) => Store) {
     skip: (req) => rateLimitBypassed(req) || !isScoringWrite(req) || !budgetUserId(req),
     standardHeaders: true,
     legacyHeaders: false,
-    handler: limitReply('busy'), // F048
+    handler: limitReply('account'), // F048 / N-R5-layout-4: signed-in scoring writes, per account
     store: store('scoring'),
   });
   return { globalLimiter, scoringLimiter };

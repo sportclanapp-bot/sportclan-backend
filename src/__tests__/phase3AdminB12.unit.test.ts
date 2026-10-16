@@ -71,7 +71,8 @@ describe('F3 · admin actions are logged', () => {
     expect(log).toHaveBeenCalledWith('admin-1', 'revoke_admin', 'user', 'u2', null);
   });
   test('dismiss', async () => {
-    results = [{ data: { id: 'r1', target_type: 'post', target_id: 'p1', resolved: false } }, { error: null }];
+    // N-RWD3-13: the dismiss write returns the row it changed (only an open report is changed).
+    results = [{ data: { id: 'r1', target_type: 'post', target_id: 'p1', resolved: false } }, { data: [{ id: 'r1' }], error: null }];
     const r = await call(resolveReport, { params: { id: 'r1' }, body: { action: 'dismiss' } });
     expect(r.body).toEqual({ ok: true, action: 'dismiss', contentRemoved: false });
     expect(log).toHaveBeenCalledWith('admin-1', 'dismiss_report', 'report', 'r1', 'post p1');

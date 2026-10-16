@@ -117,8 +117,9 @@ describe('K2-66 · notifications page by offset; reminders say the IST kick-off 
     expect(JSON.stringify(r.body)).toContain('"unread');
   });
   it('K2-66b (db350b5): formatTimeIst gives the IST wall-clock time', () => {
-    expect(formatTimeIst('2026-10-05T04:00:00Z')).toBe('09:30');
-    expect(formatTimeIst('2026-10-05T18:45:00Z')).toBe('00:15');
+    // N-RWG1-8: the house format, 12-hour (it pinned "09:30" / "00:15").
+    expect(formatTimeIst('2026-10-05T04:00:00Z')).toBe('9:30 am');
+    expect(formatTimeIst('2026-10-05T18:45:00Z')).toBe('12:15 am');
     expect(formatTimeIst(null)).toBeNull();
   });
 });

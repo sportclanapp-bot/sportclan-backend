@@ -247,8 +247,9 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
   return { ok: true, assignments };
 }
 
-// Format a stored UTC slot as "Sat 15 Jul · 14:00 · Ground 2" in IST (for
+// Format a stored UTC slot as "Sat 15 Jul · 2:00 pm · Ground 2" in IST (for
 // change-notification copy). Manual IST shift — no Intl/tz dependency.
+// N-RWG1-8: the time in the house 12-hour form too (it said "14:00").
 export function formatSlotIst(scheduledAt: string | null | undefined, groundLabel: string | null | undefined): string {
   const parts: string[] = [];
   if (scheduledAt) {
@@ -257,26 +258,26 @@ export function formatSlotIst(scheduledAt: string | null | undefined, groundLabe
       const ist = new Date(d.getTime() + TOURNAMENT_TZ_OFFSET_MIN * 60000);
       const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
       const mons = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      const hh = String(ist.getUTCHours()).padStart(2, '0');
-      const mm = String(ist.getUTCMinutes()).padStart(2, '0');
-      parts.push(`${days[ist.getUTCDay()]} ${ist.getUTCDate()} ${mons[ist.getUTCMonth()]}`, `${hh}:${mm}`);
+      parts.push(`${days[ist.getUTCDay()]} ${ist.getUTCDate()} ${mons[ist.getUTCMonth()]}`, formatTimeIst(scheduledAt)!);
     }
   }
   if (groundLabel) parts.push(groundLabel);
   return parts.length ? parts.join(' · ') : 'a new slot';
 }
 
-// Stored UTC slot → "HH:MM" in IST. Same manual IST shift as formatSlotIst (one
+// Stored UTC slot → "9:00 pm" in IST. Same manual IST shift as formatSlotIst (one
 // timezone path, not a second — SC-271) but returns only the wall-clock time, for
 // imminent-reminder copy where the date is redundant.
+// N-RWG1-8 (launch test plan): the house time format (12-hour, lowercase am/pm,
+// as the app's localDate.formatTime12 and appTime.istWhen); it said "21:00".
 export function formatTimeIst(scheduledAt: string | null | undefined): string | null {
   if (!scheduledAt) return null;
   const d = new Date(scheduledAt);
   if (isNaN(d.getTime())) return null;
   const ist = new Date(d.getTime() + TOURNAMENT_TZ_OFFSET_MIN * 60000);
-  const hh = String(ist.getUTCHours()).padStart(2, '0');
+  const h = ist.getUTCHours();
   const mm = String(ist.getUTCMinutes()).padStart(2, '0');
-  return `${hh}:${mm}`;
+  return `${h % 12 === 0 ? 12 : h % 12}:${mm} ${h < 12 ? 'am' : 'pm'}`;
 }
 
 /** 'YYYY-MM-DD' + n days → 'YYYY-MM-DD' (used to resolve per-day window overrides). */

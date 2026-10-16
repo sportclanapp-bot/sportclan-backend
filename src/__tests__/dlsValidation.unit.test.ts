@@ -10,6 +10,7 @@
 import { calculateDLSTarget, dlsInputProblem } from '../utils/dls';
 import fs from 'fs';
 import path from 'path';
+import { readOtherRepo, testWithOtherRepo } from './helpers/otherRepo';
 
 const ok = { team1Score: 120, totalOvers: 20, team2OversLeft: 8, team2Wickets: 3 };
 
@@ -39,17 +40,15 @@ describe('dlsInputProblem', () => {
     expect(dlsInputProblem({ ...ok, totalOvers: NaN })).toBe('Those are not all numbers.');
   });
 
-  it('the wording matches the app’s, word for word', () => {
+  testWithOtherRepo('the wording matches the app’s, word for word', () => {
     // Two validators, one scorer. If these drift, the refusal changes shape
     // depending on whether the phone or the server said it.
     //
     // The app lives in a sibling repo, which is not always checked out beside
     // this one. Skipping is deliberate: a cross-repo assertion that FAILS when
     // the other repo is simply absent is a test people delete, and then nothing
-    // watches the wording at all.
-    const appFile = path.join(__dirname, '..', '..', '..', 'sportclan-v2', 'src', 'utils', 'dlsInput.ts');
-    if (!fs.existsSync(appFile)) return;
-    const app = fs.readFileSync(appFile, 'utf8');
+    // watches the wording at all. N-R4-6: the skip now says so in its name.
+    const app = readOtherRepo('src/utils/dlsInput.ts');
     for (const msg of [
       'Total overs must be at least 1 — there is nothing to reduce from.',
       'Team 2 is all out — the innings is over, so there is no target to revise.',

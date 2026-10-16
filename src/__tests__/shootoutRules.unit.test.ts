@@ -1,6 +1,5 @@
 import { shootoutApplies, validShootout, shootoutWinner, shootoutResultText, SHOOTOUT_MAX } from '../utils/shootoutRules';
 const CORE_REL = 'utils/shootoutRules.ts';
-const OTHER_REPO = '../sportclan-v2';
 const OTHER_CORE_REL = 'src/scoring/shootoutRules.ts';
 /**
  * The shared shootout rule (decision A2), held to ONE fixture table in both
@@ -9,6 +8,7 @@ const OTHER_CORE_REL = 'src/scoring/shootoutRules.ts';
  */
 import fs from 'fs';
 import path from 'path';
+import { readOtherRepo, testWithOtherRepo } from './helpers/otherRepo';
 
 describe('shootoutRules', () => {
   test('only knockout football and hockey', () => {
@@ -39,9 +39,8 @@ describe('shootoutRules', () => {
   });
 
   const here = path.join(__dirname, '..', CORE_REL);
-  const there = path.join(__dirname, '..', '..', OTHER_REPO, OTHER_CORE_REL);
-  (fs.existsSync(there) ? test : test.skip)('the app and server copies are identical', () => {
-    expect(fs.readFileSync(here, 'utf8')).toBe(fs.readFileSync(there, 'utf8'));
+  testWithOtherRepo('the app and server copies are identical', () => {
+    expect(fs.readFileSync(here, 'utf8')).toBe(readOtherRepo(OTHER_CORE_REL));
   });
 });
 

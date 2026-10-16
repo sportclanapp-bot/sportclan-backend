@@ -1,6 +1,5 @@
 import { tennisReplay, tennisPointsDisplay, tennisSetLabel, tennisGamesPlayed } from '../utils/tennisCore';
 const CORE_REL = 'utils/tennisCore.ts';
-const OTHER_REPO = '../sportclan-v2';
 const OTHER_CORE_REL = 'src/scoring/tennisCore.ts';
 /**
  * The shared tennis rule, held to ONE fixture table in both repos.
@@ -12,6 +11,7 @@ const OTHER_CORE_REL = 'src/scoring/tennisCore.ts';
  */
 import fs from 'fs';
 import path from 'path';
+import { readOtherRepo, testWithOtherRepo } from './helpers/otherRepo';
 
 type S = 'A' | 'B';
 const game = (s: S): S[] => [s, s, s, s];
@@ -80,8 +80,7 @@ describe('tennisCore · the one rule', () => {
   // When both repos are checked out side by side (the dev machine), the two
   // copies must be byte-identical. Skipped elsewhere (a lone-repo CI checkout).
   const here = path.join(__dirname, '..', CORE_REL);
-  const there = path.join(__dirname, '..', '..', OTHER_REPO, OTHER_CORE_REL);
-  (fs.existsSync(there) ? test : test.skip)('the app and server copies are identical', () => {
-    expect(fs.readFileSync(here, 'utf8')).toBe(fs.readFileSync(there, 'utf8'));
+  testWithOtherRepo('the app and server copies are identical', () => {
+    expect(fs.readFileSync(here, 'utf8')).toBe(readOtherRepo(OTHER_CORE_REL));
   });
 });

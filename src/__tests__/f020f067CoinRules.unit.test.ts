@@ -5,6 +5,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { readOtherRepo, testWithOtherRepo } from './helpers/otherRepo';
 import { COIN_RULES, EARN_WORDS } from '../utils/coinRules';
 import { REFERRAL_WINDOW_DAYS, referralApplyUntil } from '../controllers/referrals.controller';
 
@@ -12,7 +13,6 @@ jest.mock('../utils/supabase', () => ({ supabase: {} }));
 
 const code = (f: string) =>
   fs.readFileSync(path.join(__dirname, '..', f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-const APP = path.join(__dirname, '../../../sportclan-v2/src/utils/coinRules.ts');
 
 it('the rules are what the server has always paid', () => {
   expect(COIN_RULES).toEqual({ checkIn: 5, post: 2, postsPerDay: 5, referral: 20, referralWindowDays: 30 });
@@ -30,6 +30,6 @@ it('the server awards by them', () => {
   expect(referralApplyUntil('2026-10-01T00:00:00.000Z')).toBe('2026-10-31T00:00:00.000Z');
 });
 
-(fs.existsSync(APP) ? it : it.skip)('coinRules.ts is byte-for-byte the app’s', () => {
-  expect(fs.readFileSync(path.join(__dirname, '../utils/coinRules.ts'), 'utf8')).toBe(fs.readFileSync(APP, 'utf8'));
+testWithOtherRepo('coinRules.ts is byte-for-byte the app’s', () => {
+  expect(fs.readFileSync(path.join(__dirname, '../utils/coinRules.ts'), 'utf8')).toBe(readOtherRepo('src/utils/coinRules.ts'));
 });

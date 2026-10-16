@@ -1,6 +1,5 @@
 import { MATCH_LENGTHS, bestOfFor, winsNeeded, isAcceptableMatchLength, matchLengthLabel, formatForBestOf } from '../utils/matchLength';
 const CORE_REL = 'utils/matchLength.ts';
-const OTHER_REPO = '../sportclan-v2';
 const OTHER_CORE_REL = 'src/scoring/matchLength.ts';
 /**
  * The shared match-length rule (decision B), held to ONE fixture table in both
@@ -9,6 +8,7 @@ const OTHER_CORE_REL = 'src/scoring/matchLength.ts';
  */
 import fs from 'fs';
 import path from 'path';
+import { readOtherRepo, testWithOtherRepo } from './helpers/otherRepo';
 
 describe('matchLength', () => {
   test('each sport offers exactly the approved presets, standard first-class', () => {
@@ -64,8 +64,7 @@ describe('matchLength', () => {
   });
 
   const here = path.join(__dirname, '..', CORE_REL);
-  const there = path.join(__dirname, '..', '..', OTHER_REPO, OTHER_CORE_REL);
-  (fs.existsSync(there) ? test : test.skip)('the app and server copies are identical', () => {
-    expect(fs.readFileSync(here, 'utf8')).toBe(fs.readFileSync(there, 'utf8'));
+  testWithOtherRepo('the app and server copies are identical', () => {
+    expect(fs.readFileSync(here, 'utf8')).toBe(readOtherRepo(OTHER_CORE_REL));
   });
 });

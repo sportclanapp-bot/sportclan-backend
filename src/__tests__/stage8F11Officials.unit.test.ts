@@ -6,6 +6,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { readOtherRepo, testWithOtherRepo } from './helpers/otherRepo';
 import { fakeDb } from './helpers/fakeSupabase';
 
 const id = (n: number) => `dddddddd-dddd-4ddd-8ddd-${String(n).padStart(12, '0')}`;
@@ -48,9 +49,9 @@ const run = async (fn: any, userId: string, params: object, body: object = {}) =
 };
 beforeEach(() => { db = mkDb(); sent.length = 0; });
 
-test('sportTerms.ts is byte-for-byte the app’s', () => {
+testWithOtherRepo('sportTerms.ts is byte-for-byte the app’s', () => {
   const be = fs.readFileSync(path.join(__dirname, '..', 'utils', 'sportTerms.ts'), 'utf8');
-  const app = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'sportclan-v2', 'src', 'sport', 'sportTerms.ts'), 'utf8');
+  const app = readOtherRepo('src/sport/sportTerms.ts');
   expect(be).toBe(app);
 });
 

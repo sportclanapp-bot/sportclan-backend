@@ -1,4 +1,6 @@
 import { inBackground } from '../utils/background';
+import { matchReminderBody } from '../utils/matchReminder';
+import { formatTimeIst } from '../utils/scheduleFixtures';
 import { matchNamesForNotice } from '../utils/matchNames';
 import { inDisplayOrder, orderedSportIds, profileSportIds } from '../utils/userSports';
 import { deleteMatching } from '../utils/softDelete';
@@ -86,22 +88,21 @@ async function runSmartNotifications(userId: string): Promise<void> {
 
     for (const p of soonMatches) {
       const m: any = p.match;
-      // Have we already inserted a reminder for this user+match? Check notifs.
-      const { data: existing } = await supabase
-        .from('notifications')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('type', 'match_reminder')
-        .contains('data', { matchId: m.id })
-        .maybeSingle();
-      if (existing) continue;
+      // F007 (launch test plan): the same claim as the reminder sweep
+      // (features.controller), so the two never both remind — this looked for a
+      // notification row the sweep doesn't check, and said "in 15 minutes"
+      // whatever was left.
+      const { error: claimErr } = await supabase
+        .from('notification_sends')
+        .insert({ user_id: userId, job_type: `match_reminder:${m.id}`, sent_on: String(m.scheduled_at).slice(0, 10) });
+      if (claimErr) continue;
       // SC-226: gate on the Match-updates toggle (was a direct insert bypass).
       await notifyUser({
         userId,
         type: 'match_reminder',
         title: 'Match reminder',
         // Audit #89: the teams' names (a team match stores none — it read "null vs null").
-        body: `\u23F0 ${(await matchNamesForNotice(m)) ?? 'Your match'} starts in 15 minutes!`,
+        body: matchReminderBody(await matchNamesForNotice(m), m.scheduled_at, now, formatTimeIst(m.scheduled_at)),
         data: { matchId: m.id, screen: 'MatchDetail' },
       });
     }
@@ -481,7 +482,7 @@ export const EMAIL_CHECKS_PER_DAY = 20;
 /**
  * F042 (launch test plan): the most chats (or teams) a person can mute. The lists
  * live in users.notification_preferences, which every push reads for every
- * recipient, and each save rewrites the whole list — so it stays bounded (an
+ * recipient, and each save writes the whole list back — so it stays bounded (an
  * anti-abuse limit Dipak kept, 7 Oct). A muted chat you have since left or that
  * was deleted no longer counts (see pruneMutedChats).
  */
@@ -514,6 +515,59 @@ export function notificationPrefsRefusal(v: unknown): { error: string; code: str
     }
   }
   return null;
+}
+
+/** N-RWG3-3: a mute list change by item (newer apps): `{ add?: ids, remove?: ids }`. */
+type MuteDelta = { add?: string[]; remove?: string[] };
+const isMuteDelta = (v: unknown): v is MuteDelta => v != null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * N-RWG3-3 (launch test plan): why a notification_preferences CHANGE is refused,
+ * or null. A change is the keys that changed: a switch is on or off; a mute
+ * list is a whole list (older apps, which send everything) or
+ * `{ add: [ids], remove: [ids] }` (one team or chat at a time).
+ */
+export function notificationPrefsChangeRefusal(v: unknown): { error: string; code: string } | null {
+  const bad = (error: string) => ({ error, code: 'INVALID_NOTIFICATION_PREFS' });
+  if (v == null || typeof v !== 'object' || Array.isArray(v)) return bad('Notification settings must be an object.');
+  const ids = (x: unknown) => Array.isArray(x) && x.every((t) => typeof t === 'string' && /^[0-9a-f-]{36}$/i.test(t));
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (k === 'muted_teams' || k === 'muted_chats') {
+      if (Array.isArray(val)) { if (!ids(val)) return bad(`${k} must be a list of ids.`); continue; }
+      if (!isMuteDelta(val) || Object.keys(val).some((x) => x !== 'add' && x !== 'remove')
+        || (val.add !== undefined && !ids(val.add)) || (val.remove !== undefined && !ids(val.remove))) {
+        return bad(`${k} must be a list of ids.`);
+      }
+    } else if (typeof val !== 'boolean') {
+      return bad(`Notification setting "${k}" must be on or off.`);
+    }
+  }
+  return null;
+}
+
+/**
+ * N-RWG3-3 (launch test plan): a switch flipped on one phone undid a mute made on
+ * another, because each save sent the phone's whole (old) copy and the server
+ * stored it as the new whole. Now the stored settings are the base: only the
+ * keys sent change, and a mute list changes by item when the app says
+ * add/remove. A whole list (2.17.0 sends one) still replaces that list, so older
+ * apps work as before.
+ */
+export function mergeNotificationPrefs(current: unknown, change: Record<string, unknown>): Record<string, unknown> {
+  const base: Record<string, unknown> = current != null && typeof current === 'object' && !Array.isArray(current)
+    ? { ...(current as Record<string, unknown>) } : {};
+  for (const [k, val] of Object.entries(change)) {
+    if ((k === 'muted_teams' || k === 'muted_chats') && isMuteDelta(val)) {
+      const had = Array.isArray(base[k]) ? (base[k] as string[]) : [];
+      const drop = new Set(val.remove ?? []);
+      const kept = had.filter((id) => !drop.has(id));
+      for (const id of val.add ?? []) if (!kept.includes(id) && !drop.has(id)) kept.push(id);
+      base[k] = kept;
+    } else {
+      base[k] = val;
+    }
+  }
+  return base;
 }
 
 /**
@@ -662,10 +716,25 @@ export async function updateMe(req: Request, res: Response) {
   }
   // B13: notification_preferences had no shape check at all. Category switches
   // are booleans; muted_teams (D18) is a bounded list of team ids.
+  // N-RWG3-3: what is sent is merged into what is stored (only the keys sent
+  // change; a mute list by item), never stored as the whole.
   if ('notification_preferences' in patch) {
-    patch.notification_preferences = await pruneMutedChats(userId, patch.notification_preferences);
-    const refusal = notificationPrefsRefusal(patch.notification_preferences);
+    const shape = notificationPrefsChangeRefusal(patch.notification_preferences);
+    if (shape) return res.status(400).json(shape);
+    const { data: cur, error: curErr } = await supabase
+      .from('users').select('notification_preferences').eq('id', userId).maybeSingle();
+    if (curErr) return res.status(500).json({ error: curErr.message });
+    const merged = mergeNotificationPrefs(
+      (cur as { notification_preferences?: unknown } | null)?.notification_preferences,
+      patch.notification_preferences as Record<string, unknown>,
+    );
+    const pruned = await pruneMutedChats(userId, merged) as Record<string, unknown>;
+    // The keys sent are checked as they will be stored (a list after the change
+    // may be full); keys not sent are left exactly as they were.
+    const sent = Object.keys(patch.notification_preferences as Record<string, unknown>);
+    const refusal = notificationPrefsRefusal(Object.fromEntries(sent.map((k) => [k, pruned[k]])));
     if (refusal) return res.status(400).json(refusal);
+    patch.notification_preferences = pruned;
   }
   // B04-F1: these went to the DB unchecked, so a bad value was a 500 (a CHECK,
   // a uuid cast or a missing FK) instead of a worded 400.
@@ -920,8 +989,16 @@ export async function followUser(req: Request, res: Response) {
   // SC-205: notify the followed user of a GENUINELY NEW follow. A 23505 means the
   // follow already existed (re-follow spam) → no duplicate notification. Routes to
   // the follower's profile (user_id). Fire-and-forget — never blocks the follow.
+  // N-RWG4-5 (launch test plan): unfollow deletes the row, so unfollow → follow
+  // passed that check every time and sent a fresh "New follower" each round. One
+  // a day per follower now: the claim (UNIQUE user_id, job_type, sent_on) fails
+  // on a repeat, as the match reminders' does.
   if (!error) {
     void (async () => {
+      const { error: claimErr } = await supabase
+        .from('notification_sends')
+        .insert({ user_id: target, job_type: `follow:${userId}`, sent_on: istDay() });
+      if (claimErr) return; // already told today (or the claim failed: say nothing rather than twice)
       const { data: me } = await supabase
         .from('users').select('name, username').eq('id', userId).maybeSingle();
       const name = (me?.name || me?.username || 'Someone') as string;

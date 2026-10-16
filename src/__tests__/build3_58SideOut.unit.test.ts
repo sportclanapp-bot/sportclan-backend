@@ -1,14 +1,14 @@
 /** BUILD 3.58 · pickleball side-out: the server replays the serve with the shared core. */
 import fs from 'fs';
 import path from 'path';
+import { readOtherRepo, testWithOtherRepo } from './helpers/otherRepo';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { sportCommentary } from '../utils/commentary';
 
 const rally = (side: string) => ({ event_type: 'score', payload: { team_side: side, kind: 'rally' } });
 
-test('the same core as the app (byte-identical)', () => {
-  const app = path.join(__dirname, '../../../sportclan-v2/src/scoring/pickleballCore.ts');
-  if (fs.existsSync(app)) expect(fs.readFileSync(app, 'utf8')).toBe(fs.readFileSync(path.join(__dirname, '../utils/pickleballCore.ts'), 'utf8'));
+testWithOtherRepo('the same core as the app (byte-identical)', () => {
+  expect(readOtherRepo('src/scoring/pickleballCore.ts')).toBe(fs.readFileSync(path.join(__dirname, '../utils/pickleballCore.ts'), 'utf8'));
 });
 
 test('a receiver’s rally scores nothing; doubles open 0-0-2', () => {

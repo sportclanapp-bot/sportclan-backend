@@ -1,6 +1,5 @@
 import { CRICKET_OVERS, CRICKET_FORMAT_LABELS, inningsOvers, allOutWickets, allOutBySide, cricketFormatOf, isOfferedOvers, DEFAULT_OVERS, DEFAULT_ALL_OUT } from '../utils/cricketRules';
 const CORE_REL = 'utils/cricketRules.ts';
-const OTHER_REPO = '../sportclan-v2';
 const OTHER_CORE_REL = 'src/scoring/cricketRules.ts';
 /**
  * The shared cricket set-up rules (decision A6), held to ONE fixture table in
@@ -9,6 +8,7 @@ const OTHER_CORE_REL = 'src/scoring/cricketRules.ts';
  */
 import fs from 'fs';
 import path from 'path';
+import { readOtherRepo, testWithOtherRepo } from './helpers/otherRepo';
 
 describe('cricketRules', () => {
   test('every format offers overs; Pair is an overs match', () => {
@@ -54,9 +54,8 @@ describe('cricketRules', () => {
   });
 
   const here = path.join(__dirname, '..', CORE_REL);
-  const there = path.join(__dirname, '..', '..', OTHER_REPO, OTHER_CORE_REL);
-  (fs.existsSync(there) ? test : test.skip)('the app and server copies are identical', () => {
-    expect(fs.readFileSync(here, 'utf8')).toBe(fs.readFileSync(there, 'utf8'));
+  testWithOtherRepo('the app and server copies are identical', () => {
+    expect(fs.readFileSync(here, 'utf8')).toBe(readOtherRepo(OTHER_CORE_REL));
   });
 });
 

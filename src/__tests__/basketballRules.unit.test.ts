@@ -1,6 +1,5 @@
 import { REGULATION_QUARTERS, periodLabel, isOvertime, canStartNextPeriod, canStartNextPeriodOf } from '../utils/basketballRules';
 const CORE_REL = 'utils/basketballRules.ts';
-const OTHER_REPO = '../sportclan-v2';
 const OTHER_CORE_REL = 'src/scoring/basketballRules.ts';
 /**
  * The shared basketball period rule (decision A1), held to ONE fixture table in
@@ -9,6 +8,7 @@ const OTHER_CORE_REL = 'src/scoring/basketballRules.ts';
  */
 import fs from 'fs';
 import path from 'path';
+import { readOtherRepo, testWithOtherRepo } from './helpers/otherRepo';
 
 describe('basketballRules', () => {
   test('Q1–Q4, then OT1, OT2 …', () => {
@@ -29,9 +29,8 @@ describe('basketballRules', () => {
   });
 
   const here = path.join(__dirname, '..', CORE_REL);
-  const there = path.join(__dirname, '..', '..', OTHER_REPO, OTHER_CORE_REL);
-  (fs.existsSync(there) ? test : test.skip)('the app and server copies are identical', () => {
-    expect(fs.readFileSync(here, 'utf8')).toBe(fs.readFileSync(there, 'utf8'));
+  testWithOtherRepo('the app and server copies are identical', () => {
+    expect(fs.readFileSync(here, 'utf8')).toBe(readOtherRepo(OTHER_CORE_REL));
   });
 });
 

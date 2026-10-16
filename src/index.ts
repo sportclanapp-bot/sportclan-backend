@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { privacyPolicyHtml } from './legal/privacyPage';
+import { termsOfServiceHtml } from './legal/termsPage';
 import { limitReply } from './utils/limitReply';
 
 // FIRST, before anything else can throw. An error while wiring the app is
@@ -63,6 +64,7 @@ import {
   runPublishScheduledPosts,
   runSmartMatchNotifications,
   runMatchReminderSweep,
+  REMINDER_TICK_MS,
   runReEngagement,
   runWeeklyDigest,
 } from './controllers/features.controller';
@@ -83,6 +85,8 @@ app.use(helmet({
 app.use(cors());
 // F011: the privacy policy page is built from the app's own text (src/legal), not a static copy.
 app.get('/privacy-policy.html', (_req, res) => { res.type('html').send(privacyPolicyHtml()); });
+// N-RWG2-15: the terms page from the app's own terms text (the static copy sold Premium).
+app.get('/terms.html', (_req, res) => { res.type('html').send(termsOfServiceHtml()); });
 app.use(express.static(path.join(__dirname, '..', 'public')));
 // 12mb cap supports base64-encoded profile photos (Change #4: no client size limit;
 // server compresses). Larger uploads should switch to multipart in a future module.
@@ -348,7 +352,7 @@ app.listen(PORT, () => {
   //    deleted pre-launch). All jobs are idempotent / deduped via
   //    notification_sends, so a double-fire (restart / multi-instance) is safe.
 
-  // Publish due scheduled (Premium) posts frequently so they appear on time.
+  // Publish due scheduled posts frequently so they appear on time (F045: anyone can schedule).
   const runPublish = async () => {
     try {
       const { published } = await runPublishScheduledPosts();
@@ -360,9 +364,11 @@ app.listen(PORT, () => {
   void runPublish();
   setInterval(runPublish, 2 * 60 * 1000).unref();
 
-  // 15-min pre-match reminder sweep. Runs every 5 min so a participant NOT in the
-  // app still gets reminded (the app-open trigger alone missed them). Idempotent
-  // via notification_sends, so a double-fire (restart / multi-instance) is safe.
+  // 15-min pre-match reminder sweep. Runs every minute (F007: every 5 made a
+  // reminder 10–15 min early) so a participant NOT in the app still gets reminded
+  // (the app-open trigger alone missed them), and at boot, which catches up the
+  // reminders missed while the server slept. Idempotent via notification_sends,
+  // so a double-fire (restart / multi-instance / POST /jobs/match-reminders) is safe.
   const runReminders = async () => {
     try {
       const { sent } = await runMatchReminderSweep();
@@ -372,7 +378,7 @@ app.listen(PORT, () => {
     }
   };
   void runReminders();
-  setInterval(runReminders, 5 * 60 * 1000).unref();
+  setInterval(runReminders, REMINDER_TICK_MS).unref();
 
   // SC-441 (M3) · the two match sweepers, hourly.
   //

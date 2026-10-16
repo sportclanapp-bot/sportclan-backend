@@ -1,6 +1,5 @@
 import { carromBoard, carromBoardPoints, carromPieces, carromReplay, emptyCarrom, CARROM_GAME_TARGET, CARROM_QUEEN_POINTS, CARROM_QUEEN_LIMIT, CARROM_MAX_PIECES } from '../utils/carromCore';
 const CORE_REL = 'utils/carromCore.ts';
-const OTHER_REPO = '../sportclan-v2';
 const OTHER_CORE_REL = 'src/scoring/carromCore.ts';
 /**
  * The shared carrom rule (decision A5), held to ONE fixture table in both repos.
@@ -9,6 +8,7 @@ const OTHER_CORE_REL = 'src/scoring/carromCore.ts';
  */
 import fs from 'fs';
 import path from 'path';
+import { readOtherRepo, testWithOtherRepo } from './helpers/otherRepo';
 
 type S = 'A' | 'B';
 const board = (winner: S, piecesLeft: number, queen = false) => ({ winner, piecesLeft, queen });
@@ -68,8 +68,7 @@ describe('carromCore', () => {
   });
 
   const here = path.join(__dirname, '..', CORE_REL);
-  const there = path.join(__dirname, '..', '..', OTHER_REPO, OTHER_CORE_REL);
-  (fs.existsSync(there) ? test : test.skip)('the app and server copies are identical', () => {
-    expect(fs.readFileSync(here, 'utf8')).toBe(fs.readFileSync(there, 'utf8'));
+  testWithOtherRepo('the app and server copies are identical', () => {
+    expect(fs.readFileSync(here, 'utf8')).toBe(readOtherRepo(OTHER_CORE_REL));
   });
 });

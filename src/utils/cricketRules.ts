@@ -84,9 +84,10 @@ export const OVERS_MIN = 1;
 export const OVERS_MAX = Number.MAX_SAFE_INTEGER; // Stage 13 · CR3 (Dipak): no top
 
 /**
- * Can a match be played to `overs`? BUILD 3.1: any whole number 1–50 in every
- * format (it was the format's chips only, so a 12-over league game couldn't be
- * set up). The name is kept: it's what create and edit ask.
+ * Can a match be played to `overs`? BUILD 3.1: any whole number from 1 in every
+ * format, no top since Stage 13 · CR3 (it was the format's chips only, so a
+ * 12-over league game couldn't be set up). The name is kept: it's what create
+ * and edit ask.
  */
 export function isOfferedOvers(_format: CricketFormat, overs: number | null | undefined): boolean {
   if (overs == null) return true;

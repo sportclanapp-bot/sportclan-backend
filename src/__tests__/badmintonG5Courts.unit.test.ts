@@ -119,7 +119,7 @@ test('Running late: every match not started or called moves; everyone in them is
   expect(m(1).scheduled_at).toBe(at('04:00')); // live: stays
   expect(sent).toHaveLength(1);
   expect(sent[0]).toMatchObject({ type: 'tournament_updated', title: 'Running 30 min late' });
-  expect(sent[0]!.body).toMatch(/the next is at 10:15\.$/);
+  expect(sent[0]!.body).toMatch(/the next is at 10:15 am\.$/); // N-RWG1-8: 12-hour
   // Stage 13 · CR3: any whole number of minutes, 1 or more (no top).
   expect((await run(runningLate, ORG, { id: P }, { minutes: 0 })).body).toEqual({ error: 'Running late by a whole number of minutes.', code: 'BAD_MINUTES' });
   expect((await run(runningLate, ORG, { id: P }, { minutes: 2.5 })).body.code).toBe('BAD_MINUTES');

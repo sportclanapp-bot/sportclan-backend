@@ -16,6 +16,7 @@ import { rankTeams, rankTeamsDetailed, computeStats, pointsFor, bestPlacedAcross
 import { settingsOf } from '../utils/tournamentSettings';
 import { istDay, istDayStartIso } from '../utils/appTime';
 import { formatTimeIst } from '../utils/scheduleFixtures';
+import { REMINDER_LEAD_MS, REMINDER_TICK_MS, REMINDER_CATCHUP_MS, matchReminderBody } from '../utils/matchReminder';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { countsForUser, countParticipantsByMatch } from '../utils/matchCounts';
 import { plural } from '../utils/plural';
@@ -1090,20 +1091,34 @@ export async function runSmartMatchNotifications(): Promise<{ sent: number }> {
 
 // 15-MINUTE PRE-MATCH REMINDER SWEEP. The reminder LOGIC already existed but only
 // fired from GET /users/me (app-open) — so a participant NOT in the app never got
-// it. This dedicated sweep (wired to a 5-min in-process interval, like the
+// it. This dedicated sweep (wired to an in-process interval, like the
 // scheduled-post publisher) makes it reliable: it scans matches starting in the
 // next 15 minutes and notifies each match's PARTICIPANTS + assigned UMPIRE
 // (in-app notification always lands; FCM push is best-effort — push delivery is a
 // deferred launch gate). Idempotent via notification_sends: job_type
 // 'match_reminder:<matchId>' + sent_on = the match's date → once per user/match.
+//
+// F007 (launch test plan): the sweep ran every 5 minutes over "the next 15", so
+// the first sweep to see a match was 10–15 minutes before it. It now runs every
+// minute (REMINDER_TICK_MS), so a reminder goes 14–15 minutes before. And a match
+// whose reminder time fell while the (free) server was asleep was skipped for
+// good once its start had passed: on waking, a match that has not started and
+// was due no more than REMINDER_CATCHUP_MS ago is still reminded, saying it was
+// due. The claim makes the catch-up safe to run any number of times, from the
+// in-process timer or POST /jobs/match-reminders (an outside scheduler that also
+// keeps the server awake — see LAUNCH-RUNBOOK).
+
+export { REMINDER_LEAD_MS, REMINDER_TICK_MS, REMINDER_CATCHUP_MS, matchReminderBody };
+
 export async function runMatchReminderSweep(): Promise<{ sent: number }> {
   const now = new Date();
-  const in15 = new Date(now.getTime() + 15 * 60 * 1000);
+  const until = new Date(now.getTime() + REMINDER_LEAD_MS);
+  const since = new Date(now.getTime() - REMINDER_CATCHUP_MS); // F007: missed while asleep
   const { data: soon } = await supabase
     .from('matches')
     .select('id, team_a_name, team_b_name, team_a_id, team_b_id, scheduled_at, umpire_id, status')
-    .gte('scheduled_at', now.toISOString())
-    .lte('scheduled_at', in15.toISOString())
+    .gte('scheduled_at', since.toISOString())
+    .lte('scheduled_at', until.toISOString())
     // V007 (visual review): a match that already started (live), or was voided,
     // does not "start in 15 minutes". Scheduled and not voided only.
     .eq('status', 'scheduled')
@@ -1135,7 +1150,7 @@ export async function runMatchReminderSweep(): Promise<{ sent: number }> {
         type: 'match_reminder',
         title: 'Match reminder',
         // Audit #89: the teams' names, not "Team A vs Team B" for a team match.
-        body: `⏰ ${(await matchNamesForNotice(m)) ?? 'Your match'} starts ${kickoff ? `at ${kickoff} (~15 min)` : 'in ~15 minutes'}!`,
+        body: matchReminderBody(await matchNamesForNotice(m), m.scheduled_at as string, now, kickoff),
         data: { matchId: m.id, screen: 'MatchDetail' },
       });
       sent++;

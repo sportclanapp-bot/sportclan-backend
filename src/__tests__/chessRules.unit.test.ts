@@ -1,6 +1,5 @@
 import { CHESS_RESULT_REASONS, isValidChessReason, flagFallen } from '../utils/chessRules';
 const CORE_REL = 'utils/chessRules.ts';
-const OTHER_REPO = '../sportclan-v2';
 const OTHER_CORE_REL = 'src/scoring/chessRules.ts';
 /**
  * The shared chess result rule (decision A3), held to ONE fixture table in both
@@ -9,6 +8,7 @@ const OTHER_CORE_REL = 'src/scoring/chessRules.ts';
  */
 import fs from 'fs';
 import path from 'path';
+import { readOtherRepo, testWithOtherRepo } from './helpers/otherRepo';
 
 describe('chessRules', () => {
   test('reasons: three decisive, five draws (incl. insufficient material, 50-move)', () => {
@@ -32,9 +32,8 @@ describe('chessRules', () => {
   });
 
   const here = path.join(__dirname, '..', CORE_REL);
-  const there = path.join(__dirname, '..', '..', OTHER_REPO, OTHER_CORE_REL);
-  (fs.existsSync(there) ? test : test.skip)('the app and server copies are identical', () => {
-    expect(fs.readFileSync(here, 'utf8')).toBe(fs.readFileSync(there, 'utf8'));
+  testWithOtherRepo('the app and server copies are identical', () => {
+    expect(fs.readFileSync(here, 'utf8')).toBe(readOtherRepo(OTHER_CORE_REL));
   });
 });
 

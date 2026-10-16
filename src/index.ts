@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { privacyPolicyHtml } from './legal/privacyPage';
+import { termsOfServiceHtml } from './legal/termsPage';
 import { limitReply } from './utils/limitReply';
 
 // FIRST, before anything else can throw. An error while wiring the app is
@@ -84,6 +85,8 @@ app.use(helmet({
 app.use(cors());
 // F011: the privacy policy page is built from the app's own text (src/legal), not a static copy.
 app.get('/privacy-policy.html', (_req, res) => { res.type('html').send(privacyPolicyHtml()); });
+// N-RWG2-15: the terms page from the app's own terms text (the static copy sold Premium).
+app.get('/terms.html', (_req, res) => { res.type('html').send(termsOfServiceHtml()); });
 app.use(express.static(path.join(__dirname, '..', 'public')));
 // 12mb cap supports base64-encoded profile photos (Change #4: no client size limit;
 // server compresses). Larger uploads should switch to multipart in a future module.

@@ -152,6 +152,7 @@ const ipCeilingLimiter = rateLimit({
   skip: (req) => rateLimitBypassed(req) || !budgetUserId(req),
   standardHeaders: false,
   legacyHeaders: false,
+  handler: limitReply('busy'), // F048
   store: new RedisRateLimitStore('ipc', 'async'),
 });
 

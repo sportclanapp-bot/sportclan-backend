@@ -9,10 +9,15 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { Options } from 'express-rate-limit';
 
-const WORDS = {
+const WORDS: Record<'otp' | 'auth' | 'busy', { code?: string; text: string }> = {
   otp: { code: 'OTP_IP_LIMIT', text: 'Too many codes asked for from this connection.' },
   auth: { code: 'AUTH_IP_LIMIT', text: 'Too many sign-in tries from this connection.' },
-} as const;
+  // F048 (launch test plan, Round 5): the general request budgets (every request, scoring
+  // writes, the per-address ceiling) said the same default HTML, and dozens of screens showed
+  // 'Request failed with status code 429'. No code on purpose: an app reads a bare 429 as
+  // "busy" and words the wait from Retry-After; one that shows the text as is reads this.
+  busy: { text: 'Too many requests from you just now.' },
+};
 
 export function limitReply(kind: keyof typeof WORDS) {
   return (req: Request, res: Response, _next: NextFunction, options: Options): void => {
@@ -21,7 +26,7 @@ export function limitReply(kind: keyof typeof WORDS) {
     const mins = Math.max(1, Math.ceil(ms / 60_000));
     res.status(options.statusCode).json({
       error: `${WORDS[kind].text} Try again in ${mins} ${mins === 1 ? 'minute' : 'minutes'}.`,
-      code: WORDS[kind].code,
+      ...(WORDS[kind].code ? { code: WORDS[kind].code } : {}),
       retry_after_seconds: Math.max(1, Math.ceil(ms / 1000)),
     });
   };

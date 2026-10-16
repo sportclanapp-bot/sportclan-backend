@@ -2372,13 +2372,20 @@ export async function addParticipants(req: Request, res: Response) {
       }
       // Audit #6: a side that is a registered team takes only that team's own
       // players (a tournament fixture's line-up is the organiser's to set).
+      // N-R5-ops-1: only ADDING someone is checked. A player already in the saved
+      // line-up on that side stays valid (they were on the team when picked), so a
+      // player who left the team since can't make the whole save fail.
       if (!match.tournament_id && (match.team_a_id || match.team_b_id)) {
         const sideTeams = [match.team_a_id, match.team_b_id].filter((x): x is string => !!x);
         const { data: roster } = await supabase.from('team_members').select('team_id, user_id').in('team_id', sideTeams).in('user_id', ids);
         const on = new Set(((roster ?? []) as Array<{ team_id: string; user_id: string }>).map((r) => `${r.team_id}:${r.user_id}`));
+        const { data: inLineup } = await supabase.from('match_participants').select('user_id, team_side, role').eq('match_id', id);
+        const already = new Set(((inLineup ?? []) as Array<{ user_id: string; team_side: string; role?: string | null }>)
+          .filter((r) => !(typeof r.role === 'string' && r.role.startsWith('tie:')))
+          .map((r) => `${r.team_side}:${r.user_id}`));
         const off = (participants as Array<{ user_id: string; team_side: string }>).find((p) => {
           const team = p.team_side === 'A' ? match.team_a_id : match.team_b_id;
-          return !!team && !on.has(`${team}:${p.user_id}`);
+          return !!team && !on.has(`${team}:${p.user_id}`) && !already.has(`${p.team_side}:${p.user_id}`);
         });
         if (off) {
           return res.status(403).json({ error: 'That player isn’t in that team, so they can’t play for it here.', code: 'NOT_ON_ROSTER', user_id: off.user_id });
@@ -2439,12 +2446,11 @@ export async function addParticipants(req: Request, res: Response) {
       const { data: curRows, error: curErr } = await supabase.from('match_participants').select('id, user_id, team_side, role').eq('match_id', id);
       if (curErr) return res.status(500).json({ error: sanitizeError(curErr) });
       const gone = ((curRows ?? []) as Array<{ id: string; user_id: string; role?: string | null }>).filter((r) => !staysOnReplace(r));
-      // Once the match is live a player in it may already have scored: they stay.
-      if (gone.length && match.status === 'live') {
-        return res.status(409).json({ error: 'Players already in a live match stay in its line-up — you can add players, not take them out.', code: 'PLAYER_ALREADY_PLAYING', user_ids: gone.map((r) => r.user_id) });
-      }
+      // N-R5-ops-1 (launch test plan, Round 5): taking a player out is always allowed, live
+      // too (F072 refused it once the match started, which left a player who had left the
+      // team stuck in it). The row is archived, never deleted, and their events stay.
       if (gone.length) {
-        const out = await deleteWithReason('match_participants', gone.map((r) => r.id), userId, 'taken out of the line-up before the start');
+        const out = await deleteWithReason('match_participants', gone.map((r) => r.id), userId, match.status === 'live' ? 'taken out of the line-up during the match' : 'taken out of the line-up before the start');
         if (out.error) return res.status(500).json({ error: 'Could not change the line-up. Try again.' });
       }
     }

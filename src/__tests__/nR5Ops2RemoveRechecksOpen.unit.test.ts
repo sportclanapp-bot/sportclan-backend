@@ -70,7 +70,8 @@ it('a refused removal (a team with matches) leaves the report open', async () =>
   db.tables.content_reports = [{ id: 'r1', target_type: 'team', target_id: OLD, reporter_id: 'rep', reason: 'offensive', resolved: false, created_at: '2026-10-01T00:00:00Z' }];
   const r = await call(resolveReport, { userId: 'admin-2', params: { id: 'r1' }, body: { action: 'remove' } });
   expect(r.statusCode).toBe(409);
-  expect(db.tables.content_reports[0]).toMatchObject({ resolved: false, resolved_action: null });
+  expect(db.tables.content_reports[0].resolved).toBe(false);
+  expect(db.tables.content_reports[0].resolved_action ?? null).toBeNull();
 });
 
 it('an open report is still removed', async () => {

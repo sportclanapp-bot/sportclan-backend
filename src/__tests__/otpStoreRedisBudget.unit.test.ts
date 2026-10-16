@@ -6,13 +6,16 @@
  * answers straight away. The codes and counters still work throughout.
  */
 const pgRows = new Map<string, { code: string; purpose: string; expires_at: string }>();
+// N-R4-7: a loaded machine, played as a Postgres that blocks the thread for a while.
+const mockPg = { stallMs: 0 };
+const mockStall = () => { if (mockPg.stallMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, mockPg.stallMs); };
 jest.mock('../utils/supabase', () => ({
   supabase: {
     from: () => ({
-      upsert: async (row: any) => { pgRows.set(row.phone, row); return { error: null }; },
+      upsert: async (row: any) => { mockStall(); pgRows.set(row.phone, row); return { error: null }; },
       select: () => ({
         eq: (_c: string, phone: string) => ({
-          maybeSingle: async () => ({ data: pgRows.get(phone) ?? null, error: null }),
+          maybeSingle: async () => { mockStall(); return { data: pgRows.get(phone) ?? null, error: null }; },
         }),
       }),
       delete: () => ({ eq: async (_c: string, phone: string) => { pgRows.delete(phone); return { error: null }; } }),
@@ -52,6 +55,7 @@ beforeEach(() => {
   mockState.calls = 0;
   mockCtor.mockClear();
   pgRows.clear();
+  mockPg.stallMs = 0;
   __resetOtpStoreForTests();
 });
 afterEach(() => jest.restoreAllMocks());
@@ -64,13 +68,30 @@ test('the client is built with SDK retries off, and a healthy Redis is still use
 });
 
 test('a hanging Redis costs one budget, then Postgres keeps the code', async () => {
-  mockState.mode = 'hang';
-  const t0 = Date.now();
-  await expect(setOtp(P, '482913', 'login')).resolves.toBe('postgres');
-  expect(Date.now() - t0).toBeLessThan(REDIS_TIMEOUT_MS + 500);
-  const t1 = Date.now();
-  await expect(getOtp(P)).resolves.toEqual({ code: '482913', purpose: 'login' });
-  expect(Date.now() - t1).toBeLessThan(100); // cooldown: Redis isn't asked again
+  // N-R4-7 (launch test plan): the budget is measured on fake timers, not the
+  // wall clock — a loaded full run overshot the old real-time margins.
+  jest.useFakeTimers();
+  try {
+    mockState.mode = 'hang';
+    mockPg.stallMs = 150; // slow as a loaded full run: fake time doesn't care
+    let where: string | undefined;
+    const set = setOtp(P, '482913', 'login').then((w) => { where = w; return w; });
+    await jest.advanceTimersByTimeAsync(REDIS_TIMEOUT_MS - 1);
+    expect(where).toBeUndefined(); // still inside the budget
+    await jest.advanceTimersByTimeAsync(1);
+    await expect(set).resolves.toBe('postgres'); // the budget, and no longer
+    expect(mockState.calls).toBe(1);
+
+    // cooldown: Redis isn't asked again, so the code comes back with no time passing
+    let got: unknown;
+    const get = getOtp(P).then((v) => { got = v; return v; });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(got).toEqual({ code: '482913', purpose: 'login' });
+    await get;
+    expect(mockState.calls).toBe(1);
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
 test('after a failure Redis is skipped for the cooldown, then tried again', async () => {

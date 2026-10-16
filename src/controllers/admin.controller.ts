@@ -5,6 +5,7 @@ import { revokeSessionsNow } from '../utils/sessionRevocation';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { orIlikeContains } from '../utils/likeSearch'; // SC-237
+import { canonicalisePhone } from '../utils/phone';
 import { afterKeysetFilter, keysetPageMeta, parseKeysetCursor } from '../utils/keysetCursor';
 import axios from 'axios';
 import crypto from 'crypto';
@@ -549,6 +550,28 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
 const ADMIN_USER_FIELDS =
   'id, name, username, phone, email, is_admin, suspended_at, deleted_at, coin_balance, created_at';
 
+/**
+ * N-RWG1-12 (launch test plan): the search box says 'Search name, @username, or
+ * phone…' and rows show '@username · +91 98765 43210', but the text went to one
+ * ILIKE as typed, so '@name' and a spaced phone number found nobody. Now: the name
+ * as typed, the username without its '@', and — when the text is a phone number —
+ * its digits (the last 10 of a full Indian number, so +91 and older stored forms
+ * both match).
+ */
+export function adminUserSearchFilter(q: string): string {
+  const parts = [orIlikeContains(['name'], q)];
+  const handle = q.replace(/^@+/, '').trim();
+  if (handle) parts.push(orIlikeContains(['username'], handle));
+  const digits = q.replace(/\D/g, '');
+  if (/^[+\d\s().-]+$/.test(q) && digits.length >= 3) {
+    const canon = canonicalisePhone(q);
+    parts.push(orIlikeContains(['phone'], canon ? canon.slice(3) : digits));
+  } else {
+    parts.push(orIlikeContains(['phone'], q));
+  }
+  return parts.join(',');
+}
+
 // GET /admin/users?q=&limit=
 // Search users by name / username / phone (substring). No query → most recent.
 export async function adminListUsers(req: Request, res: Response) {
@@ -560,7 +583,7 @@ export async function adminListUsers(req: Request, res: Response) {
       .select(ADMIN_USER_FIELDS, { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(p.from, p.to);
-    if (q) query = query.or(orIlikeContains(['name', 'username', 'phone'], q)); // SC-237: injection-safe
+    if (q) query = query.or(adminUserSearchFilter(q)); // SC-237: injection-safe; N-RWG1-12: '@name' and spaced numbers
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ users: data ?? [], ...pageMeta(count, p) });

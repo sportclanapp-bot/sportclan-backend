@@ -2,7 +2,7 @@ import { excludeTest, hideTestFor, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { targetUserHidden } from '../utils/blocks';
-import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCounts';
+import { countsForUser, countParticipantsByMatch } from '../utils/matchCounts';
 
 // ── Scorer Leaderboard ──────────────────────────────────────────────────────
 
@@ -123,7 +123,7 @@ export async function getUserInsights(req: Request, res: Response) {
 
     // Completed matches, newest-first (ISO timestamps sort lexically).
     const completed = partRows
-      .filter((x) => countsTowardRecord(x.m, insightCounts.get(x.m?.id) ?? 0))
+      .filter((x) => countsForUser(x.m, id, insightCounts.get(x.m?.id) ?? 0)) // N-R4-9
       .sort((a, b) => (b.m.created_at ?? '').localeCompare(a.m.created_at ?? ''));
 
     // Result per completed match (newest-first). Two winner signals, unified:

@@ -1,6 +1,6 @@
 import { inBackground } from '../utils/background';
 import { matchNamesForNotice } from '../utils/matchNames';
-import { countParticipantsByMatch, countsTowardRecord, isByeMatch } from '../utils/matchCounts';
+import { countParticipantsByMatch, countsForUser, isByeMatch } from '../utils/matchCounts';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { escapeLike, orIlikeContains } from '../utils/likeSearch';
 import { teamSheetProblem } from './squads.controller';
@@ -689,11 +689,7 @@ export function buildHistory(
   // N-R4-3 (launch test plan): Played is what the Profile counted. A result since Audit #56 says
   // whose record it changed (attributed_user_ids — only players who agreed, no walkover, …);
   // an older one goes by the Profile's rule (SC-283): ranked, or two or more real players.
-  const counted = (m: any) => {
-    const who = m.score_summary?.attributed_user_ids;
-    if (userId && Array.isArray(who)) return countsTowardRecord(m, 2) && who.includes(userId);
-    return countsTowardRecord(m, players?.get(m.id) ?? 0);
-  };
+  const counted = (m: any) => countsForUser(m, userId, players?.get(m.id) ?? 0);
   const played = players
     ? sorted.filter((m) => m.my_role === 'played' && counted(m)).length
     : counts('played');

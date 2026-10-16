@@ -17,7 +17,7 @@ import { settingsOf } from '../utils/tournamentSettings';
 import { istDay, istDayStartIso } from '../utils/appTime';
 import { formatTimeIst } from '../utils/scheduleFixtures';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
-import { countsTowardRecord, countParticipantsByMatch } from '../utils/matchCounts';
+import { countsForUser, countParticipantsByMatch } from '../utils/matchCounts';
 import { plural } from '../utils/plural';
 import { deletedIdSet } from '../utils/activeUser';
 import { blockedUserIds, targetUserHidden } from '../utils/blocks';
@@ -594,7 +594,8 @@ export async function getSeasonRecap(req: Request, res: Response) {
     let wins = 0, losses = 0, draws = 0, totalMatches = 0;
     for (const row of rows) {
       const m = row.match;
-      if (!countsTowardRecord(m, participantCounts.get(m?.id) ?? 0)) continue;
+      // N-R4-9: counted for this person as the Profile counted it (the result's own list since Audit #56).
+      if (!countsForUser(m, id, participantCounts.get(m?.id) ?? 0)) continue;
       totalMatches += 1;
       const ss = (m.score_summary ?? {}) as Record<string, any>;
       let winnerSide: 'A' | 'B' | null = ss.winner_side ?? null;

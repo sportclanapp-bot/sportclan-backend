@@ -34,6 +34,8 @@ export interface CountableMatch {
   team_a_name?: string | null;
   team_b_name?: string | null;
   tournament_id?: string | null;
+  /** N-R4-9: a result's summary — since Audit #56 it lists whose record it changed. */
+  score_summary?: unknown;
 }
 
 /**
@@ -80,6 +82,18 @@ export function countsTowardRecord(
   if (isByeMatch(match)) return false;
   if (match.is_ranked) return true;
   return participantCount >= 2;
+}
+
+/**
+ * N-R4-3 / N-R4-9 (launch test plan): did this match count toward THIS person's record, the way the
+ * Profile counted it? A result since Audit #56 lists whose record it changed (attributed_user_ids:
+ * only players who agreed to the match — Audit #6 — and nobody for a walkover); that decides. An
+ * older result goes by the rule above, which is what the Profile counted before then.
+ */
+export function countsForUser(match: CountableMatch | null | undefined, userId: string | null | undefined, participantCount: number): boolean {
+  const who = (match?.score_summary as { attributed_user_ids?: unknown } | null | undefined)?.attributed_user_ids;
+  if (userId && Array.isArray(who)) return countsTowardRecord(match, 2) && who.includes(userId);
+  return countsTowardRecord(match, participantCount);
 }
 
 /** Minimum real participants for a casual match to count. Exported so tests and

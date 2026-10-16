@@ -10,12 +10,36 @@
  *                  point and a script hammering points is still stopped.
  */
 import rateLimit, { type Store } from 'express-rate-limit';
-import { budgetUserId, rateLimitKey, refreshUserId } from '../middleware/rateLimitKey';
+import { budgetUserId, clientIpKey, rateLimitKey, refreshUserId } from '../middleware/rateLimitKey';
 import { rateLimitBypassed } from '../middleware/rateLimitBypass';
 import { isScoringWrite, SCORING_PER_USER_MAX } from './scoringBudget';
+import { limitReply } from './limitReply';
 
 export const PER_USER_MAX = 600;
 export const PER_IP_MAX = 200;
+/** Abuse ceiling for AUTHENTICATED traffic from one address, so per-user keying
+ *  cannot be farmed by minting many accounts behind one IP. Generous enough that
+ *  a full team on one Wi-Fi never reaches it. */
+export const PER_IP_AUTHED_CEILING = 4000;
+
+/**
+ * F001 (launch test plan): the per-address ceiling for signed-in users. It had
+ * standardHeaders off, so its 429 carried no Retry-After and the default text,
+ * and the app waited its own 30 seconds. It now answers like the sign-in
+ * limiters (F034): JSON with a code and the wait, plus the Retry-After header.
+ */
+export function makeIpCeilingLimiter(store: Store, max: number = PER_IP_AUTHED_CEILING) {
+  return rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max,
+    keyGenerator: (req) => `ipc:${clientIpKey(req)}`,
+    skip: (req) => rateLimitBypassed(req) || !budgetUserId(req),
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: limitReply('ipc'),
+    store,
+  });
+}
 
 export function makeBudgetLimiters(store: (name: string) => Store) {
   const globalLimiter = rateLimit({

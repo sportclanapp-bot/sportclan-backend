@@ -166,13 +166,16 @@ describe('every limiter uses the Redis store', () => {
   const idx = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
   const acct = fs.readFileSync(path.join(__dirname, '..', 'routes', 'account.routes.ts'), 'utf8');
   test.each([
-    ['ipCeilingLimiter', 'ipc', 'async'],
     ['authLimiter', 'auth', 'blocking'],
     ['resetCheckIpLimiter', 'rip', 'blocking'],
     ['resetCheckNumberLimiter', 'rnum', 'blocking'],
     ['sendOtpLimiter', 'sendotp', 'blocking'],
   ])('%s → %s (%s)', (limiter, name, mode) => {
     expect(idx).toMatch(new RegExp(`const ${limiter} = rateLimit\\(\\{[\\s\\S]*?store: new RedisRateLimitStore\\('${name}', '${mode}'\\),\\n\\}\\);`));
+  });
+  // F001: the per-address ceiling is built by utils/budgetLimiters too (so it answers with the wait).
+  test('ipCeilingLimiter → ipc (async, via makeIpCeilingLimiter)', () => {
+    expect(idx).toContain("const ipCeilingLimiter = makeIpCeilingLimiter(new RedisRateLimitStore('ipc', 'async'));");
   });
   // 2.16.0: the two per-user budgets are built by utils/budgetLimiters — from the server, on the Redis store.
   test('globalLimiter → global, scoringLimiter → scoring (async, via makeBudgetLimiters)', () => {

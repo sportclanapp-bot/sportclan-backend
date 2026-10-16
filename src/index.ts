@@ -49,7 +49,7 @@ import devRoutes from './routes/dev.routes';
 import adminRoutes from './routes/admin.routes';
 import jobsRoutes from './routes/jobs.routes';
 import { authenticateToken } from './middleware/auth.middleware';
-import { budgetUserId, clientIpKey, rateLimitKey, refreshUserId } from './middleware/rateLimitKey';
+import { clientIpKey, rateLimitKey, refreshUserId } from './middleware/rateLimitKey';
 import { rateLimitBypassed } from './middleware/rateLimitBypass';
 
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
@@ -67,7 +67,7 @@ import {
   runWeeklyDigest,
 } from './controllers/features.controller';
 import { dbTimingMiddleware } from './utils/dbTiming';
-import { makeBudgetLimiters } from './utils/budgetLimiters';
+import { makeBudgetLimiters, makeIpCeilingLimiter } from './utils/budgetLimiters';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -130,11 +130,6 @@ app.use(sanitizeErrorResponses);
  * PER_USER_MAX is headroom for a long session, not permission to be chatty.
  */
 // PER_USER_MAX (600) and PER_IP_MAX (200) live in utils/budgetLimiters now, beside the scoring budget.
-/** Abuse ceiling for AUTHENTICATED traffic from one address, so per-user keying
- *  cannot be farmed by minting many accounts behind one IP. Generous enough that
- *  a full team on one Wi-Fi never reaches it. */
-const PER_IP_AUTHED_CEILING = 4000;
-
 /*
  * 29 Sep: every limiter counts in Upstash Redis (utils/rateLimitStore), so a
  * limit holds across instances. The two that run on every request use the
@@ -145,15 +140,8 @@ const PER_IP_AUTHED_CEILING = 4000;
  */
 const { globalLimiter, scoringLimiter } = makeBudgetLimiters((name) => new RedisRateLimitStore(name, 'async'));
 
-const ipCeilingLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: PER_IP_AUTHED_CEILING,
-  keyGenerator: (req) => `ipc:${clientIpKey(req)}`,
-  skip: (req) => rateLimitBypassed(req) || !budgetUserId(req),
-  standardHeaders: false,
-  legacyHeaders: false,
-  store: new RedisRateLimitStore('ipc', 'async'),
-});
+// F001: the per-address ceiling (PER_IP_AUTHED_CEILING) is built beside the budgets and answers with the wait.
+const ipCeilingLimiter = makeIpCeilingLimiter(new RedisRateLimitStore('ipc', 'async'));
 
 app.use(globalLimiter);
 app.use(scoringLimiter);

@@ -12,6 +12,8 @@ import type { Options } from 'express-rate-limit';
 const WORDS = {
   otp: { code: 'OTP_IP_LIMIT', text: 'Too many codes asked for from this connection.' },
   auth: { code: 'AUTH_IP_LIMIT', text: 'Too many sign-in tries from this connection.' },
+  // F001 (launch test plan): the per-address ceiling for signed-in users answered with no wait at all.
+  ipc: { code: 'IP_LIMIT', text: 'Too many requests from this connection.' },
 } as const;
 
 export function limitReply(kind: keyof typeof WORDS) {

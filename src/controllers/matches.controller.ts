@@ -1,3 +1,4 @@
+import { voidClosedOn } from '../utils/voidClosedOn';
 import { inBackground } from '../utils/background';
 import { matchNamesForNotice } from '../utils/matchNames';
 import { countParticipantsByMatch, countsForUser, isByeMatch } from '../utils/matchCounts';
@@ -4412,8 +4413,9 @@ export async function voidMatch(req: Request, res: Response) {
     // write so a refusal changes nothing.
     if (!withinVoidWindow(match)) {
       const deadline = voidDeadline(match);
+      // N-RWG3-2 (launch test plan): the date in India time and the app's style (it was the UTC day).
       return res.status(403).json({
-        error: `Matches can only be voided within ${VOID_WINDOW_DAYS} days of finishing. This one closed on ${deadline?.toDateString() ?? 'an earlier date'}.`,
+        error: `Matches can only be voided within ${VOID_WINDOW_DAYS} days of finishing. This one closed on ${deadline ? voidClosedOn(deadline) : 'an earlier date'}.`,
         code: 'VOID_WINDOW_CLOSED',
         void_deadline: deadline?.toISOString() ?? null,
       });

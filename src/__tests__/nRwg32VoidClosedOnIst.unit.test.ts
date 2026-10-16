@@ -7,6 +7,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { otherRepoPath, testWithOtherRepo } from './helpers/otherRepo';
 
 const load = () => {
   let m: { voidClosedOn?: (d: Date) => string } = {};
@@ -37,10 +38,7 @@ it('the refusal uses it', () => {
   expect(src).not.toContain('toDateString()');
 });
 
-it("is the app's own file, byte for byte", () => {
-  // The app repo beside this one (a checkout), or the app worktree beside this worktree.
-  const candidates = ['../../../sportclan-v2/src/utils/voidClosedOn.ts', '../../../r5-ops-app/src/utils/voidClosedOn.ts']
-    .map((p) => path.join(__dirname, p)).filter((p) => fs.existsSync(p));
-  expect(candidates.length).toBeGreaterThan(0);
-  expect(fs.readFileSync(path.join(__dirname, '../utils/voidClosedOn.ts'), 'utf8')).toBe(fs.readFileSync(candidates[0]!, 'utf8'));
+// N-R4-6: the app repo is found by the shared helper (an env var, the sibling checkout, or the paired worktree).
+testWithOtherRepo("is the app's own file, byte for byte", () => {
+  expect(fs.readFileSync(path.join(__dirname, '../utils/voidClosedOn.ts'), 'utf8')).toBe(fs.readFileSync(otherRepoPath('src/utils/voidClosedOn.ts')!, 'utf8'));
 });

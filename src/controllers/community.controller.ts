@@ -441,7 +441,7 @@ export async function createPost(req: Request, res: Response) {
     poll_options: rawPollOptions,
     allow_multiple: rawAllowMultiple, // SC-347: poll single(false) vs multiple(true) choice
     type, // frontend sends 'type' which can be 'poll', 'general', etc.
-    scheduled_at, // optional ISO string · Premium-only scheduled publishing
+    scheduled_at, // optional ISO string · scheduled publishing, for everyone (F045: no Premium)
     match_id, // SC-193: optional — links a match_result post to a completed match
   } = req.body;
   // Audit #32: a link is an http(s) URL or nothing.
@@ -529,7 +529,7 @@ export async function createPost(req: Request, res: Response) {
   // SC-434: image posts and scheduling were Premium-only, and free accounts were
   // capped at 5 posts a month. All three are gone — see migration 090 for the cap.
 
-  // Scheduled publishing · Premium-only, must be a future timestamp.
+  // Scheduled publishing · for everyone (F045), must be a future timestamp.
   // The publishScheduledPosts job clears scheduled_at once the time passes,
   // at which point the post becomes visible in the normal feed query.
   let scheduledAtIso: string | null = null;

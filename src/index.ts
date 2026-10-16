@@ -364,7 +364,7 @@ app.listen(PORT, () => {
   //    deleted pre-launch). All jobs are idempotent / deduped via
   //    notification_sends, so a double-fire (restart / multi-instance) is safe.
 
-  // Publish due scheduled (Premium) posts frequently so they appear on time.
+  // Publish due scheduled posts frequently so they appear on time (F045: anyone can schedule).
   const runPublish = async () => {
     try {
       const { published } = await runPublishScheduledPosts();

@@ -1,9 +1,9 @@
 /**
  * N-R5-ops-1 (launch test plan, Round 5) · in a live team match, a saved player who had since
  * left the team made Save line-up fail: the roster check (audit #6) refused him, and F072
- * refused taking him out. Now a player already in the saved line-up stays valid, taking anyone
- * out is always allowed (archived, never deleted), and only ADDING someone who isn't on the
- * team is refused, with words.
+ * (rightly) won't take a player out of a live match. Now a player already in the saved
+ * line-up stays valid, so the save succeeds with him in it; F072 still holds (a live
+ * player stays); only ADDING someone who isn't on the team is refused, with words.
  */
 type Q = string[];
 let mockLog: Q[] = [];
@@ -67,8 +67,15 @@ test('live: saving the line-up with the player who left still in it works', asyn
   expect(removed()).toEqual([]);
 });
 
-test('live: the captain takes him out and saves', async () => {
+test('live: F072 still holds — taking him out is refused, nothing removed', async () => {
   status = 'live';
+  saved = [...saved, left];
+  const r = await call({ participants: [{ user_id: P(1), team_side: 'A' }, { user_id: P(2), team_side: 'A' }, { user_id: P(4), team_side: 'B' }], replace: true });
+  expect([r.statusCode, r.body.code]).toEqual([409, 'PLAYER_ALREADY_PLAYING']);
+  expect(removed()).toEqual([]);
+});
+
+test('before the start he can be taken out, as before', async () => {
   saved = [...saved, left];
   const r = await call({ participants: [{ user_id: P(1), team_side: 'A' }, { user_id: P(2), team_side: 'A' }, { user_id: P(4), team_side: 'B' }], replace: true });
   expect(r.statusCode).toBe(200);

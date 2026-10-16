@@ -2,7 +2,7 @@
  * F072 (launch test plan, Round 2): opening a line-up again showed nobody ticked, and saving could
  * only ADD — a saved player couldn't be taken out. A save may now say it is the whole line-up
  * (replace): before the match starts, players left out are removed (archived, audit #25); once it
- * is live, a player already in it stayed and that save was refused — until N-R5-ops-1 (Round 5): taking a player out is always allowed.
+ * is live, a player already in it stays (they may have scored), and that save is refused.
  */
 type Q = string[];
 let mockLog: Q[] = [];
@@ -65,11 +65,10 @@ test('without replace, as before: only added', async () => {
   expect((await call({ participants: lineup })).statusCode).toBe(200);
   expect(removed()).toEqual([]);
 });
-// N-R5-ops-1 (Round 5): taking a player out is always allowed, live too (this used to be a 409
-// PLAYER_ALREADY_PLAYING, which left a player who had left the team stuck in a live line-up).
-test('live: a player can be taken out (archived, not deleted)', async () => {
+test('live: a player already in stays — that save is refused, nothing removed', async () => {
   status = 'live';
   const r = await call({ participants: lineup, replace: true });
-  expect(r.statusCode).toBe(200);
-  expect(removed()).toEqual(['r2']);
+  expect([r.statusCode, r.body.code]).toEqual([409, 'PLAYER_ALREADY_PLAYING']);
+  expect(removed()).toEqual([]);
+  expect((await call({ participants: [...lineup, { user_id: P(2), team_side: 'A', batting_order: 3 }], replace: true })).statusCode).toBe(200); // all still in: fine
 });

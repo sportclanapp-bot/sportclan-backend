@@ -2446,11 +2446,12 @@ export async function addParticipants(req: Request, res: Response) {
       const { data: curRows, error: curErr } = await supabase.from('match_participants').select('id, user_id, team_side, role').eq('match_id', id);
       if (curErr) return res.status(500).json({ error: sanitizeError(curErr) });
       const gone = ((curRows ?? []) as Array<{ id: string; user_id: string; role?: string | null }>).filter((r) => !staysOnReplace(r));
-      // N-R5-ops-1 (launch test plan, Round 5): taking a player out is always allowed, live
-      // too (F072 refused it once the match started, which left a player who had left the
-      // team stuck in it). The row is archived, never deleted, and their events stay.
+      // Once the match is live a player in it may already have scored: they stay.
+      if (gone.length && match.status === 'live') {
+        return res.status(409).json({ error: 'Players already in a live match stay in its line-up — you can add players, not take them out.', code: 'PLAYER_ALREADY_PLAYING', user_ids: gone.map((r) => r.user_id) });
+      }
       if (gone.length) {
-        const out = await deleteWithReason('match_participants', gone.map((r) => r.id), userId, match.status === 'live' ? 'taken out of the line-up during the match' : 'taken out of the line-up before the start');
+        const out = await deleteWithReason('match_participants', gone.map((r) => r.id), userId, 'taken out of the line-up before the start');
         if (out.error) return res.status(500).json({ error: 'Could not change the line-up. Try again.' });
       }
     }

@@ -5,6 +5,8 @@ import { revokeSessionsNow } from '../utils/sessionRevocation';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { orIlikeContains } from '../utils/likeSearch'; // SC-237
+import { canonicalisePhone } from '../utils/phone';
+import { afterKeysetFilter, keysetPageMeta, parseKeysetCursor } from '../utils/keysetCursor';
 import axios from 'axios';
 import crypto from 'crypto';
 import { getLastOtpSend } from './auth.controller';
@@ -115,19 +117,29 @@ export async function getReports(req: Request, res: Response) {
   // #3: ?status=actioned lists resolved reports with the action taken (and
   // Restore for a moderator's removal); the default is the open queue.
   const actioned = req.query.status === 'actioned';
+  // N-RWD3-15/16 (launch test plan): `cursor` (the last page's `next_cursor`)
+  // pages after that row, so a Restore (which moves a report to the top of
+  // Actioned) can't shift the next page. `offset` still works for older apps.
+  const cursor = req.query.cursor === undefined ? null : parseKeysetCursor(req.query.cursor);
+  if (req.query.cursor !== undefined && !cursor) {
+    return res.status(400).json({ error: 'cursor must be the next_cursor from the last page', code: 'INVALID_CURSOR' });
+  }
+  const sortCol = actioned ? 'resolved_at' : 'created_at';
   try {
-    const { data: reports, error, count } = await supabase
+    let q = supabase
       .from('content_reports')
       .select('id, target_type, target_id, reason, reporter_id, resolved, created_at, resolved_at, resolved_action, actioned_via', { count: 'exact' })
       .eq('resolved', actioned)
-      .order(actioned ? 'resolved_at' : 'created_at', { ascending: false })
-      .range(p.from, p.to);
+      .order(sortCol, { ascending: false, nullsFirst: false })
+      .order('id', { ascending: true });
+    q = cursor ? q.or(afterKeysetFilter(sortCol, cursor)).limit(p.limit) : q.range(p.from, p.to);
+    const { data: reports, error, count } = await q;
     // Phase 3 B12-F6: a failed query is a failure — an empty 200 read as "the
     // queue is clear" during an outage. A page past the end is still empty.
     if (error && !isRangeError(error)) return res.status(500).json({ error: 'Could not load reports.' });
-    if (error) return res.json({ reports: [], ...pageMeta(count, p) });
-    const rows = reports ?? [];
-    if (rows.length === 0) return res.json({ reports: [], ...pageMeta(count, p) });
+    const rows = error ? [] : (reports ?? []);
+    const meta = keysetPageMeta(rows as Array<{ id: string } & Record<string, unknown>>, sortCol, count, p, cursor);
+    if (rows.length === 0) return res.json({ reports: [], ...meta });
 
     const postIds = [...new Set(rows.filter((r) => r.target_type === 'post').map((r) => r.target_id))];
     const commentIds = [...new Set(rows.filter((r) => r.target_type === 'comment').map((r) => r.target_id))];
@@ -261,7 +273,7 @@ export async function getReports(req: Request, res: Response) {
         content_removed_by_moderator,
       };
     });
-    return res.json({ reports: enriched, ...pageMeta(count, p) });
+    return res.json({ reports: enriched, ...meta });
   } catch {
     return res.status(500).json({ error: 'Could not load reports.' });
   }
@@ -279,6 +291,9 @@ export async function getReports(req: Request, res: Response) {
 //             again, and the reports that removed it read 'restored'. An
 //             author's own delete can't be restored here — it was their choice.
 // Every remove, restore and dismiss is also written to admin_actions (who, when, via).
+/** N-RWD3-13: what a stale Dismiss or Remove is told. */
+export const ALREADY_HANDLED_TEXT = 'Another admin already handled this report. It is in Actioned now.';
+
 export async function resolveReport(req: Request, res: Response) {
   const { id } = req.params;
   const raw = (req.body || {}).action;
@@ -293,12 +308,37 @@ export async function resolveReport(req: Request, res: Response) {
       .maybeSingle();
     if (fetchErr) return res.status(500).json({ error: fetchErr.message });
     if (!report) return res.status(404).json({ error: 'Report not found' });
+    // N-RWD3-13 (launch test plan): Dismiss and Remove are for an OPEN report. A
+    // second admin's stale Dismiss turned a 'Removed' report into 'Dismissed', and
+    // its Restore was lost for good.
+    if (action !== 'restore' && report.resolved) {
+      return res.status(409).json({ error: ALREADY_HANDLED_TEXT, code: 'ALREADY_HANDLED' });
+    }
 
     const now = new Date().toISOString();
     const isContent = ['post', 'comment', 'profile_post', 'profile_comment'].includes(report.target_type);
     const type = report.target_type as ModeratedType;
     const resolution = (resolved_action: 'dismissed' | 'removed' | 'restored') =>
       ({ resolved: true, resolved_at: now, resolved_by: adminId, resolved_action });
+    // N-R5-ops-2 (launch test plan, Round 5): Remove claims this report while it is still
+    // open — the same 'first one wins' as Dismiss — BEFORE it touches the content. If the
+    // removal is then refused, the claim is handed back (the report is open again).
+    const claimForRemove = async (): Promise<'ok' | 'handled' | { error: string }> => {
+      const { data: claimed, error: claimErr } = await supabase
+        .from('content_reports')
+        .update(resolution('removed'))
+        .eq('id', id)
+        .eq('resolved', false)
+        .select('id');
+      if (claimErr) return { error: claimErr.message };
+      return claimed && claimed.length > 0 ? 'ok' : 'handled';
+    };
+    const unclaim = () => supabase
+      .from('content_reports')
+      .update({ resolved: false, resolved_at: null, resolved_by: null, resolved_action: null })
+      .eq('id', id)
+      .eq('resolved_by', adminId)
+      .eq('resolved_at', now);
 
     // N-RWG2-9: a reported team — removed (the disband's soft mark, reason
     // 'moderator') or restored, with the other open reports on it resolved too.
@@ -318,10 +358,14 @@ export async function resolveReport(req: Request, res: Response) {
         await logAdminAction(adminId, 'restore_team', 'team', report.target_id, `via report ${id}`);
         return res.json({ ok: true, action, contentRestored: true });
       }
+      const claim = await claimForRemove();
+      if (typeof claim === 'object') return res.status(500).json({ error: claim.error });
+      if (claim === 'handled') return res.status(409).json({ error: ALREADY_HANDLED_TEXT, code: 'ALREADY_HANDLED' });
       const removed = await removeTeamAsModerator(report.target_id, adminId, `via report ${id}`);
-      if ('status' in removed) return res.status(removed.status).json(removed.body);
-      const { error: e1 } = await supabase.from('content_reports').update(resolution('removed')).eq('id', id);
-      if (e1) return res.status(500).json({ error: e1.message });
+      if ('status' in removed) {
+        await unclaim();
+        return res.status(removed.status).json(removed.body);
+      }
       const { error: e2 } = await supabase
         .from('content_reports')
         .update({ ...resolution('removed'), actioned_via: id })
@@ -360,6 +404,9 @@ export async function resolveReport(req: Request, res: Response) {
         // Its author already deleted it; there is nothing left to remove.
         return res.status(409).json({ error: 'Its author already deleted this.', code: 'ALREADY_DELETED' });
       }
+      const claim = await claimForRemove();
+      if (typeof claim === 'object') return res.status(500).json({ error: claim.error });
+      if (claim === 'handled') return res.status(409).json({ error: ALREADY_HANDLED_TEXT, code: 'ALREADY_HANDLED' });
       if (!target.deleted) {
         const removed = type === 'post'
           ? await softDeletePost(report.target_id, adminId, { reason: 'moderator' })
@@ -368,10 +415,8 @@ export async function resolveReport(req: Request, res: Response) {
             : await moderatorRemoveWallItem(type, report.target_id, adminId);
         if (removed) await logAdminAction(adminId, `remove_${type}`, type, report.target_id, `via report ${id}`);
       }
-      // This report, then the other open ones on the same content — kept, and
-      // shown as already actioned through this one.
-      const { error: e1 } = await supabase.from('content_reports').update(resolution('removed')).eq('id', id);
-      if (e1) return res.status(500).json({ error: e1.message });
+      // This report (claimed above), then the other open ones on the same content —
+      // kept, and shown as already actioned through this one.
       const { error: e2 } = await supabase
         .from('content_reports')
         .update({ ...resolution('removed'), actioned_via: id })
@@ -383,8 +428,15 @@ export async function resolveReport(req: Request, res: Response) {
       return res.json({ ok: true, action, contentRemoved: true });
     }
 
-    const { error: updErr } = await supabase.from('content_reports').update(resolution('dismissed')).eq('id', id);
+    // N-RWD3-13: only while it is still open — another admin's action between the read and here wins.
+    const { data: dismissed, error: updErr } = await supabase
+      .from('content_reports')
+      .update(resolution('dismissed'))
+      .eq('id', id)
+      .eq('resolved', false)
+      .select('id');
     if (updErr) return res.status(500).json({ error: updErr.message });
+    if (!dismissed || dismissed.length === 0) return res.status(409).json({ error: ALREADY_HANDLED_TEXT, code: 'ALREADY_HANDLED' });
     await logAdminAction(adminId, 'dismiss_report', 'report', id, `${report.target_type} ${report.target_id}`);
     return res.json({ ok: true, action: 'dismiss', contentRemoved: false });
   } catch (err: any) {
@@ -522,6 +574,28 @@ export async function broadcastAnnouncement(req: Request, res: Response) {
 const ADMIN_USER_FIELDS =
   'id, name, username, phone, email, is_admin, suspended_at, deleted_at, coin_balance, created_at';
 
+/**
+ * N-RWG1-12 (launch test plan): the search box says 'Search name, @username, or
+ * phone…' and rows show '@username · +91 98765 43210', but the text went to one
+ * ILIKE as typed, so '@name' and a spaced phone number found nobody. Now: the name
+ * as typed, the username without its '@', and — when the text is a phone number —
+ * its digits (the last 10 of a full Indian number, so +91 and older stored forms
+ * both match).
+ */
+export function adminUserSearchFilter(q: string): string {
+  const parts = [orIlikeContains(['name'], q)];
+  const handle = q.replace(/^@+/, '').trim();
+  if (handle) parts.push(orIlikeContains(['username'], handle));
+  const digits = q.replace(/\D/g, '');
+  if (/^[+\d\s().-]+$/.test(q) && digits.length >= 3) {
+    const canon = canonicalisePhone(q);
+    parts.push(orIlikeContains(['phone'], canon ? canon.slice(3) : digits));
+  } else {
+    parts.push(orIlikeContains(['phone'], q));
+  }
+  return parts.join(',');
+}
+
 // GET /admin/users?q=&limit=
 // Search users by name / username / phone (substring). No query → most recent.
 export async function adminListUsers(req: Request, res: Response) {
@@ -533,7 +607,7 @@ export async function adminListUsers(req: Request, res: Response) {
       .select(ADMIN_USER_FIELDS, { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(p.from, p.to);
-    if (q) query = query.or(orIlikeContains(['name', 'username', 'phone'], q)); // SC-237: injection-safe
+    if (q) query = query.or(adminUserSearchFilter(q)); // SC-237: injection-safe; N-RWG1-12: '@name' and spaced numbers
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ users: data ?? [], ...pageMeta(count, p) });
@@ -767,22 +841,29 @@ export async function otpDiagnostics(_req: Request, res: Response) {
 /** Decision 10: the two states an admin moves feedback between. */
 export const FEEDBACK_STATUSES = ['open', 'resolved'] as const;
 
-// GET /admin/feedback?status=open|resolved&limit&offset
+// GET /admin/feedback?status=open|resolved&limit&offset|cursor
 // Decision 10 (B11-F11): nothing read the feedback table. Newest first, with
 // who sent it. The default is every message.
+// F052 / N-R3C2-4 (launch test plan): `cursor` (the last row's `next_cursor`)
+// pages after that row, so marking feedback done or two quick "Load more" taps
+// can't skip any. `offset` still works for older apps.
 export async function adminListFeedback(req: Request, res: Response) {
   const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 30, maxLimit: 100 });
   const status = typeof req.query.status === 'string' ? req.query.status : undefined;
   if (status !== undefined && !(FEEDBACK_STATUSES as readonly string[]).includes(status)) {
     return res.status(400).json({ error: `status must be one of: ${FEEDBACK_STATUSES.join(', ')}` });
   }
+  const cursor = req.query.cursor === undefined ? null : parseKeysetCursor(req.query.cursor);
+  if (req.query.cursor !== undefined && !cursor) {
+    return res.status(400).json({ error: 'cursor must be the next_cursor from the last page', code: 'INVALID_CURSOR' });
+  }
   let q = supabase
     .from('feedback')
     .select('id, user_id, category, message, rating, email, status, created_at', { count: 'exact' })
     .order('created_at', { ascending: false })
-    .order('id', { ascending: true })
-    .range(p.from, p.to);
+    .order('id', { ascending: true });
   if (status) q = q.eq('status', status);
+  q = cursor ? q.or(afterKeysetFilter('created_at', cursor)).limit(p.limit) : q.range(p.from, p.to);
   const { data, error, count } = await q;
   if (error && !isRangeError(error)) return res.status(500).json({ error: 'Could not load feedback.' });
   const rows = error ? [] : (data ?? []);
@@ -793,19 +874,29 @@ export async function adminListFeedback(req: Request, res: Response) {
     for (const u of (us ?? []) as Array<{ id: string; name: string | null; username: string | null }>) users.set(u.id, u);
   }
   const feedback = rows.map((r: any) => ({ ...r, user: users.get(r.user_id) ?? null }));
-  return res.json({ feedback, ...pageMeta(count, p) });
+  return res.json({ feedback, ...keysetPageMeta(rows as Array<{ id: string; created_at?: string | null }>, 'created_at', count, p, cursor) });
 }
 
 // PATCH /admin/feedback/:id  { status: 'open' | 'resolved' }
+// F052 (launch test plan): only a change is written. Feedback already in that
+// state (another admin got there first, or a stale list) is a 409 with words.
 export async function adminUpdateFeedback(req: Request, res: Response) {
   const { id } = req.params;
   const { status } = req.body || {};
   if (!(FEEDBACK_STATUSES as readonly unknown[]).includes(status)) {
     return res.status(400).json({ error: `status must be one of: ${FEEDBACK_STATUSES.join(', ')}` });
   }
-  const { data, error } = await supabase.from('feedback').update({ status }).eq('id', id).select('id, status').maybeSingle();
+  const { data, error } = await supabase.from('feedback').update({ status }).eq('id', id).neq('status', status).select('id, status').maybeSingle();
   if (error) return res.status(500).json({ error: 'Could not update that feedback.' });
-  if (!data) return res.status(404).json({ error: 'Feedback not found.' });
+  if (!data) {
+    const { data: row, error: readErr } = await supabase.from('feedback').select('id, status').eq('id', id).maybeSingle();
+    if (readErr) return res.status(500).json({ error: 'Could not update that feedback.' });
+    if (!row) return res.status(404).json({ error: 'Feedback not found.' });
+    return res.status(409).json({
+      error: status === 'resolved' ? 'Another admin already marked this done. Pull down to refresh.' : 'Another admin already reopened this. Pull down to refresh.',
+      code: 'ALREADY_SET',
+    });
+  }
   await logAdminAction(req.userId!, status === 'resolved' ? 'resolve_feedback' : 'reopen_feedback', 'feedback', id, null);
   return res.json({ feedback: data });
 }

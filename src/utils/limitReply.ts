@@ -9,7 +9,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { Options } from 'express-rate-limit';
 
-const WORDS: Record<'otp' | 'auth' | 'account' | 'connection', { code: string; text: string }> = {
+const WORDS: Record<'otp' | 'auth' | 'account' | 'connection' | 'ipc', { code: string; text: string }> = {
   otp: { code: 'OTP_IP_LIMIT', text: 'Too many codes asked for from this connection.' },
   auth: { code: 'AUTH_IP_LIMIT', text: 'Too many sign-in tries from this connection.' },
   // F048 (launch test plan, Round 5): the general request budgets (every request, scoring
@@ -19,6 +19,8 @@ const WORDS: Record<'otp' | 'auth' | 'account' | 'connection', { code: string; t
   // code, so the app shows these words rather than guessing ('from this connection' for an account).
   account: { code: 'ACCOUNT_BUSY', text: 'Too many requests from your account just now.' },
   connection: { code: 'CONNECTION_BUSY', text: 'Too many requests from this connection just now.' },
+  // F001 (launch test plan): the per-address ceiling for signed-in users answered with no wait at all.
+  ipc: { code: 'IP_LIMIT', text: 'Too many requests from this connection.' },
 };
 
 export function limitReply(kind: keyof typeof WORDS) {

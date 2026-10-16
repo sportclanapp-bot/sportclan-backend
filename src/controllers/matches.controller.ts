@@ -1,3 +1,4 @@
+import { voidClosedOn } from '../utils/voidClosedOn';
 import { inBackground } from '../utils/background';
 import { matchNamesForNotice } from '../utils/matchNames';
 import { countParticipantsByMatch, countsForUser, isByeMatch } from '../utils/matchCounts';
@@ -1597,6 +1598,23 @@ async function staleOutcomeOf(id: string): Promise<{ side: 'A' | 'B' | null } | 
   return staleMatchOutcome(slug, cs, m as never, (lineup ?? []) as Array<{ team_side: string }>);
 }
 
+/**
+ * N-RWG2-2 (launch test plan): the answer to Abandon on a match that is already decided
+ * (a side has won it, or its rules' draw), or null when it may be abandoned.
+ */
+export function decidedAbandonRefusal(outcome: { side: 'A' | 'B' | null } | null): { status: number; body: { error: string; code: string } } | null {
+  if (!outcome) return null;
+  return {
+    status: 409,
+    body: {
+      error: outcome.side
+        ? 'This match already has a winner. Tap End match to save the result, or undo the last point first.'
+        : 'This match is already decided as a draw. Tap End match to save it, or undo the last point first.',
+      code: 'MATCH_DECIDED',
+    },
+  };
+}
+
 /** F191: end a decided stale match as its creator would (the full completion: ratings, records, bracket). */
 async function completeStale(id: string, outcome: { side: 'A' | 'B' | null }): Promise<boolean> {
   const { data: m } = await supabase.from('matches').select('id, created_by, team_a_id, team_b_id').eq('id', id).maybeSingle();
@@ -2354,13 +2372,20 @@ export async function addParticipants(req: Request, res: Response) {
       }
       // Audit #6: a side that is a registered team takes only that team's own
       // players (a tournament fixture's line-up is the organiser's to set).
+      // N-R5-ops-1: only ADDING someone is checked. A player already in the saved
+      // line-up on that side stays valid (they were on the team when picked), so a
+      // player who left the team since can't make the whole save fail.
       if (!match.tournament_id && (match.team_a_id || match.team_b_id)) {
         const sideTeams = [match.team_a_id, match.team_b_id].filter((x): x is string => !!x);
         const { data: roster } = await supabase.from('team_members').select('team_id, user_id').in('team_id', sideTeams).in('user_id', ids);
         const on = new Set(((roster ?? []) as Array<{ team_id: string; user_id: string }>).map((r) => `${r.team_id}:${r.user_id}`));
+        const { data: inLineup } = await supabase.from('match_participants').select('user_id, team_side, role').eq('match_id', id);
+        const already = new Set(((inLineup ?? []) as Array<{ user_id: string; team_side: string; role?: string | null }>)
+          .filter((r) => !(typeof r.role === 'string' && r.role.startsWith('tie:')))
+          .map((r) => `${r.team_side}:${r.user_id}`));
         const off = (participants as Array<{ user_id: string; team_side: string }>).find((p) => {
           const team = p.team_side === 'A' ? match.team_a_id : match.team_b_id;
-          return !!team && !on.has(`${team}:${p.user_id}`);
+          return !!team && !on.has(`${team}:${p.user_id}`) && !already.has(`${p.team_side}:${p.user_id}`);
         });
         if (off) {
           return res.status(403).json({ error: 'That player isn’t in that team, so they can’t play for it here.', code: 'NOT_ON_ROSTER', user_id: off.user_id });
@@ -2902,6 +2927,12 @@ export async function abandonMatch(req: Request, res: Response) {
     }
     if (match.status !== 'scheduled' && match.status !== 'live') {
       return res.status(409).json({ error: 'Only a scheduled or live match can be abandoned.' });
+    }
+    // N-RWG2-2 (launch test plan): a live match its own rules say is decided (the pad shows
+    // the winner, End match not tapped yet) is not abandoned — that wiped the result.
+    if (match.status === 'live') {
+      const refusal = decidedAbandonRefusal(await staleOutcomeOf(id).catch(() => null));
+      if (refusal) return res.status(refusal.status).json(refusal.body);
     }
 
     // SC-258: only a real knockout bracket match needs an advancing team on
@@ -4389,8 +4420,9 @@ export async function voidMatch(req: Request, res: Response) {
     // write so a refusal changes nothing.
     if (!withinVoidWindow(match)) {
       const deadline = voidDeadline(match);
+      // N-RWG3-2 (launch test plan): the date in India time and the app's style (it was the UTC day).
       return res.status(403).json({
-        error: `Matches can only be voided within ${VOID_WINDOW_DAYS} days of finishing. This one closed on ${deadline?.toDateString() ?? 'an earlier date'}.`,
+        error: `Matches can only be voided within ${VOID_WINDOW_DAYS} days of finishing. This one closed on ${deadline ? voidClosedOn(deadline) : 'an earlier date'}.`,
         code: 'VOID_WINDOW_CLOSED',
         void_deadline: deadline?.toISOString() ?? null,
       });

@@ -109,9 +109,11 @@ describe('PATCH /admin/reports/:id', () => {
   });
   test('the report records the action; the other open reports stay, marked actioned through it', () => {
     const f = R();
-    expect(f).toMatch(/update\(resolution\('removed'\)\)\.eq\('id', id\)/);
+    // N-R5-ops-2: Remove claims the report only while it is still open, before touching the content.
+    expect(f).toMatch(/update\(resolution\('removed'\)\)\s*\.eq\('id', id\)\s*\.eq\('resolved', false\)/);
     expect(f).toMatch(/update\(\{ \.\.\.resolution\('removed'\), actioned_via: id \}\)[\s\S]*?\.eq\('resolved', false\)\s*\.neq\('id', id\)/);
-    expect(f).toMatch(/update\(resolution\('dismissed'\)\)\.eq\('id', id\)/);
+    // N-RWD3-13: the dismiss is now chained over lines and only touches an open report.
+    expect(f).toMatch(/update\(resolution\('dismissed'\)\)\s*\.eq\('id', id\)\s*\.eq\('resolved', false\)/);
     expect(f).toMatch(/resolved_action \}\)/); // resolved, resolved_at, resolved_by, resolved_action
   });
   test('restore: only a moderator removal; its reports read "restored"; both are audited', () => {

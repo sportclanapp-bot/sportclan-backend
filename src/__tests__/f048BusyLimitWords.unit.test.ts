@@ -39,7 +39,10 @@ it('the scoring budget and the per-address ceiling use the same words', () => {
   const lim = fs.readFileSync(path.join(__dirname, '../utils/budgetLimiters.ts'), 'utf8');
   expect(lim).toMatch(/handler: \(req, res, next, options\) => limitReply\(budgetUserId\(req\) \? 'account' : 'connection'\)/);
   expect(lim).toMatch(/handler: limitReply\('account'\)/);
+  // The per-address ceiling is built beside the budgets (F001, makeIpCeilingLimiter) and answers in
+  // its own per-connection words (IP_LIMIT, "…from this connection.").
   const idx = fs.readFileSync(path.join(__dirname, '../index.ts'), 'utf8');
-  const ceiling = idx.slice(idx.indexOf('const ipCeilingLimiter'), idx.indexOf('app.use(globalLimiter)'));
-  expect(ceiling).toMatch(/handler: limitReply\('connection'\)/);
+  expect(idx).toContain("const ipCeilingLimiter = makeIpCeilingLimiter(");
+  const ceil = lim.slice(lim.indexOf('export function makeIpCeilingLimiter'), lim.indexOf('export function makeBudgetLimiters'));
+  expect(ceil).toMatch(/handler: limitReply\('ipc'\)/);
 });

@@ -989,8 +989,16 @@ export async function followUser(req: Request, res: Response) {
   // SC-205: notify the followed user of a GENUINELY NEW follow. A 23505 means the
   // follow already existed (re-follow spam) → no duplicate notification. Routes to
   // the follower's profile (user_id). Fire-and-forget — never blocks the follow.
+  // N-RWG4-5 (launch test plan): unfollow deletes the row, so unfollow → follow
+  // passed that check every time and sent a fresh "New follower" each round. One
+  // a day per follower now: the claim (UNIQUE user_id, job_type, sent_on) fails
+  // on a repeat, as the match reminders' does.
   if (!error) {
     void (async () => {
+      const { error: claimErr } = await supabase
+        .from('notification_sends')
+        .insert({ user_id: target, job_type: `follow:${userId}`, sent_on: istDay() });
+      if (claimErr) return; // already told today (or the claim failed: say nothing rather than twice)
       const { data: me } = await supabase
         .from('users').select('name, username').eq('id', userId).maybeSingle();
       const name = (me?.name || me?.username || 'Someone') as string;

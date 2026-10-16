@@ -12,7 +12,7 @@ const ROUTES = path.join(__dirname, '..', 'routes');
 // file → routes that may answer without a token (method path).
 const ALLOWED: Record<string, string[]> = {
   'auth.routes.ts': ['*'], // sign-in, sign-up, refresh, reset — pre-auth by nature
-  'app.routes.ts': ['GET /version'],
+  'app.routes.ts': ['GET /version', 'GET /get-update'], // F025: a static page an old app's Update opens in the browser
   'cities.routes.ts': ['*'],
   'sports.routes.ts': ['*'],
   'gifts.routes.ts': ['GET /catalogue'],

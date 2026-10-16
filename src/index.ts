@@ -63,6 +63,7 @@ import {
   runPublishScheduledPosts,
   runSmartMatchNotifications,
   runMatchReminderSweep,
+  REMINDER_TICK_MS,
   runReEngagement,
   runWeeklyDigest,
 } from './controllers/features.controller';
@@ -372,9 +373,11 @@ app.listen(PORT, () => {
   void runPublish();
   setInterval(runPublish, 2 * 60 * 1000).unref();
 
-  // 15-min pre-match reminder sweep. Runs every 5 min so a participant NOT in the
-  // app still gets reminded (the app-open trigger alone missed them). Idempotent
-  // via notification_sends, so a double-fire (restart / multi-instance) is safe.
+  // 15-min pre-match reminder sweep. Runs every minute (F007: every 5 made a
+  // reminder 10–15 min early) so a participant NOT in the app still gets reminded
+  // (the app-open trigger alone missed them), and at boot, which catches up the
+  // reminders missed while the server slept. Idempotent via notification_sends,
+  // so a double-fire (restart / multi-instance / POST /jobs/match-reminders) is safe.
   const runReminders = async () => {
     try {
       const { sent } = await runMatchReminderSweep();
@@ -384,7 +387,7 @@ app.listen(PORT, () => {
     }
   };
   void runReminders();
-  setInterval(runReminders, 5 * 60 * 1000).unref();
+  setInterval(runReminders, REMINDER_TICK_MS).unref();
 
   // SC-441 (M3) · the two match sweepers, hourly.
   //

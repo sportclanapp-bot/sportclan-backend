@@ -131,10 +131,10 @@ describe('notifications and schedules', () => {
   test('APPROVAL-NOTIFS (1f874c1): answering a play invite tells its sender (tournament entries: phase3TournamentsB08 › entry_requested)', () => {
     expect(fnBody('controllers/invites.controller.ts', 'respondToInvite')).toMatch(/userId: data\.sender_id,\s*type: accepted \? 'invite_accepted' : 'invite_declined',/);
   });
-  test('Z-2a (a60b7e1): the 15-minute reminder runs on a 5-minute in-process timer, not only from GET /users/me', () => {
+  test('Z-2a (a60b7e1): the 15-minute reminder runs on an in-process timer (every minute since F007), not only from GET /users/me', () => {
     const idx = code('index.ts');
     expect(idx).toMatch(/const \{ sent \} = await runMatchReminderSweep\(\);/);
-    expect(idx).toContain('setInterval(runReminders, 5 * 60 * 1000).unref();');
+    expect(idx).toContain('setInterval(runReminders, REMINDER_TICK_MS).unref();');
   });
   test('SC-316 (8d21c22): badges are evaluated on the events that earn them', () => {
     for (const f of ['controllers/community.controller.ts', 'controllers/users.controller.ts', 'controllers/gifts.controller.ts', 'controllers/tournaments.controller.ts', 'controllers/matches.controller.ts']) {

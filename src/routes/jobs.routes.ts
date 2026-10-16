@@ -38,8 +38,10 @@ router.post('/smart-match', async (_req, res) => {
   }
 });
 
-// Fire the 15-min pre-match reminder sweep on demand (also runs on a 5-min
-// in-process interval). Idempotent via notification_sends.
+// Fire the 15-min pre-match reminder sweep on demand (also runs every minute in
+// process). Idempotent via notification_sends. F007: an outside scheduler calling
+// this every few minutes keeps a free instance awake, and each call also catches
+// up reminders missed while it slept.
 router.post('/match-reminders', async (_req, res) => {
   try {
     return res.json(await runMatchReminderSweep());

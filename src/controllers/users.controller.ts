@@ -1,4 +1,6 @@
 import { inBackground } from '../utils/background';
+import { matchReminderBody } from '../utils/matchReminder';
+import { formatTimeIst } from '../utils/scheduleFixtures';
 import { matchNamesForNotice } from '../utils/matchNames';
 import { inDisplayOrder, orderedSportIds, profileSportIds } from '../utils/userSports';
 import { deleteMatching } from '../utils/softDelete';
@@ -86,22 +88,21 @@ async function runSmartNotifications(userId: string): Promise<void> {
 
     for (const p of soonMatches) {
       const m: any = p.match;
-      // Have we already inserted a reminder for this user+match? Check notifs.
-      const { data: existing } = await supabase
-        .from('notifications')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('type', 'match_reminder')
-        .contains('data', { matchId: m.id })
-        .maybeSingle();
-      if (existing) continue;
+      // F007 (launch test plan): the same claim as the reminder sweep
+      // (features.controller), so the two never both remind — this looked for a
+      // notification row the sweep doesn't check, and said "in 15 minutes"
+      // whatever was left.
+      const { error: claimErr } = await supabase
+        .from('notification_sends')
+        .insert({ user_id: userId, job_type: `match_reminder:${m.id}`, sent_on: String(m.scheduled_at).slice(0, 10) });
+      if (claimErr) continue;
       // SC-226: gate on the Match-updates toggle (was a direct insert bypass).
       await notifyUser({
         userId,
         type: 'match_reminder',
         title: 'Match reminder',
         // Audit #89: the teams' names (a team match stores none — it read "null vs null").
-        body: `\u23F0 ${(await matchNamesForNotice(m)) ?? 'Your match'} starts in 15 minutes!`,
+        body: matchReminderBody(await matchNamesForNotice(m), m.scheduled_at, now, formatTimeIst(m.scheduled_at)),
         data: { matchId: m.id, screen: 'MatchDetail' },
       });
     }

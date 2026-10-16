@@ -1597,6 +1597,23 @@ async function staleOutcomeOf(id: string): Promise<{ side: 'A' | 'B' | null } | 
   return staleMatchOutcome(slug, cs, m as never, (lineup ?? []) as Array<{ team_side: string }>);
 }
 
+/**
+ * N-RWG2-2 (launch test plan): the answer to Abandon on a match that is already decided
+ * (a side has won it, or its rules' draw), or null when it may be abandoned.
+ */
+export function decidedAbandonRefusal(outcome: { side: 'A' | 'B' | null } | null): { status: number; body: { error: string; code: string } } | null {
+  if (!outcome) return null;
+  return {
+    status: 409,
+    body: {
+      error: outcome.side
+        ? 'This match already has a winner. Tap End match to save the result, or undo the last point first.'
+        : 'This match is already decided as a draw. Tap End match to save it, or undo the last point first.',
+      code: 'MATCH_DECIDED',
+    },
+  };
+}
+
 /** F191: end a decided stale match as its creator would (the full completion: ratings, records, bracket). */
 async function completeStale(id: string, outcome: { side: 'A' | 'B' | null }): Promise<boolean> {
   const { data: m } = await supabase.from('matches').select('id, created_by, team_a_id, team_b_id').eq('id', id).maybeSingle();
@@ -2902,6 +2919,12 @@ export async function abandonMatch(req: Request, res: Response) {
     }
     if (match.status !== 'scheduled' && match.status !== 'live') {
       return res.status(409).json({ error: 'Only a scheduled or live match can be abandoned.' });
+    }
+    // N-RWG2-2 (launch test plan): a live match its own rules say is decided (the pad shows
+    // the winner, End match not tapped yet) is not abandoned — that wiped the result.
+    if (match.status === 'live') {
+      const refusal = decidedAbandonRefusal(await staleOutcomeOf(id).catch(() => null));
+      if (refusal) return res.status(refusal.status).json(refusal.body);
     }
 
     // SC-258: only a real knockout bracket match needs an advancing team on

@@ -135,6 +135,9 @@ export async function heartbeatHub(req: Request, res: Response) {
     const { id } = req.params;
     const deviceId = deviceIdOf(req);
     if (!deviceId) return res.status(400).json({ error: 'A device id is required.' });
+    // E-063 (Round 6): someone removed as a co-organiser (or who left) no longer runs the desk. Their
+    // phone kept heartbeating, so the lease never went quiet and the other organisers were locked out.
+    if (!(await mustOrganise(id!, userId, res))) return;
     const beat = await heartbeatHubLease(id!, userId, deviceId);
     if (!beat.ok) {
       // Not ours any more. Say so rather than quietly reinstating it — the hub
@@ -175,7 +178,10 @@ export async function takeOverHub(req: Request, res: Response) {
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
     if (!reason) return res.status(400).json({ error: 'A reason is required to take over a hub.' });
 
-    const result = await takeOverHubLease(id!, userId, deviceId, reason, { force: !!req.body?.force });
+    // E-063 (Round 6): a hub held by someone who is no longer an organiser can be taken straight away.
+    const current = await getHubLease(id!);
+    const holderGone = !!current && current.user_id !== userId && !(await isTournamentOrganiser(id!, current.user_id));
+    const result = await takeOverHubLease(id!, userId, deviceId, reason, { force: !!req.body?.force, holderGone });
     if (!result.ok) {
       return res.status(409).json({
         error: 'That phone is still running this tournament. Ask them to hand over from their own phone.',

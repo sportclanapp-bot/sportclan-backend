@@ -810,6 +810,15 @@ export async function adminRemoveTeam(req: Request, res: Response) {
   try {
     const r = await removeTeamAsModerator(String(req.params.id), req.userId!, null);
     if ('status' in r) return res.status(r.status).json(r.body);
+    // E-008 (Round 6): the team is gone, so its open reports are handled — the
+    // report path resolves them; this direct path left them in the queue.
+    const { error } = await supabase
+      .from('content_reports')
+      .update({ resolved: true, resolved_at: new Date().toISOString(), resolved_by: req.userId!, resolved_action: 'removed' })
+      .eq('target_type', 'team')
+      .eq('target_id', String(req.params.id))
+      .eq('resolved', false);
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     return res.json({ ok: true, removed: true });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed to remove team' });
@@ -821,6 +830,14 @@ export async function adminRestoreTeam(req: Request, res: Response) {
   try {
     const restored = await restoreRemovedTeam(String(req.params.id));
     if (!restored) return res.status(409).json({ error: 'Only a team a moderator removed can be restored.', code: 'NOT_REMOVED' });
+    // E-008 (Round 6): as the report path does, the reports that removed it read 'restored'.
+    const { error } = await supabase
+      .from('content_reports')
+      .update({ resolved: true, resolved_at: new Date().toISOString(), resolved_by: req.userId!, resolved_action: 'restored' })
+      .eq('target_type', 'team')
+      .eq('target_id', String(req.params.id))
+      .eq('resolved_action', 'removed');
+    if (error) return res.status(500).json({ error: sanitizeError(error) });
     await logAdminAction(req.userId!, 'restore_team', 'team', String(req.params.id), null);
     return res.json({ ok: true, restored: true });
   } catch (err: any) {

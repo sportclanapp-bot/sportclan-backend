@@ -41,7 +41,7 @@ export async function applyReferral(req: Request, res: Response) {
   // Look up the referrer.
   const { data: referrer } = await supabase
     .from('users')
-    .select('id, name')
+    .select('id, name, referred_by')
     .eq('referral_code', normalised)
     .maybeSingle();
   if (!referrer) {
@@ -49,6 +49,14 @@ export async function applyReferral(req: Request, res: Response) {
   }
   if (referrer.id === userId) {
     return res.status(400).json({ error: 'Cannot use your own code' });
+  }
+  // E-016 (Round 6): this friend joined with YOUR code, so you invited them —
+  // using theirs back paid both sides a second time (4 rewards for one pair).
+  if ((referrer as { referred_by?: string | null }).referred_by === userId) {
+    return res.status(400).json({
+      error: 'This friend joined with your code, so you can’t use theirs.',
+      code: 'REFERRAL_CIRCULAR',
+    });
   }
 
   const { data: me } = await supabase

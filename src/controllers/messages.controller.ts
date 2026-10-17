@@ -1255,21 +1255,15 @@ export async function forwardMessage(req: Request, res: Response) {
   }
 
   // SC-94 TARGET: the caller must belong to EVERY target chat — no partial
-  // inject. Also respect blocks on a DM target (mirrors getOrCreateDM).
+  // inject. E-133 (Round 6): a DM target gets sendMessage's own gate — the block
+  // AND "Who can message you"; forwarding checked the block only, so it got a
+  // message into a DM whose owner had set "No one" (or "Followers").
   for (const chatId of chat_ids as string[]) {
     if (!(await isChatParticipant(chatId, userId))) {
       return res.status(403).json({ error: 'Not a member of a target chat' });
     }
-    const { data: others } = await supabase
-      .from('chat_participants')
-      .select('user_id')
-      .is('left_at', null)
-      .eq('chat_id', chatId)
-      .neq('user_id', userId);
-    const otherIds = (others ?? []).map((o) => o.user_id as string);
-    if (otherIds.length === 1 && (await isBlockedBetween(userId, otherIds[0]))) {
-      return res.status(403).json({ error: 'You can’t message this user.' });
-    }
+    const gate = await dmSendGate(chatId, userId);
+    if (gate) return res.status(gate.status).json({ error: gate.error });
   }
 
   const inserts = (chat_ids as string[]).map((chatId) => ({

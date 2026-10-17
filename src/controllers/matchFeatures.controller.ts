@@ -362,6 +362,11 @@ export async function setMatchAvailability(req: Request, res: Response) {
     if (!(await viewerCanPlay(m, userId, (parts ?? []).map((p) => p.user_id as string)))) {
       return res.status(403).json({ error: 'Only a player in this match can answer.', code: 'NOT_A_PLAYER' });
     }
+    // E-052 (Round 6): team_id was stored as sent — any team's id, and a
+    // non-id was a 500. It is one of this match's two teams, or left out.
+    if (team_id != null && team_id !== m.team_a_id && team_id !== m.team_b_id) {
+      return res.status(400).json({ error: 'team_id must be one of this match’s teams.', code: 'BAD_TEAM' });
+    }
 
     // Phase 3: for a singles match this row IS the opponent's answer to the
     // challenge. Read the previous answer so a repeat tap doesn't re-notify.

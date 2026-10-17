@@ -11,6 +11,7 @@ import { generateAccessTokenAt } from '../utils/jwt';
 import { denySessions } from '../utils/sessionDeny';
 import { sessionLabel } from '../utils/sessionDevice';
 import { isOlderApp, updateRequired } from '../utils/clientVersion';
+import { handGroupsToHeirsOnDelete } from '../utils/chatHeirsOnDelete';
 
 // POST /account/delete — FINAL delete: immediate PII scrub + login lockout,
 // hard-purged after a 30-day retention window.
@@ -146,6 +147,9 @@ export async function deleteAccount(req: Request, res: Response) {
       // ignore captaincy-transfer failures
     }
   }
+
+  // N-R6-13 (Round 6): and the groups it was the only admin of get one (the leave rule, SC-301).
+  try { await handGroupsToHeirsOnDelete(userId); } catch { /* best-effort, like the captaincy above */ }
 
   return res.json({
     success: true,

@@ -116,10 +116,11 @@ describe('F9 · deleted accounts', () => {
 
 describe('F14 · last-admin guard', () => {
   test('counts live, unsuspended admins only', async () => {
-    results = [{ data: { id: 'u2', is_admin: true, deleted_at: null } }, { count: 1 }];
+    // E-004 (Round 6): the count now leaves out the target, so "no other admin" is 0.
+    results = [{ data: { id: 'u2', is_admin: true, deleted_at: null } }, { count: 0 }];
     const r = await call(adminUpdateUser, { params: { id: 'u2' }, body: { is_admin: false } });
     expect(r.body).toEqual({ error: 'Cannot remove the last remaining admin' });
-    expect(queries[1].join(' ')).toMatch(/eq:\["is_admin",true\].*is:\["deleted_at",null\].*is:\["suspended_at",null\]/);
+    expect(queries[1].join(' ')).toMatch(/is:\["deleted_at",null\].*is:\["suspended_at",null\].*eq:\["is_admin",true\]/);
   });
 });
 

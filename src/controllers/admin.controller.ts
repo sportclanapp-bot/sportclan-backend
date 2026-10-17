@@ -20,6 +20,8 @@ import { cleanTeamName } from './teams.controller';
 import { normalizeShortName } from '../utils/validation';
 import { detectProfanity } from '../utils/profanity';
 import { sendPushToTokens } from '../utils/expoPush';
+import { adminWhitelist } from '../middleware/admin.middleware';
+import { isUuid } from '../utils/uuid';
 
 /**
  * Admin controller · stats + moderation + broadcast.
@@ -575,6 +577,18 @@ const ADMIN_USER_FIELDS =
   'id, name, username, phone, email, is_admin, suspended_at, deleted_at, coin_balance, created_at';
 
 /**
+ * E-005 (Round 6): someone in the ADMIN_USER_IDS whitelist is an admin whatever
+ * users.is_admin says (isAdminUser checks the list first), but the list showed
+ * the column — no Admin badge, 'Make Admin' offered, and 'Remove Admin' said done
+ * while changing nothing. `is_admin` is now the server's answer, and
+ * `admin_by_settings` says the access comes from the server's settings.
+ */
+export function withAdminSource<T extends { id?: string; is_admin?: boolean | null }>(u: T): T & { is_admin: boolean; admin_by_settings: boolean } {
+  const bySettings = !!u.id && adminWhitelist().includes(u.id);
+  return { ...u, is_admin: bySettings || u.is_admin === true, admin_by_settings: bySettings };
+}
+
+/**
  * N-RWG1-12 (launch test plan): the search box says 'Search name, @username, or
  * phone…' and rows show '@username · +91 98765 43210', but the text went to one
  * ILIKE as typed, so '@name' and a spaced phone number found nobody. Now: the name
@@ -610,7 +624,7 @@ export async function adminListUsers(req: Request, res: Response) {
     if (q) query = query.or(adminUserSearchFilter(q)); // SC-237: injection-safe; N-RWG1-12: '@name' and spaced numbers
     const { data, error, count } = await query;
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
-    return res.json({ users: data ?? [], ...pageMeta(count, p) });
+    return res.json({ users: ((data ?? []) as Array<{ id?: string; is_admin?: boolean }>).map(withAdminSource), ...pageMeta(count, p) });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed to list users' });
   }
@@ -658,15 +672,30 @@ export async function adminUpdateUser(req: Request, res: Response) {
   }
   // Guard: don't remove admin from the LAST remaining admin (ADM-002) — that
   // would leave the app with no one able to reach the admin dashboard.
+  // E-005 (Round 6): a whitelisted admin's access is in the server's settings;
+  // clearing the column would say done and change nothing.
+  if (patch.is_admin === false && adminWhitelist().includes(String(id))) {
+    return res.status(409).json({
+      error: 'This admin is set in the server settings, so their access can’t be removed here.',
+      code: 'ADMIN_BY_SETTINGS',
+    });
+  }
   if (patch.is_admin === false && existing.is_admin) {
-    const { count } = await supabase
+    // E-004 (Round 6): the question is whether an admin OTHER than the target
+    // stays. It counted the target too, so with one active admin and one
+    // suspended admin, removing the suspended one was refused as "the last".
+    // E-005: whitelisted admins count as well.
+    const others = adminWhitelist().filter((w) => w !== id && isUuid(w));
+    let q = supabase
       .from('users')
       .select('id', { count: 'exact', head: true })
-      .eq('is_admin', true)
+      .neq('id', id)
       // Phase 3 B12-F14: only admins who can still sign in count.
       .is('deleted_at', null)
       .is('suspended_at', null);
-    if ((count ?? 0) <= 1) {
+    q = others.length > 0 ? q.or(`is_admin.eq.true,id.in.(${others.join(',')})`) : q.eq('is_admin', true);
+    const { count } = await q;
+    if ((count ?? 0) < 1) {
       return res.status(400).json({ error: 'Cannot remove the last remaining admin' });
     }
   }
@@ -700,7 +729,7 @@ export async function adminUpdateUser(req: Request, res: Response) {
     if (typeof patch.is_admin === 'boolean') {
       await logAdminAction(req.userId!, patch.is_admin ? 'grant_admin' : 'revoke_admin', 'user', id, null);
     }
-    return res.json({ user: data });
+    return res.json({ user: data ? withAdminSource(data as { id?: string; is_admin?: boolean }) : data });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Failed to update user' });
   }

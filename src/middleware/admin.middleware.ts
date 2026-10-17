@@ -20,13 +20,17 @@ import { supabase } from '../utils/supabase';
  * ADMIN_USER_IDS whitelist — so a whitelisted admin (@scadmin970_qa) passed
  * every admin route but never saw the Admin screen, or its "Test Sentry" button.
  */
-export async function isAdminUser(userId: string): Promise<boolean> {
-  // 1. ENV whitelist
-  const whitelist = (process.env.ADMIN_USER_IDS || '')
+/** E-005 (Round 6): the ADMIN_USER_IDS whitelist, read once per call (tests change the env). */
+export function adminWhitelist(): string[] {
+  return (process.env.ADMIN_USER_IDS || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  if (whitelist.includes(userId)) return true;
+}
+
+export async function isAdminUser(userId: string): Promise<boolean> {
+  // 1. ENV whitelist
+  if (adminWhitelist().includes(userId)) return true;
 
   // 2. DB lookup (graceful on missing column)
   try {

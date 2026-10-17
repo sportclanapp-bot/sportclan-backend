@@ -225,7 +225,7 @@ describe('F11 · your own other phone is not "someone else"', () => {
   });
   test('every caller passes the user, and the claim 409 says it too', () => {
     const m = src('controllers/matches.controller.ts');
-    expect(m.match(/leaseRefusal\(verdict, userId\)/g)).toHaveLength(2);
+    expect(m.match(/leaseRefusal\(verdict, userId\)/g)).toHaveLength(3); // E-111: abandon checks the lease too
     expect(m).toContain("out.heldBy?.user_id === userId ? 'Your other phone is scoring this match.'");
   });
 });

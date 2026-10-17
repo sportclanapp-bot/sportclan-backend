@@ -97,7 +97,7 @@ describe('3 · delete for everyone, at any age', () => {
   const DAY = 86400000;
   test.each([[true], [false], [undefined]])('a day-old message with for_everyone=%s is blanked for everyone', async (forEveryone) => {
     mockNext = (q) => {
-      if (q[0] === 'from:messages' && has(q, 'select:["sender_id, created_at"]')) {
+      if (q[0] === 'from:messages' && has(q, 'select:["sender_id, created_at, is_system"]')) {
         return { data: { sender_id: ME, created_at: new Date(Date.now() - DAY).toISOString() } };
       }
       if (q[0] === 'from:messages' && has(q, 'update:')) return { data: [{ id: MSG }] };

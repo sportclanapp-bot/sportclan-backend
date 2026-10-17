@@ -2864,7 +2864,9 @@ export async function getTournamentChat(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const { id } = req.params;
+    // E-079 (Round 6): one chat for a tournament and all its events — an event's page opens the
+    // tournament's chat (it made a second chat for the event).
+    const id = await rootTournamentId(String(req.params.id));
     const { data: tournament } = await supabase
       .from('tournaments')
       .select('id, name, sport_metadata, created_by')

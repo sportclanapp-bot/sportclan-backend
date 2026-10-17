@@ -22,7 +22,7 @@ import { selectAllIn } from './selectAll';
 import { joinChat, leaveChat } from './chatMembership';
 import type { Response } from 'express';
 import { supabase } from './supabase';
-import { familyIds } from './tournamentEvents';
+import { familyIds, rootTournamentId } from './tournamentEvents';
 
 export interface ChatAudience {
   organisers: Set<string>;
@@ -85,24 +85,46 @@ export function planChatSync(
   return { add, promote, remove };
 }
 
+/**
+ * E-079 (Round 6): the chats of a tournament made of events. Its one chat is the tournament's (the
+ * parent's), but every trigger synced the chat of the id it was called with — an event's own, which
+ * normally doesn't exist — so approving, withdrawing or rejecting in an event left the tournament's
+ * chat as it was. Opening the chat from an event's page also made a second chat for that event; any
+ * such chat (made before this fix) is kept in step too.
+ */
+async function familyChatIds(rootId: string): Promise<string[]> {
+  const ids = await familyIds(rootId);
+  const { data } = await supabase.from('tournaments').select('id, sport_metadata').in('id', ids);
+  const rows = (data ?? []) as Array<{ id: string; sport_metadata: Record<string, unknown> | null }>;
+  // The tournament's own chat first.
+  rows.sort((a, b) => (a.id === rootId ? -1 : b.id === rootId ? 1 : 0));
+  const chats = rows.map((r) => r.sport_metadata?._chat_id).filter((c): c is string => typeof c === 'string');
+  return [...new Set(chats)];
+}
+
 /** Make the tournament's chat equal its audience. Best-effort; never throws. */
 export async function syncTournamentChatMembers(tournamentId: string): Promise<{ added: number; removed: number } | null> {
   try {
-    const chatId = await tournamentChatId(tournamentId);
-    if (!chatId) return null;
-    const audience = await tournamentChatAudience(tournamentId);
+    const rootId = await rootTournamentId(tournamentId); // E-079: an event's chat is its tournament's
+    const chatIds = await familyChatIds(rootId);
+    if (chatIds.length === 0) return null;
+    const audience = await tournamentChatAudience(rootId);
     if (!audience) return null;
-    const { data: current, error } = await supabase
-      .from('chat_participants').select('user_id, role').is('left_at', null).eq('chat_id', chatId);
-    if (error) return null;
-    const plan = planChatSync(audience, (current ?? []) as Array<{ user_id: string; role: string }>);
-    // 098: joining clears left_at on a returning member's row; nobody is deleted.
-    if (plan.add.length > 0) await joinChat(chatId, plan.add);
-    if (plan.promote.length > 0) {
-      await supabase.from('chat_participants').update({ role: 'admin' }).eq('chat_id', chatId).in('user_id', plan.promote);
+    let added = 0; let removed = 0;
+    for (const chatId of chatIds) {
+      const { data: current, error } = await supabase
+        .from('chat_participants').select('user_id, role').is('left_at', null).eq('chat_id', chatId);
+      if (error) return null;
+      const plan = planChatSync(audience, (current ?? []) as Array<{ user_id: string; role: string }>);
+      // 098: joining clears left_at on a returning member's row; nobody is deleted.
+      if (plan.add.length > 0) await joinChat(chatId, plan.add);
+      if (plan.promote.length > 0) {
+        await supabase.from('chat_participants').update({ role: 'admin' }).eq('chat_id', chatId).in('user_id', plan.promote);
+      }
+      if (plan.remove.length > 0) await leaveChat(chatId, plan.remove); // 098: soft leave
+      added += plan.add.length; removed += plan.remove.length;
     }
-    if (plan.remove.length > 0) await leaveChat(chatId, plan.remove); // 098: soft leave
-    return { added: plan.add.length, removed: plan.remove.length };
+    return { added, removed };
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('[tournament-chat] sync failed', tournamentId, e instanceof Error ? e.message : e);
@@ -115,8 +137,9 @@ export async function syncTournamentChatsForTeam(teamId: string): Promise<void> 
   try {
     const { data } = await supabase
       .from('tournament_entries').select('tournament_id').eq('team_id', teamId).eq('status', 'approved');
-    const ids = [...new Set((data ?? []).map((e) => e.tournament_id as string))];
-    for (const id of ids) await syncTournamentChatMembers(id);
+    // E-079: an entry in an event syncs its tournament's chat, once per tournament.
+    const roots = await Promise.all([...new Set((data ?? []).map((e) => e.tournament_id as string))].map((id) => rootTournamentId(id)));
+    for (const id of new Set(roots)) await syncTournamentChatMembers(id);
   } catch { /* best-effort */ }
 }
 

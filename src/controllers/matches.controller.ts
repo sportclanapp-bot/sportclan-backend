@@ -2935,6 +2935,13 @@ export async function abandonMatch(req: Request, res: Response) {
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can abandon' : 'Only the creator or umpire can abandon' });
     }
+    // E-111 (Round 6): abandoning ends the match (on a knockout fixture it
+    // decides who goes through), so it is a scoring write like complete and the
+    // toss — only the phone holding the pad, while somebody holds it.
+    {
+      const verdict = await checkLease(id, userId, deviceIdOf(req));
+      if (!verdict.ok) return res.status(409).json(leaseRefusal(verdict, userId));
+    }
     if (match.status !== 'scheduled' && match.status !== 'live') {
       return res.status(409).json({ error: 'Only a scheduled or live match can be abandoned.' });
     }

@@ -227,11 +227,17 @@ describe('Decision 18 · PATCH /matches/:id sets no result (B05-D1)', () => {
     const r = await call(updateMatch, { body: { status: 'completed' } });
     expect(r.statusCode).toBe(403);
   });
-  test('status "cancelled" still goes through, as do the other fields', async () => {
+  test('status "cancelled" still goes through (E-092: on its own, as a cancel)', async () => {
     mockNext = onMatch(matchRow());
-    const r = await call(updateMatch, { body: { status: 'cancelled', venue: 'Ground 2' } });
+    const r = await call(updateMatch, { body: { status: 'cancelled' } });
     expect(r.statusCode).toBe(200);
     expect(writes()[0].join()).toContain('"status":"cancelled"');
+  });
+  test('E-092: a cancel mixed with other fields is refused, nothing written', async () => {
+    mockNext = onMatch(matchRow());
+    const r = await call(updateMatch, { body: { status: 'cancelled', venue: 'Ground 2' } });
+    expect([r.statusCode, r.body.code]).toEqual([400, 'CANCEL_ALONE']);
+    expect(writes()).toHaveLength(0);
   });
   testWithOtherRepo('the app never calls this route with a result (its one call sends a fixture’s rules only, cricket gap 1)', () => {
     const calls = [...readOtherRepo('src/api/matches.ts').matchAll(/client\.patch[^(]*\(\s*`\/matches\/\$\{id\}`\s*,\s*([^)]*)\)/g)].map((m) => m[1]!.trim());

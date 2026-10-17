@@ -99,7 +99,8 @@ describe('SC-85 · a finished match’s status and teams are locked', () => {
     mockNext = onMatch(matchRow({ status: 'completed' }));
     const r = await call(updateMatch, { body: { status: 'cancelled' } });
     expect(r.statusCode).toBe(409);
-    expect(r.body.error).toBe('This match is already finished — its result and status are locked.');
+    // E-092 (Round 6): an edit that cancels is a cancel, so cancel's own words.
+    expect(r.body.error).toBe('This match is already finished and cannot be cancelled.');
     expect(writes()).toHaveLength(0);
   });
   test('K1-68b (b513648): a benign field (venue) on a completed match is still editable', async () => {

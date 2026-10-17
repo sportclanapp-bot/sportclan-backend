@@ -7,6 +7,8 @@
 type Q = string[];
 let mockLog: Q[] = [];
 let mockNext: (q: Q) => { data?: unknown; error?: unknown; count?: number | null } = () => ({ data: null, error: null });
+// Round 6: the hand-off now reads the scorer's account (suspended / deleted); here they are active.
+const mockActiveSigner = (q: string[]) => (q[0] === 'from:users' && q.some((c) => c.includes('suspended_at, deleted_at')) ? { data: { suspended_at: null, deleted_at: null } } : {});
 jest.mock('../utils/supabase', () => {
   const start = (head: string) => {
     const q: string[] = [head];
@@ -15,7 +17,7 @@ jest.mock('../utils/supabase', () => {
     for (const m of ['select', 'in', 'not', 'eq', 'neq', 'is', 'limit', 'update', 'delete', 'order', 'or', 'ilike', 'range', 'gte', 'gt', 'lt', 'lte', 'upsert', 'insert', 'filter', 'match', 'contains', 'overlaps', 'textSearch', 'returns', 'abortSignal', 'like', 'not', 'csv']) {
       chain[m] = jest.fn((...a: unknown[]) => { q.push(`${m}:${JSON.stringify(a)}`); return chain; });
     }
-    const done = () => ({ data: null, error: null, ...mockNext(q) });
+    const done = () => ({ data: null, error: null, ...mockNext(q), ...(mockActiveSigner(q).data && !mockNext(q).data ? mockActiveSigner(q) : {}) });
     chain.single = jest.fn(async () => { q.push('single'); return done(); });
     chain.maybeSingle = jest.fn(async () => { q.push('maybeSingle'); return done(); });
     chain.then = (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) => {

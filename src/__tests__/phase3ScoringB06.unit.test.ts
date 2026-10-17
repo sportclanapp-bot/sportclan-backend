@@ -9,6 +9,8 @@ import path from 'path';
 type Q = string[];
 let mockLog: Q[] = [];
 let mockNext: (q: Q) => { data?: unknown; error?: unknown; count?: number } = () => ({ data: null, error: null });
+// Round 6: the hand-off now reads the scorer's account (suspended / deleted); here they are active.
+const mockActiveSigner = (q: string[]) => (q[0] === 'from:users' && q.some((c) => c.includes('suspended_at, deleted_at')) ? { data: { suspended_at: null, deleted_at: null } } : {});
 jest.mock('../utils/supabase', () => {
   const start = (t: string) => {
     const q: string[] = [`from:${t}`];
@@ -19,7 +21,7 @@ jest.mock('../utils/supabase', () => {
     }
     chain.insert = jest.fn((row: unknown) => { q.push(`insert:${JSON.stringify(row)}`); return chain; });
     chain.then = (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) => {
-      try { return Promise.resolve(ok({ data: null, error: null, ...mockNext(q) })); } catch (e) { return bad ? bad(e) : Promise.reject(e); }
+      try { return Promise.resolve(ok({ data: null, error: null, ...mockNext(q), ...(mockActiveSigner(q).data && !mockNext(q).data ? mockActiveSigner(q) : {}) })); } catch (e) { return bad ? bad(e) : Promise.reject(e); }
     };
     return chain;
   };

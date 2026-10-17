@@ -117,6 +117,13 @@ export async function uploadHandoff(req: Request, res: Response) {
       }
       return res.status(refusal.status).json({ error: refusal.error, code: refusal.code });
     }
+    // Round 6: suspending or deleting an account ends its sign-ins but not its phone's signing
+    // key, and a code is good for a day — so a courier could still apply its play.
+    const { data: signer } = await supabase.from('users').select('suspended_at, deleted_at').eq('id', p.u).maybeSingle();
+    const s = signer as { suspended_at?: string | null; deleted_at?: string | null } | null;
+    if (!s || s.suspended_at || s.deleted_at) {
+      return res.status(403).json({ error: 'The person who scored this can no longer score on SportClan, so nothing was applied.', code: 'SCORER_INACTIVE' });
+    }
 
     // BUILD 2.5: the code says which rules the scorer's phone played by. The
     // rules are fixed once play starts, so a different set means a phone scoring

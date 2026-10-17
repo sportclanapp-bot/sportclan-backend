@@ -29,6 +29,7 @@ import { supabase } from '../utils/supabase';
 import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers, matchAudienceIds, matchFollowerIds } from '../utils/notify';
 import { isTournamentOrganiser, canOfficiateMatch, canDefault } from '../utils/tournamentAuth';
+import { familyLookupIds } from '../utils/tournamentEvents';
 import { blockedUserIds } from '../utils/blocks';
 import { upsertVenue, venueCityFor } from './venues.controller';
 
@@ -2518,10 +2519,13 @@ const TOURNAMENT_OFFICIATING_ROLES = ['umpire', 'referee', 'chief_referee', 'dep
 export async function selfOfficiateMode(match: SelfOfficiateMatch, userId: string): Promise<'assign' | 'offer' | 'none'> {
   if (match.tournament_id) {
     if (await isTournamentOrganiser(match.tournament_id, userId).catch(() => false)) return 'assign';
+    // E-066 / E-108 (Round 6): officials are kept on the tournament, so a fixture of one of its
+    // events looks there too (as isTournamentScorer and canDefault do).
+    const ids = await familyLookupIds(match.tournament_id);
     const { data: rows } = await supabase
       .from('tournament_officials')
       .select('role')
-      .eq('tournament_id', match.tournament_id)
+      .in('tournament_id', ids)
       .eq('user_id', userId)
       .in('role', TOURNAMENT_OFFICIATING_ROLES);
     return rows && rows.length > 0 ? 'assign' : 'none';

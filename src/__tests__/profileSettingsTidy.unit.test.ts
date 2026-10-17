@@ -18,7 +18,7 @@ import { officialCategoriesOf } from '../utils/officialCategories';
 let db = fakeDb();
 jest.mock('../utils/supabase', () => ({ get supabase() { return db.client; } }));
 jest.mock('../utils/testContent', () => ({ hideTestFor: jest.fn(async () => false), excludeTest: (q: unknown) => q, excludeTestEmbed: (q: unknown) => q }));
-jest.mock('../utils/blocks', () => ({ blockedUserIds: jest.fn(async () => new Set()), excludeIds: (q: unknown) => q }));
+jest.mock('../utils/blocks', () => ({ blockedUserIds: jest.fn(async () => new Set()), excludeIds: (q: unknown) => q, isBlockedBetween: jest.fn(async () => false) }));
 jest.mock('../utils/notify', () => ({ notifyUser: jest.fn(async () => undefined), notifyUnlessBlocked: jest.fn(async () => undefined), notifyUsers: jest.fn(async () => undefined), matchAudienceIds: jest.fn(async () => []) }));
 jest.mock('../utils/softDelete', () => ({ deleteMatching: jest.fn(async () => ({ ids: [], error: null })) }));
 jest.mock('../middleware/admin.middleware', () => ({ isAdminUser: jest.fn(async () => false) }));

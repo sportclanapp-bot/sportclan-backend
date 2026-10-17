@@ -2601,12 +2601,10 @@ export async function selfAssignUmpire(req: Request, res: Response) {
       .select('account_type')
       .eq('user_id', userId)
       .in('account_type', [...OFFICIATING_TYPES]);
-    if (!roles || roles.length === 0) {
-      return res.status(403).json({
-        error: 'Only umpires, referees and officials can officiate matches. Add the role in Edit profile.',
-        code: 'NOT_AN_UMPIRE',
-      });
-    }
+    const notAnUmpire = () => res.status(403).json({
+      error: 'Only umpires, referees and officials can officiate matches. Add the role in Edit profile.',
+      code: 'NOT_AN_UMPIRE',
+    });
 
     const { data: match } = await supabase
       .from('matches')
@@ -2614,6 +2612,12 @@ export async function selfAssignUmpire(req: Request, res: Response) {
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
+    // E-107 (Round 6): the account type is the gate for a casual match. On a tournament fixture
+    // the organiser decides who officiates: one of its officials (or an organiser) takes the seat
+    // whatever their account type; anyone else is refused below (ORGANISER_NAMES_OFFICIALS).
+    if (!roles?.length && !(match.tournament_id && (await selfOfficiateMode(match as SelfOfficiateMatch, userId)) === 'assign')) {
+      return notAnUmpire();
+    }
     if (match.voided_at || match.status === 'completed' || match.status === 'cancelled' || match.status === 'abandoned') {
       return res.status(409).json({ error: 'This match is no longer open for officiating.' });
     }

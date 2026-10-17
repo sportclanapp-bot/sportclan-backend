@@ -88,6 +88,24 @@ export function leaseRefusal(
     : { error: 'Someone else took over scoring this match.', code: 'LEASE_LOST' };
 }
 
+/**
+ * May this person take the lease over? Pure, so the rule is tested as it runs.
+ * Yes when nobody holds it, when it is STALE, or when its holder no longer may
+ * hold it (`holderGone`: E-063, Round 6 — a removed co-organiser's hub). `force`
+ * is the HOLDER moving it to another of their own phones: E-064 (Round 6) — it
+ * was honoured from anybody, so any organiser could take a live hub from the
+ * phone running it just by sending force:true.
+ */
+export function mayTakeOver(
+  existing: Pick<LeaseRow, 'user_id' | 'heartbeat_at'> | null,
+  userId: string,
+  opts: { force?: boolean; holderGone?: boolean } = {},
+  now = Date.now(),
+): boolean {
+  if (!existing || isStale(existing, now) || opts.holderGone) return true;
+  return !!opts.force && existing.user_id === userId;
+}
+
 export function makeLease<T extends LeaseRow>(table: string, idColumn: string) {
   async function get(id: string): Promise<T | null> {
     const { data } = await supabase.from(table).select('*').eq(idColumn, id).maybeSingle();
@@ -153,14 +171,15 @@ export function makeLease<T extends LeaseRow>(table: string, idColumn: string) {
   }
 
   /** Take it from someone else. Allowed when the current lease is STALE, or when
-   *  the holder hands over voluntarily (`force`). A reason is required and
-   *  recorded, because displacing someone mid-event must be explainable after. */
+   *  the holder hands over voluntarily (`force`, from the holder's own login —
+   *  see mayTakeOver). A reason is required and recorded, because displacing
+   *  someone mid-event must be explainable after. */
   async function takeOver(
-    id: string, userId: string, deviceId: string, reason: string, opts: { force?: boolean } = {},
+    id: string, userId: string, deviceId: string, reason: string, opts: { force?: boolean; holderGone?: boolean } = {},
   ): Promise<{ ok: true; lease: T } | { ok: false; code: 'LEASE_ACTIVE'; lease: T }> {
     const existing = await get(id);
     const nowIso = new Date().toISOString();
-    if (existing && !opts.force && !isStale(existing)) {
+    if (existing && !mayTakeOver(existing, userId, opts)) {
       return { ok: false, code: 'LEASE_ACTIVE', lease: existing };
     }
     const { data, error } = await supabase

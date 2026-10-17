@@ -29,5 +29,5 @@ export const heartbeatHubLease = (tournamentId: string, userId: string, deviceId
 export const releaseHubLease = (tournamentId: string, userId: string, deviceId: string) =>
   lease.release(tournamentId, userId, deviceId);
 export const takeOverHubLease = (
-  tournamentId: string, userId: string, deviceId: string, reason: string, opts: { force?: boolean } = {},
+  tournamentId: string, userId: string, deviceId: string, reason: string, opts: { force?: boolean; holderGone?: boolean } = {},
 ) => lease.takeOver(tournamentId, userId, deviceId, reason, opts);

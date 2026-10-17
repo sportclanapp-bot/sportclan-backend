@@ -153,14 +153,23 @@ export async function isPairingsArbiter(tournamentId: string, userId: string): P
  */
 export async function swissDeskPeople(tournamentId: string): Promise<string[]> {
   const ids = await familyLookupIds(tournamentId);
-  const [{ data: t }, { data: co }, { data: offs }] = await Promise.all([
+  const [organisers, { data: offs }] = await Promise.all([
+    tournamentOrganiserIds(tournamentId),
+    supabase.from('tournament_officials').select('user_id').in('tournament_id', ids).in('role', PAIRINGS_ROLES),
+  ]);
+  return [...new Set([...organisers, ...((offs ?? []) as Array<{ user_id: string }>).map((r) => r.user_id)])];
+}
+
+/** Round 6: a tournament's organisers — its creator and every co-organiser (an event's are its tournament's). */
+export async function tournamentOrganiserIds(tournamentId: string): Promise<string[]> {
+  const ids = await familyLookupIds(tournamentId);
+  const [{ data: t }, { data: co }] = await Promise.all([
     supabase.from('tournaments').select('created_by').eq('id', tournamentId).maybeSingle(),
     supabase.from('tournament_organisers').select('user_id').in('tournament_id', ids),
-    supabase.from('tournament_officials').select('user_id').in('tournament_id', ids).in('role', PAIRINGS_ROLES),
   ]);
   const people = new Set<string>();
   const creator = (t as { created_by?: string | null } | null)?.created_by;
   if (creator) people.add(creator);
-  for (const r of [...((co ?? []) as Array<{ user_id: string }>), ...((offs ?? []) as Array<{ user_id: string }>)]) people.add(r.user_id);
+  for (const r of (co ?? []) as Array<{ user_id: string }>) people.add(r.user_id);
   return [...people];
 }

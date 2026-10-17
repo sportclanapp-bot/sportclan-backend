@@ -8,6 +8,8 @@
 import { supabase } from './supabase';
 import { isTerminalMatchStatus } from './validation';
 import { checkResultAgainstPlay, resultWouldContradictPlay, sideFromSummary, sideOfTeam, type Side } from './resultCheck';
+import { notifyUsers } from './notify';
+import { tournamentOrganiserIds } from './tournamentAuth';
 
 export type DetectedBy = 'result_op' | 'events' | 'complete';
 
@@ -130,13 +132,13 @@ export async function recordUnsentPlayForFinalMatch(
 ): Promise<void> {
   const { data: match } = await supabase
     .from('matches')
-    .select('id, tournament_id, team_a_id, team_b_id, winner_team_id, score_summary')
+    .select('id, tournament_id, created_by, team_a_id, team_b_id, team_a_name, team_b_name, winner_team_id, score_summary')
     .eq('id', matchId)
     .maybeSingle();
   if (!match) return;
   const m = match as {
-    tournament_id: string | null; team_a_id: string | null; team_b_id: string | null;
-    winner_team_id: string | null; score_summary: unknown;
+    tournament_id: string | null; created_by: string | null; team_a_id: string | null; team_b_id: string | null;
+    team_a_name: string | null; team_b_name: string | null; winner_team_id: string | null; score_summary: unknown;
   };
 
   const { data: open } = await supabase
@@ -155,6 +157,18 @@ export async function recordUnsentPlayForFinalMatch(
     derived_summary: { unsent_actions: opCount },
     detected_by: 'events',
   });
+
+  // E-120 (Round 6): the scorer is told "The organiser has been told", but nobody was. Tell them:
+  // a tournament fixture's organisers, a casual match's creator. Ungated (match_decided), once per
+  // open argument (a second refusal returns above).
+  const told = m.tournament_id ? await tournamentOrganiserIds(m.tournament_id) : [m.created_by].filter((x): x is string => !!x);
+  const label = m.team_a_name && m.team_b_name ? `${m.team_a_name} vs ${m.team_b_name}` : 'A match';
+  await notifyUsers(told, {
+    type: 'match_decided',
+    title: `${label}: play not sent in time`,
+    body: `A scorer still had ${opCount} ${opCount === 1 ? 'action' : 'actions'} for this match after its result was recorded. They weren’t added. Check the result is right.`,
+    data: { matchId, screen: 'MatchDetail' },
+  }).catch(() => undefined);
 }
 
 

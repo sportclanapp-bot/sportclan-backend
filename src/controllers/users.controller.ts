@@ -21,7 +21,7 @@ import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/valid
 import { RESERVED_USERNAMES, EMAIL_RE, GENDERS, GENDER_ERROR, dobProblem, localAreaProblem, cleanLocalArea } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
-import { VALID_ACCOUNT_TYPES, isValidAccountType } from '../constants/accountTypes';
+import { VALID_ACCOUNT_TYPES, OFFICIATING_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
 import { istDate, istDay } from '../utils/appTime';
@@ -2088,7 +2088,8 @@ const REVIEW_UNGATED_TYPES = new Set([
 ]);
 // B16: an official (other sports) is gated like an umpire — reviewed only by
 // someone who played a match they officiated.
-const REVIEW_GATED_TYPES = new Set(['umpire', 'official', 'organiser']);
+// E-123 (Round 6): and the legacy 'referee', who still officiates (OFFICIATING_TYPES).
+const REVIEW_GATED_TYPES = new Set(['umpire', 'official', 'referee', 'organiser']);
 
 /** The reviewed user's account types (multi-type; legacy singular fallback). */
 async function reviewedUserTypes(reviewedId: string): Promise<string[]> {
@@ -2103,13 +2104,18 @@ async function reviewedUserTypes(reviewedId: string): Promise<string[]> {
   return u?.account_type ? [u.account_type] : ['player'];
 }
 
-/** SC-324 UMPIRE proof — the reviewer played in a match this user umpired. */
+/** SC-324 UMPIRE proof — the reviewer played in a match this user umpired.
+ *  E-122 (Round 6): a match that was played — completed and not voided, the
+ *  officiated count's rule (utils/officiated). A scheduled, cancelled or voided
+ *  match with them named was enough before. */
 async function playedUnderUmpire(reviewerId: string, umpireId: string): Promise<boolean> {
   const { data } = await supabase
     .from('match_participants')
-    .select('match_id, match:matches!inner(umpire_id)')
+    .select('match_id, match:matches!inner(umpire_id, status, voided_at)')
     .eq('user_id', reviewerId)
     .eq('match.umpire_id', umpireId)
+    .eq('match.status', 'completed')
+    .is('match.voided_at', null)
     .limit(1);
   return !!(data && data.length > 0);
 }
@@ -2158,7 +2164,7 @@ export async function submitReview(req: Request, res: Response) {
     } else if (hasGated) {
       // Umpire / organiser — must have a real in-app relationship.
       let eligible = false;
-      if (types.includes('umpire') || types.includes('official')) eligible = await playedUnderUmpire(userId, id);
+      if (types.some((t) => (OFFICIATING_TYPES as readonly string[]).includes(t))) eligible = await playedUnderUmpire(userId, id);
       if (!eligible && types.includes('organiser')) {
         eligible = await playedInTournamentOrganisedBy(userId, id);
       }

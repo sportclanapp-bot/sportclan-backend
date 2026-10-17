@@ -1137,6 +1137,11 @@ export async function createComment(req: Request, res: Response) {
     const parentRow = await commentForWrite(parent_id);
     if (!parentRow || parentRow.post_id !== id) return res.status(404).json({ error: 'Comment not found' });
     if (parentRow.deleted) return res.status(410).json(commentGone(parentRow));
+    // E-146 (Round 6): a reply goes to the comment's author too (they are told
+    // and see it), so a block with THEM stops it — as reacting to their comment does.
+    if (await isBlockedBetween(userId, parentRow.author_id)) {
+      return res.status(403).json({ error: 'You can’t reply to this comment.', code: 'BLOCKED' });
+    }
   }
 
   // SC-130: idempotent comment. With a key → insert-first (unique index dedups a

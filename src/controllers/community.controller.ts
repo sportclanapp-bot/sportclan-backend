@@ -1398,8 +1398,18 @@ export async function reportContent(req: Request, res: Response) {
     if (wall?.deleted) return res.status(410).json(postGone(wall));
     exists = !!t; ownerId = t?.author_id ?? null;
   } else if (resolvedType === 'message') {
-    const { data: t } = await supabase.from('messages').select('sender_id').eq('id', resolvedId).maybeSingle();
-    exists = !!t; ownerId = (t as { sender_id?: string } | null)?.sender_id ?? null;
+    const { data: t } = await supabase.from('messages').select('sender_id, chat_id').eq('id', resolvedId).maybeSingle();
+    // E-151 (Round 6): only someone who is or was in that chat saw the message,
+    // so only they can report it — anyone holding an id put a private chat's
+    // text in front of the moderators. A member who has left still can (the
+    // row stays, 098), and a block never stops a report (SC-241 audit).
+    const chatId = (t as { chat_id?: string } | null)?.chat_id;
+    let wasInChat = false;
+    if (chatId) {
+      const { data: seat } = await supabase.from('chat_participants').select('id').eq('chat_id', chatId).eq('user_id', userId).limit(1);
+      wasInChat = (seat ?? []).length > 0;
+    }
+    exists = !!t && wasInChat; ownerId = (t as { sender_id?: string } | null)?.sender_id ?? null;
   } else if (resolvedType === 'team') {
     // N-RWG2-9: a gone team (disbanded, or removed already) can't be reported;
     // a tournament entry's hidden team isn't a team anyone sees. Its captain

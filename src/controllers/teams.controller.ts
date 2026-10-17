@@ -897,7 +897,12 @@ export async function unbanTeamMember(req: Request, res: Response) {
   if (!(await isTeamManager(id, userId))) {
     return res.status(403).json({ error: 'Only the captain or a co-captain can undo a removal' });
   }
-  await supabase.from('team_bans').delete().eq('team_id', id).eq('user_id', targetUserId);
+  // E-024 (Round 6): it answered "unbanned" for someone who was never removed
+  // (B07-F22's removal fix, the other way round). Now 404, and the lifted ban is
+  // archived with who lifted it (audit #23).
+  const del = await deleteMatching('team_bans', (q) => q.eq('team_id', id).eq('user_id', targetUserId), userId, 'removal undone by a team manager');
+  if (del.error) return res.status(500).json({ error: sanitizeError({ message: del.error }) });
+  if (del.ids.length === 0) return res.status(404).json({ error: 'This person isn’t removed from the team.', code: 'NOT_BANNED' });
   return res.json({ unbanned: true });
 }
 

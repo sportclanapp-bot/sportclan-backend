@@ -800,6 +800,12 @@ export async function removeMember(req: Request, res: Response) {
   if (!participant || participant.role !== 'admin') {
     return res.status(403).json({ error: 'Only admins can remove members' });
   }
+  // E-124 (Round 6): an admin "removing" themselves skipped Leave group's
+  // hand-over (SC-301: the next admin is chosen) and its empty-group delete,
+  // leaving a group nobody could manage. Leaving goes through Leave group.
+  if (memberId === userId) {
+    return res.status(400).json({ error: 'To leave this group, use Leave group.', code: 'USE_LEAVE_GROUP' });
+  }
   // B09-F6: removing someone who isn't there isn't a success.
   if (!(await isActiveMember(id, memberId))) {
     return res.status(404).json({ error: 'Not a member of this group' });

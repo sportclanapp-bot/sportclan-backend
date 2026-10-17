@@ -46,9 +46,10 @@ async function loadT(id: string): Promise<T | null> {
   const { data } = await supabase.from('tournaments').select('id, settings, fixtures_generated, registration_deadline, entry_kind, format').eq('id', id).maybeSingle();
   return (data as T | null) ?? null;
 }
-async function isEntered(tid: string, teamId: string): Promise<boolean> {
-  const { data } = await supabase.from('tournament_entries').select('team_id').eq('tournament_id', tid).eq('team_id', teamId).in('status', ['approved', 'pending', 'withdrawn']).limit(1);
-  return (data ?? []).length > 0;
+/** The team's entry status here ('approved' | 'pending' | 'withdrawn'), or null when it isn't entered. */
+async function entryStatus(tid: string, teamId: string): Promise<string | null> {
+  const { data } = await supabase.from('tournament_entries').select('team_id, status').eq('tournament_id', tid).eq('team_id', teamId).in('status', ['approved', 'pending', 'withdrawn']).limit(1);
+  return ((data ?? [])[0] as { status?: string } | undefined)?.status ?? null;
 }
 // Round 6: the team's captain or co-captain now. It also accepted the team's creator, who kept
 // the squad (and gender marks) after handing over the captaincy and leaving the team.
@@ -93,10 +94,15 @@ export async function getSquad(req: Request, res: Response) {
     const t = await loadT(tid);
     if (!t || !isUuid(teamId)) return res.status(404).json({ error: 'Not found' });
     if (t.entry_kind === 'singles' || t.entry_kind === 'doubles') return res.status(400).json({ error: 'Players and pairs enter this one — there are no squads.', code: 'NO_SQUADS' });
-    if (!(await isEntered(tid, teamId))) return res.status(404).json({ error: 'That team isn’t in this tournament.' });
+    const status = await entryStatus(tid, teamId);
+    if (!status) return res.status(404).json({ error: 'That team isn’t in this tournament.' });
     const organiser = await isTournamentOrganiser(tid, userId);
     const captain = await isCaptain(teamId, userId);
     const locked = squadLocked(t);
+    // E-042 (Round 6): the organiser's ID-check notes ('birth certificate seen',
+    // Aadhaar remarks) went to everyone signed in. Now only the organisers and the
+    // team's own captain or co-captain read them; everyone else sees just the tick.
+    const seesNotes = organiser || captain;
     const saved = await savedRows(tid, teamId);
     const rows = saved.length ? saved : (await memberRows(teamId)).map((m) => ({ id: `member:${m.user_id}`, team_id: teamId, user_id: m.user_id, guest_name: null, jersey_number: m.jersey_number, id_checked_at: null, id_checked_by: null, id_note: null }));
     const nm = await names(rows.map((r) => r.user_id).filter((x): x is string => !!x));
@@ -108,10 +114,10 @@ export async function getSquad(req: Request, res: Response) {
       team: team ?? { id: teamId, name: 'Team' },
       saved: saved.length > 0,
       size: q.size ?? null, lock: q.lock ?? 'draw', locked,
-      can_edit: organiser || (captain && !locked), can_check: organiser,
+      can_edit: organiser || (captain && !locked && status !== 'withdrawn'), can_check: organiser, // E-056: not a withdrawn team's captain
       players: rows.map((r) => ({
         id: r.id, user_id: r.user_id, name: r.user_id ? nm.get(r.user_id) ?? 'Player' : r.guest_name ?? 'Player', guest: !r.user_id,
-        jersey_number: r.jersey_number, id_checked: !!r.id_checked_at, id_note: r.id_note,
+        jersey_number: r.jersey_number, id_checked: !!r.id_checked_at, id_note: seesNotes ? r.id_note : null,
         banned: bans.find((b) => (r.user_id ? b.user_id === r.user_id : !b.user_id && b.name.toLowerCase() === (r.guest_name ?? '').toLowerCase()))?.reason ?? null,
       })),
     });
@@ -128,10 +134,15 @@ export async function setSquad(req: Request, res: Response) {
     const t = await loadT(tid);
     if (!t || !isUuid(teamId)) return res.status(404).json({ error: 'Not found' });
     if (t.entry_kind === 'singles' || t.entry_kind === 'doubles') return res.status(400).json({ error: 'Players and pairs enter this one — there are no squads.', code: 'NO_SQUADS' });
-    if (!(await isEntered(tid, teamId))) return res.status(404).json({ error: 'That team isn’t in this tournament.' });
+    const status = await entryStatus(tid, teamId);
+    if (!status) return res.status(404).json({ error: 'That team isn’t in this tournament.' });
     const organiser = await isTournamentOrganiser(tid, userId);
     if (!organiser) {
       if (!(await isCaptain(teamId, userId))) return res.status(403).json({ error: 'Only the team’s captain or the organiser can set the squad.' });
+      // E-056 (Round 6): a withdrawn team's squad stays readable (its record stays),
+      // but its captain could still change it — and add players, keeping them out
+      // of every other team's squad. The organiser can still change it.
+      if (status === 'withdrawn') return res.status(409).json({ error: 'Your team withdrew, so its squad can’t change. Ask the organiser if a player needs to move.', code: 'TEAM_WITHDRAWN' });
       if (squadLocked(t)) return res.status(409).json({ error: 'Squads are locked — ask the organiser to change it.', code: 'SQUAD_LOCKED' });
     }
     const list = Array.isArray((req.body ?? {}).players) ? (req.body.players as Array<{ user_id?: unknown; guest_name?: unknown; jersey_number?: unknown }>) : null;

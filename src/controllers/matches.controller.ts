@@ -1967,6 +1967,15 @@ export async function getMatch(req: Request, res: Response) {
     matchWithRating.can_cancel = !!userId && !isTerminalMatchStatus(match.status)
       && (match.tournament_id ? canManage === true && !koMatch : match.created_by === userId);
     matchWithRating.can_void = !!userId && await canVoidMatch(match, userId).catch(() => false);
+    // E-097 / E-096 (Round 6): decideMatch and setMatchOfficials allow the
+    // organiser of a tournament fixture, and a casual match's CREATOR — not its
+    // umpire, whom can_manage includes (the umpire was shown a Decide that
+    // always failed, and the creator no Umpire & scorer sheet at all).
+    {
+      const organiserOrCreator = !!userId && (match.tournament_id ? canManage === true : match.created_by === userId);
+      matchWithRating.can_decide = organiserOrCreator;
+      matchWithRating.can_name_officials = organiserOrCreator;
+    }
     // E-100 (Round 6): may the viewer rate it? rateMatchHandler's own rule, so
     // the app offers the card to exactly the people the server accepts.
     matchWithRating.can_rate = !!userId && match.status === 'completed' && !match.voided_at

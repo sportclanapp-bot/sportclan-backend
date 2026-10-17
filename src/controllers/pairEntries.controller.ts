@@ -375,6 +375,11 @@ export async function answerPairInvite(req: Request, res: Response) {
       const { data: members } = await supabase.from('team_members').select('user_id').eq('team_id', teamId);
       const old = ((members ?? []) as Array<{ user_id: string }>).map((m) => m.user_id).filter((u) => u !== inv.inviter_id);
       if (old.length) await deleteMatching('team_members', (q) => q.eq('team_id', teamId).in('user_id', old), userId, 'pair partner replaced'); // audit #23
+      // E-088 (Round 6): either partner may start a change. When the co-captain
+      // did, the captain was the one replaced and the pair was left with no
+      // captain (the approve / reject notice and every captain-only path reached
+      // nobody). The partner who stays captains the pair, as one who made it does.
+      await supabase.from('team_members').update({ role: 'captain' }).eq('team_id', teamId).eq('user_id', inv.inviter_id);
       await supabase.from('team_members').insert({ team_id: teamId, user_id: userId, role: 'vice_captain' });
       await supabase.from('teams').update({ name: entryTeamName([nameOf(ppl.get(inv.inviter_id)), nameOf(ppl.get(userId))]) }).eq('id', teamId);
       await supabase.from('tournament_pair_invites').update({ status: 'accepted', responded_at: now }).eq('id', inv.id);

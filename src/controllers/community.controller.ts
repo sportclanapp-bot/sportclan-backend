@@ -1015,7 +1015,8 @@ export async function likePost(req: Request, res: Response) {
   if (!likePostRow || hiddenFrom(likePostRow, userId)) return res.status(404).json({ error: 'Post not found' }); // B03-F13
   if (likePostRow.deleted) return res.status(410).json(postGone(likePostRow)); // #1 / #3
   if (await isBlockedBetween(userId, likePostRow.author_id)) {
-    return res.status(403).json({ error: 'BLOCKED' });
+    // N-R6-9 (Round 6): plain words; the code stays 'BLOCKED'.
+    return res.status(403).json({ error: 'You can’t like this post.', code: 'BLOCKED' });
   }
 
   const { error } = await supabase
@@ -1151,7 +1152,8 @@ export async function createComment(req: Request, res: Response) {
   if (!commentPostRow || hiddenFrom(commentPostRow, userId)) return res.status(404).json({ error: 'Post not found' }); // B03-F13
   if (commentPostRow.deleted) return res.status(410).json(postGone(commentPostRow)); // #1 / #3
   if (await isBlockedBetween(userId, commentPostRow.author_id)) {
-    return res.status(403).json({ error: 'BLOCKED' });
+    // N-R6-9 (Round 6): plain words; the code stays 'BLOCKED'.
+    return res.status(403).json({ error: 'You can’t comment on this post.', code: 'BLOCKED' });
   }
   // #2: no reply to a deleted comment.
   if (parent_id) {
@@ -1289,7 +1291,8 @@ export async function reactToComment(req: Request, res: Response) {
 
   // SC-96: block gate — can't react to a blocked-either-direction user's comment.
   if (await isBlockedBetween(userId, comment.author_id)) {
-    return res.status(403).json({ error: 'BLOCKED' });
+    // N-R6-9 (Round 6): plain words; the code stays 'BLOCKED'.
+    return res.status(403).json({ error: 'You can’t react to this comment.', code: 'BLOCKED' });
   }
 
   const reactions = (comment.reactions as Record<string, string[]>) || {};
@@ -1592,7 +1595,8 @@ export async function votePoll(req: Request, res: Response) {
   if (isDeletedPost(post)) return res.status(410).json(postGone(post)); // #1 / #3
   // SC-96: block gate — can't vote on a blocked-either-direction user's poll.
   if (await isBlockedBetween(userId, post.author_id)) {
-    return res.status(403).json({ error: 'BLOCKED' });
+    // N-R6-9 (Round 6): plain words; the code stays 'BLOCKED'.
+    return res.status(403).json({ error: 'You can’t vote in this poll.', code: 'BLOCKED' });
   }
   if (!post.poll_options) return res.status(400).json({ error: 'Not a poll post' });
   // SC-43: a closed poll is final — no more votes.

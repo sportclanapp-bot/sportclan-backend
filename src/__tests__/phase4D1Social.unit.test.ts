@@ -127,7 +127,7 @@ describe('block gates (SC-207, SC-96s, a7f0fe6)', () => {
     mockBlocked = true;
     mockTable = { post_comments: { data: { reactions: {}, author_id: THEM, post_id: POST } }, community_posts: { data: { author_id: THEM } } };
     const r = await call(reactToComment, { params: { commentId: POST }, body: { emoji: '❤️' } });
-    expect([r.statusCode, r.body]).toEqual([403, { error: 'BLOCKED' }]);
+    expect([r.statusCode, r.body]).toEqual([403, { error: 'You can’t react to this comment.', code: 'BLOCKED' }]);
     expect(mockWrites).toEqual([]);
   });
 
@@ -135,7 +135,7 @@ describe('block gates (SC-207, SC-96s, a7f0fe6)', () => {
     mockBlocked = true;
     mockTable = { community_posts: { data: { author_id: THEM, poll_options: [{ id: 'o1' }] } } };
     const r = await call(votePoll, { params: { id: POST }, body: { option_id: 'o1' } });
-    expect([r.statusCode, r.body]).toEqual([403, { error: 'BLOCKED' }]);
+    expect([r.statusCode, r.body]).toEqual([403, { error: 'You can’t vote in this poll.', code: 'BLOCKED' }]);
   });
 
   test('SC-96s (a7f0fe6): reviewing or sending kudos across a block → 403', async () => {

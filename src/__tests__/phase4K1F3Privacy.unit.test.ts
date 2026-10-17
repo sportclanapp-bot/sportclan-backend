@@ -108,13 +108,13 @@ describe('a blocked user cannot like or comment on the blocker’s posts', () =>
   test('K1-67 (3937974): like across a block → 403 BLOCKED, no like written', async () => {
     mockPairBlocked = true;
     const r = await call(likePost, { params: { id: POST } });
-    expect([r.statusCode, r.body]).toEqual([403, { error: 'BLOCKED' }]);
+    expect([r.statusCode, r.body]).toEqual([403, { error: 'You can’t like this post.', code: 'BLOCKED' }]);
     expect(mockLog.some((q) => q[0] === 'from:post_likes')).toBe(false);
   });
   test('K1-67 (3937974): comment across a block → 403 BLOCKED, no comment written', async () => {
     mockPairBlocked = true;
     const r = await call(createComment, { params: { id: POST }, body: { content: 'nice game' } });
-    expect([r.statusCode, r.body]).toEqual([403, { error: 'BLOCKED' }]);
+    expect([r.statusCode, r.body]).toEqual([403, { error: 'You can’t comment on this post.', code: 'BLOCKED' }]);
     expect(mockLog.some((q) => q[0] === 'from:post_comments' && q.some((c) => c.startsWith('insert:')))).toBe(false);
   });
   test('K1-67 (3937974): control — no block, the like goes through', async () => {

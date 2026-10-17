@@ -247,7 +247,7 @@ async function searchByAccountTypes(
   const blocked = await blockedUserIds(callerId); // SC-82
   let query = supabase
     .from('users')
-    .select('id, name, username, profile_picture_url, bio, city:cities!city_id(id, name), acct:user_account_types!inner(account_type)')
+    .select('id, name, username, profile_picture_url, bio, discoverability, city:cities!city_id(id, name), acct:user_account_types!inner(account_type)')
     .or(orIlikeContains(['username', 'name'], q));
   query = types.length === 1 ? query.eq('acct.account_type', types[0]) : query.in('acct.account_type', types);
   if (opts.orderByName) query = query.order('name', { ascending: true });
@@ -255,8 +255,11 @@ async function searchByAccountTypes(
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging
     .range(p.from, p.to)), hide), 'id', blocked);
   if (error) return res.status(500).json({ error: error.message });
-  const rows = (users || []).map(({ acct, ...u }: any) => u);
-  return res.json({ data: rows, has_more: rows.length === p.limit });
+  const rows = (users || []).map(({ acct, ...u }: any) => u) as Array<{ id: string; discoverability?: string }>;
+  // E-002 (Round 6): "Who can find you" holds on every people tab, not just
+  // Players — a coach or umpire set to "No one" was still found by name here.
+  // has_more stays on the raw page, as on Players (a filtered page may be short).
+  return res.json({ data: await applyDiscoverability(rows, callerId), has_more: rows.length === p.limit });
 }
 
 // (searchClubs removed — clubs now route through searchByAccountType('club'),

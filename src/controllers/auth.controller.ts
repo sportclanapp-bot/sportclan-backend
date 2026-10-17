@@ -776,6 +776,13 @@ export async function login(req: Request, res: Response) {
   return res.json({ user: safe, accessToken, refreshToken });
 }
 
+/** A renewal for a suspended or deleted account: the refusal that says so (the app words it from this). */
+async function accountEndedRefusal(userId: string): Promise<{ error: string; code?: string } | null> {
+  if (await isSuspended(userId)) return { error: 'This account has been suspended. Please contact support.' };
+  if (await isDeleted(userId)) return { error: 'This account has been deleted.', code: 'ACCOUNT_DELETED' };
+  return null;
+}
+
 export async function refresh(req: Request, res: Response) {
   const { refreshToken } = req.body || {};
   if (!refreshToken) return res.status(400).json({ error: 'refreshToken is required' });
@@ -793,7 +800,15 @@ export async function refresh(req: Request, res: Response) {
     // without signal. Any older token is refused.
     const found = await findSessionByToken(refreshToken);
     const row = found?.row;
-    if (!found || !row || row.revoked || (row.user_id && row.user_id !== payload.userId)) return res.status(401).json({ error: 'Refresh token revoked' });
+    if (!found || !row || row.revoked || (row.user_id && row.user_id !== payload.userId)) {
+      // Round 6: suspending or deleting an account revokes its sign-ins first, so the
+      // phone's next renewal landed here and heard only "revoked" — and the app told a
+      // suspended person their sign-in had expired. The token's signature is good, so
+      // say why it ended.
+      const ended = await accountEndedRefusal(payload.userId);
+      if (ended) return res.status(403).json(ended);
+      return res.status(401).json({ error: 'Refresh token revoked' });
+    }
     // F027 (launch test plan): this key was pushed aside when its predecessor came
     // back as a "lost reply" — but it HAD been handed out, so that predecessor came
     // from a second holder (a stolen copy). End the sign-in for both: the owner signs
@@ -807,12 +822,8 @@ export async function refresh(req: Request, res: Response) {
     // SC-213: a ban/deletion must bite mid-session — a suspended or soft-deleted
     // user must NOT be able to mint fresh access tokens off an old refresh token.
     // (Login/verify-otp already gate this; refresh was the evasion path.)
-    if (await isSuspended(payload.userId)) {
-      return res.status(403).json({ error: 'This account has been suspended. Please contact support.' });
-    }
-    if (await isDeleted(payload.userId)) {
-      return res.status(403).json({ error: 'This account has been deleted.', code: 'ACCOUNT_DELETED' });
-    }
+    const ended = await accountEndedRefusal(payload.userId);
+    if (ended) return res.status(403).json(ended);
     // B15 (D17): "last active" on Active sessions. Best-effort; a missing
     // column (before migration 100) must not fail a refresh.
     void Promise.resolve(

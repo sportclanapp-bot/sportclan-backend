@@ -12,7 +12,7 @@ const mk = (settings: object = {}, extra: object = {}) => fakeDb({
   tournament_organisers: [],
   tournament_entries: [{ tournament_id: T, team_id: TA, status: 'approved' }, { tournament_id: T, team_id: TB, status: 'approved' }],
   teams: [{ id: TA, name: 'Lions', created_by: CAP }, { id: TB, name: 'Tigers', created_by: OTHER }],
-  team_members: [{ team_id: TA, user_id: CAP, role: 'captain', jersey_number: 1 }, { team_id: TA, user_id: P1, role: 'player', jersey_number: 7 }],
+  team_members: [{ team_id: TA, user_id: CAP, role: 'captain', jersey_number: 1 }, { team_id: TA, user_id: P1, role: 'player', jersey_number: 7 }, { team_id: TB, user_id: OTHER, role: 'captain', jersey_number: 1 }], // Round 6: a captain is a member (creators no longer count)
   users: [CAP, P1, P2, P3, ORG, OTHER].map((u, i) => ({ id: u, name: ['Cap', 'Ravi', 'Amit', 'Dev', 'Org', 'Other'][i], deleted_at: null })),
   tournament_squads: [], matches: [], match_events: [],
 });

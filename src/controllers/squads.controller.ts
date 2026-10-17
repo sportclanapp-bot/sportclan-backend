@@ -50,11 +50,11 @@ async function isEntered(tid: string, teamId: string): Promise<boolean> {
   const { data } = await supabase.from('tournament_entries').select('team_id').eq('tournament_id', tid).eq('team_id', teamId).in('status', ['approved', 'pending', 'withdrawn']).limit(1);
   return (data ?? []).length > 0;
 }
+// Round 6: the team's captain or co-captain now. It also accepted the team's creator, who kept
+// the squad (and gender marks) after handing over the captaincy and leaving the team.
 async function isCaptain(teamId: string, userId: string): Promise<boolean> {
   const { data } = await supabase.from('team_members').select('role').eq('team_id', teamId).eq('user_id', userId).in('role', ['captain', 'vice_captain']).limit(1);
-  if ((data ?? []).length) return true;
-  const { data: t } = await supabase.from('teams').select('created_by').eq('id', teamId).maybeSingle();
-  return !!t && (t as { created_by?: string }).created_by === userId;
+  return (data ?? []).length > 0;
 }
 async function savedRows(tid: string, teamId: string): Promise<Row[]> {
   const { data } = await supabase.from('tournament_squads').select('id, team_id, user_id, guest_name, jersey_number, id_checked_at, id_checked_by, id_note').eq('tournament_id', tid).eq('team_id', teamId).is('removed_at', null).order('created_at');

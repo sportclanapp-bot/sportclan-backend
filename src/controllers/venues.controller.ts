@@ -1,6 +1,7 @@
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { isBlockedBetween } from '../utils/blocks';
 import { LIMITS, normaliseVenue, VENUE_TOO_LONG, queryText } from '../utils/validation';
 import { isUuid } from '../utils/uuid';
 import { escapeLike } from '../utils/likeSearch';
@@ -338,10 +339,9 @@ export async function getVenue(req: Request, res: Response) {
   const { city, sport, owner, ...rest } = v as any;
   let contact: { id: string; name: string | null; username: string | null; profile_picture_url: string | null } | null = null;
   if (owner && !owner.deleted_at && owner.id !== req.userId) {
-    const { data: block } = await supabase.from('user_blocks').select('id')
-      .or(`and(blocker_id.eq.${req.userId},blocked_id.eq.${owner.id}),and(blocker_id.eq.${owner.id},blocked_id.eq.${req.userId})`)
-      .maybeSingle();
-    if (!block) contact = { id: owner.id, name: owner.name ?? null, username: owner.username ?? null, profile_picture_url: owner.profile_picture_url ?? null };
+    // E-155 (Round 6): isBlockedBetween — this inline .or().maybeSingle() errored on a
+    // block from both sides (two rows) and so showed the contact and its Message button.
+    if (!(await isBlockedBetween(req.userId, owner.id))) contact = { id: owner.id, name: owner.name ?? null, username: owner.username ?? null, profile_picture_url: owner.profile_picture_url ?? null };
   }
   return res.json({
     venue: {

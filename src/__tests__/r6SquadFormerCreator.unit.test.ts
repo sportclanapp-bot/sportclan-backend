@@ -11,7 +11,7 @@ beforeEach(() => {
   mock.log = [];
   mock.next = (q) => {
     if (q[0] === 'from:tournaments') return { data: { id: T, settings: {}, fixtures_generated: false, registration_deadline: null, entry_kind: 'teams', format: 'knockout' } };
-    if (q[0] === 'from:tournament_entries') return { data: [{ team_id: TEAM }] };
+    if (q[0] === 'from:tournament_entries') return { data: [{ team_id: TEAM, status: 'approved' }] }; // E-056: the entry's status is read now
     if (q[0] === 'from:team_members') return { data: membership };
     if (q[0] === 'from:teams') return { data: { created_by: ME } }; // ME made the team
     return { data: [] };

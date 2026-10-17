@@ -31,6 +31,21 @@ async function notAGroup(chatId: string): Promise<{ status: number; body: object
   return null;
 }
 
+/**
+ * Round 6 (D7): the tournament whose chat this is, if any. Its members follow the
+ * tournament — the organisers and the players of approved teams — so the group
+ * routes must not add, remove or promote anyone there, or delete it: an organiser
+ * (an admin of that chat) could let an outsider read it until the next sync.
+ */
+async function tournamentOfChat(chatId: string): Promise<string | null> {
+  const { data } = await supabase.from('tournaments').select('id').eq('sport_metadata->>_chat_id', chatId).limit(1);
+  return ((data ?? [])[0] as { id?: string } | undefined)?.id ?? null;
+}
+const TOURNAMENT_CHAT = {
+  error: 'This is a tournament’s chat. Its members follow the tournament: the organisers and the players of approved teams.',
+  code: 'TOURNAMENT_CHAT',
+};
+
 /** B09-F5/F6: which of these ids are real, live (not deleted) accounts. */
 async function liveUserIds(ids: string[]): Promise<Set<string>> {
   if (ids.length === 0) return new Set();
@@ -327,7 +342,8 @@ export async function getChat(req: Request, res: Response) {
     `)
     .is('left_at', null)
     .eq('chat_id', id);
-  const full = { ...chat, participants: participants || [] };
+  const tournamentId = (chat as { is_group?: boolean }).is_group ? await tournamentOfChat(id) : null;
+  const full = { ...chat, participants: participants || [], tournament_id: tournamentId };
   return res.json({ data: full, chat: full });
 }
 
@@ -695,6 +711,7 @@ export async function addMember(req: Request, res: Response) {
 
   const notGroup = await notAGroup(id);
   if (notGroup) return res.status(notGroup.status).json(notGroup.body);
+  if (await tournamentOfChat(id)) return res.status(409).json(TOURNAMENT_CHAT);
 
   // Check admin
   const { data: participant } = await supabase
@@ -770,6 +787,7 @@ export async function removeMember(req: Request, res: Response) {
 
   const notGroup = await notAGroup(id);
   if (notGroup) return res.status(notGroup.status).json(notGroup.body);
+  if (await tournamentOfChat(id)) return res.status(409).json(TOURNAMENT_CHAT);
 
   const { data: participant } = await supabase
     .from('chat_participants')
@@ -800,6 +818,7 @@ export async function promoteMember(req: Request, res: Response) {
 
   const notGroup = await notAGroup(id);
   if (notGroup) return res.status(notGroup.status).json(notGroup.body);
+  if (await tournamentOfChat(id)) return res.status(409).json(TOURNAMENT_CHAT);
 
   const { data: participant } = await supabase
     .from('chat_participants')
@@ -904,6 +923,7 @@ export async function deleteGroup(req: Request, res: Response) {
 
   const notGroup = await notAGroup(id);
   if (notGroup) return res.status(notGroup.status).json(notGroup.body);
+  if (await tournamentOfChat(id)) return res.status(409).json(TOURNAMENT_CHAT);
 
   const { data: chat } = await supabase
     .from('chats')

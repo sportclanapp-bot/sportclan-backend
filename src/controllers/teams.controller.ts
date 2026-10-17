@@ -1,5 +1,5 @@
 import { inBackground } from '../utils/background';
-import { deleteMatching } from '../utils/softDelete';
+import { deleteMatching, deleteWithReason } from '../utils/softDelete';
 import { TEAM_DISBANDED, liveTeams, softDisbandTeam, teamGone } from '../utils/teamVisibility';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { escapeLike } from '../utils/likeSearch';
@@ -174,7 +174,12 @@ export async function createTeam(req: Request, res: Response) {
       .from('team_members')
       .insert({ team_id: team.id, user_id: userId, role: 'captain' });
     if (memberErr) {
-      // best effort — return team anyway
+      // E-055 (Round 6): this was "best effort — return team anyway", which left a
+      // team with no captain that nobody could manage, edit or disband. The new,
+      // empty team is taken back (archived with why, audit #23) and the maker
+      // told to try again.
+      await deleteWithReason('teams', [team.id as string], userId, 'team creation failed (no captain row)');
+      return res.status(500).json({ error: 'The team wasn’t created. Try again.', code: 'TEAM_NOT_CREATED' });
     }
     return res.json({ team });
   } catch (e: any) {

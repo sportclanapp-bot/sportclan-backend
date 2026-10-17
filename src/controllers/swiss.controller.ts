@@ -17,7 +17,7 @@
 import { deleteMatching } from '../utils/softDelete';
 import type { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
-import { isTournamentOrganiser } from '../utils/tournamentAuth';
+import { isTournamentOrganiser, isPairingsArbiter, swissDeskPeople } from '../utils/tournamentAuth';
 import { byeAskRounds, settingsOf } from '../utils/tournamentSettings';
 import { byeWords, entryPlayers, type ByeKind } from '../utils/swissByeRequests';
 import { notifyUsers } from '../utils/notify';
@@ -30,9 +30,7 @@ type Ctx = NonNullable<Awaited<ReturnType<typeof swissContext>>>;
 
 async function canManagePairings(tournamentId: string, userId: string): Promise<boolean> {
   if (await isTournamentOrganiser(tournamentId, userId)) return true;
-  const { data } = await supabase.from('tournament_officials').select('id').eq('tournament_id', tournamentId).eq('user_id', userId)
-    .in('role', ['pairings', 'chief_referee', 'deputy_referee']).limit(1);
-  return (data ?? []).length > 0;
+  return isPairingsArbiter(tournamentId, userId); // E-067 (Round 6): an event's arbiters are its tournament's
 }
 
 /** What a round's pairing breaks, in words (repeats; in chess colour runs and differences; same club in the last round). */
@@ -150,10 +148,9 @@ async function writeBye(ctx: Ctx, id: string, team: string, r: number, kind: Swi
 
 type ByeRequestRow = { id: string; tournament_id: string; team_id: string; round: number; kind: ByeKind; status: string; note: string | null; requested_by: string | null; created_at: string; decided_at: string | null };
 
-/** The people who decide byes: the organiser and the arbiters who pair. */
+/** The people who decide byes: the organisers and the arbiters who pair (E-062 / E-067, Round 6: co-organisers too, and an event's arbiters). */
 async function byeDeciders(ctx: Ctx): Promise<string[]> {
-  const { data } = await supabase.from('tournament_officials').select('user_id').eq('tournament_id', ctx.t.id as string).in('role', ['pairings', 'chief_referee', 'deputy_referee']);
-  return [...new Set([ctx.t.created_by as string, ...((data ?? []) as Array<{ user_id: string }>).map((o) => o.user_id)])];
+  return swissDeskPeople(ctx.t.id as string);
 }
 
 /** The entries in this Swiss the caller may ask for (a singles / doubles entry: its players; a team: its captain or co-captain). */

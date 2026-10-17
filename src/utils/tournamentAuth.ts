@@ -130,3 +130,37 @@ export function swissTakesLateEntries(t: { format?: string | null; settings?: un
   const sw = (t.settings && typeof t.settings === 'object' ? (t.settings as { swiss?: { rounds?: number; paired?: number } }).swiss : null) ?? null;
   return !sw || (sw.paired ?? 0) < (sw.rounds ?? 0);
 }
+
+/** The arbiters who run a Swiss's Pairings desk: pairings, chief and deputy. */
+export const PAIRINGS_ROLES = ['pairings', 'chief_referee', 'deputy_referee'];
+
+/**
+ * E-067 (Round 6): a Pairings-desk arbiter. Officials are kept on the tournament, so a Swiss that is
+ * one of its events looks there too (it looked on the event only, and found nobody).
+ */
+export async function isPairingsArbiter(tournamentId: string, userId: string): Promise<boolean> {
+  const ids = await familyLookupIds(tournamentId);
+  const { data } = await supabase.from('tournament_officials').select('id').in('tournament_id', ids).eq('user_id', userId)
+    .in('role', PAIRINGS_ROLES).limit(1);
+  return (data ?? []).length > 0;
+}
+
+/**
+ * E-062 / E-067 (Round 6): everyone who runs a Swiss's Pairings desk, to be told when a round is
+ * ready to check or a player asks for a bye: the creator, every co-organiser (they can decide byes
+ * and publish too, but were never told), and the pairings / chief / deputy arbiters — an event's
+ * are its tournament's.
+ */
+export async function swissDeskPeople(tournamentId: string): Promise<string[]> {
+  const ids = await familyLookupIds(tournamentId);
+  const [{ data: t }, { data: co }, { data: offs }] = await Promise.all([
+    supabase.from('tournaments').select('created_by').eq('id', tournamentId).maybeSingle(),
+    supabase.from('tournament_organisers').select('user_id').in('tournament_id', ids),
+    supabase.from('tournament_officials').select('user_id').in('tournament_id', ids).in('role', PAIRINGS_ROLES),
+  ]);
+  const people = new Set<string>();
+  const creator = (t as { created_by?: string | null } | null)?.created_by;
+  if (creator) people.add(creator);
+  for (const r of [...((co ?? []) as Array<{ user_id: string }>), ...((offs ?? []) as Array<{ user_id: string }>)]) people.add(r.user_id);
+  return [...people];
+}

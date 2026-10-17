@@ -76,7 +76,7 @@ import {
   buildSchedule, timeToMinutes, keyOf, formatSlotIst,
   type SchedulingConfig, type FixtureShape, type SlotAssign,
 } from '../utils/scheduleFixtures';
-import { isTournamentOrganiser, authorizeCarveout, logAdminAction, swissTakesLateEntries } from '../utils/tournamentAuth';
+import { isTournamentOrganiser, authorizeCarveout, logAdminAction, swissTakesLateEntries, swissDeskPeople } from '../utils/tournamentAuth';
 import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
 import { ENTRY_CAP_BODY, isEntryCapError } from '../utils/entryCap';
@@ -3704,9 +3704,9 @@ async function swissAfterResult(tournamentId: string): Promise<void> {
     .select('id');
   if (!claim || claim.length === 0) return;
   if (sw.check) {
-    // Tell the organiser and the pairings arbiters the round is ready to check.
-    const { data: offs } = await supabase.from('tournament_officials').select('user_id').eq('tournament_id', tournamentId).in('role', ['pairings', 'chief_referee', 'deputy_referee']);
-    const who = [...new Set([ctx.t.created_by as string, ...((offs ?? []) as Array<{ user_id: string }>).map((o) => o.user_id)])];
+    // Tell the organisers and the pairings arbiters the round is ready to check (E-062 / E-067,
+    // Round 6: the co-organisers too, and an event's arbiters, who are kept on its tournament).
+    const who = await swissDeskPeople(tournamentId);
     await notifyUsers(who, { type: 'tournament_updated', title: `Round ${next} pairings are ready`, body: 'Check them, swap if needed, then publish.', data: { tournamentId } }).catch(() => undefined);
     return;
   }

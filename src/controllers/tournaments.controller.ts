@@ -4863,9 +4863,14 @@ async function ladderReplayFrom(tournamentId: string, matchId: string): Promise<
 }
 
 /** The teams the caller plays for in this tournament (their entries). */
-async function myEntryTeams(userId: string, teamIds: string[]): Promise<string[]> {
+async function myEntryTeams(userId: string, teamIds: string[], managersOnly = false): Promise<string[]> {
   if (!teamIds.length) return [];
-  const { data } = await supabase.from('team_members').select('team_id').eq('user_id', userId).in('team_id', teamIds);
+  let q = supabase.from('team_members').select('team_id').eq('user_id', userId).in('team_id', teamIds);
+  // E-084 (Round 6): a challenge is the team's call, like entering and withdrawing
+  // (SC-267: captain or co-captain). Any member could make one, and became the
+  // match's maker. A singles / doubles entry's players are its captain and co-captain.
+  if (managersOnly) q = q.in('role', ['captain', 'vice_captain']);
+  const { data } = await q;
   return Array.from(new Set(((data ?? []) as Array<{ team_id: string }>).map((r) => r.team_id)));
 }
 
@@ -4881,12 +4886,14 @@ export async function getLadder(req: Request, res: Response) {
   const order = rows.map((r) => r.team_id);
   const busy = await ladderBusy(String(id));
   const mine = await myEntryTeams(userId, order);
+  const managed = await myEntryTeams(userId, order, true); // E-084
   const l = settingsOf(t as { settings?: unknown }).ladder;
   const open = (t as { fixtures_generated?: boolean }).fixtures_generated && (t as { status?: string }).status !== 'completed' && (t as { status?: string }).status !== 'cancelled';
   return res.json({
     set: !!(t as { fixtures_generated?: boolean }).fixtures_generated,
-    ladder: rows.map((r, i) => ({ position: i + 1, team_id: r.team_id, name: r.name, busy: busy.has(r.team_id), mine: mine.includes(r.team_id) })),
-    can_challenge: open ? Object.fromEntries(mine.map((me) => [me, order.filter((d) => challengeProblem(order, me, d, l, busy) === null)])) : {},
+    // E-084: `i_manage` — the caller makes this team's challenges (captain or co-captain).
+    ladder: rows.map((r, i) => ({ position: i + 1, team_id: r.team_id, name: r.name, busy: busy.has(r.team_id), mine: mine.includes(r.team_id), i_manage: managed.includes(r.team_id) })),
+    can_challenge: open ? Object.fromEntries(managed.map((me) => [me, order.filter((d) => challengeProblem(order, me, d, l, busy) === null)])) : {},
     reach: reachOf(l), // audit #64: none set → null (anyone above), not 3
     move: l?.move ?? 'leapfrog',
   });
@@ -4911,12 +4918,20 @@ export async function createLadderChallenge(req: Request, res: Response) {
   const organiser = await isTournamentOrganiser(String(id), userId);
   let challenger: string | null = null;
   if (typeof body.challenger_team_id === 'string') {
-    const mine = await myEntryTeams(userId, [body.challenger_team_id]);
-    if (!organiser && !mine.length) return res.status(403).json({ error: 'You can only challenge for yourself.', code: 'NOT_YOURS' });
+    const mine = await myEntryTeams(userId, [body.challenger_team_id], true);
+    if (!organiser && !mine.length) {
+      return (await myEntryTeams(userId, [body.challenger_team_id])).length
+        ? res.status(403).json({ error: 'Only your team’s captain or a co-captain can make a challenge.', code: 'NOT_TEAM_MANAGER' })
+        : res.status(403).json({ error: 'You can only challenge for yourself.', code: 'NOT_YOURS' });
+    }
     challenger = body.challenger_team_id;
   } else {
-    challenger = (await myEntryTeams(userId, order))[0] ?? null;
-    if (!challenger) return res.status(403).json({ error: 'You aren’t on this ladder.', code: 'NOT_ON_LADDER' });
+    challenger = (await myEntryTeams(userId, order, true))[0] ?? null;
+    if (!challenger) {
+      return (await myEntryTeams(userId, order)).length
+        ? res.status(403).json({ error: 'Only your team’s captain or a co-captain can make a challenge.', code: 'NOT_TEAM_MANAGER' })
+        : res.status(403).json({ error: 'You aren’t on this ladder.', code: 'NOT_ON_LADDER' });
+    }
   }
   const busy = await ladderBusy(String(id));
   const why = challengeProblem(order, challenger, body.defender_team_id, settingsOf(t).ladder, busy);

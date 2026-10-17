@@ -19,7 +19,7 @@ import {
   verifyRefreshToken,
 } from '../utils/jwt';
 import { setOtp, getOtp, deleteOtp, bumpCounter, readCounter, clearCounter } from '../utils/otpStore';
-import { normalizeAccountTypes } from '../constants/accountTypes';
+import { normalizeAccountTypes, isValidAccountType } from '../constants/accountTypes';
 import { signupProfileProblem, cleanLocalArea, USERNAME_RE, RESERVED_USERNAMES, GENDERS, GENDER_ERROR } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { awardCoins } from '../utils/coins';
@@ -652,7 +652,7 @@ export async function register(req: Request, res: Response) {
   const refreshToken = generateRefreshToken(user.id);
   const sid = await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
   const accessToken = generateAccessToken(user.id, sid); // decision 15: tied to this sign-in
-  return res.json({ user, accessToken, refreshToken, isNewUser: true });
+  return res.json({ user: { ...user, account_types: await accountTypesFor(user.id, user.account_type) }, accessToken, refreshToken, isNewUser: true });
 }
 
 // POST /auth/otp/login  { phone, code }
@@ -709,7 +709,7 @@ export async function otpLogin(req: Request, res: Response) {
   const refreshToken = generateRefreshToken(user.id);
   const sid = await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
   const accessToken = generateAccessToken(user.id, sid); // decision 15: tied to this sign-in
-  return res.json({ user, accessToken, refreshToken, isNewUser: false });
+  return res.json({ user: { ...user, account_types: await accountTypesFor(user.id, user.account_type) }, accessToken, refreshToken, isNewUser: false });
 }
 
 // POST /auth/login  { phone, password } or { email, password }
@@ -773,7 +773,19 @@ export async function login(req: Request, res: Response) {
   const sid = await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
   const accessToken = generateAccessToken(user.id, sid); // decision 15: tied to this sign-in
   const { password_hash: _ph, deleted_at: _da, ...safe } = user;
-  return res.json({ user: safe, accessToken, refreshToken });
+  return res.json({ user: { ...safe, account_types: await accountTypesFor(user.id, user.account_type) }, accessToken, refreshToken });
+}
+
+/**
+ * N-R6-12 (Round 6): the user's full account-type set, as GET /users/me gives it. The sign-in
+ * answers carried only the legacy primary column, so an umpire or official who had just signed in
+ * had no Officiate / Offer to officiate until the app next reloaded the profile.
+ */
+async function accountTypesFor(userId: string, primary: unknown): Promise<string[]> {
+  const { data } = await supabase.from('user_account_types').select('account_type').eq('user_id', userId);
+  const types = (data ?? []).map((r: { account_type: string }) => r.account_type);
+  if (types.length) return types;
+  return typeof primary === 'string' && isValidAccountType(primary) ? [primary] : ['player'];
 }
 
 /** A renewal for a suspended or deleted account: the refusal that says so (the app words it from this). */

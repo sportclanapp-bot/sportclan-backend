@@ -24,7 +24,7 @@ import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { LIMITS, firstDisallowedImageUrl, firstInvalidUrl } from '../utils/validation';
-import { blockedUserIds } from '../utils/blocks';
+import { blockedUserIds, isBlockedBetween } from '../utils/blocks';
 import { normalizeClientKey } from '../utils/idempotency';
 import { attachLikes, detectProfanity } from './community.controller';
 
@@ -271,6 +271,11 @@ export async function likeProfilePost(req: Request, res: Response) {
   const target = await profilePostForWrite(id);
   if (!target) return res.status(404).json({ error: 'Post not found' });
   if (target.deleted) return res.status(410).json(postGone(target)); // #4
+  // E-152 (Round 6): the wall owner and the liker blocked either way — the post
+  // is "not found" to them (getProfilePost) and commenting is refused; liking was not.
+  if (await isBlockedBetween(userId, target.author_id)) {
+    return res.status(403).json({ error: 'You can’t like this post.' });
+  }
   const { error } = await supabase
     .from('profile_post_likes')
     .insert({ post_id: id, user_id: userId });

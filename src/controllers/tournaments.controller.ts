@@ -1664,23 +1664,28 @@ export async function updateEntry(req: Request, res: Response) {
       try { await promoteWaitlist(id); } catch { /* best-effort */ }
     }
 
-    // Notify the team CAPTAIN when the organiser approves/rejects the entry
+    // Notify the team's managers when the organiser approves/rejects the entry
     // (block-respecting, best-effort). Withdrawals are self-initiated → no notify.
+    // E-080 (Round 6): the captain only, so a co-captain who entered the team (SC-267)
+    // was never told; a pair's partner neither. Now the captain and every co-captain.
     if (status === 'approved' || status === 'rejected') {
       try {
-        const { data: cap } = await supabase
+        const { data: managers } = await supabase
           .from('team_members').select('user_id')
-          .eq('team_id', entry.team_id).eq('role', 'captain').maybeSingle();
-        if (cap?.user_id && cap.user_id !== userId) {
+          .eq('team_id', entry.team_id).in('role', ['captain', 'vice_captain']);
+        const to = [...new Set(((managers ?? []) as Array<{ user_id: string | null }>).map((m) => m.user_id).filter((u): u is string => !!u && u !== userId))];
+        if (to.length > 0) {
           const { data: team } = await supabase.from('teams').select('name').eq('id', entry.team_id).maybeSingle();
           const approved = status === 'approved';
-          await notifyUnlessBlocked(userId, {
-            userId: cap.user_id,
-            type: approved ? 'entry_approved' : 'entry_rejected',
-            title: approved ? 'Tournament entry approved' : 'Tournament entry rejected',
-            body: `${team?.name ?? 'Your team'} was ${approved ? 'approved for' : 'rejected from'} ${tournament?.name ?? 'the tournament'}.`,
-            data: { tournamentId: id, teamId: entry.team_id, entryId },
-          });
+          for (const managerId of to) {
+            await notifyUnlessBlocked(userId, {
+              userId: managerId,
+              type: approved ? 'entry_approved' : 'entry_rejected',
+              title: approved ? 'Tournament entry approved' : 'Tournament entry rejected',
+              body: `${team?.name ?? 'Your team'} was ${approved ? 'approved for' : 'rejected from'} ${tournament?.name ?? 'the tournament'}.`,
+              data: { tournamentId: id, teamId: entry.team_id, entryId },
+            });
+          }
         }
       } catch { /* best-effort */ }
     }

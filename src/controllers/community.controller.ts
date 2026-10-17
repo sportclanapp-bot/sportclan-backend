@@ -1372,7 +1372,9 @@ export async function reportContent(req: Request, res: Response) {
   if (resolvedType === 'post') {
     const t = await postForWrite(resolvedId);
     if (t?.deleted) return res.status(410).json(postGone(t)); // #1 / #3: already gone
-    exists = !!t; ownerId = t?.author_id ?? null;
+    // E-149 (Round 6): a scheduled post not yet out is "not found" to everyone
+    // but its author here too (B03-F13) — a report confirmed it existed.
+    exists = !!t && !hiddenFrom(t, userId); ownerId = t?.author_id ?? null;
   } else if (resolvedType === 'comment') {
     const { data: t } = await supabase.from('post_comments').select('author_id, post_id, deleted_at, deleted_reason').eq('id', resolvedId).maybeSingle();
     // #2: a deleted comment can't be reported (its existing reports stay).
@@ -1382,7 +1384,8 @@ export async function reportContent(req: Request, res: Response) {
     const cpost = (t as { post_id?: string } | null)?.post_id;
     const cpostRow = cpost ? await postForWrite(cpost) : null;
     if (cpostRow?.deleted) return res.status(410).json(postGone(cpostRow));
-    exists = !!t; ownerId = (t as { author_id?: string } | null)?.author_id ?? null;
+    // E-149: nor a comment under a scheduled post that isn't out yet.
+    exists = !!t && !(cpostRow && hiddenFrom(cpostRow, userId)); ownerId = (t as { author_id?: string } | null)?.author_id ?? null;
   } else if (resolvedType === 'profile_post') {
     // A wall post: gone (deleted or removed) can't be reported; its reports stay.
     const t = await profilePostForWrite(resolvedId);

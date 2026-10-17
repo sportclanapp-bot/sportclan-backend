@@ -3,6 +3,7 @@ import { isRangeError, pageMeta, parsePagination } from '../utils/pagination';
 import { Request, Response } from 'express';
 import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
+import { isBlockedBetween } from '../utils/blocks';
 import { sanitizeError } from '../utils/response';
 import { notifyUnlessBlocked, notifyUser } from '../utils/notify';
 
@@ -117,12 +118,8 @@ export async function createInvite(req: Request, res: Response) {
   }
 
   // Block check — neither side may be blocking the other.
-  const { data: block } = await supabase
-    .from('user_blocks')
-    .select('id')
-    .or(`and(blocker_id.eq.${userId},blocked_id.eq.${receiver_id}),and(blocker_id.eq.${receiver_id},blocked_id.eq.${userId})`)
-    .maybeSingle();
-  if (block) return res.status(403).json({ error: 'Cannot invite a blocked user' });
+  // E-001 (Round 6): isBlockedBetween — the inline maybeSingle() let a mutual block through.
+  if (await isBlockedBetween(userId, receiver_id)) return res.status(403).json({ error: 'Cannot invite a blocked user' });
 
   // DEDUP: one PENDING invite per (sender, receiver, sport). A resolved
   // (accepted/declined/expired) invite is REOPENED; a FRESH pending one is a clean

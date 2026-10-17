@@ -51,6 +51,10 @@ export async function isBlockedBetween(userA?: string, userB?: string): Promise<
     .from('user_blocks')
     .select('id')
     .or(`and(blocker_id.eq.${userA},blocked_id.eq.${userB}),and(blocker_id.eq.${userB},blocked_id.eq.${userA})`)
+    // E-001 (Round 6): two people who blocked EACH OTHER match two rows, and
+    // maybeSingle() over two rows is an error with no data — the block read as
+    // "not blocked". One row is all the answer needs.
+    .limit(1)
     .maybeSingle();
   return !!data;
 }

@@ -318,14 +318,9 @@ export async function getUserById(req: Request, res: Response) {
   // token) and self-views are unaffected.
   const viewerId = req.userId;
   if (viewerId && viewerId !== id) {
-    const { data: block } = await supabase
-      .from('user_blocks')
-      .select('id')
-      .or(
-        `and(blocker_id.eq.${viewerId},blocked_id.eq.${id}),and(blocker_id.eq.${id},blocked_id.eq.${viewerId})`,
-      )
-      .maybeSingle();
-    if (block) return res.status(404).json({ error: 'User not found' });
+    // E-001 (Round 6): the shared pairwise check — this inline .or().maybeSingle()
+    // read a block from BOTH sides (two rows) as an error, i.e. "not blocked".
+    if (await isBlockedBetween(viewerId, id)) return res.status(404).json({ error: 'User not found' });
   }
 
   // Respect the DOB privacy toggle (PRD 17.5): if the owner hid their DOB,
@@ -961,14 +956,8 @@ export async function followUser(req: Request, res: Response) {
   // Block gate (SC-31): can't follow someone you've blocked, or who has blocked
   // you. Without this, a blocked user could re-follow after the block-time
   // unfollow, defeating the block.
-  const { data: block } = await supabase
-    .from('user_blocks')
-    .select('id')
-    .or(
-      `and(blocker_id.eq.${userId},blocked_id.eq.${target}),and(blocker_id.eq.${target},blocked_id.eq.${userId})`,
-    )
-    .maybeSingle();
-  if (block) return res.status(403).json({ error: 'Cannot follow this user' });
+  // E-001 (Round 6): isBlockedBetween — the inline maybeSingle() let a mutual block through.
+  if (await isBlockedBetween(userId, target)) return res.status(403).json({ error: 'Cannot follow this user' });
 
   // B04-F10: only a live account can be followed. An unknown id used to hit
   // the foreign key as a 500, and a deleted one was followed — then counted in

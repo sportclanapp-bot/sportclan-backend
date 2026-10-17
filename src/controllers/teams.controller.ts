@@ -584,8 +584,9 @@ export async function updateMemberRole(req: Request, res: Response) {
 
     // ── Transfer captaincy — captain-only, atomic RPC. ──
     if (role === 'captain') {
-      if (targetUserId === userId) return res.status(400).json({ error: 'You are already the captain' });
+      // Round 6: the role check first — a co-captain naming themselves was told 'You are already the captain'.
       if (actorRole !== 'captain') return res.status(403).json({ error: 'Only the captain can transfer captaincy' });
+      if (targetUserId === userId) return res.status(400).json({ error: 'You are already the captain' });
       const { error } = await supabase.rpc('transfer_team_captaincy', {
         p_team_id: id, p_actor_id: userId, p_target_id: targetUserId,
       });

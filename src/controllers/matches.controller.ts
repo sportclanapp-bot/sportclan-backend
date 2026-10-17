@@ -4395,7 +4395,7 @@ export function voidDeadline(match: VoidWindowMatch): Date | null {
   return new Date(t + VOID_WINDOW_DAYS * 24 * 3600_000);
 }
 
-/** A live or scheduled match is always voidable; a finished one only in window. */
+/** The window is open until a match ends; a finished one only in window. (Before play there is nothing to void: E-114, in voidMatch.) */
 export function withinVoidWindow(
   match: VoidWindowMatch,
   now: number = Date.now(),
@@ -4433,6 +4433,18 @@ export async function voidMatch(req: Request, res: Response) {
     // can never double-subtract somebody's record.
     if (match.voided_at) {
       return res.json({ success: true, already_voided: true, match });
+    }
+    // E-114 (Round 6): only a match that was played has anything to void (the
+    // app's rule, W-2). A voided scheduled match could then never be finished
+    // (MATCH_VOIDED) until someone restored it; a cancelled one counts for
+    // nothing already.
+    if (match.status === 'scheduled' || match.status === 'cancelled') {
+      return res.status(409).json({
+        error: match.status === 'scheduled'
+          ? 'This match hasn’t been played, so there’s nothing to void. Cancel it instead.'
+          : 'This match was cancelled, so it already doesn’t count.',
+        code: 'NOT_PLAYED',
+      });
     }
     // SC-442 (M5/D3): the window closes 7 days after the match ends. Checked
     // AFTER permission so a stranger learns nothing about timing, and before any

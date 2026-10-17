@@ -390,9 +390,16 @@ export async function addTournamentOfficial(req: Request, res: Response) {
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     if (!(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only organiser can add officials' });
     // Stage 12 · CH11: the pairings / sector / anti-cheating arbiters only where the sport has them (chess).
-    if (role === 'pairings' || role === 'sector' || role === 'fair_play') {
+    // E-076 (Round 6): likewise a deputy only where the sport has one (not volleyball, basketball,
+    // hockey, football, cricket), and an assistant only where it has assistant officials (not carrom) —
+    // the roles the app offers each sport.
+    if (role === 'pairings' || role === 'sector' || role === 'fair_play' || role === 'deputy_referee' || role === 'assistant') {
       const slug = (await getSport((tournament as { sport_id?: string }).sport_id ?? ''))?.slug;
-      if (!sportTerms(slug).deskRoles[role]) return res.status(400).json({ error: 'This sport doesn’t have that official.', code: 'ROLE_NOT_IN_SPORT' });
+      const terms = sportTerms(slug);
+      const has = role === 'deputy_referee' ? !!terms.deputyReferee
+        : role === 'assistant' ? terms.assistants.length > 0
+          : !!terms.deskRoles[role];
+      if (!has) return res.status(400).json({ error: 'This sport doesn’t have that official.', code: 'ROLE_NOT_IN_SPORT' });
     }
     const { data: person } = await supabase.from('users').select('id').eq('id', user_id).is('deleted_at', null).maybeSingle();
     if (!person) return res.status(404).json({ error: 'User not found' });

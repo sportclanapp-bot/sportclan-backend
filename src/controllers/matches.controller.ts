@@ -2124,6 +2124,16 @@ export const RULE_KEYS = ['format', 'overs', 'rules'] as const;
 export async function updateMatch(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  // E-092 (Round 6): an edit that cancels is a cancel — the same people
+  // (never a casual match's umpire), the knockout guard, the competition moving
+  // on and the "Match cancelled" message. It used to skip all four.
+  if (req.body && typeof req.body === 'object' && req.body.status === 'cancelled') {
+    const others = Object.keys(req.body).filter((k) => k !== 'status');
+    if (others.length > 0) {
+      return res.status(400).json({ error: 'Cancel the match on its own, then make other changes.', code: 'CANCEL_ALONE' });
+    }
+    return cancelMatch(req, res);
+  }
   try {
     const { id } = req.params;
     const { data: match } = await supabase

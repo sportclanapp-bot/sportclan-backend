@@ -952,9 +952,14 @@ export async function listOpenMatches(req: Request, res: Response) {
 /**
  * Took part: the creator, the umpire, anyone in the line-up, or a member of
  * either registered team. Exported for tests.
+ * E-100 (Round 6): a member who was on the team when the match was played —
+ * someone who joined afterwards took no part in it.
  */
 export async function tookPartInMatch(
-  match: { id: string; created_by?: string | null; umpire_id?: string | null; team_a_id?: string | null; team_b_id?: string | null },
+  match: {
+    id: string; created_by?: string | null; umpire_id?: string | null; team_a_id?: string | null; team_b_id?: string | null;
+    completed_at?: string | null; scheduled_at?: string | null;
+  },
   userId: string,
 ): Promise<boolean> {
   if (match.created_by === userId || match.umpire_id === userId) return true;
@@ -967,13 +972,14 @@ export async function tookPartInMatch(
   if (row) return true;
   const teamIds = [match.team_a_id, match.team_b_id].filter(Boolean) as string[];
   if (!teamIds.length) return false;
-  const { data: member } = await supabase
+  let q = supabase
     .from('team_members')
     .select('user_id')
     .in('team_id', teamIds)
-    .eq('user_id', userId)
-    .limit(1)
-    .maybeSingle();
+    .eq('user_id', userId);
+  const playedBy = match.completed_at ?? match.scheduled_at ?? null;
+  if (playedBy) q = q.lte('joined_at', playedBy);
+  const { data: member } = await q.limit(1).maybeSingle();
   return !!member;
 }
 
@@ -998,7 +1004,7 @@ export async function rateMatchHandler(req: Request, res: Response) {
     // that actually happened.
     const { data: match } = await supabase
       .from('matches')
-      .select('id, status, created_by, umpire_id, team_a_id, team_b_id, voided_at')
+      .select('id, status, created_by, umpire_id, team_a_id, team_b_id, voided_at, completed_at, scheduled_at')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -1961,6 +1967,10 @@ export async function getMatch(req: Request, res: Response) {
     matchWithRating.can_cancel = !!userId && !isTerminalMatchStatus(match.status)
       && (match.tournament_id ? canManage === true && !koMatch : match.created_by === userId);
     matchWithRating.can_void = !!userId && await canVoidMatch(match, userId).catch(() => false);
+    // E-100 (Round 6): may the viewer rate it? rateMatchHandler's own rule, so
+    // the app offers the card to exactly the people the server accepts.
+    matchWithRating.can_rate = !!userId && match.status === 'completed' && !match.voided_at
+      && await tookPartInMatch(match, userId).catch(() => false);
     // Audit #5: may the viewer take the official's seat themselves ('assign'),
     // only offer to ('offer', casual matches: the creator accepts), or not at
     // all ('none', a tournament fixture they don't officiate)? And a pending

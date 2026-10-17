@@ -33,7 +33,7 @@ describe('D7 · the chat equals its audience', () => {
   });
   it('is idempotent: a chat already in sync needs no change', () => {
     const p = planChatSync(aud(['o'], ['p']), [{ user_id: 'o', role: 'admin' }, { user_id: 'p', role: 'member' }]);
-    expect(p).toEqual({ add: [], promote: [], remove: [] });
+    expect(p).toEqual({ add: [], promote: [], demote: [], remove: [] }); // E-128 (Round 6): the plan also demotes
   });
 });
 

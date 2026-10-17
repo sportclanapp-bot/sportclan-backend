@@ -66,11 +66,16 @@ export async function tournamentChatId(tournamentId: string): Promise<string | n
   return typeof meta._chat_id === 'string' ? meta._chat_id : null;
 }
 
-/** Pure: what to change so the chat equals the audience. */
+/**
+ * Pure: what to change so the chat equals the audience. E-128 (Round 6): the admins too — only the
+ * organisers are admins (D7), so an admin who isn't one any more (a removed co-organiser who still
+ * plays, the creator before a reassign, a player made admin when the organiser left) is made a
+ * member again. It only ever promoted.
+ */
 export function planChatSync(
   audience: ChatAudience,
   current: Array<{ user_id: string; role: string }>,
-): { add: Array<{ user_id: string; role: 'admin' | 'member' }>; promote: string[]; remove: string[] } {
+): { add: Array<{ user_id: string; role: 'admin' | 'member' }>; promote: string[]; demote: string[]; remove: string[] } {
   const want = new Map<string, 'admin' | 'member'>();
   for (const u of audience.players) want.set(u, 'member');
   for (const u of audience.organisers) want.set(u, 'admin'); // organiser wins over player
@@ -82,7 +87,8 @@ export function planChatSync(
     else if (role === 'admin' && have.get(u) !== 'admin') promote.push(u);
   }
   const remove = current.map((c) => c.user_id).filter((u) => !want.has(u));
-  return { add, promote, remove };
+  const demote = current.filter((c) => c.role === 'admin' && want.get(c.user_id) === 'member').map((c) => c.user_id);
+  return { add, promote, demote, remove };
 }
 
 /**
@@ -120,6 +126,9 @@ export async function syncTournamentChatMembers(tournamentId: string): Promise<{
       if (plan.add.length > 0) await joinChat(chatId, plan.add);
       if (plan.promote.length > 0) {
         await supabase.from('chat_participants').update({ role: 'admin' }).eq('chat_id', chatId).in('user_id', plan.promote);
+      }
+      if (plan.demote.length > 0) {
+        await supabase.from('chat_participants').update({ role: 'member' }).eq('chat_id', chatId).in('user_id', plan.demote);
       }
       if (plan.remove.length > 0) await leaveChat(chatId, plan.remove); // 098: soft leave
       added += plan.add.length; removed += plan.remove.length;

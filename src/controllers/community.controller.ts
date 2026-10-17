@@ -502,10 +502,19 @@ export async function createPost(req: Request, res: Response) {
     return res.status(400).json({ error: 'mentions must be a list of user ids' });
   }
 
+  // E-148 (Round 6): the type the post will carry (as p_post_type below). A
+  // result card is made only from a real match link (SC-193), and a poll only
+  // with its options — `post_type: 'match_result'` alone, or `post_type: 'poll'`
+  // with no options, stored a card that had nothing behind it.
+  const askedType = type || post_type || 'general';
+  if (askedType === 'match_result' && !match_id) {
+    return res.status(400).json({ error: 'A result is shared from its match: open the match and tap Share.', code: 'MATCH_REQUIRED' });
+  }
+
   // Poll validation: accept string[] from frontend; convert to JSONB with
   // generated option_id + zero votes.
   let pollOptions: { id: string; text: string; vote_count: number }[] | null = null;
-  if (type === 'poll' || Array.isArray(rawPollOptions)) {
+  if (askedType === 'poll' || Array.isArray(rawPollOptions)) {
     if (!Array.isArray(rawPollOptions) || rawPollOptions.length < 2 || rawPollOptions.length > 5) {
       return res.status(400).json({ error: 'Polls need 2-5 options' });
     }
@@ -752,16 +761,28 @@ export async function updatePost(req: Request, res: Response) {
   // SC-355: media + schedule are editable now. Both need the CURRENT row first —
   // rescheduling is only legal while the post is still pending, and we must not
   // let an edit resurrect a schedule on something already published.
-  let current: { scheduled_at?: string | null } | null = null;
-  if (media_urls !== undefined || scheduled_at !== undefined) {
+  let current: { scheduled_at?: string | null; post_type?: string | null } | null = null;
+  if (media_urls !== undefined || scheduled_at !== undefined || post_type != null) {
     const { data: row } = await supabase
       .from('community_posts')
-      .select('scheduled_at')
+      .select('scheduled_at, post_type')
       .eq('id', id)
       .eq('author_id', userId)
       .maybeSingle();
     if (!row) return res.status(404).json({ error: 'Post not found or not yours' });
     current = row;
+  }
+
+  // E-148 (Round 6): an edit can't turn a post INTO a match result or a poll —
+  // those are made with what they carry (a checked match link, the options), and
+  // an edit sets neither. Keeping the post's own type is fine (the app sends it).
+  if ((post_type === 'match_result' || post_type === 'poll') && current?.post_type !== post_type) {
+    return res.status(400).json({
+      error: post_type === 'poll'
+        ? 'A post can’t be changed into a poll. Start a new post and choose Poll.'
+        : 'A post can’t be changed into a match result. Share the result from its match.',
+      code: 'POST_TYPE_FIXED',
+    });
   }
 
   // SC-355: images are editable — the only way to fix a post whose image is dead.

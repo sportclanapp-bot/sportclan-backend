@@ -560,13 +560,17 @@ export async function createPost(req: Request, res: Response) {
   if (match_id) {
     const { data: m } = await supabase
       .from('matches')
-      .select('id, status, created_by')
+      .select('id, status, created_by, voided_at')
       .eq('id', match_id)
       .maybeSingle();
     if (!m || m.status !== 'completed') {
       return res
         .status(400)
         .json({ error: 'A result can only be shared for a completed match', code: 'MATCH_NOT_COMPLETED' });
+    }
+    // N-R6-11 (Round 6): a voided match doesn't count, so its result isn't shared as one.
+    if ((m as { voided_at?: string | null }).voided_at) {
+      return res.status(409).json({ error: 'This match was voided, so its result can’t be shared.', code: 'MATCH_VOIDED' });
     }
     let isParticipant = m.created_by === userId;
     if (!isParticipant) {

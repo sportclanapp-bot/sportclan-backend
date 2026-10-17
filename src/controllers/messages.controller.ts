@@ -45,6 +45,10 @@ const TOURNAMENT_CHAT = {
   error: 'This is a tournament’s chat. Its members follow the tournament: the organisers and the players of approved teams.',
   code: 'TOURNAMENT_CHAT',
 };
+const TOURNAMENT_LEAVE = {
+  error: 'You can’t leave a tournament’s chat while you’re in the tournament. Mute it instead.',
+  code: 'TOURNAMENT_CHAT',
+};
 
 /** B09-F5/F6: which of these ids are real, live (not deleted) accounts. */
 async function liveUserIds(ids: string[]): Promise<Set<string>> {
@@ -859,6 +863,9 @@ export async function leaveGroup(req: Request, res: Response) {
 
   const notGroup = await notAGroup(id);
   if (notGroup) return res.status(notGroup.status).json(notGroup.body);
+  // E-127 (Round 6): a tournament's chat holds exactly its organisers and players (D7), so the next
+  // sync put a leaver straight back — leaving never stuck. It's refused instead; muting still works.
+  if (await tournamentOfChat(id)) return res.status(409).json(TOURNAMENT_LEAVE);
 
   // SC-301 (SC-243 sibling): if an ADMIN leaves, hand the group to an heir BEFORE
   // removing them — otherwise the group is left admin-less and becomes a

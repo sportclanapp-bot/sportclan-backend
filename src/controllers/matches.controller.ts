@@ -2769,6 +2769,8 @@ export async function setMatchOfficials(req: Request, res: Response) {
     for (const k of fields) update[k] = body[k];
     const { data, error } = await supabase.from('matches').update(update).eq('id', id).select('*').single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // E-110 (Round 6): an official taken off the match gives up the pad with it.
+    try { await dropLeaseOfFormerOfficial(data as never); } catch { /* the next claim lets it go too */ }
 
     // Tell each newly named official (not the organiser naming themselves).
     const label = match.team_a_name && match.team_b_name ? `${match.team_a_name} vs ${match.team_b_name}` : 'a match';
@@ -4588,6 +4590,21 @@ async function leaseWithHolder(lease: Awaited<ReturnType<typeof getLease>>) {
   };
 }
 
+/**
+ * E-110 (Round 6): a lease held by someone who may no longer score this match
+ * (an umpire or scorer taken off it) is let go, so the official named instead
+ * claims it at once — the old phone kept it warm and blocked them, and a
+ * takeover was refused until five minutes after that phone stopped.
+ * Returns true when it let one go.
+ */
+export async function dropLeaseOfFormerOfficial(
+  match: { id: string; tournament_id?: string | null; created_by?: string | null; umpire_id?: string | null; scorer_id?: string | null },
+): Promise<boolean> {
+  const held = await getLease(match.id);
+  if (!held || await canOfficiateMatch(match, held.user_id)) return false;
+  return releaseLease(match.id, held.user_id, held.device_id);
+}
+
 export async function claimScoringLease(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -4606,6 +4623,7 @@ export async function claimScoringLease(req: Request, res: Response) {
     if (isTerminalMatchStatus(match.status)) {
       return res.status(409).json({ error: 'This match is finished and can no longer be scored.', code: 'MATCH_FINISHED' });
     }
+    await dropLeaseOfFormerOfficial(match); // E-110
     const out = await claimLease(id, userId, deviceId);
     if (!out.taken) {
       // Somebody else holds it. Not an error the caller can fix by retrying, so
@@ -4630,6 +4648,20 @@ export async function heartbeatScoringLease(req: Request, res: Response) {
     const { id } = req.params;
     const deviceId = deviceIdOf(req);
     if (!deviceId) return res.status(400).json({ error: 'A device id is required.' });
+    // E-110 (Round 6): a heartbeat keeps the pad only for someone who may still
+    // score — an umpire or scorer taken off the match lets it go here.
+    {
+      const { data: match } = await supabase
+        .from('matches').select('id, created_by, umpire_id, scorer_id, tournament_id').eq('id', id).maybeSingle();
+      if (match && !(await canOfficiateMatch(match, userId))) {
+        await releaseLease(id, userId, deviceId);
+        return res.status(409).json({
+          error: 'You’re no longer an official of this match, so you can’t score it.',
+          code: 'LEASE_LOST',
+          lease: await leaseWithHolder(await getLease(id)),
+        });
+      }
+    }
     const out = await heartbeatLease(id, userId, deviceId);
     if (!out.ok) {
       // A heartbeat NEVER reinstates a lease you no longer hold — being told
@@ -4691,6 +4723,7 @@ export async function takeOverScoringLease(req: Request, res: Response) {
     if (isTerminalMatchStatus(match.status)) {
       return res.status(409).json({ error: 'This match is finished and can no longer be scored.', code: 'MATCH_FINISHED' });
     }
+    await dropLeaseOfFormerOfficial(match); // E-110
     const out = await takeOverLease(id, userId, deviceId, reason);
     if (!out.ok) {
       return res.status(409).json({

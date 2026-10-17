@@ -1185,11 +1185,17 @@ export async function deleteMessage(req: Request, res: Response) {
   // window (never sent by the app) is gone; the flag is accepted and ignored.
   const { data: msg } = await supabase
     .from('messages')
-    .select('sender_id, created_at')
+    .select('sender_id, created_at, is_system')
     .eq('id', messageId)
     .single();
 
   if (!msg) return res.status(404).json({ error: 'Message not found' });
+  // E-136 (Round 6): a system line ('Group "X" created', 'Y was added') carries
+  // the admin who caused it as its sender, so they could blank it for everyone.
+  // It is the group's record, not their message.
+  if ((msg as { is_system?: boolean | null }).is_system) {
+    return res.status(403).json({ error: 'This line can’t be deleted.', code: 'SYSTEM_MESSAGE' });
+  }
 
   // SC-35: a server-side soft-delete blanks the message for EVERYONE, so it
   // must be sender-only regardless of `for_everyone`. Previously the mutation
@@ -1206,6 +1212,7 @@ export async function deleteMessage(req: Request, res: Response) {
     .update({ is_deleted: true, content: null, image_url: null })
     .eq('id', messageId)
     .eq('sender_id', userId)
+    .eq('is_system', false)
     .select('id');
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });

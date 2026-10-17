@@ -21,7 +21,8 @@ const PAGE = 20;
 /** Everyone a tournament (and its events) should reach: entrants' players (of `ids`), and the whole tournament's organisers and officials (`family`). */
 export async function tournamentAudience(rootId: string, ids: string[], family: string[] = ids): Promise<string[]> {
   const people = new Set<string>();
-  const entries = await selectAllIn(ids, (c, f, to) => supabase.from('tournament_entries').select('id, team_id').in('tournament_id', c).in('status', ['approved', 'pending']).order('id').range(f, to));
+  // E-089 (Round 6): the waitlist too — they may be moved into the draw, and need a court change as much as anyone.
+  const entries = await selectAllIn(ids, (c, f, to) => supabase.from('tournament_entries').select('id, team_id').in('tournament_id', c).in('status', ['approved', 'pending', 'waitlisted']).order('id').range(f, to));
   const teams = [...new Set(((entries ?? []) as Array<{ team_id: string | null }>).map((e) => e.team_id).filter((x): x is string => !!x))];
   if (teams.length) {
     const members = await selectAllIn(teams, (c, f, to) => supabase.from('team_members').select('team_id, user_id').in('team_id', c).order('team_id').range(f, to));

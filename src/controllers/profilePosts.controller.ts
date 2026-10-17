@@ -24,7 +24,7 @@ import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { LIMITS, firstDisallowedImageUrl, firstInvalidUrl } from '../utils/validation';
-import { blockedUserIds, isBlockedBetween } from '../utils/blocks';
+import { blockedUserIds, excludeIds, isBlockedBetween } from '../utils/blocks';
 import { normalizeClientKey } from '../utils/idempotency';
 import { attachLikes, detectProfanity } from './community.controller';
 
@@ -304,24 +304,30 @@ export async function listProfilePostComments(req: Request, res: Response) {
   // #4: the comments on a deleted wall post stay, out of sight with it.
   const wallPost = await profilePostForWrite(id);
   if (wallPost?.deleted) return res.status(410).json(postGone(wallPost));
+  // E-153 (Round 6): blocks, as on the post itself and on community comments.
+  // Blocked either way with the wall's owner → the thread is "not found", like
+  // the post (getProfilePost); comments by anyone blocked with the viewer are
+  // left out of the page and the count.
+  const blocked = await blockedUserIds(req.userId);
+  if (wallPost && blocked.has(wallPost.author_id)) return res.status(404).json({ error: 'Post not found' });
   const { limit: pageSize, offset } = parsePagination(req.query as Record<string, unknown>, {
     defaultLimit: 50,
     maxLimit: 100,
   });
 
   const [{ data, error, count }, live] = await Promise.all([
-    supabase
+    excludeIds(supabase
       .from('profile_post_comments')
       .select(`*, ${AUTHOR_SELECT}`, { count: 'exact' })
-      .eq('post_id', id)
+      .eq('post_id', id), 'author_id', blocked)
       .order('created_at', { ascending: true })
       .range(offset, offset + pageSize - 1),
     // Hard-delete list #5: COMMENTS · N counts live comments only.
-    supabase
+    excludeIds(supabase
       .from('profile_post_comments')
       .select('id', { count: 'exact', head: true })
       .eq('post_id', id)
-      .is('deleted_at', null),
+      .is('deleted_at', null), 'author_id', blocked),
   ]);
   if (error) return res.status(500).json({ error: sanitizeError(error) });
 

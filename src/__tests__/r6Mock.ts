@@ -8,7 +8,7 @@ export function supabaseStandIn() {
     const q: string[] = [`from:${t}`];
     mock.log.push(q);
     const chain: any = {};
-    for (const m of ['select', 'in', 'not', 'eq', 'neq', 'is', 'limit', 'maybeSingle', 'single', 'update', 'delete', 'order', 'or', 'ilike', 'range', 'gte', 'lt', 'upsert', 'insert', 'filter']) {
+    for (const m of ['select', 'in', 'not', 'eq', 'neq', 'is', 'limit', 'maybeSingle', 'single', 'update', 'delete', 'order', 'or', 'ilike', 'range', 'gte', 'gt', 'lt', 'lte', 'upsert', 'insert', 'filter']) {
       chain[m] = jest.fn((...a: unknown[]) => { q.push(`${m}:${JSON.stringify(a)}`); return chain; });
     }
     chain.then = (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) => {

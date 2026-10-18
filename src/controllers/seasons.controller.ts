@@ -164,7 +164,7 @@ export async function endSeason(req: Request, res: Response) {
   // moves up instead of a podium spot going empty.
   const testFlag = await testFlagReady();
   const { data: sports } = await supabase.from('sports').select('id, name');
-  const insertRows: Array<{ user_id: string; season_id: string; sport_id: string; medal_type: string }> = [];
+  const insertRows: Array<{ user_id: string; season_id: string; sport_id: string; medal_type: string; final_rating: number; final_rank: number }> = [];
   for (const sport of sports ?? []) {
     let topQ = supabase
       .from('user_sport_profiles')
@@ -184,12 +184,20 @@ export async function endSeason(req: Request, res: Response) {
         season_id: season.id,
         sport_id: sport.id,
         medal_type: medalMap[idx] ?? 'participant',
+        // N-R7-1 (Step 2): both are NOT NULL (migration 078, from live), so every medal insert
+        // failed — silently — and the season closed with no medals.
+        final_rating: Math.round(Number(row.rating) || 0),
+        final_rank: idx + 1,
       });
     });
   }
 
   if (insertRows.length > 0) {
-    await supabase.from('season_medals').insert(insertRows);
+    // N-R7-1: a failed save stops here, before the season closes, so the end can be run again.
+    const { error: medalErr } = await supabase.from('season_medals').insert(insertRows);
+    if (medalErr) {
+      return res.status(500).json({ error: 'The season’s medals couldn’t be saved, so the season is still open. Try again.', code: 'MEDALS_NOT_SAVED' });
+    }
   }
 
   // Close current season + create the next one.

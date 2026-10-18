@@ -351,7 +351,7 @@ export async function sendOtp(req: Request, res: Response) {
   // gets a clear, retryable message instead of "Internal server error".
   try {
     await setOtp(p, code, purpose, OTP_TTL_SECONDS);
-    await clearWrongCodes(p, who); // a new code, a new count of THIS requester's wrong guesses
+    await clearWrongCodes(p, who, code !== prev?.code); // this requester's count; the number's too for a brand-new code (N-R7-3)
   } catch (err: any) {
     // eslint-disable-next-line no-console
     console.error('[send-otp] OTP storage unavailable:', err?.message);

@@ -76,7 +76,7 @@ describe('5 wrong codes lock the guesser, not the number (audit #10, 11 Oct 2026
   });
   test("a new code starts a new count for that requester", () => {
     const auth = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'auth.controller.ts'), 'utf8');
-    expect(auth).toMatch(/await setOtp\(p, code, purpose, OTP_TTL_SECONDS\);\s*await clearWrongCodes\(p, who\);/);
+    expect(auth).toMatch(/await setOtp\(p, code, purpose, OTP_TTL_SECONDS\);\s*await clearWrongCodes\(p, who(, code !== prev\?\.code)?\);/);
   });
   test('a right code clears the count', async () => {
     store.set(P, { code: '482913', purpose: 'reset' });

@@ -101,8 +101,14 @@ export function otpCheckError(result: Exclude<OtpCheck, 'ok'>): { status: number
  * a new code. Guessing stays bounded by the per-number limit on the checking
  * endpoints (10 an hour) and the send limits.
  */
-export async function clearWrongCodes(phone: string, requester?: string): Promise<void> {
-  // Audit #10: a requester's new code clears only THEIR wrong guesses; the
-  // number's own count (guesses from anyone) runs out on its own.
-  await clearCounter(wrongKey(phone, requester ?? 'unknown'));
+export async function clearWrongCodes(phone: string, requester?: string, newCode = false): Promise<void> {
+  // Audit #10: a requester's send clears only THEIR wrong guesses; re-sending a
+  // still-valid code leaves the number's own count (guesses from anyone) alone.
+  // N-R7-3 (Step 2): but once 20 guesses had deleted the code, that count still
+  // locked every NEW code for 15 minutes — the owner too. A brand-new code
+  // starts a fresh count; new codes stay capped by the send limits.
+  await Promise.all([
+    clearCounter(wrongKey(phone, requester ?? 'unknown')),
+    ...(newCode ? [clearCounter(wrongKey(phone))] : []),
+  ]);
 }

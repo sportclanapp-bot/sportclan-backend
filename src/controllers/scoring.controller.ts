@@ -1479,7 +1479,8 @@ export const isGuestId = (id: string | null | undefined): boolean =>
 export function sanitizePlayerName(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined;
   // eslint-disable-next-line no-control-regex
-  const clean = raw.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  // N-R7-26 (Step 2): a control character is a gap, not nothing — a pasted "Ravi\tKumar" read "RaviKumar".
+  const clean = raw.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
   return clean.length ? clean : undefined;
 }
 

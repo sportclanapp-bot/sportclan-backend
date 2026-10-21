@@ -73,7 +73,8 @@ describe('both removal paths use it', () => {
   });
   test('DELETE /matches/:id/events/:eventId: logs "delete" with the full row (it logged only the payload, and lost it)', () => {
     const f = fnBody('controllers/matchFeatures.controller.ts', 'deleteMatchEvent');
-    expect(f).toMatch(/logThenDeleteEvent\(event as \{ id: string; match_id: string \}, userId, 'delete'\)/);
+    expect(f).toMatch(/logThenDeleteEvent\(event as \{ id: string; match_id: string \}, userId, removal\)/);
+    expect(f).toMatch(/const removal = String\(req\.query\.undo\) === '1' \? 'undo' : 'delete'/);
     expect(f).not.toMatch(/old_payload: event\.payload/);
   });
 });
@@ -107,5 +108,12 @@ describe('who reads the log', () => {
     expect(code('controllers/matches.controller.ts')).toContain("from('match_event_audit').select('id', { count: 'exact', head: true }).eq('match_id', id).eq('action', 'edit')");
     expect(code('controllers/matchFeatures.controller.ts')).toMatch(/function getScoringEditLog[\s\S]*?from\('match_event_audit'\)\s*\.select/);
     expect((all.match(/from\('match_event_audit'\)\.(insert|update)/g) ?? []).length).toBe(3);
+  });
+});
+
+describe('N-R7-24 · the pad\'s Undo through DELETE is an undo', () => {
+  test('?undo=1 logs "undo" (Scoring log: undid; archive reason: scoring undo); without it, an editor\'s delete', () => {
+    const f = fnBody('controllers/matchFeatures.controller.ts', 'deleteMatchEvent');
+    expect(f).toMatch(/String\(req\.query\.undo\) === '1' \? 'undo' : 'delete'/);
   });
 });

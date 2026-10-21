@@ -639,7 +639,10 @@ export async function deleteMatchEvent(req: Request, res: Response) {
 
     // Hard-delete list #7: logged first — who, when, the whole event — and
     // only then deleted. (The row now outlives the event: migration 107.)
-    const removed = await logThenDeleteEvent(event as { id: string; match_id: string }, userId, 'delete');
+    // N-R7-24 (Step 2): the pad's Undo reaches here (it removes that exact event, SC-421) and says so with
+    // ?undo=1 — it was logged as an editor's delete ('deleted' in the Scoring log, reason 'scoring delete').
+    const removal = String(req.query.undo) === '1' ? 'undo' : 'delete';
+    const removed = await logThenDeleteEvent(event as { id: string; match_id: string }, userId, removal);
     if (removed.error) return res.status(500).json({ error: removed.error });
 
     // SC-319: rebuild score_summary from the remaining events (was left stale).

@@ -36,6 +36,9 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 /** The score a match has now (goal sports' A.score; a set sport's sets won), for "result stands". */
 export function scoreNow(ss: Record<string, any> | null | undefined): { A: number; B: number } | null {
   if (!ss) return null;
+  // N-R7-37 (Step 2): a cricket innings that never started (no ball bowled on either side) is not a 0–0 score.
+  const unbowled = (x: any) => num(x?.balls) === 0 && !num(x?.runs) && !num(x?.wickets);
+  if (unbowled(ss.A) && unbowled(ss.B)) return null;
   const a = num(ss.team_a_score ?? ss.A?.score ?? ss.A?.value);
   const b = num(ss.team_b_score ?? ss.B?.score ?? ss.B?.value);
   if (a != null && b != null) return { A: a, B: b };

@@ -44,7 +44,16 @@ export async function getTransactions(req: Request, res: Response) {
 
   const { data, count, error } = await query;
   // Phase 3 B10-F2: an offset past the end is an empty last page, not a 500.
-  if (isRangeError(error)) return res.json({ transactions: [], total: count ?? 0 });
+  // N-R7-S1 (Step 2 B17, RW-G4-069): PostgREST refuses that range with 416 and
+  // supabase-js then has no count, so the page said total 0. Count on its own.
+  if (isRangeError(error)) {
+    if (count != null) return res.json({ transactions: [], total: count });
+    let head = supabase.from('transactions').select('id', { count: 'exact', head: true }).eq('user_id', userId);
+    if (types.length === 1) head = head.eq('type', types[0]);
+    else if (types.length > 1) head = head.in('type', types);
+    const { count: all } = await head;
+    return res.json({ transactions: [], total: all ?? 0 });
+  }
   if (error) return res.status(500).json({ error: error.message });
 
   return res.json({ transactions: data ?? [], total: count ?? 0 });

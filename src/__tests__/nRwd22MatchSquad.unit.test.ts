@@ -9,7 +9,7 @@ jest.mock('../utils/supabase', () => ({
   supabase: {
     from: jest.fn((t: string) => {
       const chain: any = {};
-      for (const m of ['select', 'eq']) chain[m] = jest.fn(() => chain);
+      for (const m of ['select', 'eq', 'is']) chain[m] = jest.fn(() => chain);
       chain.maybeSingle = jest.fn(async () => ({ data: mockMatch, error: null }));
       chain.then = (ok: (v: unknown) => unknown) => Promise.resolve(ok({ data: t === 'team_members' ? mockMembers : null, error: null }));
       return chain;

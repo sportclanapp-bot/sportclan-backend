@@ -464,7 +464,8 @@ export async function getMatchSquad(req: Request, res: Response) {
     if (!(await canOfficiateMatch(match, req.userId))) return res.status(403).json({ error: 'Only the match’s officials can see its squads.', code: 'NOT_OFFICIAL' });
     const teamId = side === 'A' ? match.team_a_id : match.team_b_id;
     if (!teamId) return res.json({ lineup: [] });
-    const { data: rows } = await supabase.from('team_members').select('user_id, role').eq('team_id', teamId);
+    // N-R7-39 (Step 2): a member whose account was deleted is never put into a line-up.
+    const { data: rows } = await excludeDeletedEmbed(supabase.from('team_members').select('user_id, role, user:user_id!inner (deleted_at)').eq('team_id', teamId), 'user');
     const max = rulesOf('cricket', m as never).players ?? 11;
     return res.json({ lineup: squadLineupOf((rows ?? []) as Array<{ user_id: string | null; role: string | null }>, side, max) });
   } catch {

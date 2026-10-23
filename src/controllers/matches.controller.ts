@@ -4064,6 +4064,13 @@ export async function completeMatch(req: Request, res: Response) {
       if (!superOverScore && derivedSide && lastSO?.done && lastSO.winner === derivedSide && isBracketMatch && slug === 'cricket') {
         ss.result = superOverPlayedText(derivedSide === 'A' ? aName : bName, lastSO);
       }
+      // N-R7-49: a tied knockout typed in (no balls, no super-over score) — the organiser
+      // named who won the super over; say so, as the sheet's preview did ("Tigers won").
+      if (!superOverScore && !tieFallback && !lastSO && derivedSide && isBracketMatch && slug === 'cricket'
+        && (ss as { score_only?: boolean }).score_only === true && aScore === bScore) {
+        ss.result = `Tied · ${derivedSide === 'A' ? aName : bName} won the super over`;
+        resultForNotice = ss.result;
+      }
       if (tieFallback && derivedSide && isBracketMatch && slug === 'cricket') {
         ss.tie_decided_by = tieFallback;
         ss.result = tieFallbackText(derivedSide === 'A' ? aName : bName, tieFallback as TieFallback, fallbackBoundaries ?? undefined);

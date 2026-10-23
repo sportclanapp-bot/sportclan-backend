@@ -148,6 +148,13 @@ describe('a typed cricket score', () => {
     expect((await call({ is_draw: true, score_summary: typed({ runs: 100, wickets: 6, overs: '10' }, { runs: 100, wickets: 9, overs: '10' }) })).body.code).toBe('BRACKET_NEEDS_WINNER');
     expect((await call({ winner_team_id: TB, winner_side: 'B', score_summary: typed({ runs: 100, wickets: 6, overs: '10' }, { runs: 100, wickets: 9, overs: '10' }) })).statusCode).toBe(200);
   });
+  test('N-R7-49: a tied knockout typed in reads "Tied · <side> won the super over" (the sheet\'s preview), not "<side> won"', async () => {
+    format = 'knockout';
+    setup();
+    const r = await call({ winner_team_id: TB, winner_side: 'B', score_summary: typed({ runs: 140, wickets: 6, overs: '10' }, { runs: 140, wickets: 8, overs: '10' }) });
+    expect(r.statusCode).toBe(200);
+    expect(stored()).toMatchObject({ result: 'Tied · Tigers won the super over', winner_side: 'B' });
+  });
   test('refusals name the field', async () => {
     setup();
     const bad = async (a: object, b: object, first = 'A') => (await call({ winner_team_id: TA, winner_side: 'A', score_summary: typed(a, b, first) })).body;

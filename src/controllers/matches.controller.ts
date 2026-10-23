@@ -1876,7 +1876,7 @@ export async function getMatch(req: Request, res: Response) {
       scoringLease,
       [{ count: followerCount }, { data: myFollow }],
       canOfficiate,
-      tournamentFormat,
+      tournamentRow,
       myJoinRequest,
       umpire,
       canManage,
@@ -1902,8 +1902,8 @@ export async function getMatch(req: Request, res: Response) {
       ]),
       canOfficiateMatch(match, userId),
       match.tournament_id
-        ? supabase.from('tournaments').select('format').eq('id', match.tournament_id).maybeSingle()
-          .then(({ data: tf }) => (tf as any)?.format ?? null)
+        ? supabase.from('tournaments').select('format, name').eq('id', match.tournament_id).maybeSingle()
+          .then(({ data: tf }) => (tf as { format?: string | null; name?: string | null } | null) ?? null)
         : Promise.resolve(undefined),
       Promise.resolve(
         supabase.from('match_join_requests').select('status').eq('match_id', id).eq('user_id', userId).maybeSingle(),
@@ -1920,6 +1920,8 @@ export async function getMatch(req: Request, res: Response) {
         ? isTournamentOrganiser(match.tournament_id, userId).catch(() => false)
         : Promise.resolve(!!userId && (match.created_by === userId || match.umpire_id === userId)),
     ]);
+    // N-R7-50: the tournament's name too (the result poster's subtitle), beside its format.
+    const tournamentFormat = tournamentRow === undefined ? undefined : tournamentRow?.format ?? null;
     timer.mark('reads');
 
     const matchWithRating: any = { ...match };
@@ -2018,7 +2020,7 @@ export async function getMatch(req: Request, res: Response) {
     // from a round_robin/league match (round=1 but NOT a bracket — may draw /
     // plainly abandon). Mirrors the server's isKnockoutBracketMatch discriminator;
     // `round` alone can't distinguish them. Null for casual (no tournament).
-    if (match.tournament_id) matchWithRating.tournament_format = tournamentFormat;
+    if (match.tournament_id) { matchWithRating.tournament_format = tournamentFormat; matchWithRating.tournament_name = tournamentRow?.name ?? null; }
     // BUILD 2.1: always the rules as data — read back from format / overs for a
     // match stored before rules were (it plays exactly as it did).
     if (!matchWithRating.rules) {

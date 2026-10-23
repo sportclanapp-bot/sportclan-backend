@@ -2540,6 +2540,8 @@ export async function getBracket(req: Request, res: Response) {
       ...(bracket ? { bracket } : {}),
       matches: ms.map((m) => {
         const ss: any = m.score_summary ?? {};
+        // N-R7-59: a best-of-N cricket series is scored in games won (2–1), not the last game's runs.
+        const seriesTie = ss?.tie?.series === true ? ss.tie : null;
         return {
           id: m.id,
           team_a_id: m.team_a_id,
@@ -2548,8 +2550,8 @@ export async function getBracket(req: Request, res: Response) {
           team_b_name: m.team_b_name,
           // V109 (visual review): the final's card showed no score. Cricket keeps
           // runs, football goals — read the same shapes the result screen does.
-          score_a: ss.team_a_score ?? ss?.A?.score ?? ss?.A?.runs ?? ss.goals_a ?? null,
-          score_b: ss.team_b_score ?? ss?.B?.score ?? ss?.B?.runs ?? ss.goals_b ?? null,
+          score_a: seriesTie ? Number(seriesTie.rubbersA ?? 0) : ss.team_a_score ?? ss?.A?.score ?? ss?.A?.runs ?? ss.goals_a ?? null,
+          score_b: seriesTie ? Number(seriesTie.rubbersB ?? 0) : ss.team_b_score ?? ss?.B?.score ?? ss?.B?.runs ?? ss.goals_b ?? null,
           winner_team_id: m.winner_team_id,
           status: m.status,
           // V109/SC-428: fetched above but dropped here, so a voided final never

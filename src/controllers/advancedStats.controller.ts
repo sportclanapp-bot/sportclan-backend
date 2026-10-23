@@ -1,4 +1,4 @@
-import { selectAll } from '../utils/selectAll';
+import { selectAll, selectAllIn } from '../utils/selectAll';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { resolveSportId } from '../utils/sportId';
@@ -111,18 +111,20 @@ export async function getAdvancedStats(req: Request, res: Response) {
     const matchIds = history.map((h) => h.match_id).filter(Boolean) as string[];
     const idFilter = matchIds.length ? matchIds : ['00000000-0000-0000-0000-000000000000'];
 
-    const { data: matchRows } = await supabase
+    // N-R7-52: read in chunks — one `.in()` of every id (1,363 for a busy player) is a URL
+    // the gateway refuses, and the read came back empty: no splits, no head-to-head.
+    const matches = await selectAllIn<any>(idFilter, (c, f, to) => supabase
       .from('matches')
       .select('id, team_a_id, team_b_id, team_a_name, team_b_name, winner_team_id, scheduled_at, format, city_id')
-      .in('id', idFilter)
-      .is('voided_at', null); // SC-424
-    const matches = matchRows ?? [];
+      .in('id', c)
+      .is('voided_at', null) // SC-424
+      .order('id').range(f, to)).catch(() => [] as any[]);
     const matchById = new Map<string, (typeof matches)[number]>();
     for (const m of matches) matchById.set(m.id as string, m);
 
-    const { data: myParts } = await supabase
+    const myParts = await selectAllIn<any>(idFilter, (c, f, to) => supabase
       .from('match_participants').select('match_id, team_side')
-      .eq('user_id', targetId).in('match_id', idFilter);
+      .eq('user_id', targetId).in('match_id', c).order('match_id').range(f, to)).catch(() => [] as any[]); // N-R7-52
     const mySideByMatch = new Map<string, 'A' | 'B'>();
     for (const p of myParts ?? []) if (p.match_id) mySideByMatch.set(p.match_id as string, p.team_side as 'A' | 'B');
 
@@ -167,8 +169,8 @@ export async function getAdvancedStats(req: Request, res: Response) {
     const oneVoneIds = matches.filter((m) => !m.team_a_id && !m.team_b_id).map((m) => m.id as string);
     const oppUserByMatch = new Map<string, string>();
     if (oneVoneIds.length) {
-      const { data: allParts } = await supabase
-        .from('match_participants').select('match_id, user_id, team_side').in('match_id', oneVoneIds);
+      const allParts = await selectAllIn<any>(oneVoneIds, (c, f, to) => supabase
+        .from('match_participants').select('match_id, user_id, team_side').in('match_id', c).order('match_id').range(f, to)).catch(() => [] as any[]); // N-R7-52
       const byMatch = new Map<string, Array<{ user_id: string; side: string }>>();
       for (const p of allParts ?? []) {
         const arr = byMatch.get(p.match_id as string) ?? [];
@@ -184,7 +186,7 @@ export async function getAdvancedStats(req: Request, res: Response) {
     const oppUserIds = Array.from(new Set([...oppUserByMatch.values()]));
     const userName = new Map<string, string>();
     if (oppUserIds.length) {
-      const { data: us } = await supabase.from('users').select('id, name, username').in('id', oppUserIds);
+      const us = await selectAllIn<any>(oppUserIds, (c, f, to) => supabase.from('users').select('id, name, username').in('id', c).order('id').range(f, to)).catch(() => [] as any[]); // N-R7-52
       for (const u of us ?? []) userName.set(u.id as string, (u.name as string) || (u.username as string) || 'Player');
     }
 

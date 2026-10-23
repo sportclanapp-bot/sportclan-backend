@@ -43,7 +43,7 @@ describe('V109 · the bracket carries the score and the void', () => {
   const b = fnBody('getBracket');
   it('voided_at reaches the response', () => expect(b).toMatch(/voided_at: \(m as any\)\.voided_at \?\? null/));
   it('cricket runs and football goals count as the score', () => {
-    expect(b).toMatch(/score_a: ss\.team_a_score \?\? ss\?\.A\?\.score \?\? ss\?\.A\?\.runs \?\? ss\.goals_a \?\? null/);
+    expect(b).toMatch(/score_a: (seriesTie \? Number\(seriesTie\.rubbersA \?\? 0\) : )?ss\.team_a_score \?\? ss\?\.A\?\.score \?\? ss\?\.A\?\.runs \?\? ss\.goals_a \?\? null/); // N-R7-59: a series scores games won
   });
 });
 

@@ -4054,7 +4054,7 @@ export async function maybeSeedKnockout(tournamentId: string): Promise<void> {
     const detail = rankTeamsDetailed(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label));
     const live = detail.order.filter((id) => !outIds.has(id));
     const places = new Set(live.slice(0, qualsPerGroup + (bestNextOn ? 1 : 0)));
-    if (detail.level.some((cl) => { const c = cl.filter((id) => !outIds.has(id)); return c.length > 1 && c.some((id) => places.has(id)); })) return;
+    if (detail.level.some((cl) => { const c = cl.filter((id) => !outIds.has(id)); return c.length > 1 && c.every((id) => (globalStats.get(id)?.played ?? 0) > 0) && c.some((id) => places.has(id)); })) return; // as the table's "level" note
   }
   for (const label of labels) {
     const orderedIds = rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label)).filter((id) => !outIds.has(id)); // audit #54

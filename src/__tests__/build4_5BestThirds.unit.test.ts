@@ -44,8 +44,9 @@ import { getTournamentStandings } from '../controllers/features.controller';
 import { openKnockoutPlaces, bestPlacedAcrossGroups, computeStats, type GMatch } from '../utils/standings';
 
 const T = 't1';
-const g = (id: string, label: string, a: string, b: string, winner: string | null) =>
-  ({ id, tournament_id: T, team_a_id: a, team_b_id: b, winner_team_id: winner, status: 'completed', voided_at: null, round: 0, group_label: label, next_match_id: null, score_summary: {} });
+// N-R7-S1: scores that settle each group (a group level on every tie-break now waits for a draw of lots)
+const g = (id: string, label: string, a: string, b: string, winner: string | null, sa = winner === a ? 1 : 0, sb = winner === b ? 1 : 0) =>
+  ({ id, tournament_id: T, team_a_id: a, team_b_id: b, winner_team_id: winner, status: 'completed', voided_at: null, round: 0, group_label: label, next_match_id: null, score_summary: { A: { score: sa }, B: { score: sb } } });
 const entry = (id: string, label: string) => ({ tournament_id: T, team_id: id, group_label: label, status: 'approved', team: { id, name: id } });
 const ko = (id: string, n: number) => ({ id, tournament_id: T, team_a_id: null, team_b_id: null, status: 'scheduled', round: 1, match_no: n, group_label: null, next_match_id: `sf${n >> 1}`, next_slot: n % 2 ? 'b' : 'a', voided_at: null, score_summary: {} });
 
@@ -75,10 +76,10 @@ describe('BUILD 4.5 · best third places fill the knockout', () => {
     db.tournaments = [{ id: T, status: 'live', format: 'groups_knockout', champion_team_id: null, tiebreaker_rules: [], num_groups: 3, group_size: null, qualifiers_per_group: 2, settings: { v: 1, bestThirds: true } }];
     db.tournament_entries = ['a', 'b', 'c'].flatMap((l) => [1, 2, 3].map((n) => entry(`${l}${n}`, l.toUpperCase())));
     db.matches = [
-      // A: a1 6, a2 3, a3 0.   B: b1 6, b2 1, b3 1 (b2 over b3 on id).   C: a cycle, 3 each → c3 third on 3.
+      // A: a1 6, a2 3, a3 0.   B: b1 6, b2 1, b3 1 (b2 over b3 on goal difference).   C: a cycle, 3 each → c3 third on 3 (goal difference).
       g('a12', 'A', 'a1', 'a2', 'a1'), g('a13', 'A', 'a1', 'a3', 'a1'), g('a23', 'A', 'a2', 'a3', 'a2'),
-      g('b12', 'B', 'b1', 'b2', 'b1'), g('b13', 'B', 'b1', 'b3', 'b1'), g('b23', 'B', 'b2', 'b3', null),
-      g('c12', 'C', 'c1', 'c2', 'c1'), g('c23', 'C', 'c2', 'c3', 'c2'), g('c31', 'C', 'c3', 'c1', 'c3'),
+      g('b12', 'B', 'b1', 'b2', 'b1'), g('b13', 'B', 'b1', 'b3', 'b1', 2, 0), g('b23', 'B', 'b2', 'b3', null),
+      g('c12', 'C', 'c1', 'c2', 'c1'), g('c23', 'C', 'c2', 'c3', 'c2', 2, 0), g('c31', 'C', 'c3', 'c1', 'c3'),
       ko('q0', 0), ko('q1', 1), ko('q2', 2), ko('q3', 3),
     ];
   });
@@ -111,8 +112,8 @@ describe('BUILD 4.5 · the table marks the best thirds as qualifying', () => {
     db.tournament_entries = ['a', 'b', 'c'].flatMap((l) => [1, 2, 3].map((n) => entry(`${l}${n}`, l.toUpperCase())));
     db.matches = [
       g('a12', 'A', 'a1', 'a2', 'a1'), g('a13', 'A', 'a1', 'a3', 'a1'), g('a23', 'A', 'a2', 'a3', 'a2'),
-      g('b12', 'B', 'b1', 'b2', 'b1'), g('b13', 'B', 'b1', 'b3', 'b1'), g('b23', 'B', 'b2', 'b3', null),
-      g('c12', 'C', 'c1', 'c2', 'c1'), g('c23', 'C', 'c2', 'c3', 'c2'), g('c31', 'C', 'c3', 'c1', 'c3'),
+      g('b12', 'B', 'b1', 'b2', 'b1'), g('b13', 'B', 'b1', 'b3', 'b1', 2, 0), g('b23', 'B', 'b2', 'b3', null),
+      g('c12', 'C', 'c1', 'c2', 'c1'), g('c23', 'C', 'c2', 'c3', 'c2', 2, 0), g('c31', 'C', 'c3', 'c1', 'c3'),
     ];
   });
   const table = async () => {

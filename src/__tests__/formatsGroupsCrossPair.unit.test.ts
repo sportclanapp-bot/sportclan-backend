@@ -44,8 +44,9 @@ import { advanceTournamentWinner } from '../controllers/tournaments.controller';
 import { crossGroupFirstRound } from '../utils/koFirstRound';
 
 const T = 't1';
-const g = (id: string, label: string, a: string, b: string, winner: string | null) =>
-  ({ id, tournament_id: T, team_a_id: a, team_b_id: b, winner_team_id: winner, status: 'completed', voided_at: null, round: 0, group_label: label, next_match_id: null, score_summary: {} });
+// N-R7-S1: scores that settle each group (a group level on every tie-break now waits for a draw of lots)
+const g = (id: string, label: string, a: string, b: string, winner: string | null, sa = winner === a ? 1 : 0, sb = winner === b ? 1 : 0) =>
+  ({ id, tournament_id: T, team_a_id: a, team_b_id: b, winner_team_id: winner, status: 'completed', voided_at: null, round: 0, group_label: label, next_match_id: null, score_summary: { A: { score: sa }, B: { score: sb } } });
 const entry = (id: string, label: string) => ({ tournament_id: T, team_id: id, group_label: label, status: 'approved', team: { id, name: id } });
 
 describe('groups → knockout pairs across groups', () => {
@@ -54,9 +55,9 @@ describe('groups → knockout pairs across groups', () => {
     db.tournament_entries = [entry('a1', 'A'), entry('a2', 'A'), entry('a3', 'A'), entry('b1', 'B'), entry('b2', 'B'), entry('b3', 'B')];
     db.matches = [
       // A: a1 wins both (6 pts); a2 and a3 draw (1 pt each) → a1 top, a runner-up on 1 pt
-      g('ga1', 'A', 'a1', 'a2', 'a1'), g('ga2', 'A', 'a1', 'a3', 'a1'), g('ga3', 'A', 'a2', 'a3', null),
+      g('ga1', 'A', 'a1', 'a2', 'a1'), g('ga2', 'A', 'a1', 'a3', 'a1', 2, 0), g('ga3', 'A', 'a2', 'a3', null),
       // B: a cycle, 3 pts each → the B runner-up (3 pts) outranks A's (1 pt)
-      g('gb1', 'B', 'b1', 'b2', 'b1'), g('gb2', 'B', 'b2', 'b3', 'b2'), g('gb3', 'B', 'b3', 'b1', 'b3'),
+      g('gb1', 'B', 'b1', 'b2', 'b1', 2, 0), g('gb2', 'B', 'b2', 'b3', 'b2'), g('gb3', 'B', 'b3', 'b1', 'b3'),
       { id: 'sf1', tournament_id: T, team_a_id: null, team_b_id: null, status: 'scheduled', round: 1, match_no: 0, group_label: null, next_match_id: 'f', voided_at: null },
       { id: 'sf2', tournament_id: T, team_a_id: null, team_b_id: null, status: 'scheduled', round: 1, match_no: 1, group_label: null, next_match_id: 'f', voided_at: null },
     ];

@@ -55,3 +55,15 @@ test('N-R7-53 first round: clubmates swapped apart land in opposite halves (they
   const half = (i: number) => (i < out.length / 2 ? 0 : 1);
   expect(half(at('colts'))).not.toBe(half(at('seniors')));
 });
+test('N-R7-S2 first round: clubmates drawn into the same half are moved to opposite halves (SPP2-FOO-041)', () => {
+  // A random 8-team draw: Bears (b side of pair 3) and Hawks (a side of pair 4) would meet in the semi-final.
+  const club3: Record<string, string> = { bears: 'Kolhapur FC', hawks: 'Kolhapur FC' };
+  const t = (id: string) => ({ id });
+  const pairs = [{ a: t('tigers'), b: t('lions') }, { a: t('wolves'), b: t('sharks') }, { a: t('eagles'), b: t('bears') }, { a: t('hawks'), b: t('panthers') }];
+  const out = separateClubsInRound1(pairs, (id) => club3[id] ?? null);
+  const at = (id: string) => out.findIndex((p) => p.a?.id === id || p.b?.id === id);
+  const half = (i: number) => (i < out.length / 2 ? 0 : 1);
+  expect(half(at('bears'))).not.toBe(half(at('hawks')));
+  expect(out.map((p) => p.a!.id)).toEqual(['tigers', 'wolves', 'eagles', 'hawks']); // seeds (a sides) stay
+  expect(out.flatMap((p) => [p.a!.id, p.b!.id]).sort()).toEqual(['bears', 'eagles', 'hawks', 'lions', 'panthers', 'sharks', 'tigers', 'wolves']);
+});

@@ -70,7 +70,10 @@ export function separateClubsInRound1<T extends { id: string }>(
   const worse = (p: Pair<T>) => (p.a && p.b ? alsoApart(p.a.id, p.b.id) : false);
   for (let i = 0; i < out.length; i++) {
     if (!bad(out[i]!)) continue;
-    for (let j = 0; j < out.length; j++) {
+    // N-R7-53: try the pairs farthest away first (the other half of the draw), so the
+    // clubmates can only meet as late as possible — not in the next round.
+    const order = out.map((_, j) => j).sort((x, y) => Math.abs(y - i) - Math.abs(x - i) || x - y);
+    for (const j of order) {
       if (j === i || !out[j]!.b || !out[i]!.b) continue;
       const pi = { a: out[i]!.a, b: out[j]!.b };
       const pj = { a: out[j]!.a, b: out[i]!.b };

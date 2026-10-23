@@ -44,3 +44,14 @@ test('only for a draw', () => {
   expect(settingsRefusal('carrom', 'league', { separateClubs: true })?.error).toBe('Keeping clubs apart is for a draw — a knockout, groups or a Swiss.') // Stage 12 · CH2;
   expect(settingsRefusal('carrom', 'knockout', { separateClubs: true })).toBeNull();
 });
+test('N-R7-53 first round: clubmates swapped apart land in opposite halves (they can only meet in the final)', () => {
+  // 8-team draw by entry order: pairs [1v8, 4v5, 2v7, 3v6]; SP Colts (1) and SP Seniors (8) share a club.
+  const club2: Record<string, string> = { colts: 'Shivaji Park CC', seniors: 'Shivaji Park CC' };
+  const t = (id: string) => ({ id });
+  const pairs = [{ a: t('colts'), b: t('seniors') }, { a: t('d'), b: t('e') }, { a: t('b'), b: t('g') }, { a: t('c'), b: t('f') }];
+  const out = separateClubsInRound1(pairs, (id) => club2[id] ?? null);
+  const at = (id: string) => out.findIndex((p) => p.a?.id === id || p.b?.id === id);
+  expect(at('colts')).not.toBe(at('seniors'));
+  const half = (i: number) => (i < out.length / 2 ? 0 : 1);
+  expect(half(at('colts'))).not.toBe(half(at('seniors')));
+});

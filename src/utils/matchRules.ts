@@ -728,6 +728,11 @@ export function normalizeRules(
     if (k === 'v') continue;
     out[k] = k in given && given[k] !== undefined ? given[k] : (base as unknown as Record<string, unknown>)[k];
   }
+  // N-R7-57: box and pair cricket left at 'Std' overs play their own standard (box 6, pair 8 —
+  // the New match form's standard), not limited overs' 20.
+  if (lengthKey(sport) === 'cricket' && (given.style === 'box' || given.style === 'pair') && given.overs == null) {
+    out.overs = given.style === 'box' ? 6 : 8;
+  }
   return out as unknown as MatchRules;
 }
 

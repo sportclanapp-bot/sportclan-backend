@@ -2568,7 +2568,7 @@ export async function getBracket(req: Request, res: Response) {
           // N-SPP2-5 (launch test plan): a result not played out — the champion card said 'beat X 0–0'.
           ...(decidedBy(m as any) ? { decided_by: decidedBy(m as any) } : {}),
           ...(de ? { next_match_id: (m as any).next_match_id ?? null } : {}), // Stage 11 · PB4: the back draw's lines follow the links
-          ...(fmtLc === 'box' && m.group_label ? { group_label: m.group_label } : {}), // Stage 9 · T16: the match's box
+          ...((fmtLc === 'box' || fmtLc === 'groups_knockout') && m.group_label ? { group_label: m.group_label } : {}), // Stage 9 · T16: the match's box · N-R7-54: a groups stage's group
         };
       }),
     }));

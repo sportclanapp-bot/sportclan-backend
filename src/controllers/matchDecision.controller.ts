@@ -39,6 +39,10 @@ export function scoreNow(ss: Record<string, any> | null | undefined): { A: numbe
   // N-R7-37 (Step 2): a cricket innings that never started (no ball bowled on either side) is not a 0–0 score.
   const unbowled = (x: any) => num(x?.balls) === 0 && !num(x?.runs) && !num(x?.wickets);
   if (unbowled(ss.A) && unbowled(ss.B)) return null;
+  // N-R7-S9 (Step 2, SPP1-TEN-099): a set sport with nothing in it on either side (a tennis match
+  // abandoned after the warm-up, before its first point) is not a 0–0 score either.
+  const unplayed = (x: any) => Array.isArray(x?.sets) && x.sets.length === 0 && !num(x?.games) && !num(x?.points);
+  if (unplayed(ss.A) && unplayed(ss.B)) return null;
   const a = num(ss.team_a_score ?? ss.A?.score ?? ss.A?.value);
   const b = num(ss.team_b_score ?? ss.B?.score ?? ss.B?.value);
   if (a != null && b != null) return { A: a, B: b };

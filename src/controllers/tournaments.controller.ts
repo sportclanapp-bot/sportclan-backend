@@ -4104,7 +4104,8 @@ export async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   // FORMATS (28 Sep): cross-pair, so group mates don't meet straight away.
   const groupOfTeam = new Map<string, string>();
   for (const label of labels) for (const id of groupTeams[label]) groupOfTeam.set(id, label);
-  const crossed = crossGroupFirstRound(seededRound1(seeds, ko1.length * 2), (id) => groupOfTeam.get(id));
+  const seedNo = new Map(seeds.map((x, i) => [x.id, i + 1])); // N-R7-S12: a clash swaps with the nearest lower seed
+  const crossed = crossGroupFirstRound(seededRound1(seeds, ko1.length * 2), (id) => groupOfTeam.get(id), (id) => seedNo.get(id));
   // BUILD 4.13: and same-club qualifiers apart, without undoing the cross-pairing.
   const clubOfTeam = new Map((entries ?? []).map((e: { team_id: string; club?: string | null }) => [e.team_id, e.club ?? null]));
   const round1 = settingsOf(trow as { settings?: unknown }).separateClubs

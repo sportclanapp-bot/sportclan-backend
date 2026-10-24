@@ -20,13 +20,18 @@ export type Slot = { id: string; name: string } | null;
 export function crossGroupFirstRound<T extends { a: Slot; b: Slot }>(
   round1: T[],
   groupOf: (teamId: string) => string | undefined,
+  /** N-R7-S12: each team's seed (1 = best); a clash is repaired with the nearest lower seed first (a third swaps with a third). */
+  seedOf?: (teamId: string) => number | undefined,
 ): T[] {
   const out = round1.map((m) => ({ ...m }));
   const clash = (a: Slot, b: Slot) => !!a && !!b && groupOf(a.id) !== undefined && groupOf(a.id) === groupOf(b.id);
+  const seed = (x: Slot) => (x && seedOf ? seedOf(x.id) ?? 0 : 0);
   for (let i = 0; i < out.length; i++) {
     if (!clash(out[i]!.a, out[i]!.b)) continue;
-    for (let j = 0; j < out.length; j++) {
-      if (j === i || !out[j]!.b) continue;
+    const others = out.map((_, j) => j).filter((j) => j !== i);
+    if (seedOf) others.sort((x, y) => Math.abs(seed(out[x]!.b) - seed(out[i]!.b)) - Math.abs(seed(out[y]!.b) - seed(out[i]!.b)) || x - y);
+    for (const j of others) {
+      if (!out[j]!.b) continue;
       if (!clash(out[i]!.a, out[j]!.b) && !clash(out[j]!.a, out[i]!.b)) {
         const tmp = out[i]!.b;
         out[i]!.b = out[j]!.b;

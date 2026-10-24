@@ -3,6 +3,7 @@
  */
 import type { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { DB_UNAVAILABLE, DB_UNAVAILABLE_STATUS } from '../utils/dbUnavailable';
 import { deviceIdOf } from '../utils/deviceHeader';
 import {
   verifyHandoff, handoffRefusal, isEventOp, isResultOp, completeFieldsOf,
@@ -88,12 +89,14 @@ export async function uploadHandoff(req: Request, res: Response) {
     // database at all — `handoffRefusal` ranks that first either way, and there is
     // nothing to look up on a match this payload was never about.
     const wrongMatch = p.m !== id;
-    const { data: match } = wrongMatch
-      ? { data: null }
+    const { data: match, error: readError } = wrongMatch
+      ? { data: null, error: null }
       : await supabase
         .from('matches')
         .select('id, created_by, umpire_id, scorer_id, tournament_id, sport_id, status, voided_at, format, overs, rules, round, group_label')
         .eq('id', id!).maybeSingle();
+    // N-R7-S7: a failed read is not a missing match — the courier keeps the code and tries again.
+    if (readError) return res.status(DB_UNAVAILABLE_STATUS).json(DB_UNAVAILABLE);
     const auth = match ? await authorizeScorer(id!, p.u, p.d) : null;
     const refusal = handoffRefusal({
       routeMatchId: id!,

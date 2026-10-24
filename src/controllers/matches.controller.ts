@@ -26,6 +26,7 @@ import { deviceIdOf } from '../utils/deviceHeader';
 import { getMatchLiveStatus } from '../utils/liveStatus';
 import { istDay, istWhen } from '../utils/appTime';
 import { supabase } from '../utils/supabase';
+import { DB_UNAVAILABLE, DB_UNAVAILABLE_STATUS } from '../utils/dbUnavailable';
 import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers, matchAudienceIds, matchFollowerIds } from '../utils/notify';
 import { isTournamentOrganiser, canOfficiateMatch, canDefault } from '../utils/tournamentAuth';
@@ -1849,7 +1850,9 @@ export async function getMatch(req: Request, res: Response) {
     const { id } = req.params;
     const timer = stepTimer();
     const { data: match, error } = await supabase.from('matches').select('*').eq('id', id).maybeSingle();
-    if (error || !match) return res.status(404).json({ error: 'Match not found' });
+    // N-R7-S7: a failed read is not a missing match.
+    if (error) return res.status(DB_UNAVAILABLE_STATUS).json(DB_UNAVAILABLE);
+    if (!match) return res.status(404).json({ error: 'Match not found' });
     // Stage 11 follow-up: a trump tie's picks, once both sides have picked or the
     // tie has started (before that a side's pick is hidden from the other side; the
     // line-up screen shows its own).
@@ -4660,8 +4663,9 @@ export async function claimScoringLease(req: Request, res: Response) {
     const { id } = req.params;
     const deviceId = deviceIdOf(req);
     if (!deviceId) return res.status(400).json({ error: 'A device id is required to claim scoring.' });
-    const { data: match } = await supabase
+    const { data: match, error: readError } = await supabase
       .from('matches').select('id, created_by, umpire_id, scorer_id, tournament_id, status').eq('id', id).maybeSingle();
+    if (readError) return res.status(DB_UNAVAILABLE_STATUS).json(DB_UNAVAILABLE); // N-R7-S7
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: 'Only the scorer, umpire or organiser can score this match.' });
@@ -4762,8 +4766,9 @@ export async function takeOverScoringLease(req: Request, res: Response) {
     if (reason.length > TAKEOVER_REASON_MAX) {
       return res.status(400).json({ error: `Keep the reason under ${TAKEOVER_REASON_MAX} characters.`, code: 'REASON_TOO_LONG' });
     }
-    const { data: match } = await supabase
+    const { data: match, error: readError } = await supabase
       .from('matches').select('id, created_by, umpire_id, scorer_id, tournament_id, status').eq('id', id).maybeSingle();
+    if (readError) return res.status(DB_UNAVAILABLE_STATUS).json(DB_UNAVAILABLE); // N-R7-S7
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (!(await canOfficiateMatch(match, userId))) {
       return res.status(403).json({ error: 'Only the scorer, umpire or organiser can take over.' });

@@ -7,6 +7,7 @@ import { checkLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { isRangeError } from '../utils/pagination';
 import { supabase } from '../utils/supabase';
+import { DB_UNAVAILABLE, DB_UNAVAILABLE_STATUS } from '../utils/dbUnavailable';
 import { pendingRankedOpponent } from '../utils/singles';
 import { tennisReplayEvents, type TennisScore } from '../utils/tennisCore';
 import { scorePush, quarterPush } from '../utils/scorePush';
@@ -82,11 +83,13 @@ export function superOverOfGame(typed: { A: number; B: number } | undefined, gam
 }
 
 export async function authorizeScorer(matchId: string, userId: string, deviceId?: string | null) {
-  const { data: match } = await supabase
+  const { data: match, error: readError } = await supabase
     .from('matches')
     .select('id, created_by, umpire_id, scorer_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules, round, group_label')
     .eq('id', matchId)
     .maybeSingle();
+  // N-R7-S7: a failed read is not a missing match — 503, so the outbox keeps the point and retries.
+  if (readError) return { ok: false as const, status: DB_UNAVAILABLE_STATUS, error: DB_UNAVAILABLE.error, code: DB_UNAVAILABLE.code };
   if (!match) return { ok: false as const, status: 404, error: 'Match not found' };
   if (!(await canOfficiateMatch(match, userId))) {
     return { ok: false as const, status: 403, error: match.tournament_id ? 'Only a tournament organiser, the umpire or a scorer can score' : 'Only the umpire, the scorer or the creator can score' };

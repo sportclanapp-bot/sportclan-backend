@@ -1677,27 +1677,17 @@ export async function getSportProfile(req: Request, res: Response) {
   if (hidden) return res.status(404).json({ error: 'User not found' });
   if (inactive) return res.status(404).json({ error: 'Sport not available' });
 
-  if (!profile) {
-    return res.json({
-      profile: {
-        rating: 1200,
-        matches_played: 0,
-        wins: 0,
-        losses: 0,
-        draws: 0,
-        last_match_at: null,
-        cityRank: null,
-        globalRank: null,
-      },
-    });
-  }
+  // N-R7-S10 (Step 2, SP-TEN-061): no rated match yet (no profile row) is the new-player card —
+  // 1200, nothing played, no rank — but the stats from the player's casual matches still count
+  // below. It used to return here, so a casual-only player's sets, games and aces never showed.
+  const NEW_PLAYER = { rating: 1200, matches_played: 0, wins: 0, losses: 0, draws: 0, last_match_at: null };
 
   // Calculate city + global rank by counting how many players have a
   // strictly higher rating in the same sport. Rank = count + 1.
   let cityRank: number | null = null;
   let globalRank: number | null = null;
 
-  const p = profile as any;
+  const p = (profile ?? NEW_PLAYER) as any;
   const rate = p.rating as number;
   const mp = (p.matches_played ?? 0) as number;
   // The "standing above" predicate, shared by BOTH ranks: rating desc, then

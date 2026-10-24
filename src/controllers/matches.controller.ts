@@ -3203,7 +3203,9 @@ export async function completeMatch(req: Request, res: Response) {
     if (!match) return res.status(404).json({ error: 'Match not found' });
     // Authorization before status (SC-33): a non-owner must get 403, not learn
     // the match state via a 400.
-    if (!system && !(await canOfficiateMatch(match, userId))) {
+    // N-R7-S24: a tournament's chief / deputy referee (or a sector arbiter) gives walkovers and
+    // defaults on any fixture (canDefault) — they were stopped here before canDefault was asked.
+    if (!system && !(await canOfficiateMatch(match, userId)) && !((walkoverIn === true || defaulted) && !!match.tournament_id && (await canDefault(match, userId)))) {
       return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can complete' : 'Only the creator or umpire can complete' });
     }
     if (defaulted && !(await canDefault(match, userId))) {

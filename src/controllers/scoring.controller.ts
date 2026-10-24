@@ -15,7 +15,7 @@ import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
 import { INT_MAX, PG_INT_MAX, isTerminalMatchStatus } from '../utils/validation';
-import { canOfficiateMatch } from '../utils/tournamentAuth';
+import { canOfficiateMatch, canDefault } from '../utils/tournamentAuth';
 import { isSportInactive } from '../utils/sports';
 import { isKnownEventType } from '../utils/scoringEvents';
 import { leaseRefusal } from '../utils/leaseCore';
@@ -189,8 +189,15 @@ export async function validateScoringEvent(
   matchId: string,
   match: { id: string; status?: string | null; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_a_name?: string | null; team_b_name?: string | null; tournament_id?: string | null; score_summary?: unknown; format?: string | null; overs?: number | null; rules?: unknown; sport_id?: string | null; round?: number | null; group_label?: string | null },
   ev: { event_type: unknown; period?: unknown; clock_seconds?: unknown; payload?: any },
+  userId?: string,
 ): Promise<{ status: number; body: { error: string; code?: string } } | null> {
   const refuse = (status: number, body: { error: string; code?: string }) => ({ status, body });
+  // N-R7-S20: the chess arbiter's calls (an illegal move, a wrong draw claim, a game lost for a
+  // second illegal move, a phone or misconduct) are the arbiter's or the organiser's — a plain
+  // scorer could send them through the API although the pad hides them.
+  if (userId && chessArbiterOnly(ev.event_type, ev.payload) && !(await canDefault(match as never, userId))) {
+    return refuse(403, { error: 'That’s the arbiter’s call — only the arbiter or the organiser can record it.', code: 'NOT_ARBITER' });
+  }
   // BUILD 2.4 (found on the device): a tournament fixture waiting on earlier
   // results has no teams yet — a knockout final before its semis. It took
   // scoring events, so a result could exist before anyone knew who played.
@@ -807,7 +814,7 @@ export async function createEvent(req: Request, res: Response) {
 
     // B06-F1: every check on the event itself lives in validateScoringEvent, so
     // the signed QR handoff (qrHandoff.controller) runs exactly the same ones.
-    const refused = await validateScoringEvent(matchId, match, { event_type, period, clock_seconds, payload });
+    const refused = await validateScoringEvent(matchId, match, { event_type, period, clock_seconds, payload }, userId);
     if (refused) return res.status(refused.status).json(refused.body);
     const startsPlay = startsPlayEvent(event_type, payload); // V-3 · N-R7-S15: pre-play events don't start the match
 
@@ -2286,4 +2293,12 @@ export async function typedScore(req: Request, res: Response) {
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+/** N-R7-S20 · the chess events only an arbiter or the organiser may send (the pad's mayDefault rows). */
+export function chessArbiterOnly(eventType: unknown, payload: unknown): boolean {
+  const p = (payload && typeof payload === 'object' ? payload : {}) as { kind?: unknown; reason?: unknown };
+  if (eventType === 'note') return p.kind === 'illegal_move' || p.kind === 'wrong_claim';
+  if (eventType === 'result') return p.reason === 'illegal_move' || p.reason === 'device' || p.reason === 'conduct';
+  return false;
 }

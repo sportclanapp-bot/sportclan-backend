@@ -3708,6 +3708,13 @@ export async function completeMatch(req: Request, res: Response) {
         code: 'CHESS_RESULT_REQUIRED',
       });
     }
+    // N-R7-S21: a team chess match is played on every board — its game points count in the
+    // table's tie-breaks — so it can't be ended while a board has no result (3–0 with board 4
+    // live ended the match and board 4 could never be recorded).
+    if (!walkover && normSportSlug(sportRow?.slug) === 'chess' && match.status !== 'completed') {
+      const left = chessBoardsLeft(tieSpecOf('chess', rulesOf('chess', match as never)), canonical as never);
+      if (left) return res.status(409).json({ error: `Every board is played: ${left.played} of ${left.boards} have a result.`, code: 'BOARDS_NOT_FINISHED' });
+    }
     // Stage 11 · PB9 / PB3: a timed match level at the buzzer under a "stays
     // level" rule, or a team tie its win rule calls a draw, is a draw the
     // rules allow — in any sport (a knockout fixture was refused above).
@@ -4819,3 +4826,16 @@ export async function handOverScoringLease(req: Request, res: Response) {
 
 /** N-R7-S18: a timed rally match that ended level at the buzzer ("stays level") — a draw; no side may be named the winner. */
 export const levelAtTime = (summary: { timed_level?: unknown } | null | undefined): boolean => summary?.timed_level === true;
+
+/**
+ * N-R7-S21 · a team chess match (boards, no play-off games) with boards still to play:
+ * how many have a result. Null when every board has one, or it isn't a team match.
+ */
+export function chessBoardsLeft(
+  spec: { rubbers: ReadonlyArray<{ decider?: boolean }> } | null | undefined,
+  summary: { rubbers?: unknown[] | null } | null | undefined,
+): { played: number; boards: number } | null {
+  if (!spec || spec.rubbers.some((r) => r.decider)) return null; // a mini-match ends when it's decided
+  const played = Array.isArray(summary?.rubbers) ? summary!.rubbers!.length : 0;
+  return played > 0 && played < spec.rubbers.length ? { played, boards: spec.rubbers.length } : null;
+}

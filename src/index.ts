@@ -49,6 +49,7 @@ import referralsRoutes from './routes/referrals.routes';
 import devRoutes from './routes/dev.routes';
 import adminRoutes from './routes/admin.routes';
 import jobsRoutes from './routes/jobs.routes';
+import { revalidateAlways } from './middleware/revalidate';
 import { authenticateToken } from './middleware/auth.middleware';
 import { clientIpKey, rateLimitKey, refreshUserId } from './middleware/rateLimitKey';
 import { rateLimitBypassed } from './middleware/rateLimitBypass';
@@ -271,6 +272,8 @@ const cacheFor = (seconds: number) => (_req: any, res: any, next: any) => {
   next();
 };
 
+// N-R7-63: no API answer is reused from a phone's HTTP cache without asking first.
+app.use(revalidateAlways);
 app.use('/auth/send-otp', sendOtpLimiter);
 app.use(['/auth/reset-password', '/auth/verify-otp'], resetCheckIpLimiter, resetCheckNumberLimiter);
 app.use(['/auth/refresh', '/auth/logout'], refreshLimiter);

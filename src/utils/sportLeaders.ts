@@ -12,6 +12,7 @@
  * boards) and the score. A team tie (rubbers) counts in none of the game boards.
  */
 import { pointHowFor } from './matchRules'; // Stage 14 · VB8
+import { unfinishedSetGames } from './tennisGames';
 
 /**
  * Audit #78 (Dipak): every board holds everyone — no top 5. The tournament
@@ -109,6 +110,7 @@ function teamTallies(matches: SportLeaderMatch[]): TTally[] {
         me.pf += mine[i]!; me.pa += theirs[i]!;
         if (mine[i]! > theirs[i]!) me.games += 1; else if (theirs[i]! > mine[i]!) me.gamesLost += 1;
       }
+      { const u = unfinishedSetGames(m.score_summary); me.pf += side === 'A' ? u.a : u.b; me.pa += side === 'A' ? u.b : u.a; } // N-R7-S11
       // Stage 9 · T11: tennis's tiebreaks won/lost (a match tiebreak counts) and aces.
       for (const tb of m.score_summary?.set_tiebreaks ?? []) {
         if (!tb) continue;

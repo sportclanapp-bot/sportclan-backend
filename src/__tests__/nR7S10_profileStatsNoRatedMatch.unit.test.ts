@@ -28,3 +28,16 @@ test('casual tennis only (no profile row): the stats from the scores still come 
   expect(r.body.profile).toMatchObject({ rating: 1200, matches_played: 0, wins: 0, losses: 0, cityRank: null, globalRank: null });
   expect(r.body.profile.sportStats).toMatchObject({ singles_won: 1, sets_won: 2, sets_lost: 0, tennis_games_won: 12, tennis_games_lost: 7, total_aces: 2, total_double_faults: 1 });
 });
+
+// Between typed names (the usual casual match: players picked, no saved teams) there are no team
+// ids, so the winner is the stored winner side — the record counted nothing.
+test('a casual win and a doubles loss between typed names count in the singles / doubles record', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { racketStats } = require('../utils/racketStats');
+  const ms = [
+    { id: 'm1', team_a_id: null, team_b_id: null, winner_team_id: null, score_summary: { A: { sets: [6, 6] }, B: { sets: [4, 3] }, winner_side: 'A' } },
+    { id: 'm2', team_a_id: null, team_b_id: null, winner_team_id: null, score_summary: { A: { sets: [4, 6] }, B: { sets: [6, 7] }, winner_side: 'B' } },
+  ];
+  const out = racketStats(ms, new Map([['m1', 'A'], ['m2', 'A']]), new Map([['m1', 1], ['m2', 2]]));
+  expect([out.singles_won, out.singles_lost, out.doubles_won, out.doubles_lost]).toEqual([1, 0, 0, 1]);
+});

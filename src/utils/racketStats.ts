@@ -9,7 +9,7 @@
 export type RacketMatch = {
   id: string;
   team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null;
-  score_summary?: { A?: { sets?: unknown }; B?: { sets?: unknown }; rubbers?: unknown } | null;
+  score_summary?: { A?: { sets?: unknown }; B?: { sets?: unknown }; rubbers?: unknown; winner_side?: unknown } | null;
 };
 export type RacketStats = {
   games_won: number; games_lost: number; points_won: number; points_lost: number;
@@ -34,8 +34,10 @@ export function racketStats(matches: RacketMatch[], side: Map<string, 'A' | 'B'>
       if (mine[i]! > theirs[i]!) out.games_won++;
       else if (theirs[i]! > mine[i]!) out.games_lost++;
     }
-    if (!m.winner_team_id) continue;
-    const won = m.winner_team_id === (me === 'A' ? m.team_a_id : m.team_b_id);
+    // N-R7-S10: between typed names (no team ids) the winner is the stored winner side.
+    const ws = m.score_summary?.winner_side;
+    if (!m.winner_team_id && ws !== 'A' && ws !== 'B') continue;
+    const won = m.winner_team_id ? m.winner_team_id === (me === 'A' ? m.team_a_id : m.team_b_id) : ws === me;
     const n = sideSize.get(m.id) ?? 1;
     if (n === 1) won ? out.singles_won++ : out.singles_lost++;
     else if (n === 2) won ? out.doubles_won++ : out.doubles_lost++;

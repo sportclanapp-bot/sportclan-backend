@@ -2010,7 +2010,7 @@ export async function recomputeSummary(
     summary.periods = per;
   }
   if (carromBoardsPlayed !== null) summary.boards_played = carromBoardsPlayed;
-  if (carromSlams) summary.slams = carromSlams; // Stage 13 · CR6
+  if (carromSlams) summary.slams = carromSlams; else delete summary.slams; // Stage 13 · CR6 · N-R7-S23: recomputed each time (an undone slam kept 'Slams 1–0')
   if (tieRubbers) { summary.rubber = tieRubbers.rubber; summary.rubbers = tieRubbers.results; } // BUILD 3.49
   if (tieSummary) summary.tie = tieSummary; // Stage 9 · T3: the win rule, rubbers and games each side
   if (sideOutServe) summary.serve = sideOutServe; // BUILD 3.58: who serves, and (doubles) server 1 or 2

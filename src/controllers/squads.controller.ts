@@ -62,8 +62,11 @@ async function savedRows(tid: string, teamId: string): Promise<Row[]> {
   return (data ?? []) as Row[];
 }
 async function memberRows(teamId: string): Promise<Array<{ user_id: string; jersey_number: number | null }>> {
-  const rows = await allRows(() => supabase.from('team_members').select('user_id, jersey_number').eq('team_id', teamId));
-  return (rows ?? []) as Array<{ user_id: string; jersey_number: number | null }>;
+  const rows = (await allRows(() => supabase.from('team_members').select('user_id, jersey_number').eq('team_id', teamId)) ?? []) as Array<{ user_id: string; jersey_number: number | null }>;
+  // N-R7-64: a member whose account was deleted is no longer in the team's squad (the team page
+  // and every line-up already leave them out, N-R7-39).
+  const live = await names(rows.map((r) => r.user_id));
+  return rows.filter((r) => live.has(r.user_id));
 }
 async function names(ids: string[]): Promise<Map<string, string>> {
   if (!ids.length) return new Map();
@@ -116,7 +119,7 @@ export async function getSquad(req: Request, res: Response) {
       size: q.size ?? null, lock: q.lock ?? 'draw', locked,
       can_edit: organiser || (captain && !locked && status !== 'withdrawn'), can_check: organiser, // E-056: not a withdrawn team's captain
       players: rows.map((r) => ({
-        id: r.id, user_id: r.user_id, name: r.user_id ? nm.get(r.user_id) ?? 'Player' : r.guest_name ?? 'Player', guest: !r.user_id,
+        id: r.id, user_id: r.user_id, name: r.user_id ? nm.get(r.user_id) ?? 'Deleted User' : r.guest_name ?? 'Player', guest: !r.user_id, // N-R7-64: a saved row whose account is gone
         jersey_number: r.jersey_number, id_checked: !!r.id_checked_at, id_note: seesNotes ? r.id_note : null,
         banned: bans.find((b) => (r.user_id ? b.user_id === r.user_id : !b.user_id && b.name.toLowerCase() === (r.guest_name ?? '').toLowerCase()))?.reason ?? null,
       })),

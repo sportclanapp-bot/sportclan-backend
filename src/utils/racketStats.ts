@@ -1,4 +1,4 @@
-import { unfinishedSetGames } from './tennisGames';
+import { unfinishedGamePoints, unfinishedSetGames } from './tennisGames';
 /**
  * Badminton 7.15 (Oct 2026) · a racket player's career, from the scores:
  * games won and lost, rally points won and lost, and the singles and doubles
@@ -37,6 +37,8 @@ export function racketStats(matches: RacketMatch[], side: Map<string, 'A' | 'B'>
     }
     const u = unfinishedSetGames(m.score_summary); // N-R7-S11: tennis — the games of a set left unfinished
     out.points_won += me === 'A' ? u.a : u.b; out.points_lost += me === 'A' ? u.b : u.a;
+    const v = unfinishedGamePoints(m.score_summary); // N-R7-S16: a rally game left unfinished
+    out.points_won += me === 'A' ? v.a : v.b; out.points_lost += me === 'A' ? v.b : v.a;
     // N-R7-S10: between typed names (no team ids) the winner is the stored winner side.
     const ws = m.score_summary?.winner_side;
     if (!m.winner_team_id && ws !== 'A' && ws !== 'B') continue;

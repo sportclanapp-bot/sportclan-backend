@@ -26,7 +26,7 @@ test('the Games won board: 8–5; Sets won stays 1–0', () => {
   expect(sets.rows.find((r) => r.team_id === 'P')?.detail).toBe('1–0');
 });
 test('badminton and finished tennis sets are unchanged; a walkover adds nothing', () => {
-  expect(rallyPointsOf({ ...M, score_summary: { A: { sets: [21, 21], points: 3 }, B: { sets: [15, 10], points: 2 } } } as never)).toEqual({ a: 42, b: 25 });
+  expect(rallyPointsOf({ ...M, score_summary: { A: { sets: [21, 21], points: 0 }, B: { sets: [15, 10], points: 0 } } } as never)).toEqual({ a: 42, b: 25 }); // a finished badminton match (its unfinished-game points: N-R7-S16)
   expect(rallyPointsOf({ ...M, score_summary: { A: { sets: [6, 6], games: 0 }, B: { sets: [4, 3], games: 0 }, set_tiebreaks: [null, null] } } as never)).toEqual({ a: 12, b: 7 });
   expect(rallyPointsOf({ ...M, score_summary: { ...ret, walkover: true } } as never)).toEqual({ a: 0, b: 0 });
 });

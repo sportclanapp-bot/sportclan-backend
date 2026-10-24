@@ -1,4 +1,4 @@
-import { unfinishedSetGames } from './tennisGames';
+import { unfinishedGamePoints, unfinishedSetGames } from './tennisGames';
 // SC-89: shared group-standings ranking ladder, used by BOTH the qualification
 // path (maybeSeedKnockout) and the display path (getTournamentStandings) so they
 // always agree.
@@ -121,7 +121,8 @@ export function rallyPointsOf(m: GMatch): { a: number; b: number } {
   // A walkover played no rallies — N-Q070: but a volleyball one in straight sets counts each set to nil.
   if (ss.walkover === true && ss.walkover_sets !== true) return { a: 0, b: 0 };
   const u = unfinishedSetGames(ss); // N-R7-S11: a tennis set left unfinished (retired, defaulted, time called)
-  return { a: sum(ss?.A?.sets) + u.a, b: sum(ss?.B?.sets) + u.b };
+  const v = unfinishedGamePoints(ss); // N-R7-S16: a rally game left unfinished
+  return { a: sum(ss?.A?.sets) + u.a + v.a, b: sum(ss?.B?.sets) + u.b + v.b };
 }
 
 /** Badminton 7.16: games each side won, from the games' points (0 for a walkover). */

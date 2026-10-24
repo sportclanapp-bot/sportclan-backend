@@ -303,7 +303,10 @@ function resultPoints(m: GMatch, pts: PointsModel, winnerScore: number, loserSco
     // Stage 11 · PB3: a team tie won in its deciding match (MLP's DreamBreaker:
     // 2 to the winner, 1 to the loser) — else volleyball's set score.
     const tie = m.score_summary?.tie;
-    const decider = tie && typeof tie === 'object' ? tie.decider === true : winnerScore > 1 && loserScore === winnerScore - 1;
+    // N-R7-S14 (SPP1-TEN-121): a first-to tie won by one rubber in its last match (Davis Cup 3–2) went the distance too.
+    const wonByOne = (w: number, l: number) => w > 1 && l === w - 1;
+    const tieRubbers = (x: any) => { const a = Number(x?.rubbersA); const b = Number(x?.rubbersB); return Number.isFinite(a) && Number.isFinite(b) ? wonByOne(Math.max(a, b), Math.min(a, b)) : false; };
+    const decider = tie && typeof tie === 'object' ? tie.decider === true || (tie.win === 'first' && tieRubbers(tie)) : wonByOne(winnerScore, loserScore);
     return decider ? pts.sets.decider : pts.sets.straight;
   }
   return [pts.win, pts.loss];

@@ -2,7 +2,7 @@ import { inBackground } from '../utils/background';
 import { sportKeyOf, storedPoints, pointsPresetFor, type TournamentSettings } from '../utils/tournamentSettings';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { swissMaxRounds, swissDefaultTiebreaks } from '../utils/tournamentSettings';
-import { deleteMatching } from '../utils/softDelete';
+import { deleteMatching, deleteWithReason } from '../utils/softDelete';
 import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
 import { rankExtrasFor } from '../utils/rankExtras';
 import { sportTerms } from '../utils/sportTerms';
@@ -4967,8 +4967,23 @@ export async function createLadderChallenge(req: Request, res: Response) {
     venue: t.venue ?? null, city_id: t.city_id ?? null, status: 'scheduled', score_summary: {}, created_by: userId,
     scheduled_at: when.toISOString(), round: 1, match_no: count ?? 0, is_ranked: true,
     format: legacy.format, rules, ...(sportSlug === 'cricket' ? { overs: legacy.overs } : {}),
-  }).select('id').single();
+  }).select('id, created_at').single();
   if (error || !match) return res.status(500).json({ error: 'The challenge wasn’t made. Try again.' });
+  // N-R7-S5: two challenges made at the same moment both passed the busy check
+  // above (neither match existed yet). One open challenge each: the earliest
+  // open challenge of either player stands; a later one is taken back and
+  // refused with the words a slower second tap gets.
+  const made = match as { id: string; created_at?: string | null };
+  const key = (m: { id: string; created_at?: string | null }) => `${m.created_at ?? ''}|${m.id}`;
+  const { data: others } = await supabase.from('matches').select('id, created_at, team_a_id, team_b_id')
+    .eq('tournament_id', id).in('status', ['scheduled', 'live']).is('voided_at', null).neq('id', made.id);
+  const earlier = ((others ?? []) as Array<{ id: string; created_at?: string | null; team_a_id: string | null; team_b_id: string | null }>)
+    .filter((m) => key(m) < key(made) && [m.team_a_id, m.team_b_id].some((x) => x === challenger || x === body.defender_team_id));
+  if (earlier.length) {
+    await deleteWithReason('matches', [made.id], userId, 'ladder challenge made at the same moment as another (N-R7-S5)');
+    const taken = new Set(earlier.flatMap((m) => [m.team_a_id, m.team_b_id]).filter((x): x is string => !!x));
+    return res.status(409).json({ error: challengeProblem(order, challenger, body.defender_team_id, settingsOf(t).ladder, taken) ?? 'They have a challenge to play first.', code: 'CHALLENGE' });
+  }
   try { await fillEntryLineups(String(id)); } catch { /* best effort */ }
   const { data: mem } = await supabase.from('team_members').select('user_id').eq('team_id', body.defender_team_id);
   const ids = ((mem ?? []) as Array<{ user_id: string | null }>).map((r) => r.user_id).filter((x): x is string => !!x && x !== userId);

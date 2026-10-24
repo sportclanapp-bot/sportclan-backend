@@ -64,7 +64,7 @@ import { validateSportForCreate } from '../utils/sports';
 import { allRows, selectAll, selectAllIn, IN_CHUNK } from '../utils/selectAll';
 import { backNext, backRoundName, backRounds, loserTarget } from '../utils/doubleElim'; // Stage 11 · PB4
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, isCount, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
-import { rankTeams, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, bestNextCount, groupsKnockoutSize, type PointsModel } from '../utils/standings';
+import { rankTeams, rankTeamsDetailed, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, bestNextCount, groupsKnockoutSize, type PointsModel } from '../utils/standings';
 import { placeGroupTiersApart, crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { withWalkoverScore } from '../utils/walkoverScore';
@@ -4046,6 +4046,16 @@ export async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   const ranks: Array<Array<{ id: string; name: string }>> = [];
   // Stage 8 · F8: fair play (when the order uses it) and each group's draw of lots.
   const extraFor = await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tableMatches as Array<{ id: string; team_a_id?: string | null; team_b_id?: string | null }>);
+  // N-R7-S1 (SCR-T-S03): a group whose qualifying places are still level on every
+  // tie-break waits for the organiser's draw of lots (setLots seeds it then) —
+  // the team-id order the table shows "until lots are drawn" isn't a result.
+  const bestNextOn = (() => { const s0 = settingsOf(trow as { settings?: unknown }); return !!(s0.bestThirds || s0.bestNext != null); })();
+  for (const label of labels) {
+    const detail = rankTeamsDetailed(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label));
+    const live = detail.order.filter((id) => !outIds.has(id));
+    const places = new Set(live.slice(0, qualsPerGroup + (bestNextOn ? 1 : 0)));
+    if (detail.level.some((cl) => { const c = cl.filter((id) => !outIds.has(id)); return c.length > 1 && c.every((id) => (globalStats.get(id)?.played ?? 0) > 0) && c.some((id) => places.has(id)); })) return; // as the table's "level" note
+  }
   for (const label of labels) {
     const orderedIds = rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label)).filter((id) => !outIds.has(id)); // audit #54
     for (let r = 0; r < qualsPerGroup; r++) {

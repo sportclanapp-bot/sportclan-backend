@@ -12,6 +12,7 @@ import { isUuid } from '../utils/uuid';
 import { allRows } from '../utils/selectAll';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { settingsOf, storedSettings } from '../utils/tournamentSettings';
+import { maybeSeedKnockout } from './tournaments.controller';
 
 export async function setLots(req: Request, res: Response) {
   const userId = req.userId;
@@ -19,7 +20,7 @@ export async function setLots(req: Request, res: Response) {
   try {
     const id = String(req.params.id);
     if (!isUuid(id)) return res.status(404).json({ error: 'Tournament not found' });
-    const { data: t } = await supabase.from('tournaments').select('id, settings').eq('id', id).maybeSingle();
+    const { data: t } = await supabase.from('tournaments').select('id, settings, format').eq('id', id).maybeSingle();
     if (!t) return res.status(404).json({ error: 'Tournament not found' });
     if (!(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only the organiser can record a draw of lots.' });
     const body = (req.body ?? {}) as { group?: unknown; order?: unknown };
@@ -39,6 +40,8 @@ export async function setLots(req: Request, res: Response) {
     const next = storedSettings({ lots: Object.keys(lots).length ? lots : null }, cur);
     const { error } = await supabase.from('tournaments').update({ settings: next }).eq('id', id);
     if (error) return res.status(500).json({ error: 'Couldn’t save the draw of lots.' });
+    // N-R7-S1 (SCR-T-S03): a knockout waiting on this group's order is seeded now.
+    if ((t as { format?: string }).format === 'groups_knockout') await maybeSeedKnockout(id).catch(() => undefined);
     return res.json({ lots: next.lots ?? {} });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

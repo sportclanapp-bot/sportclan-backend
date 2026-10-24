@@ -84,5 +84,38 @@ export function separateClubsInRound1<T extends { id: string }>(
       }
     }
   }
+  // N-R7-S2 (SPP2-FOO-041): clubmates not paired can still meet in the next round —
+  // spread them as far apart in the tree as swapping lower seeds can (opposite halves
+  // for two of a club), never making a first-round clash or an `alsoApart` pair.
+  // Pairs i and j meet in round 1 + bit length of (i ^ j); a clash in the first round is round 1.
+  const meet = (i: number, j: number) => (i === j ? 1 : 1 + Math.floor(Math.log2(i ^ j)) + 1);
+  const top = meet(0, Math.max(1, out.length - 1) | 0) + 1;
+  const cost = () => {
+    const at: Array<{ id: string; c: string | null; i: number }> = [];
+    out.forEach((p, i) => { for (const x of [p.a, p.b]) if (x) at.push({ id: x.id, c: norm(clubOf(x.id)), i }); });
+    let n = 0;
+    // clubmates, and the pairs the caller keeps apart (a group's qualifiers), each as early as they could meet
+    for (let x = 0; x < at.length; x++) for (let y = x + 1; y < at.length; y++) {
+      const k = (at[x]!.c !== null && at[x]!.c === at[y]!.c ? 1 : 0) + (alsoApart(at[x]!.id, at[y]!.id) ? 1 : 0);
+      if (k) n += k * 4 ** (top - meet(at[x]!.i, at[y]!.i));
+    }
+    return n;
+  };
+  for (let guard = 0, improved = true; improved && guard < out.length * out.length; guard++) {
+    improved = false;
+    const now = cost();
+    for (let i = 0; i < out.length && !improved; i++) {
+      if (!out[i]!.b) continue;
+      for (let j = 0; j < out.length && !improved; j++) {
+        if (j === i || !out[j]!.b) continue;
+        const pi = { a: out[i]!.a, b: out[j]!.b };
+        const pj = { a: out[j]!.a, b: out[i]!.b };
+        if (bad(pi) || bad(pj) || worse(pi) || worse(pj)) continue;
+        const [oi, oj] = [out[i]!, out[j]!];
+        out[i] = pi; out[j] = pj;
+        if (cost() < now) improved = true; else { out[i] = oi; out[j] = oj; }
+      }
+    }
+  }
   return out;
 }

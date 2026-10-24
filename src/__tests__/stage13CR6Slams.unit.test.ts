@@ -20,5 +20,5 @@ test('the toss: who won it, what they chose; the extra board’s toss', () => {
 
 test('the match summary counts slams (source)', () => {
   const src = require('fs').readFileSync(require('path').join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
-  expect(src).toContain("if (carromSlams) summary.slams = carromSlams; // Stage 13 · CR6");
+  expect(src).toContain("if (carromSlams) summary.slams = carromSlams; else delete summary.slams; // Stage 13 · CR6"); // N-R7-S23: and cleared when an undo leaves none
 });

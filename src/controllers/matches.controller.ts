@@ -4458,6 +4458,40 @@ export function withinVoidWindow(
   return now <= deadline.getTime();
 }
 
+/**
+ * N-R7-S26 · the later-round slots a knockout result filled: the winner's next
+ * match and (double elimination) the loser's back-draw match, or a semi's loser
+ * in the third-place match. A void empties them while those matches are unplayed
+ * and is refused once one has been played (void that one first).
+ */
+async function bracketSlotsFilledBy(matchId: string): Promise<{ played: boolean; slots: Array<{ id: string; col: 'a' | 'b' }> }> {
+  const none = { played: false, slots: [] as Array<{ id: string; col: 'a' | 'b' }> };
+  const { data: m } = await supabase.from('matches')
+    .select('id, tournament_id, group_label, winner_team_id, team_a_id, team_b_id, next_match_id, loser_next_match_id')
+    .eq('id', matchId).maybeSingle();
+  const r = m as { tournament_id: string | null; group_label: string | null; winner_team_id: string | null; team_a_id: string | null; team_b_id: string | null; next_match_id: string | null; loser_next_match_id: string | null } | null;
+  if (!r?.tournament_id || r.group_label || !r.winner_team_id) return none;
+  const loser = r.winner_team_id === r.team_a_id ? r.team_b_id : r.winner_team_id === r.team_b_id ? r.team_a_id : null;
+  const want: Array<[string, string]> = [];
+  if (r.next_match_id) want.push([r.next_match_id, r.winner_team_id]);
+  if (r.loser_next_match_id && loser) want.push([r.loser_next_match_id, loser]);
+  if (r.next_match_id && loser) {
+    const { data: third } = await supabase.from('matches').select('id').eq('tournament_id', r.tournament_id).eq('third_place', true).maybeSingle();
+    if ((third as { id?: string } | null)?.id) want.push([(third as { id: string }).id, loser]);
+  }
+  const out = { played: false, slots: [] as Array<{ id: string; col: 'a' | 'b' }> };
+  for (const [cid, team] of want) {
+    const { data: c } = await supabase.from('matches').select('id, status, team_a_id, team_b_id, voided_at').eq('id', cid).maybeSingle();
+    const ch = c as { id: string; status: string; team_a_id: string | null; team_b_id: string | null; voided_at: string | null } | null;
+    if (!ch) continue;
+    const col = ch.team_a_id === team ? 'a' : ch.team_b_id === team ? 'b' : null;
+    if (!col) continue;
+    if (ch.status !== 'scheduled' && ch.status !== 'cancelled' && !ch.voided_at) { out.played = true; continue; }
+    out.slots.push({ id: ch.id, col });
+  }
+  return out;
+}
+
 export async function voidMatch(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -4512,6 +4546,12 @@ export async function voidMatch(req: Request, res: Response) {
       });
     }
 
+    // N-R7-S26: a voided knockout result no longer puts anyone in a later round.
+    const bracketSlots = match.tournament_id ? await bracketSlotsFilledBy(id) : { played: false, slots: [] };
+    if (bracketSlots.played) {
+      return res.status(409).json({ error: 'A later match this result decided has been played. Void that one first.', code: 'NEXT_ROUND_PLAYED' });
+    }
+
     // Walk back what completion materialised BEFORE setting the flag, so the
     // numbers are computed against the match as it still stands.
     const deltas = await recordDeltas(id);
@@ -4539,6 +4579,11 @@ export async function voidMatch(req: Request, res: Response) {
     // V042 (D6): the walked-back totals may no longer earn First Match /
     // Veteran / Winner / Champion. Silent, best-effort.
     for (const d of deltas) void revokeRecordBadgesSafe(d.user_id);
+
+    // N-R7-S26: its winner (and a back-draw / third-place loser) leaves the later round.
+    for (const sl of bracketSlots.slots) {
+      await supabase.from('matches').update(sl.col === 'a' ? { team_a_id: null, team_a_name: 'TBD' } : { team_b_id: null, team_b_name: 'TBD' }).eq('id', sl.id);
+    }
 
     // Decision 27 Sep 2026: a voided final un-crowns its tournament.
     if (match.tournament_id) await recrownAfterVoidChange(id);
@@ -4609,6 +4654,15 @@ export async function unvoidMatch(req: Request, res: Response) {
 
     // V042 (D6): a restore re-awards what the void took back.
     for (const d of deltas) void awardBadgesSafe(d.user_id);
+
+    // N-R7-S26: a restored knockout result moves its teams on again.
+    if (match.tournament_id) {
+      const { data: link } = await supabase.from('matches').select('next_match_id, loser_next_match_id, group_label').eq('id', id).maybeSingle();
+      const l = link as { next_match_id: string | null; loser_next_match_id: string | null; group_label: string | null } | null;
+      if (l && !l.group_label && (l.next_match_id || l.loser_next_match_id)) {
+        try { await advanceTournamentWinner(id); } catch (e) { console.error('restore advance failed:', e instanceof Error ? e.message : e); }
+      }
+    }
 
     // …and a restored final crowns its winner again.
     if (match.tournament_id) await recrownAfterVoidChange(id);

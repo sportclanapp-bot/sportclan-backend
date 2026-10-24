@@ -94,7 +94,7 @@ import { separateClubsInGroups, separateClubsInRound1 } from '../utils/clubSepar
 import { scheduleRefusal } from '../utils/scheduleFields';
 import { swissFirstRound, type SwissRound } from '../utils/swiss';
 import { dutchFirstRound, dutchRound, dutchHistory } from '../utils/swissDutch';
-import { bergerRounds, seededGroupFixtures } from '../utils/groupOrder';
+import { balanceColours, bergerRounds, seededGroupFixtures } from '../utils/groupOrder';
 import { declineStaleByeRequests } from '../utils/swissByeRequests';
 import { BOX_DEFAULT, boxesOf, boxLabel, challengeProblem, ladderAfter, nextBoxOrder, reachOf } from '../utils/ladderBox';
 import {
@@ -4678,7 +4678,9 @@ export async function generateFixtures(req: Request, res: Response) {
       }
       // Stage 10 · TT7: each group in seeded order (the top seeds meet last), the
       // groups' rounds interleaved so a player rests while the others play.
-      for (const fx of seededGroupFixtures(groups)) {
+      const groupChess = normSportSlug((await getSport(tournament.sport_id as string))?.slug) === 'chess';
+      const groupGames = seededGroupFixtures(groups);
+      for (const fx of groupChess ? balanceColours(groupGames, (x) => x.id) : groupGames) { // N-R7-S22: chess colours even
         matchRows.push({
           sport_id: tournament.sport_id,
           tournament_id: id,
@@ -5009,7 +5011,9 @@ async function boxRoundRows(
     for (const e of boxes[b]!) await supabase.from('tournament_entries').update({ group_label: String(b + 1), seed: ++place }).eq('id', e.entryId);
   }
   // Stage 10 · TT7: each box in seeded order (its top players meet last), boxes interleaved.
-  for (const fx of seededGroupFixtures(boxes)) {
+  const boxChess = normSportSlug((await getSport(String(base.sport_id)))?.slug) === 'chess';
+  const boxGames = seededGroupFixtures(boxes);
+  for (const fx of boxChess ? balanceColours(boxGames, (x) => x.teamId) : boxGames) { // N-R7-S22
     rows.push({
       sport_id: base.sport_id, tournament_id: base.tournament_id,
       team_a_id: fx.a.teamId, team_b_id: fx.b.teamId,

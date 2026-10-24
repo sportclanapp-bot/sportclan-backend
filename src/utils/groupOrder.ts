@@ -82,3 +82,25 @@ export function bergerRounds(n: number, double = false): Array<Array<[number, nu
   const first = rounds.length >= 2 ? [...rounds.slice(0, -2), rounds[rounds.length - 1]!, rounds[rounds.length - 2]!] : rounds;
   return drop([...first, ...first.map((rd) => rd.map(([a, b]) => [b, a] as [number, number]))]);
 }
+
+/**
+ * N-R7-S22 · chess: who has White in a group's (or a box's) games. The seeded
+ * order names the higher seed first in every game, so in chess — where the
+ * first side is White — the top seed of a group of 4 had White in all three
+ * games and the bottom seed none. Games are taken in play order and the side
+ * with more Whites so far (then the one who had White last) takes Black, so
+ * every player's colours come out as even as a round robin allows (2/1 in a
+ * group of 4, 1/1 in a group of 3).
+ */
+export function balanceColours<T extends { a: unknown; b: unknown }>(games: T[], keyOf: (side: T['a']) => string): T[] {
+  const net = new Map<string, number>(); const last = new Map<string, 'W' | 'B'>();
+  return games.map((g) => {
+    const a = keyOf(g.a as T['a']); const b = keyOf(g.b as T['a']);
+    const na = net.get(a) ?? 0; const nb = net.get(b) ?? 0;
+    const swap = na > nb || (na === nb && last.get(a) === 'W' && last.get(b) !== 'W');
+    const out = swap ? { ...g, a: g.b, b: g.a } : g;
+    const w = keyOf(out.a as T['a']); const k = keyOf(out.b as T['a']);
+    net.set(w, (net.get(w) ?? 0) + 1); net.set(k, (net.get(k) ?? 0) - 1); last.set(w, 'W'); last.set(k, 'B');
+    return out;
+  });
+}

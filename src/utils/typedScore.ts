@@ -80,7 +80,7 @@ function rallyPoints(rules: MatchRules, sets: TypedSet[], sideOut: boolean, u: '
     const set = sets[g]!;
     if (gamesWinner(wonA, wonB, bestOf, rules.allGames)) return { problem: `The match was already won before ${u} ${g + 1}.`, points, winner: null };
     if (set.a === set.b) return { problem: `${U} ${g + 1} (${label(set)}) has no winner.`, points, winner: null };
-    const deciding = g + 1 === bestOf;
+    const deciding = bestOf > 1 && g + 1 === bestOf; // N-R7-S25: a one-set match has no decider (matchRules drops finalTarget at best of 1)
     const target = deciding && rules.finalTarget ? rules.finalTarget : rules.target ?? 11;
     const winner: TypedSide = set.a > set.b ? 'A' : 'B';
     const order = interleave(winner, Math.max(set.a, set.b), Math.min(set.a, set.b));

@@ -359,7 +359,7 @@ export const CARROM_PRESETS = [{ target: 25, queenPoints: 3, name: 'Official' },
 export const SPORT_SLOT_MINUTES: Readonly<Record<string, number>> = {
   cricket: 180, football: 90, hockey: 70, tennis: 90, basketball: 60, volleyball: 75, badminton: 30, pickleball: 30, carrom: 30, tabletennis: 20, chess: 60, // volleyball: best of 5 to 25 runs ~75 min (was 45, the old sport default — device pass)
 };
-const up5 = (m: number) => Math.max(5, Math.ceil(m / 5) * 5);
+const up5 = (m: number) => Math.max(5, Math.ceil(Math.round(m * 1e6) / 1e6 / 5) * 5); // N-R7-S13: 50.000000001 (2.4 × 6 in floating point) is 50, not 55
 /** Stage 11 · PB9: the rally sports a match can be timed in (tennis and carrom have their own clocks). */
 export const RALLY_TIMED: ReadonlySet<string> = new Set(['badminton', 'tabletennis', 'pickleball', 'volleyball']);
 /** Expected sets / games played in a best-of-n: all the winner needs, and 40% of the rest. */

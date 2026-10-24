@@ -8,7 +8,7 @@ const base = { daily_start_time: '09:00', daily_end_time: '18:00', buffer_minute
 
 test('a pro set gets a short slot; best of 5 a long one; the organiser’s number wins', () => {
   const pro = buildTournamentScheduleConfig({ ...base, match_rules: { default: { v: 1, bestOf: 1, gamesPerSet: 8 } } }, '2026-11-28', undefined, 'tennis');
-  expect([pro.durationMin, pro.bounded]).toEqual([55, true]);
+  expect([pro.durationMin, pro.bounded]).toEqual([50, true]); // N-R7-S13: 90 × 8 / 14.4 = 50 (it read 55 from a floating-point 50.000000001)
   const bo5 = buildTournamentScheduleConfig({ ...base, match_rules: { default: { v: 1, bestOf: 5, finalSetTiebreakTo: 10 } } }, '2026-11-28', undefined, 'tennis');
   expect(bo5.durationMin).toBe(145);
   const own = buildTournamentScheduleConfig({ ...base, match_duration_minutes: 40, match_rules: { default: { v: 1, bestOf: 5 } } }, '2026-11-28', undefined, 'tennis');

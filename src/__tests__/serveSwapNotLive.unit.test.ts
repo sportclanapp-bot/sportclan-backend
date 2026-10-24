@@ -10,7 +10,8 @@ const src = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'scoring.c
 const body = src.slice(src.indexOf('export async function createEvent'), src.indexOf('\nexport ', src.indexOf('export async function createEvent') + 10));
 
 test('only an event that is play flips a scheduled match to live', () => {
-  expect(body).toContain("const startsPlay = event_type !== 'serve_swap';");
+  expect(body).toContain('const startsPlay = startsPlayEvent(event_type, payload);'); // N-R7-S15: the warm-up and pre-play notes too
+  expect(src).toContain("if (eventType === 'serve_swap') return false;");
   expect(body).toContain('if (startsPlay) await promoteToLive(matchId, match);');
   expect(src).toMatch(/export async function promoteToLive[\s\S]*?if \(match\.status !== 'scheduled'\) return;[\s\S]*?update\(\{ status: 'live' \}\)/);
 });

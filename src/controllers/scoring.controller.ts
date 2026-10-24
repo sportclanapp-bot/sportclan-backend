@@ -733,6 +733,17 @@ export async function validateScoringEvent(
 }
 
 /**
+ * V-3 · N-R7-S15 (Step 2, SPP1-TTN-138): does this event start play (flip a scheduled match to live)?
+ * A serve swap, the warm-up, a misconduct before the first point and a receiver swap are pre-play:
+ * the match goes live on the first point (a penalty point included) or any other event.
+ */
+export function startsPlayEvent(eventType: string, payload: unknown): boolean {
+  if (eventType === 'serve_swap') return false;
+  const kind = (payload as { kind?: unknown } | null | undefined)?.kind;
+  return !(eventType === 'note' && (kind === 'warmup' || kind === 'violation' || kind === 'receiver_swap'));
+}
+
+/**
  * A scheduled match goes live on its first accepted play (never a downgrade of
  * a finished one). Shared with the QR handoff, which used to leave a first-play
  * match on `scheduled` (B06-F1).
@@ -797,7 +808,7 @@ export async function createEvent(req: Request, res: Response) {
     // the signed QR handoff (qrHandoff.controller) runs exactly the same ones.
     const refused = await validateScoringEvent(matchId, match, { event_type, period, clock_seconds, payload });
     if (refused) return res.status(refused.status).json(refused.body);
-    const startsPlay = event_type !== 'serve_swap';
+    const startsPlay = startsPlayEvent(event_type, payload); // V-3 · N-R7-S15: pre-play events don't start the match
 
     // Catch-all: any scored event means the match is in progress, so promote it
     // to `live`. The toss handler already does this for the normal flow; this

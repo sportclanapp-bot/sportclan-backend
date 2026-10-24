@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { orderedSportIds } from '../utils/userSports'; // N-R7-65
 import bcrypt from 'bcryptjs';
 import { findSessionByToken, hashRefreshToken, rememberOrphan } from '../utils/refreshTokenStore';
 import { notifyUser } from '../utils/notify';
@@ -652,7 +653,7 @@ export async function register(req: Request, res: Response) {
   const refreshToken = generateRefreshToken(user.id);
   const sid = await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
   const accessToken = generateAccessToken(user.id, sid); // decision 15: tied to this sign-in
-  return res.json({ user: { ...user, account_types: await accountTypesFor(user.id, user.account_type) }, accessToken, refreshToken, isNewUser: true });
+  return res.json({ user: { ...user, account_types: await accountTypesFor(user.id, user.account_type), sport_ids: await orderedSportIds(user.id).catch(() => [] as string[]) }, accessToken, refreshToken, isNewUser: true });
 }
 
 // POST /auth/otp/login  { phone, code }
@@ -709,7 +710,7 @@ export async function otpLogin(req: Request, res: Response) {
   const refreshToken = generateRefreshToken(user.id);
   const sid = await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
   const accessToken = generateAccessToken(user.id, sid); // decision 15: tied to this sign-in
-  return res.json({ user: { ...user, account_types: await accountTypesFor(user.id, user.account_type) }, accessToken, refreshToken, isNewUser: false });
+  return res.json({ user: { ...user, account_types: await accountTypesFor(user.id, user.account_type), sport_ids: await orderedSportIds(user.id).catch(() => [] as string[]) }, accessToken, refreshToken, isNewUser: false });
 }
 
 // POST /auth/login  { phone, password } or { email, password }
@@ -773,7 +774,7 @@ export async function login(req: Request, res: Response) {
   const sid = await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
   const accessToken = generateAccessToken(user.id, sid); // decision 15: tied to this sign-in
   const { password_hash: _ph, deleted_at: _da, ...safe } = user;
-  return res.json({ user: { ...safe, account_types: await accountTypesFor(user.id, user.account_type) }, accessToken, refreshToken });
+  return res.json({ user: { ...safe, account_types: await accountTypesFor(user.id, user.account_type), sport_ids: await orderedSportIds(user.id).catch(() => [] as string[]) }, accessToken, refreshToken });
 }
 
 /**
@@ -781,6 +782,8 @@ export async function login(req: Request, res: Response) {
  * answers carried only the legacy primary column, so an umpire or official who had just signed in
  * had no Officiate / Offer to officiate until the app next reloaded the profile.
  */
+// N-R7-65: the sign-in answers also carry sport_ids (as /users/me), so the first screens after a sign-in
+// see the person's own sports (Search 'players near you' fell back to cricket).
 async function accountTypesFor(userId: string, primary: unknown): Promise<string[]> {
   const { data } = await supabase.from('user_account_types').select('account_type').eq('user_id', userId);
   const types = (data ?? []).map((r: { account_type: string }) => r.account_type);

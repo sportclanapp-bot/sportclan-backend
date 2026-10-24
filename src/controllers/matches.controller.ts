@@ -3279,6 +3279,11 @@ export async function completeMatch(req: Request, res: Response) {
           code: 'WINNER_NOT_LEADER',
         });
       }
+      // N-R7-S18: a timed rally match left level at the buzzer under "stays level" is a draw by its
+      // rules — End naming a side recorded "Lions won" on a 3–3 (no leader to check against).
+      if (bo && bo.decided && levelAtTime(canonical) && winnerSide) {
+        return res.status(409).json({ error: 'The match ended level at time — it’s a draw.', code: 'TIMED_LEVEL' });
+      }
       // Stage 15 follow-up: a best-of-N series (any sport) ends once a side has won it, and that side is the winner.
       const seriesTie = tieSpecOf(normSportSlug(sportRow?.slug), rulesOf(normSportSlug(sportRow?.slug), match))?.series ? (canonical as { tie?: { decided?: unknown; settled?: unknown; rubbersA?: number; rubbersB?: number } } | null)?.tie : null;
       if (seriesTie && submittedSummary?.score_only !== true) {
@@ -4811,3 +4816,6 @@ export async function handOverScoringLease(req: Request, res: Response) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+/** N-R7-S18: a timed rally match that ended level at the buzzer ("stays level") — a draw; no side may be named the winner. */
+export const levelAtTime = (summary: { timed_level?: unknown } | null | undefined): boolean => summary?.timed_level === true;

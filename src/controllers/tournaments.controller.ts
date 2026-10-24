@@ -4056,8 +4056,10 @@ export async function maybeSeedKnockout(tournamentId: string): Promise<void> {
     const places = new Set(live.slice(0, qualsPerGroup + (bestNextOn ? 1 : 0)));
     if (detail.level.some((cl) => { const c = cl.filter((id) => !outIds.has(id)); return c.length > 1 && c.every((id) => (globalStats.get(id)?.played ?? 0) > 0) && c.some((id) => places.has(id)); })) return; // as the table's "level" note
   }
+  const rankedGroups: string[][] = []; // N-R7-S12: each group's order, to rank a tier across the groups
   for (const label of labels) {
     const orderedIds = rankTeams(groupTeams[label], tableMatches, tiebreakerRules, pts, extraFor(label)).filter((id) => !outIds.has(id)); // audit #54
+    rankedGroups.push(orderedIds);
     for (let r = 0; r < qualsPerGroup; r++) {
       const id = orderedIds[r];
       if (id) (ranks[r] ??= []).push({ id, name: nameOf[id] ?? 'Team' });
@@ -4080,7 +4082,10 @@ export async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   for (const label of labels) for (const tid of groupTeams[label]) groupOfId.set(tid, label);
   const orderedIds = placeGroupTiersApart(
     direct.map((d) => d.team_id),
-    ranks.map((tier) => (tier ?? []).slice().sort(tierCmp).map((t) => t.id)),
+    // N-R7-S12 (SPP1-TEN-117): a tier in the order the best-placed teams across the groups are ranked
+    // (points, difference, scored per game played, then the tie-breaks that compare teams from
+    // different groups) — by points alone a winner with a worse difference could take the bye.
+    ranks.map((tier, r) => { const ids = (tier ?? []).map((t) => t.id); const best = bestPlacedAcrossGroups(rankedGroups, r, ids.length, globalStats, tiebreakerRules, { ...extraFor(''), matches: tableMatches, pts }).filter((id) => ids.includes(id)); return best.length === ids.length ? best : (tier ?? []).slice().sort(tierCmp).map((t) => t.id); }),
     (tid) => groupOfId.get(tid),
     ko1.length * 2,
   );

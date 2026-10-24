@@ -32,6 +32,7 @@ import { BASKETBALL_STAT_KEYS, goalHowFor, DOUBLES_PLAYERS, RALLY_TIMED, carromO
 import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsFor, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { trumpsFor } from '../utils/tieTrumps';
 import { sideOutReplay } from '../utils/pickleballCore';
+import { takesSideOutRally, tieHasTimedMatch } from '../utils/sideOutRally';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
 import { isValidChessReason } from '../utils/chessRules';
 
@@ -389,7 +390,7 @@ export async function validateScoringEvent(
   // in any other it would score as a point (the rollups count every score).
   if (event_type === 'score' && payload && payload.kind === 'rally') {
     const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
-    if (slug !== 'pickleball' || rulesOf(slug, match).scoring !== 'sideout') {
+    if (!takesSideOutRally(slug, rulesOf(slug, match))) { // N-R7-S17: and a pickleball tie with a side-out match (MLP)
       return refuse(400, { error: 'A rally without a point is for side-out pickleball.', code: 'BAD_RALLY' });
     }
   }
@@ -421,7 +422,7 @@ export async function validateScoringEvent(
     const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
     // BUILD 3.76: and a timed carrom game.
     // Stage 11 · PB9: and a timed badminton, table tennis, pickleball or volleyball match.
-    const timedHere = slug === 'tennis' || RALLY_TIMED.has(slug) ? !!rulesOf(slug, match).timeLimitMinutes : slug === 'carrom' ? !!rulesOf(slug, match).gameMinutes : false;
+    const timedHere = slug === 'tennis' || RALLY_TIMED.has(slug) ? !!rulesOf(slug, match).timeLimitMinutes || tieHasTimedMatch(rulesOf(slug, match)) /* N-R7-S19: a tie's timed match (WPBL) */ : slug === 'carrom' ? !!rulesOf(slug, match).gameMinutes : false;
     if (!timedHere) {
       return refuse(400, { error: 'Time is called only in a timed match (or a timed carrom game).', code: 'BAD_NOTE' });
     }

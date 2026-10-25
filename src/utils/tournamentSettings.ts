@@ -802,6 +802,9 @@ export function categoryProblem(c: Category | null | undefined, players: Categor
   }
   if (c.gender === 'mixed' && players.length > 1) {
     const g = new Set(players.map((p) => p.gender));
+    // N-R7-S75: a profile with no gender says so (as the men's and women's events do), not the general words.
+    const unknown = players.find((p) => p.gender !== 'male' && p.gender !== 'female');
+    if ((!g.has('male') || !g.has('female')) && unknown) return `${poss(unknown.name)} profile doesn’t list their gender, and this is a mixed event (one man and one woman). Add it to the profile first.`;
     if (!g.has('male') || !g.has('female')) return 'A mixed event needs at least one man and one woman on the team.';
   }
   // Stage 9 · T12: a pair's combined age (two players; a bigger team is checked per rubber).

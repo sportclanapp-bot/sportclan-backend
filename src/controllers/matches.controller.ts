@@ -4566,13 +4566,13 @@ export async function voidMatch(req: Request, res: Response) {
       return res.status(409).json({ error: 'A later match this result decided has been played. Void that one first.', code: 'NEXT_ROUND_PLAYED' });
     }
 
-    // Walk back what completion materialised BEFORE setting the flag, so the
+    // Work out what completion materialised BEFORE setting the flag, so the
     // numbers are computed against the match as it still stands.
     const deltas = await recordDeltas(id);
-    if (deltas.length > 0) await applyRecordDeltas(match.sport_id, deltas, -1);
-    await applyChessTcDeltas(id, -1); // BUILD 3.71: and the time-control ratings (none for other sports)
-
-    const { data: updated, error } = await supabase
+    // N-R7-S57: then claim the void — a write that only lands while voided_at is
+    // still empty — so of two officials voiding at once only one walks the records
+    // back (both used to, and a rating moved twice).
+    const { data: claimed, error } = await supabase
       .from('matches')
       .update({
         voided_at: new Date().toISOString(),
@@ -4583,9 +4583,17 @@ export async function voidMatch(req: Request, res: Response) {
         // "recent results", which orders by updated_at.
       })
       .eq('id', id)
-      .select('*')
-      .single();
+      .is('voided_at', null)
+      .select('*');
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    const updated = (claimed ?? [])[0];
+    if (!updated) {
+      const { data: now } = await supabase.from('matches').select('*').eq('id', id).maybeSingle();
+      return res.json({ success: true, already_voided: true, match: now ?? match });
+    }
+
+    if (deltas.length > 0) await applyRecordDeltas(match.sport_id, deltas, -1);
+    await applyChessTcDeltas(id, -1); // BUILD 3.71: and the time-control ratings (none for other sports)
 
     // V-6: a voided win pays nothing — take the +5 win coins back (ledger).
     await reconcileWinCoins(id).catch(() => undefined);
@@ -4651,13 +4659,19 @@ export async function unvoidMatch(req: Request, res: Response) {
 
     // Clear the flag FIRST so the same calculation that voided it sees a live
     // match again, then re-apply with the opposite sign.
-    const { data: updated, error } = await supabase
+    // N-R7-S57: claimed like the void — only the restore that clears voided_at re-applies the records.
+    const { data: claimed, error } = await supabase
       .from('matches')
       .update({ voided_at: null, voided_by: null, void_reason: null }) // no updated_at bump (U-37)
       .eq('id', id)
-      .select('*')
-      .single();
+      .not('voided_at', 'is', null)
+      .select('*');
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    const updated = (claimed ?? [])[0];
+    if (!updated) {
+      const { data: now } = await supabase.from('matches').select('*').eq('id', id).maybeSingle();
+      return res.json({ success: true, already_active: true, match: now ?? match });
+    }
 
     const deltas = await recordDeltas(id);
     if (deltas.length > 0) await applyRecordDeltas(match.sport_id, deltas, 1);

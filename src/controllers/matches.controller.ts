@@ -1964,6 +1964,8 @@ export async function getMatch(req: Request, res: Response) {
     // and over-showed it (→403) to a fixture creator later removed as organiser.
     matchWithRating.can_officiate = canOfficiate;
     matchWithRating.can_manage = canManage;
+    // N-R7-S33: who may give a walkover / default here (completeMatch's rule), so the app offers it to them only.
+    matchWithRating.can_default = !!userId && canOfficiate && (await canDefault(match as never, userId));
     // Audit #35/#36: Cancel and Void by the same rules cancelMatch and
     // voidMatch enforce, so the app offers them to exactly who may use them —
     // Cancel: the organiser (a tournament fixture) or the creator, before it's
@@ -3211,6 +3213,11 @@ export async function completeMatch(req: Request, res: Response) {
     }
     if (defaulted && !(await canDefault(match, userId))) {
       return res.status(403).json({ error: 'Only the referee, the umpire or the organiser can default a player.', code: 'NOT_REFEREE' });
+    }
+    // N-R7-S33: a walkover on a tournament fixture is the referee's, the umpire's or the organiser's
+    // decision — a plain tournament scorer could give one through the API though the app keeps it from them.
+    if (!system && walkoverIn === true && !retired && !defaulted && !!match.tournament_id && !(await canDefault(match, userId))) {
+      return res.status(403).json({ error: 'Only the referee, the umpire or the organiser can give a walkover.', code: 'NOT_REFEREE_WALKOVER' });
     }
     // N1 (visual review): a match voided while live could still be completed,
     // and completion then moved the rating, wrote rating_history, paid the win

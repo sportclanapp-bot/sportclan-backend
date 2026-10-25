@@ -102,6 +102,11 @@ export async function authorizeScorer(matchId: string, userId: string, deviceId?
   // asks the human. See utils/scoringLease.
   const verdict = await checkLease(matchId, userId, deviceId);
   if (!verdict.ok) {
+    // N-R7-S45: a match ended on the phone that took scoring over is finished, not "taken over" — the
+    // pad says the match was ended elsewhere instead of offering to take scoring back.
+    if (isTerminalMatchStatus(match.status)) {
+      return { ok: false as const, status: 409, error: 'This match is finished and can no longer be scored', code: 'MATCH_FINISHED', match };
+    }
     const refusal = leaseRefusal(verdict, userId);
     return {
       ok: false as const,
@@ -836,7 +841,15 @@ export async function createEvent(req: Request, res: Response) {
     }
 
     const auth = await authorizeScorer(matchId, userId, deviceIdOf(req));
-    if (!auth.ok) return res.status(auth.status).json({ error: auth.error, ...(auth.code ? { code: auth.code } : {}) });
+    if (!auth.ok) {
+      // N-R7-S45: finished (on the phone that took over): an action it already has is still answered as recorded (N-R3-4).
+      const key = auth.code === 'MATCH_FINISHED' ? normalizeClientKey(idempotency_key) : null;
+      if (key) {
+        const { data: had } = await supabase.from('match_events').select('*').eq('match_id', matchId).eq('client_key', key).maybeSingle();
+        if (had) return res.json({ event: had, replayed: true });
+      }
+      return res.status(auth.status).json({ error: auth.error, ...(auth.code ? { code: auth.code } : {}) });
+    }
     const match = auth.match;
 
     // SC-335: an out-of-scope (deactivated) sport can't be scored at all — even a

@@ -4786,7 +4786,11 @@ export async function heartbeatScoringLease(req: Request, res: Response) {
     // score — an umpire or scorer taken off the match lets it go here.
     {
       const { data: match } = await supabase
-        .from('matches').select('id, created_by, umpire_id, scorer_id, tournament_id').eq('id', id).maybeSingle();
+        .from('matches').select('id, created_by, umpire_id, scorer_id, tournament_id, status').eq('id', id).maybeSingle();
+      // N-R7-S45: a finished match has nothing left to keep warm — finished, not "someone else took over".
+      if (match && isTerminalMatchStatus(match.status)) {
+        return res.status(409).json({ error: 'This match is finished and can no longer be scored.', code: 'MATCH_FINISHED' });
+      }
       if (match && !(await canOfficiateMatch(match, userId))) {
         await releaseLease(id, userId, deviceId);
         return res.status(409).json({

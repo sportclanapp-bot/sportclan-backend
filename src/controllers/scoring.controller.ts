@@ -525,7 +525,7 @@ export async function validateScoringEvent(
           let last = -1; all.forEach((e, i) => { if (e.payload?.kind === 'game_end') last = i; });
           decided = !!gameShootout(all.slice(last + 1), shootoutKicksOf(rulesOf(slug, match)));
         }
-        if (!decided) return refuse(400, { error: slug === 'basketball' ? 'The game is level — play on (overtime) until one side leads.' : `The game is level — ${slug === 'hockey' ? 'a shoot-out' : 'penalties'} decide it first.`, code: 'GAME_LEVEL' });
+        if (!decided) return refuse(400, { error: slug === 'basketball' ? 'The game is level — play on (overtime) until one side leads.' : `The game is level — ${slug === 'hockey' ? 'a shoot-out decides' : 'penalties decide'} it first.`, code: 'GAME_LEVEL' });
       }
     }
     if (payload.kind !== 'game_end' && slug !== 'basketball') return refuse(400, { error: 'The possession arrow is basketball’s.', code: 'BAD_NOTE' });

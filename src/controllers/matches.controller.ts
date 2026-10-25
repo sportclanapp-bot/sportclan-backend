@@ -55,6 +55,7 @@ import { validateSportForCreate, activeSportIds } from '../utils/sports';
 import { isTerminalMatchStatus, LIMITS, isCount, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner, recrownAfterVoidChange, tournamentSettingsOf } from './tournaments.controller';
+import { basketballEndRefusal } from '../utils/pointsGameEnd';
 import { recomputeSummary, writeCricketInningsStats, bestOfState, rollupTieSpec } from './scoring.controller';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { awardBadgesSafe, revokeRecordBadgesSafe } from './badges.controller';
@@ -3285,6 +3286,11 @@ export async function completeMatch(req: Request, res: Response) {
       // rules — End naming a side recorded "Lions won" on a 3–3 (no leader to check against).
       if (bo && bo.decided && levelAtTime(canonical) && winnerSide) {
         return res.status(409).json({ error: 'The match ended level at time — it’s a draw.', code: 'TIMED_LEVEL' });
+      }
+      // N-R7-S28: a scored basketball game can't end level, and its winner is the side ahead.
+      if (normSportSlug(sportRow?.slug) === 'basketball' && !tieSpecOf('basketball', rulesOf('basketball', match))?.series) {
+        const bb = basketballEndRefusal(canonical as never, winnerSide, { A: match.team_a_name, B: match.team_b_name });
+        if (bb) return res.status(409).json(bb);
       }
       // Stage 15 follow-up: a best-of-N series (any sport) ends once a side has won it, and that side is the winner.
       const seriesTie = tieSpecOf(normSportSlug(sportRow?.slug), rulesOf(normSportSlug(sportRow?.slug), match))?.series ? (canonical as { tie?: { decided?: unknown; settled?: unknown; rubbersA?: number; rubbersB?: number } } | null)?.tie : null;

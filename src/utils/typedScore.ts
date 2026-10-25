@@ -379,6 +379,8 @@ export function typedPeriodPoints(
     if (k === 'basketball' && i > regulation && a !== b) return no(`${periodWord(k, i, regulation)} isn’t played — the last overtime settled it.`);
     a += p.a; b += p.b;
   }
+  // N-R7-S29: hockey has no overtime (a level match is a draw, or a knockout's shoot-out).
+  if (k === 'hockey' && ps.length > regulation) return no('Hockey has no overtime — a level match is a draw, or a knockout goes to a shoot-out.');
   const level = a === b;
   if (level && k === 'basketball') return no('A basketball game can’t end level — add the overtime.');
   if (level && r.drawAllowed === false) return no(`This match can’t end level — a level knockout goes to ${k === 'hockey' ? 'a shoot-out' : 'penalties'}: score ${k === 'hockey' ? 'it' : 'them'} on the pad.`); // F182: hockey's word

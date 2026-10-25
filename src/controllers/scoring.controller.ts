@@ -198,6 +198,14 @@ export async function validateScoringEvent(
   if (userId && chessArbiterOnly(ev.event_type, ev.payload) && !(await canDefault(match as never, userId))) {
     return refuse(403, { error: 'That’s the arbiter’s call — only the arbiter or the organiser can record it.', code: 'NOT_ARBITER' });
   }
+  // N-R7-S31: a conduct step that ends the match (a default / match forfeit) is the referee's or the
+  // organiser's, as at /complete — a plain scorer's "default" note was stored though the default was refused.
+  if (userId && ev.event_type === 'note' && ev.payload?.kind === 'violation' && typeof ev.payload.penalty === 'string') {
+    const slugV = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';
+    if (ladderStepDef(slugV, ev.payload.penalty).effect === 'match' && !(await canDefault(match as never, userId))) {
+      return refuse(403, { error: 'Only the referee, the umpire or the organiser can default a player.', code: 'NOT_REFEREE' });
+    }
+  }
   // BUILD 2.4 (found on the device): a tournament fixture waiting on earlier
   // results has no teams yet — a knockout final before its semis. It took
   // scoring events, so a result could exist before anyone knew who played.

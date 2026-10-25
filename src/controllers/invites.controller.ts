@@ -3,7 +3,7 @@ import { isRangeError, pageMeta, parsePagination } from '../utils/pagination';
 import { Request, Response } from 'express';
 import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
-import { isBlockedBetween } from '../utils/blocks';
+import { blockedUserIds, isBlockedBetween } from '../utils/blocks';
 import { sanitizeError } from '../utils/response';
 import { notifyUnlessBlocked, notifyUser } from '../utils/notify';
 
@@ -225,6 +225,12 @@ export async function withdrawInvite(req: Request, res: Response) {
 }
 
 // GET /invites — invites received by current user
+/** N-R7-S55: the invite's sender has deleted their account. */
+function senderGone(inv: { sender?: { deleted_at?: string | null } | Array<{ deleted_at?: string | null }> | null }): boolean {
+  const s = Array.isArray(inv.sender) ? inv.sender[0] : inv.sender;
+  return !!s?.deleted_at;
+}
+
 export async function listInvites(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -251,27 +257,32 @@ export async function listInvites(req: Request, res: Response) {
     const invites = (data || []).map((inv: any) => (isInviteExpired(inv, nowMs) ? { ...inv, status: 'expired' } : inv));
     return res.json({ invites, pending_count: waiting ?? 0, ...pageMeta(count, p) });
   }
-  const [{ data, error, count }, { count: pendingCount }] = await Promise.all([
+  const [{ data, error, count }, { data: pendingRows }] = await Promise.all([
     supabase
       .from('invites')
-      .select('id, sender_id, receiver_id, sport_id, message, status, created_at, responded_at, sender:sender_id (id, name, username, profile_picture_url), sport:sport_id (id, name, emoji)', { count: 'exact' })
+      .select('id, sender_id, receiver_id, sport_id, message, status, created_at, responded_at, sender:sender_id (id, name, username, profile_picture_url, deleted_at), sport:sport_id (id, name, emoji)', { count: 'exact' })
       .eq('receiver_id', userId)
       // A withdrawn invite was deleted before migration 153; it stays out of the receiver's list.
       .neq('status', 'withdrawn')
       .order('created_at', { ascending: false })
       .order('id', { ascending: false })
       .range(p.from, p.to),
-    supabase.from('invites').select('id', { count: 'exact', head: true })
+    // N-R7-S55: the fresh pending ones' senders (a few at most), so the count leaves out the hidden ones.
+    supabase.from('invites').select('sender_id, sender:sender_id (deleted_at)')
       .eq('receiver_id', userId).eq('status', 'pending').gte('created_at', inviteFreshCutoffIso()),
   ]);
   if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
+  // N-R7-S55: invites from a blocked account (either way) or a deleted one leave the list.
+  const blocked = await blockedUserIds(userId);
+  const offered = (inv: any) => !blocked.has(inv.sender_id) && !senderGone(inv);
   // SC-332: a >48h-old pending invite is surfaced as 'expired' (not actionable),
   // whether or not the hygiene sweep has flipped its stored status yet.
   const nowMs = Date.now();
-  const invites = (data || []).map((inv: any) =>
+  const invites = (data || []).filter(offered).map((inv: any) =>
     isInviteExpired(inv, nowMs) ? { ...inv, status: 'expired' } : inv,
   );
-  return res.json({ invites, pending_count: pendingCount ?? 0, ...pageMeta(count, p) });
+  const pending = ((pendingRows as any[] | null) ?? []).filter(offered).length;
+  return res.json({ invites, pending_count: pending, ...pageMeta(count, p) });
 }
 
 // SC-332: hygiene sweep — flip stale PENDING invites to 'expired'. NOT required for
@@ -319,11 +330,16 @@ export async function respondToInvite(req: Request, res: Response) {
   // even if the sweep hasn't flipped its stored status yet.
   const { data: existing } = await supabase
     .from('invites')
-    .select('created_at, status, receiver_id')
+    .select('created_at, status, receiver_id, sender_id, sender:sender_id (deleted_at)')
     .eq('id', id)
     .maybeSingle();
   if (!existing || existing.receiver_id !== userId) {
     return res.status(404).json({ error: 'Invite not found' });
+  }
+  // N-R7-S55: an invite from someone blocked (either way) or a deleted account is no longer
+  // offered, so it can't be accepted (a decline is harmless and still allowed).
+  if (status === 'accepted' && (senderGone(existing) || await isBlockedBetween(userId, (existing as { sender_id: string }).sender_id))) {
+    return res.status(403).json({ error: 'This invite is no longer available.', code: 'INVITE_UNAVAILABLE' });
   }
   if (isInviteExpired(existing, Date.now())) {
     return res.status(400).json({ error: 'This invite has expired.', code: 'INVITE_EXPIRED' });

@@ -86,13 +86,13 @@ export function bannedFrom(records: PlayerRecord[], matchId: string): Array<{ te
 }
 
 /** Bans still to serve: the fixtures they cover that aren't played yet. */
-export function openBans(records: PlayerRecord[], played: Set<string>): Array<{ team_id: string; user_id: string | null; name: string; reason: string; remaining: string[] }> {
-  const out: Array<{ team_id: string; user_id: string | null; name: string; reason: string; remaining: string[] }> = [];
+export function openBans(records: PlayerRecord[], played: Set<string>): Array<{ team_id: string; user_id: string | null; name: string; reason: string; remaining: string[]; left: number }> {
+  const out: Array<{ team_id: string; user_id: string | null; name: string; reason: string; remaining: string[]; left: number }> = [];
   for (const r of records) for (const b of r.bans) {
     const remaining = b.covers.filter((id) => !played.has(id));
     // a ban whose fixtures don't exist yet (the knockout isn't drawn) is still owed: one of each kind counts
     const owed = b.covers.length < b.length ? b.length - b.covers.length : 0;
-    if (remaining.length || owed) out.push({ team_id: r.team_id, user_id: r.user_id, name: r.name, reason: b.reason, remaining });
+    if (remaining.length || owed) out.push({ team_id: r.team_id, user_id: r.user_id, name: r.name, reason: b.reason, remaining, left: remaining.length + owed }); // N-R7-S63: matches still to sit out
   }
   return out;
 }

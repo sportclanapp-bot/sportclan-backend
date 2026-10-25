@@ -121,7 +121,11 @@ export async function getSquad(req: Request, res: Response) {
       players: rows.map((r) => ({
         id: r.id, user_id: r.user_id, name: r.user_id ? nm.get(r.user_id) ?? 'Deleted User' : r.guest_name ?? 'Player', guest: !r.user_id, // N-R7-64: a saved row whose account is gone
         jersey_number: r.jersey_number, id_checked: !!r.id_checked_at, id_note: seesNotes ? r.id_note : null,
-        banned: bans.find((b) => (r.user_id ? b.user_id === r.user_id : !b.user_id && b.name.toLowerCase() === (r.guest_name ?? '').toLowerCase()))?.reason ?? null,
+        ...(() => {
+          const ban = bans.find((b) => (r.user_id ? b.user_id === r.user_id : !b.user_id && b.name.toLowerCase() === (r.guest_name ?? '').toLowerCase()));
+          // N-R7-S63: and how many matches it still covers (a 3-match red read 'Banned for the next match').
+          return { banned: ban?.reason ?? null, ban_matches_left: ban ? Math.max(ban.left, 1) : null };
+        })(),
       })),
     });
   } catch {
@@ -270,7 +274,7 @@ export async function getDiscipline(req: Request, res: Response) {
       rules: settingsOf(t as { settings?: unknown }).discipline ?? null,
       cautions: d.allRecs.filter((r) => r.yellows || r.reds).sort((a, b) => b.reds - a.reds || b.yellows - a.yellows || who(a).localeCompare(who(b)))
         .map((r) => ({ user_id: r.user_id, name: who(r), team_id: r.team_id, team_name: tn.get(r.team_id) ?? null, yellows: r.yellows, reds: r.reds })),
-      banned: openBans(d.recs, d.played).map((b) => ({ user_id: b.user_id, name: who(b), team_id: b.team_id, team_name: tn.get(b.team_id) ?? null, reason: b.reason, matches_left: Math.max(b.remaining.length, 1), next_match_id: b.remaining[0] ?? null })),
+      banned: openBans(d.recs, d.played).map((b) => ({ user_id: b.user_id, name: who(b), team_id: b.team_id, team_name: tn.get(b.team_id) ?? null, reason: b.reason, matches_left: Math.max(b.left, 1), next_match_id: b.remaining[0] ?? null })),
     });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

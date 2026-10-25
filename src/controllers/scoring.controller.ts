@@ -26,7 +26,7 @@ import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointC
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { gameEndSuperOver, superOverWinner, allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber, cricketSeries, cricketGameEvents, cricketGameOf, sideTotals, wicketRuns, outBatterOf, wicketShapeProblem } from '../utils/cricketRules';
 import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
-import { FOUL_KINDS } from '../utils/basketballRules';
+import { FOUL_KINDS, canStartNextPeriodOf } from '../utils/basketballRules';
 import { gameShootout, shootoutKicksOf, shootoutProblem } from '../utils/shootoutRules'; // Stage 15 follow-up
 import { BASKETBALL_STAT_KEYS, goalHowFor, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules, expediteCutoff } from '../utils/matchRules';
 import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsFor, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
@@ -190,6 +190,8 @@ export async function validateScoringEvent(
   match: { id: string; status?: string | null; is_ranked?: boolean | null; team_a_id?: string | null; team_b_id?: string | null; team_a_name?: string | null; team_b_name?: string | null; tournament_id?: string | null; score_summary?: unknown; format?: string | null; overs?: number | null; rules?: unknown; sport_id?: string | null; round?: number | null; group_label?: string | null },
   ev: { event_type: unknown; period?: unknown; clock_seconds?: unknown; payload?: any },
   userId?: string,
+  /** A QR hand-over's ops are all checked against the score before the first of them (no per-op state checks). */
+  opts: { batch?: boolean } = {},
 ): Promise<{ status: number; body: { error: string; code?: string } } | null> {
   const refuse = (status: number, body: { error: string; code?: string }) => ({ status, body });
   // N-R7-S20: the chess arbiter's calls (an illegal move, a wrong draw claim, a game lost for a
@@ -317,7 +319,7 @@ export async function validateScoringEvent(
         return refuse(400, { error: 'That piece isn’t worth that.', code: 'BAD_COIN' });
       }
       // N-R7-S30: a piece already pocketed this board (the queen is one piece) is refused, not stored as a no-op.
-      const prior = ((await matchEventsAll(match.id, 'event_type, payload', (q) => q.eq('event_type', 'score'))) ?? []) as Array<{ payload?: { kind?: unknown; coin?: unknown } }>;
+      const prior = (opts.batch ? [] : (await matchEventsAll(match.id, 'event_type, payload', (q) => q.eq('event_type', 'score'))) ?? []) as Array<{ payload?: { kind?: unknown; coin?: unknown } }>;
       const pc = pointCarromReplay(prior.filter((e) => e.payload?.kind === 'coin').map((e) => ({ side: sideOfPayload(e.payload), coin: e.payload!.coin as PointCoin }))
         .filter((x) => x.coin === 'white' || x.coin === 'black' || x.coin === 'queen'), { gamesToWin: winsToWin(r), queenValue: r.queenValue ?? 50 });
       if (!pc.winner && pc.left[payload.coin as PointCoin] <= 0) {
@@ -400,6 +402,25 @@ export async function validateScoringEvent(
       for (const p of periods.slice(regulation)) { otA += Number(p?.A ?? 0); otB += Number(p?.B ?? 0); }
       if (otA >= otTo || otB >= otTo) {
         return refuse(409, { error: `A side has reached ${otTo} in overtime — the game is over. End the match.`, code: 'TARGET_REACHED' });
+      }
+    }
+  }
+  // N-R7-S32: after regulation (and after each overtime) a basketball game moves on only while level —
+  // a lead there is the result (the app's canStartNextPeriodOf hides the button; the server took it).
+  if (event_type === 'period_change' && match.sport_id && !opts.batch) {
+    const slugP = normSportSlug((await getSport(match.sport_id))?.slug);
+    const ssP = (match.score_summary ?? {}) as { A?: { score?: number; points?: number }; B?: { score?: number; points?: number }; periods?: unknown };
+    if (slugP === 'basketball' && !tieSpecOf(slugP, rulesOf(slugP, match))?.series && Array.isArray(ssP.periods)) {
+      const regulation = Number(rulesOf('basketball', match).periods ?? 4) || 4;
+      const n = ssP.periods.length;
+      const ptsP = (x?: { score?: number; points?: number }) => Number(x?.score ?? x?.points ?? 0);
+      const a = ptsP(ssP.A); const b = ptsP(ssP.B);
+      // A level 0–0 one-period game is "played" once anything was recorded (N-TC-1, as the app).
+      const played = n >= regulation && a === b && a + b === 0 && n <= 1
+        ? (((await supabase.from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', match.id)) as { count?: number | null }).count ?? 0) > 0
+        : false;
+      if (!canStartNextPeriodOf(n, a, b, regulation, played)) {
+        return refuse(409, { error: a === b ? 'Nothing has been played yet — there’s no overtime at 0–0.' : 'A side leads after the last period — that’s the result. End the match.', code: 'NO_NEXT_PERIOD' });
       }
     }
   }

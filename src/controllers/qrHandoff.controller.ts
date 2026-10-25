@@ -184,7 +184,7 @@ export async function uploadHandoff(req: Request, res: Response) {
         period: op.e.period,
         clock_seconds: op.e.clock_seconds,
         payload: op.e.payload,
-      }, p.u);
+      }, p.u, { batch: true }); // N-R7-S32: the period check reads the score before these ops
       if (refused) {
         return res.status(400).json({
           error: `This code has a scoring action the server can't accept (${refused.body.error}). Nothing from it was applied.`,

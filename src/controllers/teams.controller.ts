@@ -799,7 +799,7 @@ async function joinOpenTeam(team: { id: string; name: string }, userId: string):
       .eq('team_id', team.id)
       .eq('user_id', userId)
       .maybeSingle();
-    if (existing) return reply(400, { error: 'Already a member of this team' });
+    if (existing) return reply(409, { error: 'Already a member of this team' }); // N-R7-S43: the same 409 as every other path
 
     // SC-359: removed-user + capacity gates, shared by every join path.
     const gate = await joinGate(team.id, userId);

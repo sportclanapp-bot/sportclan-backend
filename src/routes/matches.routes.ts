@@ -51,10 +51,13 @@ import {
   reduceOvers, editMatchEvent, deleteMatchEvent, upsertInningsStats, getScoringEditLog,
 } from '../controllers/matchFeatures.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
+import { hideOfficialReport } from '../middleware/hideOfficialReport.middleware';
 
 const router = Router();
 // SC-397: 400 on a malformed id instead of letting it reach Postgres and 500.
 guardIdParams(router);
+// N-R7-S53: the official's report never rides on a match payload (read via /:id/assistants).
+router.use(hideOfficialReport);
 
 router.post('/', authenticateToken, createMatch);
 router.get('/', authenticateToken, listMatches);

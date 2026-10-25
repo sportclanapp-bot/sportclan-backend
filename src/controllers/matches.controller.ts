@@ -1965,7 +1965,8 @@ export async function getMatch(req: Request, res: Response) {
     matchWithRating.can_officiate = canOfficiate;
     matchWithRating.can_manage = canManage;
     // N-R7-S33: who may give a walkover / default here (completeMatch's rule), so the app offers it to them only.
-    matchWithRating.can_default = !!userId && canOfficiate && (await canDefault(match as never, userId));
+    // (a tournament's referee may give one without officiating the fixture; asked only while it can still be given)
+    matchWithRating.can_default = !!userId && (match.status === 'scheduled' || match.status === 'live') && (await canDefault(match as never, userId));
     // Audit #35/#36: Cancel and Void by the same rules cancelMatch and
     // voidMatch enforce, so the app offers them to exactly who may use them —
     // Cancel: the organiser (a tournament fixture) or the creator, before it's

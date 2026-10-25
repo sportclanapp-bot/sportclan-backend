@@ -515,6 +515,9 @@ export async function validateScoringEvent(
       const t = (match.score_summary as { tie?: { decided?: unknown } } | null)?.tie;
       if (t?.decided === 'A' || t?.decided === 'B') return refuse(409, { error: 'The series is decided — end the match.', code: 'SERIES_DECIDED' });
     } else if (payload.kind === 'game_end') {
+      // N-R7-S39: a decided series has no more games — the same refusal as cricket's (it used to say 'the game is level').
+      const dt = (match.score_summary as { tie?: { decided?: unknown } } | null)?.tie;
+      if (dt?.decided === 'A' || dt?.decided === 'B') return refuse(409, { error: 'The series is decided — end the match.', code: 'SERIES_DECIDED' });
       const ss = (match.score_summary ?? {}) as { A?: { points?: unknown }; B?: { points?: unknown } };
       if (Number(ss.A?.points ?? 0) === Number(ss.B?.points ?? 0)) {
         // Stage 15 follow-up: football / hockey — a level game ends once its shoot-out is decided (kept apart from the goals).

@@ -30,6 +30,7 @@ let mockOrganiser = false;
 jest.mock('../utils/tournamentAuth', () => ({
   ...jest.requireActual('../utils/tournamentAuth'),
   canOfficiateMatch: jest.fn(async () => true),
+  canDefault: jest.fn(async () => true), // N-R7-S33: the walkover is the organiser's / umpire's (this user)
   isTournamentOrganiser: jest.fn(async () => mockOrganiser),
 }));
 jest.mock('../utils/scoringLease', () => ({

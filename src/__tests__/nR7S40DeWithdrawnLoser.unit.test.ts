@@ -28,13 +28,13 @@ beforeEach(() => {
     ],
   });
 });
-test('D lost once, withdrew; C drops in: C takes the back-draw match by walkover and goes on', async () => {
+test('D lost once, withdrew; C drops in: D becomes a BYE and C goes on without play', async () => {
   db.t('tournament_entries').find((e) => e.team_id === 'D')!.status = 'withdrawn';
   await walkoverOnWithdraw('T', 'D');
   expect(db.t('matches').find((m) => m.id === 'b1')!.status).toBe('scheduled'); // opponent not known yet: it waits
   Object.assign(db.t('matches').find((m) => m.id === 's2')!, { status: 'completed', winner_team_id: 'B' });
   await advanceTournamentWinner('s2');
   const b1 = db.t('matches').find((m) => m.id === 'b1')!;
-  expect([b1.team_b_id, b1.status, b1.winner_team_id]).toEqual(['C', 'abandoned', 'C']);
+  expect([b1.team_a_id ?? null, b1.team_a_name, b1.team_b_id, b1.status, b1.winner_team_id]).toEqual([null, 'BYE', 'C', 'completed', 'C']);
   expect(db.t('matches').find((m) => m.id === 'bf')!.team_b_id).toBe('C');
 });

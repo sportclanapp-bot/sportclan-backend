@@ -2699,6 +2699,8 @@ export async function updateFixtures(req: Request, res: Response) {
       if (upd.team_b_name && !('team_b_id' in upd)) patch.team_b_name = upd.team_b_name;
       const sideA = 'team_a_id' in patch ? patch.team_a_id : cur.team_a_id;
       const sideB = 'team_b_id' in patch ? patch.team_b_id : cur.team_b_id;
+      // N-R7-S54: a team never plays itself (the editor greys the other side's chip; the API took it).
+      if (sideA && sideA === sideB) { skip('Team A and Team B must be different.'); continue; }
       // B08-F10: the winner is one of the two teams in the match — a stranger was
       // accepted and advanced into the final. `null` clears a result: the match
       // goes back to scheduled and, below, its winner leaves the next round.

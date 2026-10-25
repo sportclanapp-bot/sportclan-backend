@@ -104,7 +104,7 @@ export async function authorizeScorer(matchId: string, userId: string, deviceId?
   if (!verdict.ok) {
     // N-R7-S45: a match ended on the phone that took scoring over is finished, not "taken over" — the
     // pad says the match was ended elsewhere instead of offering to take scoring back.
-    if (isTerminalMatchStatus(match.status)) {
+    if (isTerminalMatchStatus(match.status) || (match as { voided_at?: string | null }).voided_at) { // N-R7-S58: voided = finished for scoring
       return { ok: false as const, status: 409, error: 'This match is finished and can no longer be scored', code: 'MATCH_FINISHED', match };
     }
     const refusal = leaseRefusal(verdict, userId);
@@ -865,12 +865,14 @@ export async function createEvent(req: Request, res: Response) {
     // scorer's actions and the result, the scorer's own phone sent the same actions and was told the
     // match had ended elsewhere and they "weren't sent".
     const knownKey = normalizeClientKey(idempotency_key);
-    if (knownKey && isTerminalMatchStatus(match.status)) {
+    // N-R7-S58: a voided match (even one voided while live) takes no more points, like a finished one.
+    const ended = isTerminalMatchStatus(match.status) || !!(match as { voided_at?: string | null }).voided_at;
+    if (knownKey && ended) {
       const { data: had } = await supabase.from('match_events').select('*').eq('match_id', matchId).eq('client_key', knownKey).maybeSingle();
       if (had) return res.json({ event: had, replayed: true });
     }
     // SC-42: a finished match is immutable — no more scoring events.
-    if (isTerminalMatchStatus(match.status)) {
+    if (ended) {
       // B06-F5: a code, so the scorer's outbox can tell "ended elsewhere" from
       // any other refusal and stop offering a retry that can never succeed.
       return res.status(409).json({ error: 'This match is finished and can no longer be scored', code: 'MATCH_FINISHED' });

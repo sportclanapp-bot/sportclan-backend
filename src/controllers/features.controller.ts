@@ -290,7 +290,8 @@ export async function loadLeaders(id: string): Promise<null | {
     .filter((m) => m.status !== 'abandoned' || !!m.winner_team_id);
   const unplayed = (m: { status?: string }) => m.status === 'abandoned';
   const winCount = new Map<string, number>();
-  for (const m of played) if (m.winner_team_id) winCount.set(m.winner_team_id, (winCount.get(m.winner_team_id) ?? 0) + 1);
+  // N-R7-S41: a bye (one side, no opponent) isn't a win.
+  for (const m of played) if (m.winner_team_id && m.team_a_id && m.team_b_id) winCount.set(m.winner_team_id, (winCount.get(m.winner_team_id) ?? 0) + 1);
   const teamIds = Array.from(new Set([...winCount.keys(), ...played.flatMap((m) => [m.team_a_id, m.team_b_id]).filter((x): x is string => !!x)]));
   const teams = await selectAllIn(teamIds, (c, f, to) => supabase.from('teams').select('id, name').in('id', c).order('id').range(f, to));
   const teamMap = new Map<string, string>((teams ?? []).map((t: any) => [t.id, t.name]));

@@ -90,6 +90,8 @@ function teamTallies(matches: SportLeaderMatch[]): TTally[] {
   const out = new Map<string, TTally>();
   const t = (id: string) => { let x = out.get(id); if (!x) { x = { team_id: id, played: 0, won: 0, lost: 0, drawn: 0, games: 0, gamesLost: 0, pf: 0, pa: 0, cleanSheets: 0, tbWon: 0, tbLost: 0, aces: 0, pc: 0, pcGoals: 0 }; out.set(id, x); } return x; };
   for (const m of matches) {
+    // N-R7-S41: a bye (one side, no opponent) isn't a match — no win, no played (as F188/F189).
+    if (!m.team_a_id || !m.team_b_id) continue;
     const ids: Array<[string | null, 'A' | 'B']> = [[m.team_a_id, 'A'], [m.team_b_id, 'B']];
     const tie = m.score_summary?.rubbers != null;
     // A walkover or an awarded score (Stage 8 · F12) wasn't played: it counts for the result, not for points, games or clean sheets.

@@ -50,7 +50,10 @@ export function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; ti
   }
   const main = ko.filter((m) => !m.third_place);
   if (main.length === 0) return [];
-  const lastRound = Math.max(...main.map((m) => m.round ?? 0));
+  // N-R7-S38: the last round from every knockout row, voided ones too — a voided final means no
+  // placings (a semi-final must never stand in for it).
+  const allMain = matches.filter((m) => !m.group_label && (m.round ?? 0) >= 1 && !m.third_place);
+  const lastRound = Math.max(...allMain.map((m) => m.round ?? 0));
   const final = main.find((m) => m.round === lastRound);
   if (!final || !decided(final)) return [];
   const nameOf = (m: M, id: string) => (id === m.team_a_id ? m.team_a_name : m.team_b_name) ?? 'TBD';

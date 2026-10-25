@@ -43,6 +43,7 @@ export async function applyReferral(req: Request, res: Response) {
     .from('users')
     .select('id, name, referred_by')
     .eq('referral_code', normalised)
+    .is('deleted_at', null) // N-R7-S42: a deleted account's code isn't a code any more
     .maybeSingle();
   if (!referrer) {
     return res.status(404).json({ error: 'Invalid referral code' });

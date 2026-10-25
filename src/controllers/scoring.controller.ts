@@ -364,7 +364,8 @@ export async function validateScoringEvent(
 
   // BUILD 3.32: a first-to basketball game is over once a side reaches the
   // target — a basket after it is refused (the app closes its pad there too).
-  if (event_type === 'score' && payload && typeof payload === 'object' && /^[123]pt$/.test(String(payload.kind ?? ''))) {
+  // N-R7-S27: a free throw ('ft') too — it slipped past this check.
+  if (event_type === 'score' && payload && typeof payload === 'object' && /^([123]pt|ft)$/.test(String(payload.kind ?? ''))) {
     // BUILD 3.33: 3x3 scores 1s and 2s — no 3.
     if (rulesOf('basketball', match).pointSet === '12' && Number(payload.value) === 3) {
       return refuse(400, { error: 'This game scores 1s and 2s (3x3) — there’s no 3.', code: 'BAD_POINTS' });
@@ -374,6 +375,17 @@ export async function validateScoringEvent(
     const pts = (x?: { score?: number; points?: number }) => Number(x?.score ?? x?.points ?? 0);
     if (target && (pts(ss.A) >= target || pts(ss.B) >= target)) {
       return refuse(409, { error: `A side has reached ${target} — the game is over. End the match.`, code: 'TARGET_REACHED' });
+    }
+    // N-R7-S27: 3x3's overtime is won by the first to `overtimeTo` points in it — the game is over there too.
+    const otTo = rulesOf('basketball', match).overtimeTo;
+    const regulation = Number(rulesOf('basketball', match).periods ?? 4) || 4;
+    const periods = Array.isArray((ss as { periods?: unknown }).periods) ? (ss as { periods: Array<{ A?: number; B?: number }> }).periods : [];
+    if (otTo && periods.length > regulation) {
+      let otA = 0; let otB = 0;
+      for (const p of periods.slice(regulation)) { otA += Number(p?.A ?? 0); otB += Number(p?.B ?? 0); }
+      if (otA >= otTo || otB >= otTo) {
+        return refuse(409, { error: `A side has reached ${otTo} in overtime — the game is over. End the match.`, code: 'TARGET_REACHED' });
+      }
     }
   }
 

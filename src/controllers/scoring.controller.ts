@@ -22,7 +22,7 @@ import { leaseRefusal } from '../utils/leaseCore';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { tiedOnDlsTarget } from '../utils/matchResult';
 import { bestOfFor } from '../utils/matchLength';
-import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue } from '../utils/carromCore';
+import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue, type PointCoin } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { gameEndSuperOver, superOverWinner, allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber, cricketSeries, cricketGameEvents, cricketGameOf, sideTotals, wicketRuns, outBatterOf, wicketShapeProblem } from '../utils/cricketRules';
 import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
@@ -307,6 +307,13 @@ export async function validateScoringEvent(
       if (payload.coin !== 'white' && payload.coin !== 'black' && payload.coin !== 'queen') return refuse(400, { error: 'A piece is white, black or the queen.', code: 'BAD_COIN' });
       if (payload.value != null && Number(payload.value) !== pointCoinValue(payload.coin, r.queenValue ?? 50)) {
         return refuse(400, { error: 'That piece isn’t worth that.', code: 'BAD_COIN' });
+      }
+      // N-R7-S30: a piece already pocketed this board (the queen is one piece) is refused, not stored as a no-op.
+      const prior = ((await matchEventsAll(match.id, 'event_type, payload', (q) => q.eq('event_type', 'score'))) ?? []) as Array<{ payload?: { kind?: unknown; coin?: unknown } }>;
+      const pc = pointCarromReplay(prior.filter((e) => e.payload?.kind === 'coin').map((e) => ({ side: sideOfPayload(e.payload), coin: e.payload!.coin as PointCoin }))
+        .filter((x) => x.coin === 'white' || x.coin === 'black' || x.coin === 'queen'), { gamesToWin: winsToWin(r), queenValue: r.queenValue ?? 50 });
+      if (!pc.winner && pc.left[payload.coin as PointCoin] <= 0) {
+        return refuse(409, { error: payload.coin === 'queen' ? 'The queen is already pocketed this board.' : `No ${payload.coin} pieces are left on this board.`, code: 'PIECE_GONE' });
       }
     } else if (outOfRange(payload.value, 1, 3)) {
       return refuse(400, { error: 'value must be an integer between 1 and 3' });

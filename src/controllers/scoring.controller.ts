@@ -1171,6 +1171,7 @@ export function rollupSets(
     // forfeited game goes to the other side at its target to 0 (11-0).
     if (e.event_type === 'note' && p.kind === 'point_off') {
       if (sideOf(p) === 'A') curA = Math.max(0, curA - 1); else curB = Math.max(0, curB - 1);
+      if (buzzer) { const l = leader(); if (l) endAtTime(l); } // N-R7-S51: after time, the side now ahead wins
       continue;
     }
     if (e.event_type === 'note' && p.kind === 'game_forfeit') {

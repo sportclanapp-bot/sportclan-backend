@@ -174,7 +174,7 @@ export function sideOutReplay(
   for (const e of events) {
     const p = (e.payload ?? {}) as { team_side?: unknown; kind?: unknown };
     if (e.event_type === 'serve_swap') s = sideOutSwap(s);
-    else if (e.event_type === 'note' && p.kind === 'point_off') s = sideOutPointOff(s, p.team_side === 'B' ? 'B' : 'A'); // Stage 11 · PB6
+    else if (e.event_type === 'note' && p.kind === 'point_off') s = afterTime(sideOutPointOff(s, p.team_side === 'B' ? 'B' : 'A')); // Stage 11 · PB6 (N-R7-S51: after time, the side now ahead wins)
     else if (e.event_type === 'note' && p.kind === 'game_forfeit') s = afterTime(sideOutForfeitGame(s, p.team_side === 'B' ? 'B' : 'A', opts));
     else if (e.event_type === 'note' && p.kind === 'buzzer') s = sideOutCallTime(s, opts); // Stage 11 · PB9
     else if (e.event_type === 'score' && p.kind === 'penalty') s = sideOutPenalty(s, p.team_side === 'B' ? 'B' : 'A', opts); // Stage 9 · T9

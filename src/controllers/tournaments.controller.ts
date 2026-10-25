@@ -3233,8 +3233,21 @@ async function advanceDoubleElim(m: DeRow): Promise<void> {
 
 /** Put a team (or, null, a BYE) in a slot of a double-elimination match, then play out a bye there. */
 async function placeDeTeam(matchId: string, slot: 'A' | 'B', teamId: string | null, name: string | null): Promise<void> {
-  const { data: row } = await supabase.from('matches').select('id, status, team_a_id, team_b_id, team_a_name, team_b_name, next_match_id, next_slot').eq('id', matchId).maybeSingle();
+  const { data: row } = await supabase.from('matches').select('id, tournament_id, status, team_a_id, team_b_id, team_a_name, team_b_name, next_match_id, next_slot').eq('id', matchId).maybeSingle();
   if (!row) return;
+  await placeDeTeamInner(row, slot, teamId, name);
+  // N-R7-S40: the side already waiting there has withdrawn (it lost once, then withdrew while this
+  // opponent wasn't known) — the arriving side takes it by walkover, as F117 does in a knockout.
+  const { data: now } = await supabase.from('matches').select('team_a_id, team_b_id, status').eq('id', matchId).maybeSingle();
+  const tId = (row as { tournament_id?: string | null }).tournament_id;
+  const other = teamId && tId && now && (now as { status: string }).status === 'scheduled' ? (slot === 'A' ? (now as { team_b_id: string | null }).team_b_id : (now as { team_a_id: string | null }).team_a_id) : null;
+  if (other && tId) {
+    const { data: gone } = await supabase.from('tournament_entries').select('team_id').eq('tournament_id', tId).eq('team_id', other).eq('status', 'withdrawn').maybeSingle();
+    if (gone) await walkoverOnWithdraw(tId, other);
+  }
+}
+
+async function placeDeTeamInner(row: unknown, slot: 'A' | 'B', teamId: string | null, name: string | null): Promise<void> {
   const r = row as { id: string; status: string; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null; next_match_id: string | null; next_slot: string | null };
   const col = slot === 'A' ? 'a' : 'b';
   const had = r[`team_${col}_id`];

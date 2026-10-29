@@ -61,20 +61,22 @@ export async function getOfflinePack(req: Request, res: Response) {
         .select('id, team_id, status, group_label, team:teams(id, name, short_name, logo_url)')
         .eq('tournament_id', id)),
       allRows(() => supabase.from('matches')
-        .select('id, team_a_id, team_b_id, team_a_name, team_b_name, status, winner_team_id, score_summary, round, match_no, group_label, scheduled_at, venue, ground_label, voided_at, next_match_id, next_slot, third_place, overs, format, rules, umpire_id, updated_at')
+        .select('id, team_a_id, team_b_id, team_a_name, team_b_name, status, winner_team_id, score_summary, round, match_no, group_label, scheduled_at, venue, ground_label, voided_at, next_match_id, next_slot, third_place, overs, format, rules, umpire_id, scorer_id, updated_at')
         .eq('tournament_id', id)
         .order('round', { ascending: true })
         .order('match_no', { ascending: true })),
       supabase.from('tournament_organisers').select('user_id').eq('tournament_id', id),
     ]);
 
-    // Who might sign a result today: the organisers, plus every fixture's umpire.
+    // Who might sign a result today: the organisers, plus every fixture's umpire and scorer
+    // (N-R7-S97: a Scorer-only phone's code was 'not yet checked' — its key never travelled).
     // Narrow on purpose — this is not a directory dump, it is the set of phones
     // whose codes this hub should be able to verify.
     const signerIds = new Set<string>([
       (tournament as { created_by?: string }).created_by ?? '',
       ...((organisers ?? []) as { user_id: string }[]).map((o) => o.user_id),
       ...((fixtures ?? []) as { umpire_id?: string | null }[]).map((f) => f.umpire_id ?? ''),
+      ...((fixtures ?? []) as { scorer_id?: string | null }[]).map((f) => f.scorer_id ?? ''),
     ].filter(Boolean));
 
     const { data: keys } = signerIds.size

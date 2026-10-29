@@ -4546,7 +4546,8 @@ export async function generateFixtures(req: Request, res: Response) {
       // rule. It used to call buildRound1, which paired teams by raw array
       // index, so byes fell on whoever happened to sit at positions M..n.
       const seeded = seededRound1(teams, nextPow2(teams.length));
-      const round1 = separateClubs ? separateClubsInRound1(seeded, clubOf) : seeded; // BUILD 4.13
+      const seedNoOf = new Map(teams.map((x, i) => [x.id, i + 1]));
+      const round1 = separateClubs ? separateClubsInRound1(seeded, clubOf, undefined, (tid) => seedNoOf.get(tid)) : seeded; // BUILD 4.13; N-R7-S4: higher seeds swap within their pot
       const shape = bracketShape(round1, thirdPlace, qualRounds);
       const sched = buildSchedule(shape, schedCfg);
       if (!sched.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' }); }

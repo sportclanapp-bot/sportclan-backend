@@ -64,6 +64,7 @@ type Pair<T> = { a: T | null; b: T | null };
  */
 export function separateClubsInRound1<T extends { id: string }>(
   pairs: Array<Pair<T>>, clubOf: ClubOf, alsoApart: (x: string, y: string) => boolean = () => false,
+  seedOf?: (teamId: string) => number | undefined,
 ): Array<Pair<T>> {
   const out = pairs.map((p) => ({ ...p }));
   const bad = (p: Pair<T>) => (p.a && p.b ? (norm(clubOf(p.a.id)) !== null && norm(clubOf(p.a.id)) === norm(clubOf(p.b.id)) ? 1 : 0) : 0);
@@ -110,6 +111,24 @@ export function separateClubsInRound1<T extends { id: string }>(
         if (j === i || !out[j]!.b) continue;
         const pi = { a: out[i]!.a, b: out[j]!.b };
         const pj = { a: out[j]!.a, b: out[i]!.b };
+        if (bad(pi) || bad(pj) || worse(pi) || worse(pj)) continue;
+        const [oi, oj] = [out[i]!, out[j]!];
+        out[i] = pi; out[j] = pj;
+        if (cost() < now) improved = true; else { out[i] = oi; out[j] = oj; }
+      }
+    }
+    // N-R7-S4 re-run (SPP2-FOO-041): two clubmates can both be the higher seed of their pair.
+    // With seed numbers known, a higher seed may swap with another of its own seeding pot
+    // (3–4, 5–8, …; seeds 1 and 2 never move) when both pairs hold the same bye, so seeding is kept.
+    if (!seedOf) continue;
+    const pot = (x: T | null) => { const s = x ? seedOf(x.id) : undefined; return s && s > 2 ? Math.ceil(Math.log2(s)) : null; };
+    for (let i = 0; i < out.length && !improved; i++) {
+      const p = pot(out[i]!.a);
+      if (p == null) continue;
+      for (let j = i + 1; j < out.length && !improved; j++) {
+        if (pot(out[j]!.a) !== p || !out[i]!.b !== !out[j]!.b) continue;
+        const pi = { a: out[j]!.a, b: out[i]!.b };
+        const pj = { a: out[i]!.a, b: out[j]!.b };
         if (bad(pi) || bad(pj) || worse(pi) || worse(pj)) continue;
         const [oi, oj] = [out[i]!, out[j]!];
         out[i] = pi; out[j] = pj;

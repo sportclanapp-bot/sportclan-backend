@@ -2453,6 +2453,12 @@ export function decidedBy(m: { result_type?: string | null; score_summary?: any 
   if (m.score_summary?.defaulted) return 'default';
   return null;
 }
+/** N-R7-75: the bracket card's 'how it ended' — decided_by (walkover / default / awarded) or retired. */
+export function decidedFields(m: { result_type?: string | null; score_summary?: any }): { decided_by?: 'walkover' | 'default' | 'awarded'; retired?: true } {
+  const d = decidedBy(m);
+  if (d) return { decided_by: d };
+  return m.result_type === 'retired' || m.score_summary?.retired ? { retired: true } : {};
+}
 export async function getBracket(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -2584,7 +2590,7 @@ export async function getBracket(req: Request, res: Response) {
           ...((m as any).bracket === 'ko' ? { ko: true, next_match_id: (m as any).next_match_id ?? null } : {}), // Stage 13 · CR9: the knockout after a Swiss
           ...((m as any).bracket === 'reset' && m.status === 'cancelled' ? { not_needed: true } : {}), // Stage 11 · PB4: the reset final wasn't needed
           // N-SPP2-5 (launch test plan): a result not played out — the champion card said 'beat X 0–0'.
-          ...(decidedBy(m as any) ? { decided_by: decidedBy(m as any) } : {}),
+          ...decidedFields(m as any), // N-R7-75: and a retirement ('Retired (ret.)' on the card)
           ...fixtureFinish(slug, m as any), // N-R7-S64: '(5–4 pens)', 'After extra time'
           ...(de ? { next_match_id: (m as any).next_match_id ?? null } : {}), // Stage 11 · PB4: the back draw's lines follow the links
           ...((fmtLc === 'box' || fmtLc === 'groups_knockout') && m.group_label ? { group_label: m.group_label } : {}), // Stage 9 · T16: the match's box · N-R7-54: a groups stage's group

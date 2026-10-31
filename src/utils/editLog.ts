@@ -111,6 +111,16 @@ export function scoreText(summary: P | null | undefined, ctx: LogContext): strin
       ? `${side(A, ctx.teamA)} · ${side(B, ctx.teamB)}`
       : side(A, ctx.teamA);
   }
+  // N-R7-72: tennis (a set list and games beside the points) reads in calls — 40–15, not 3–1; a tiebreak keeps numbers.
+  if (Array.isArray(A.sets) && A.games != null && A.points != null) {
+    const a = Number(A.points ?? 0); const b = Number(B.points ?? 0);
+    const CALL = ['0', '15', '30', '40'];
+    const call = summary.tiebreak || summary.match_tiebreak ? `${a}–${b}`
+      : a >= 3 && b >= 3 ? (a === b ? '40–40' : a > b ? 'Ad–40' : '40–Ad')
+        : `${CALL[Math.min(a, 3)]}–${CALL[Math.min(b, 3)]}`;
+    const g = Number(A.games ?? 0) + Number(B.games ?? 0) > 0 ? `games ${Number(A.games ?? 0)}–${Number(B.games ?? 0)} · ` : '';
+    return `${g}${call}`;
+  }
   if (A.points != null || B.points != null) {
     const pts = `${Number(A.points ?? 0)}–${Number(B.points ?? 0)}`;
     // Games (or sets) only when they are counted apart from the points in play.

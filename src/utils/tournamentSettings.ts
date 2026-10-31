@@ -257,7 +257,7 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
     case 'wins': return 'Wins';
     case 'nrr': return 'Net run rate';
     case 'score_diff': return `${unit} difference`;
-    case 'score_scored': return unit === 'Score' ? 'Score' : `${unit}s ${unit === 'Set' || unit === 'Game' ? 'won' : 'scored'}`;
+    case 'score_scored': return unit === 'Score' ? 'Score' : `${unit}s ${unit === 'Set' || unit === 'Game' || unit === 'Rubber' ? 'won' : 'scored'}`; // N-R7-81: rubbers are won
     case 'score_ratio': return key === 'tennis' && !tie ? 'Sets won %' : `${unit} ratio`; // Stage 9 · T4: the ATP's words
     case 'buchholz': return 'Buchholz';
     case 'sonneborn_berger': return 'Sonneborn-Berger';

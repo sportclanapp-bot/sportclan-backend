@@ -141,6 +141,8 @@ function tennisPoints(rules: MatchRules, sets: TypedSet[]): { problem: string | 
         inTiebreak = true;
         // A set's tiebreak: its typed points (7-5). F164 (launch test plan): without them the winner
         // was given every point — a 7–0 tiebreak nobody played, saved as 7–6(0). They're asked for.
+        // N-R7-69: only a set won by one game (7-6) went to a tiebreak; 8-6 isn't one — finish it to say how it ends.
+        if (!typedTb && w - l !== 1) { for (let p = 0; p < 50 && s.sets.length === before; p++) play(winner); break; }
         if (!typedTb) return { problem: `Set ${k + 1} (${label(set)}) went to a tiebreak — type its points too (e.g. 7–5).`, points, winner: null };
         const tw = winner === 'A' ? set.tbA! : set.tbB!; const tl = winner === 'A' ? set.tbB! : set.tbA!;
         if (tw <= tl) return { problem: `Set ${k + 1}: the tiebreak ${set.tbA}–${set.tbB} goes the other way.`, points, winner: null };

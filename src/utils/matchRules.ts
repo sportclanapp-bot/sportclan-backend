@@ -460,6 +460,8 @@ export const CONDUCT_STEPS: Readonly<Record<string, Readonly<Record<string, Ladd
     warning: step('warning', 'none'), point: step('point penalty', 'points', 1), game: step('game penalty', 'game'), default: step('default', 'match'),
     // N-SPP1-TEN-2: time violations have their own track (CONDUCT_DELAY) — never a game or a default.
     delay_warning: step('time violation warning', 'none'), delay_penalty: step('time violation · point penalty', 'points', 1),
+    // N-R7-68: the server's time violation after the warning: a fault — a serve lost, the point still played.
+    delay_fault: step('time violation · fault', 'none'),
   },
   badminton: { warning: step('warning', 'none'), point: step('point penalty', 'points', 1), default: step('disqualification', 'match') },
   tabletennis: { warning: step('warning', 'none'), point: step('point penalty', 'points', 1), point2: step('two-point penalty', 'points', 2), default: step('disqualification', 'match') },

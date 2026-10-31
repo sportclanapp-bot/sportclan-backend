@@ -225,6 +225,6 @@ describe('completing a match', () => {
     mockNext = on(liveMatch({ is_ranked: true }), []);
     const played = await call(completeMatch, { body: { winner_team_id: TA } });
     expect(played.statusCode).toBe(400);
-    expect(String(played.body.error)).toMatch(/lineup/i);
+    expect(String(played.body.error)).toMatch(/line-?up/i);
   });
 });

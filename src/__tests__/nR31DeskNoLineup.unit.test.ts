@@ -53,7 +53,7 @@ import { completeMatch } from '../controllers/matches.controller';
 const ME = '11111111-1111-4111-8111-111111111111';
 const MATCH = '22222222-2222-4222-8222-222222222222';
 const P2 = '55555555-5555-4555-8555-555555555555';
-const GUARD = 'Ranked matches need at least one registered player on each side. Set the lineup first.';
+const GUARD = 'Ranked matches need at least one registered player on each side. Set the line-up first.';
 const res = () => {
   const r: any = { statusCode: 200, body: null, setHeader: jest.fn() };
   r.status = jest.fn((c: number) => { r.statusCode = c; return r; });

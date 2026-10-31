@@ -3787,7 +3787,7 @@ export async function completeMatch(req: Request, res: Response) {
         if (lined.some((p) => p.team_side === 'A') && lined.some((p) => p.team_side === 'B')) {
           return res.status(400).json({ error: 'Nobody on one side has said they’re playing yet. A ranked result needs at least one player a side who tapped “In”.', code: 'SIDE_NOT_CONFIRMED' });
         }
-        return res.status(400).json({ error: 'Ranked matches need at least one registered player on each side. Set the lineup first.' });
+        return res.status(400).json({ error: 'Ranked matches need at least one registered player on each side. Set the line-up first.' });
       }
     }
 

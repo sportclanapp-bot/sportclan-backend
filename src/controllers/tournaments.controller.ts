@@ -3073,7 +3073,8 @@ async function insertSingleElim(
 ): Promise<{ byeMatchIds: string[] }> {
   const bracketSize = round1.length * 2;
   // Stage 9 · T7: a qualifying draw stops after its rounds; each last-round winner qualifies.
-  const roundsCount = Math.min(Math.max(1, Math.round(Math.log2(bracketSize))), maxRounds ?? Infinity);
+  const fullRounds = Math.max(1, Math.round(Math.log2(bracketSize)));
+  const roundsCount = Math.min(fullRounds, maxRounds ?? Infinity);
   if (maxRounds != null) thirdPlace = false;
   const withThird = hasThirdPlace(thirdPlace, roundsCount);
   const created: Record<string, string> = {}; // `${round}:${matchNo}` -> id
@@ -3118,7 +3119,8 @@ async function insertSingleElim(
         // the ladder while runs/MVP (ungated) still accrued (the split bug).
         // Forward-only: existing fixtures are untouched (never rewrite settled ELO).
         is_ranked: true,
-        ...(base.stageDefaults ? base.stageDefaults(knockoutStage(r, roundsCount)) : (base.fixtureDefaults ?? {})),
+        // N-R7-87: the stage from the whole bracket — a qualifying draw (capped rounds) has no final, so its last round isn't one.
+        ...(base.stageDefaults ? base.stageDefaults(knockoutStage(r, fullRounds)) : (base.fixtureDefaults ?? {})),
         ...(rowExtra ? rowExtra(r, m, roundsCount) : {}), // Stage 11 · PB4
       });
     }

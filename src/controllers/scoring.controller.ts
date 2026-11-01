@@ -1209,7 +1209,8 @@ export function rollupSets(
 export function rollupTieSpec(
   slug: string, rules: MatchRules, spec: TieSpec,
   events: { event_type: string; payload: any }[], sideOf: (p: any) => 'A' | 'B',
-): { scoreA: number; scoreB: number; setsA: number[]; setsB: number[]; gamesA: number; gamesB: number; curA: number; curB: number; rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw'; key: string; label: string; unitsA: number; unitsB: number; pens?: { A: number; B: number } }>; tie: { win: string; rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: 'A' | 'B' | 'draw' | null; decider?: boolean }; finished: RubberResult[]; ends: number[] } {
+): { scoreA: number; scoreB: number; setsA: number[]; setsB: number[]; gamesA: number; gamesB: number; curA: number; curB: number; rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw'; key: string; label: string; unitsA: number; unitsB: number; pens?: { A: number; B: number } }>; tie: { win: string; rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: 'A' | 'B' | 'draw' | null; decider?: boolean }; finished: RubberResult[]; ends: number[]; setTiebreaks?: Array<{ A: number; B: number } | null> } {
+  let lastTbs: Array<{ A: number; B: number } | null> = []; const tbsByKey = new Map<string, Array<{ A: number; B: number } | null>>();
   const own = !!rules.tie;
   const single = { ...rules, tie: null, rubbers: null } as MatchRules;
   // Stage 11 · PB3: a match with its own rules (the DreamBreaker) plays those over the tie's.
@@ -1263,6 +1264,7 @@ export function rollupTieSpec(
     if (slug === 'tennis') {
       const tr = tennisReplayEvents(evs.map((e) => ({ event_type: e.event_type, payload: { ...(e.payload || {}), team_side: sideOf(e.payload || {}) } })), tennisOptsOf(rr));
       const t = tr.score;
+      lastTbs = t.sets.map((x) => x.tiebreak ?? null); // N-R7-84: each set's tiebreak points
       return { winner: t.winner, sets: { A: t.sets.map((x) => x.A), B: t.sets.map((x) => x.B) }, games: t.games, points: t.points };
     }
     const cfg = setConfigOf(rr);
@@ -1276,10 +1278,12 @@ export function rollupTieSpec(
   };
   const split = splitTie(events, spec, (evs, r) => {
     const x = read(evs, r);
+    if (slug === 'tennis') tbsByKey.set(r.key, lastTbs); // the last read of a rubber is the one that ended it
     return { winner: x.winner, sets: x.sets, units: { A: unitsOf(x.sets.A), B: unitsOf(x.sets.B) }, games: { A: unitsFor(slug, x.sets.A, x.sets.B), B: unitsFor(slug, x.sets.B, x.sets.A) } }; // F165: games won beside the points
   });
   const o = split.outcome;
   const cur = o.finished ? null : read(split.currentEvents, spec.rubbers[split.current] ?? spec.rubbers[0]!);
+  const curTbs = lastTbs;
   const won = (a: number[], b: number[]) => a.filter((v, i) => v > (b[i] ?? 0)).length;
   return {
     // F165: a tie won on games scores the games won (a rally sport's units are its points).
@@ -1293,6 +1297,8 @@ export function rollupTieSpec(
       ...(split.boards ? { boards: { done: split.results.length, of: spec.rubbers.length } } : {}) },
     // 2.14: each finished match as the engine read it, and the event that ended it (the timeline's trump lines).
     finished: split.results, ends: split.ends,
+    // N-R7-84: a tennis tie's tiebreak points, one per set in setsA/setsB order — the final line read 6–7, not 6–7(4).
+    ...(slug === 'tennis' ? { setTiebreaks: [...split.results.flatMap((r) => tbsByKey.get(r.key) ?? r.sets.A.map(() => null)), ...(cur ? curTbs : [])] } : {}),
   };
 }
 
@@ -1727,6 +1733,7 @@ export async function recomputeSummary(
   const A: Record<string, any> = { score: 0 };
   const B: Record<string, any> = { score: 0 };
   let tennisState: TennisScore | null = null;
+  let tieTiebreaks: Array<{ A: number; B: number } | null> | null = null; // N-R7-84: a tennis tie's
   let carromBoardsPlayed: number | null = null; // A5: boards played in the carrom game in play
   let carromSlams: { A: number; B: number } | null = null; // Stage 13 · CR6: White / Black slams each side
   let tieRubbers: { rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw' }> } | null = null; // BUILD 3.49 · Stage 11 · PB9: a level timed match
@@ -1838,6 +1845,7 @@ export async function recomputeSummary(
     A.points = t.curA; B.points = t.curB;
     tieRubbers = { rubber: t.rubber, results: t.results };
     tieSummary = t.tie;
+    if (t.setTiebreaks) tieTiebreaks = t.setTiebreaks; // N-R7-84
   } else if (slug === 'tennis') {
     // T-1/T-2 · per-POINT events through the shared rule (utils/tennisCore, the
     // same file the app scores with): points → games → sets, with a real 6-6
@@ -2088,6 +2096,7 @@ export async function recomputeSummary(
   if (tennisBuzzer || rallyBuzzer) summary.buzzer = true;
   if (rallyLevel) summary.timed_level = true;
   void rallyTimedWinner;
+  if (tieTiebreaks) summary.set_tiebreaks = tieTiebreaks; // N-R7-84: a tennis tie's final line keeps 7–6(4)
   if (tennisState) {
     // The tiebreak in play, and each completed set's tiebreak points (or null),
     // so a hub card or result can say "7–6 (7–5)".

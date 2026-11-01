@@ -83,6 +83,8 @@ export async function placingsFor(t: { id: string; format: string; status: strin
     .eq('tournament_id', t.id));
   const matches = (ms ?? []) as M[];
   let base: Array<{ place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string }> = [];
+  // N-R7-88: a qualifying draw crowns nobody (its last-round winners are the qualifiers) — no winner or runner-up.
+  if (settingsOf(t).qualifying) return [];
   if (t.format === 'knockout' || t.format === 'groups_knockout') base = knockoutPlacings(matches);
   else if (t.status === 'completed') {
     const ents = await allRows(() => supabase.from('tournament_entries').select('team_id, status, team:teams!team_id(id, name)').eq('tournament_id', t.id).in('status', ['approved', 'withdrawn']));

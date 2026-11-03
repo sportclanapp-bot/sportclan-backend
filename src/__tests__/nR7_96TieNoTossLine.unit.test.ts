@@ -20,6 +20,7 @@ test('toss and pick lines unchanged', () => {
   expect(tieTossTimelineLine(corbillon, tieTossOf({ abc: 'B', how: 'toss', winner: 'B' }), names)).toBe('🪙 Toss: PYC won the toss and chose A, B · Deccan is X, Y');
   expect(tieTossTimelineLine(corbillon, tieTossOf({ abc: 'B', how: 'pick' }), names)).toBe('🪙 Positions: PYC is A, B · Deccan is X, Y');
 });
-test('not a team tie: no line', () => {
+test('not a team tie, or a tie without positions (badminton S1 D1 S2): no line', () => {
   expect(tieTossTimelineLine(null, null, names)).toBeNull();
+  expect(tieTossTimelineLine(tieSpecOf('badminton', { rubbers: 3 } as never)!, null, names)).toBeNull();
 });

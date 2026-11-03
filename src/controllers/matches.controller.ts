@@ -137,7 +137,7 @@ async function lastChessSide(userId: string, opponentId: string, chessSportId: s
 const PAST_GRACE_MS = 5 * 60_000;
 /** N-R7-96: a team tie's first timeline line: the toss, the organiser's pick, or (none recorded) the first-named side. */
 export function tieTossTimelineLine(spec: ReturnType<typeof tieSpecOf>, toss: ReturnType<typeof tieTossOf>, names: { A: string; B: string }): string | null {
-  if (!spec) return null;
+  if (!spec || !spec.rubbers.some((r) => r.a && r.b)) return null; // only a tie with positions has a toss (tieLineup hasPositions)
   if (!toss) return tieTossText(spec, null, names);
   return `${toss.how === 'toss' ? '🪙 Toss' : '🪙 Positions'}: ${tieTossText(spec, toss, names)}`;
 }
@@ -1821,7 +1821,7 @@ export async function getCommentary(req: Request, res: Response) {
     const picks = trumpSpec?.trump ? await trumpsFor(match.id as string) : null;
     const trumpLine = trumpSpec && picks && ((picks.A && picks.B) || (match as { status?: string }).status !== 'scheduled')
       ? tieTrumpText(trumpSpec, picks, { A: teamA, B: teamB }) : null;
-    if (trumpLine) enriched.splice(toss && tossSpec ? 1 : 0, 0, { id: `tie-trumps-${match.id}`, over_ball: null, event_type: 'note', commentary: trumpLine, text: trumpLine, payload: { kind: 'tie_trumps' }, timestamp: null, is_wicket: false, is_boundary: false });
+    if (trumpLine) enriched.splice(tossLine ? 1 : 0, 0, { id: `tie-trumps-${match.id}`, over_ball: null, event_type: 'note', commentary: trumpLine, text: trumpLine, payload: { kind: 'tie_trumps' }, timestamp: null, is_wicket: false, is_boundary: false });
     // 2.14: a trump match's result where it happened — "Trump won: Delhi ×2 · tie now 1–2", and with
     // PBL's rule on, "Trump lost: Pune −1 · tie now −1–1".
     if (trumpSpec?.trump && picks && events?.length) {

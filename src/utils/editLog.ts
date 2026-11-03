@@ -19,6 +19,7 @@ type P = Record<string, any>;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const words = (s: string) => s.replace(/_/g, ' ').trim();
+const NOTE_WORDS: Record<string, string> = { warmup: 'warm-up', medical_timeout: 'medical time-out' };
 
 function teamOf(p: P, ctx: LogContext): string {
   return p.team_side === 'B' ? ctx.teamB : ctx.teamA;
@@ -94,7 +95,8 @@ export function describeEvent(type: string | null | undefined, p: P | null | und
     case 'queen': return `${team} queen`;
     // Rally sports
     case 'serve_swap': return 'serve change';
-    case 'note': return x.kind ? words(String(x.kind)) : 'note';
+    // N-R7-92 (SPP1-TTN-017): a note kind the way the pad says it ('warmup' read 'deleted: warmup').
+    case 'note': return x.kind ? NOTE_WORDS[String(x.kind)] ?? words(String(x.kind)) : 'note';
     default:
       return t ? `a ${words(t)} entry` : 'an entry';
   }

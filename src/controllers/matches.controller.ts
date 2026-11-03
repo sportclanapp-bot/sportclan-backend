@@ -135,6 +135,13 @@ async function lastChessSide(userId: string, opponentId: string, chessSportId: s
 
 /** A little clock skew is allowed: "now" on the phone can be a minute behind. */
 const PAST_GRACE_MS = 5 * 60_000;
+/** N-R7-96: a team tie's first timeline line: the toss, the organiser's pick, or (none recorded) the first-named side. */
+export function tieTossTimelineLine(spec: ReturnType<typeof tieSpecOf>, toss: ReturnType<typeof tieTossOf>, names: { A: string; B: string }): string | null {
+  if (!spec) return null;
+  if (!toss) return tieTossText(spec, null, names);
+  return `${toss.how === 'toss' ? '🪙 Toss' : '🪙 Positions'}: ${tieTossText(spec, toss, names)}`;
+}
+
 export const FORMAT_MAX = 20;
 
 /**
@@ -1800,11 +1807,12 @@ export async function getCommentary(req: Request, res: Response) {
     }
 
     // Stage 10 · TT1b: a team tie's toss (who names A, B, C) opens its timeline.
+    // N-R7-96: with no toss recorded the line says who is A, B anyway (the first-named side).
     const toss = tieTossOf((match as { tie_toss?: unknown }).tie_toss);
-    const tossSpec = toss ? tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null) : null;
-    if (toss && tossSpec) {
-      const line = `${toss.how === 'toss' ? '🪙 Toss' : '🪙 Positions'}: ${tieTossText(tossSpec, toss, { A: teamA, B: teamB })}`;
-      enriched.unshift({ id: `tie-toss-${match.id}`, over_ball: null, event_type: 'note', commentary: line, text: line, payload: { kind: 'tie_toss' }, timestamp: toss.at ?? null, is_wicket: false, is_boundary: false });
+    const tossSpec = tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null);
+    const tossLine = tieTossTimelineLine(tossSpec, toss, { A: teamA, B: teamB });
+    if (tossLine) {
+      enriched.unshift({ id: `tie-toss-${match.id}`, over_ball: null, event_type: 'note', commentary: tossLine, text: tossLine, payload: { kind: 'tie_toss' }, timestamp: toss?.at ?? null, is_wicket: false, is_boundary: false });
     }
 
     // Stage 11 follow-up: the trump picks, once the tie has started (before that a

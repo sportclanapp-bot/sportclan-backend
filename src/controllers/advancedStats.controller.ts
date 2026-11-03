@@ -157,9 +157,15 @@ export async function getAdvancedStats(req: Request, res: Response) {
     const lastResult = results.length ? results[results.length - 1] : 'D';
     let streakLen = 0;
     for (let i = results.length - 1; i >= 0 && results[i] === lastResult; i--) streakLen++;
-    const netDelta5 = history.slice(-5).reduce((s, h) => s + Number(h.delta), 0);
+    // N-R7-90: one definition of a window's change, shared with the app's trend
+    // sparkline: the (whole-number) rating after the window's last match minus the
+    // rating before its first. Each trajectory point carries `from` (the rating
+    // before that match), so the sparkline no longer drops the first match's change
+    // ("▼ -9 · last 5 matches" beside "▲ Rising · +5 over last 5").
+    const trajectory = history.map((h) => ({ rating: Math.round(Number(h.new_rating)), from: Math.round(Number(h.old_rating ?? Number(h.new_rating) - Number(h.delta))), at: h.created_at }));
+    const last5 = trajectory.slice(-5);
+    const netDelta5 = last5.length ? last5[last5.length - 1]!.rating - last5[0]!.from : 0;
     const trend = netDelta5 > 0 ? 'rising' : netDelta5 < 0 ? 'falling' : 'steady';
-    const trajectory = history.map((h) => ({ rating: Math.round(Number(h.new_rating)), at: h.created_at }));
 
     // ── #2 Head-to-head ──
     // Team match → opponent = other team (id + denormalised name). 1v1 →
@@ -301,7 +307,7 @@ export async function getAdvancedStats(req: Request, res: Response) {
         winRate: Math.round((wins / results.length) * 100),
         last10: last10Detail, last10Wins,
         streak: { type: lastResult, length: streakLen },
-        trend, netDelta5: Math.round(netDelta5),
+        trend, netDelta5,
         trajectory,
       },
       headToHead: {

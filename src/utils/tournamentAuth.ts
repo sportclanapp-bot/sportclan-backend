@@ -92,7 +92,7 @@ export async function canOfficiateMatch(
   return !!match.created_by && match.created_by === userId;
 }
 
-/** Cricket gap 3: a tournament official with the scorer role (scores every fixture). */
+/** Cricket gap 3: a tournament official with the scorer role (scores every fixture); N-R7-105: + the referees. */
 export async function isTournamentScorer(tournamentId: string, userId: string): Promise<boolean> {
   if (!tournamentId || !userId) return false;
   // Badminton gap 1: a tournament's officials work every one of its events.
@@ -102,7 +102,10 @@ export async function isTournamentScorer(tournamentId: string, userId: string): 
     .select('id')
     .in('tournament_id', ids)
     .eq('user_id', userId)
-    .in('role', ['scorer', 'pairings', 'sector', 'fair_play']) // Stage 12 · CH11: chess's pairings, sector and anti-cheating arbiters enter results too
+    // Stage 12 · CH11: chess's pairings, sector and anti-cheating arbiters enter results too.
+    // N-R7-105: and the tournament's referee, chief and deputy referee — they default a player
+    // (canDefault), which is done from the pad, so they open it like the scorer.
+    .in('role', ['scorer', 'pairings', 'sector', 'fair_play', 'referee', 'chief_referee', 'deputy_referee'])
     .limit(1);
   return (data ?? []).length > 0;
 }

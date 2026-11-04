@@ -557,7 +557,9 @@ export async function createTournament(req: Request, res: Response) {
       // The events share the parent's chat (one chat for the whole tournament).
       const made = await eventRowsFor(tournament as Record<string, any>, events, 0);
       if ('refusal' in made) return res.status(400).json(made.refusal);
-      const { data: eventRows, error: evErr } = await supabase.from('tournaments').insert(made.rows).select('*');
+      // N-R7-104: one insert for every event; a key one event leaves out (e.g. qualifiers_per_group
+      // set on the groups event only) takes the column default, not NULL.
+      const { data: eventRows, error: evErr } = await supabase.from('tournaments').insert(made.rows, { defaultToNull: false }).select('*');
       if (evErr || !eventRows) {
         // All or nothing: an event that won't insert takes the parent with it.
         await supabase.from('tournaments').delete().eq('id', tournament.id);
@@ -598,7 +600,7 @@ export async function addEvents(req: Request, res: Response) {
     const next = have.reduce((m, e) => Math.max(m, (e.event_order ?? -1) + 1), 0);
     const made = await eventRowsFor(parent as Record<string, any>, events, next);
     if ('refusal' in made) return res.status(400).json(made.refusal);
-    const { data: rows, error } = await supabase.from('tournaments').insert(made.rows).select('*');
+    const { data: rows, error } = await supabase.from('tournaments').insert(made.rows, { defaultToNull: false }).select('*'); // N-R7-104
     // Until migration 123 is applied the database refuses more than 100 events (no app cap).
     if ((error as { code?: string } | null)?.code === '23514') return res.status(409).json({ error: 'This tournament can’t take more events yet. Try again later.', code: 'EVENTS_LIMIT_DB' });
     if (error || !rows) return res.status(500).json({ error: sanitizeError(error) || 'Failed to add the events' });

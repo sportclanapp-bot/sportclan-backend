@@ -3426,7 +3426,16 @@ export async function completeMatch(req: Request, res: Response) {
       if (!sideDefault && (!defaultedTeamId || !sides.includes(defaultedTeamId) || !sides.includes(winner_team_id) || defaultedTeamId === winner_team_id)) {
         return res.status(400).json({ error: 'Name the side defaulted; the other side wins.', code: 'BAD_DEFAULT' });
       }
-      if (match.status !== 'live') {
+      // N-R7-102 (SP-TT-039): a misconduct before the first point leaves the match
+      // scheduled (startsPlayEvent, N-R7-S15), yet the ladder's next step can be a
+      // disqualification — so a scheduled match with a recorded violation may be defaulted.
+      let preplayConduct = false;
+      if (match.status === 'scheduled') {
+        const { count: conduct } = await supabase.from('match_events').select('id', { count: 'exact', head: true })
+          .eq('match_id', id).eq('event_type', 'note').eq('payload->>kind', 'violation');
+        preplayConduct = !!conduct;
+      }
+      if (match.status !== 'live' && !preplayConduct) {
         return res.status(409).json({ error: 'Only a match being played can end in a default — before it starts, give a walkover.', code: 'NOT_LIVE' });
       }
     }

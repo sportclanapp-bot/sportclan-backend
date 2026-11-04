@@ -152,6 +152,24 @@ describe('a default', () => {
   });
 });
 
+test('N-R7-102 (SP-TT-039): a disqualification after a pre-play warning stands on a still-scheduled match; no misconduct recorded → still NOT_LIVE', async () => {
+  mockSport = { slug: 'table-tennis', allows_draw: false };
+  mockMayDefault = true;
+  const base = { team_a_id: null, team_b_id: null, tournament_id: null, team_a_name: 'P01', team_b_name: 'P02', score_summary: {}, rules: { v: 1, bestOf: 5 }, format: null, overs: null };
+  // a warning before the first point leaves the match scheduled (N-R7-S15): the ladder's DQ must still end it
+  setup({ status: 'scheduled', ...base });
+  events = [{ id: 'e1' }];
+  const r = await call({ defaulted: true, defaulted_side: 'A', winner_side: 'B', walkover_reason: 'Misconduct' });
+  expect(r.statusCode).toBe(200);
+  expect(storedSummary()).toMatchObject({ defaulted: { side: 'A' }, result: 'P02 won (P01 disqualified)' });
+  // nothing recorded at all: still a walkover's job
+  mockLog = [];
+  setup({ status: 'scheduled', ...base });
+  events = [];
+  expect((await call({ defaulted: true, defaulted_side: 'A', winner_side: 'B' })).body.code).toBe('NOT_LIVE');
+  expect(writes().filter((q) => q.some((c) => c.includes('"status"')))).toHaveLength(0); // (the first call's late MVP write may land here)
+});
+
 test('the ladder as a rule: each sport’s standard, the organiser’s own, refusals', () => {
   expect(conductLadder('tennis', null)).toEqual(['warning', 'point', 'game', 'default']);
   expect(conductLadder('table-tennis', null)).toEqual(['warning', 'point', 'point2', 'default']);

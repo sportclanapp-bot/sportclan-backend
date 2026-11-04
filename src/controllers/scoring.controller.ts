@@ -86,7 +86,7 @@ export function superOverOfGame(typed: { A: number; B: number } | undefined, gam
 export async function authorizeScorer(matchId: string, userId: string, deviceId?: string | null) {
   const { data: match, error: readError } = await supabase
     .from('matches')
-    .select('id, created_by, umpire_id, scorer_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules, round, group_label')
+    .select('id, created_by, umpire_id, scorer_id, score_summary, sport_id, status, is_ranked, tournament_id, voided_at, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules, round, group_label, created_at')
     .eq('id', matchId)
     .maybeSingle();
   // N-R7-S7: a failed read is not a missing match — 503, so the outbox keeps the point and retries.
@@ -121,6 +121,21 @@ export async function authorizeScorer(matchId: string, userId: string, deviceId?
 
 
 /**
+ * N-R7-107 (Step 2 B6, SPP1-TTN-091): when the scorer's phone RECORDED an action, as an ISO time, or
+ * null. An offline queue or a QR hand-over sends actions later than they were tapped, and created_at is
+ * the arrival — the pad's warm-up / break timers counted from the upload. The phone's time (ms or ISO,
+ * on the server's clock via serverNow) is kept only when sane: never after now, never before the match
+ * was created; anything else (missing, garbage) is left out and the reader falls back to created_at.
+ */
+export function recordedAtOf(raw: unknown, matchCreatedAt?: string | null, nowMs = Date.now()): string | null {
+  const t = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Date.parse(raw) : NaN;
+  if (!Number.isFinite(t)) return null;
+  const floor = matchCreatedAt ? Date.parse(matchCreatedAt) : NaN;
+  const ms = Math.min(nowMs, Number.isFinite(floor) ? Math.max(floor, t) : t);
+  return new Date(ms).toISOString();
+}
+
+/**
  * SC-432 · the ONE idempotent way an event reaches the log.
  *
  * Extracted from createEvent so the QR handoff applies a scorer's queued ops
@@ -142,14 +157,21 @@ export async function recordEventIdempotent(args: {
   clockSeconds?: number | null;
   payload?: Record<string, unknown>;
   clientKey?: string | null;
+  /** N-R7-107: when the scorer's phone recorded it (sent by the queue / a QR hand-over), and the match's
+   *  created_at to bound it. Kept as payload.recorded_at (sane, or left out); created_at stays the arrival. */
+  recordedAt?: unknown;
+  matchCreatedAt?: string | null;
 }): Promise<{ event: any; error: any; wasNew: boolean }> {
+  const { recorded_at: _clientOwn, ...cleanPayload } = (args.payload || {}) as Record<string, unknown>;
+  const recordedAt = recordedAtOf(args.recordedAt, args.matchCreatedAt);
+  const payload = recordedAt ? { ...cleanPayload, recorded_at: recordedAt } : cleanPayload;
   const baseArgs = {
     p_match_id: args.matchId,
     p_created_by: args.createdBy,
     p_event_type: args.eventType,
     p_period: args.period ?? null,
     p_clock_seconds: args.clockSeconds ?? null,
-    p_payload: args.payload || {},
+    p_payload: payload,
   };
   let rpc = await supabase.rpc('record_match_event', {
     ...baseArgs,
@@ -166,7 +188,7 @@ export async function recordEventIdempotent(args: {
         event_type: args.eventType,
         period: args.period ?? null,
         clock_seconds: args.clockSeconds ?? null,
-        payload: args.payload || {},
+        payload,
         created_by: args.createdBy,
       })
       .select('*')
@@ -827,7 +849,7 @@ export async function createEvent(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
     const matchId = String(req.params.matchId);
-    const { event_type, period, clock_seconds, payload, idempotency_key } = req.body || {};
+    const { event_type, period, clock_seconds, payload, idempotency_key, recorded_at } = req.body || {};
     if (!event_type) return res.status(400).json({ error: 'event_type is required' });
     // SC-408: an event nobody can read must not be accepted. Unknown types used
     // to persist with a 201 and then leak into the partnership view (which sums
@@ -906,6 +928,8 @@ export async function createEvent(req: Request, res: Response) {
       clockSeconds: clock_seconds ?? null,
       payload: payload || {},
       clientKey: idempotency_key,
+      recordedAt: recorded_at, // N-R7-107
+      matchCreatedAt: (match as { created_at?: string | null }).created_at ?? null,
     });
     const { event, error, wasNew } = rec;
     if (error || !event) return res.status(500).json({ error: sanitizeError(error) });

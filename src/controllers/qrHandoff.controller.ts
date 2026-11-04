@@ -205,6 +205,9 @@ export async function uploadHandoff(req: Request, res: Response) {
         clockSeconds: op.e.clock_seconds ?? null,
         payload: op.e.payload ?? {},
         clientKey: op.k,
+        // N-R7-107: when the scorer's phone recorded it (an older app sends none → the upload time).
+        recordedAt: op.a,
+        matchCreatedAt: (scorerMatch as { created_at?: string | null }).created_at ?? null,
       });
       if (rec.error) {
         return res.status(500).json({ error: 'Could not apply every action; nothing was skipped.', applied });

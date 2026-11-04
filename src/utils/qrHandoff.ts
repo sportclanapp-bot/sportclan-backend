@@ -43,6 +43,8 @@ export interface HandoffEventOp {
   s: number;
   t: 'event';
   e: { event_type: string; period?: string | null; clock_seconds?: number | null; payload?: Record<string, unknown> };
+  /** N-R7-107: when the scorer's phone recorded it (ms, server clock). Optional — older apps send none. */
+  a?: number;
 }
 
 /**

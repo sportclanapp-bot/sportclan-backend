@@ -67,7 +67,10 @@ export function scorePush(args: {
     if (!gameEnded) return null;
     // A5: a carrom 'set' in the summary is now a GAME to 25 (boards are inside it).
     const word = slug === 'volleyball' ? 'set' : 'game';
-    return { title: `${word[0]!.toUpperCase()}${word.slice(1)} to ${teamName}`, body: `${teamName} wins ${word} ${n} · ${mine(setsA[n - 1] ?? 0, setsB[n - 1] ?? 0)}` };
+    // N-R7-103: a team tie keeps every rubber's games in one list — count the games of the rubber being played.
+    const before = rubbers.reduce((t, r) => t + r.A + r.B, 0);
+    const which = (rubbers.length || (summary as { tie?: unknown }).tie) ? `${n - before} of rubber ${rubbers.length + 1}` : `${n}`;
+    return { title: `${word[0]!.toUpperCase()}${word.slice(1)} to ${teamName}`, body: `${teamName} wins ${word} ${which} · ${mine(setsA[n - 1] ?? 0, setsB[n - 1] ?? 0)}` };
   }
 
   if (slug === 'tennis') {

@@ -49,3 +49,18 @@ test('the quarter push fires on period_change, for basketball only', () => {
   const src = fs.readFileSync(require('path').join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
   expect(src).toMatch(/event_type === 'period_change' && wasNew[\s\S]{0,400}slug === 'basketball'[\s\S]{0,600}quarterPush\(/);
 });
+
+test('N-R7-103: in a team tie a game push counts the games of the rubber being played, and names it', () => {
+  // Swaythling: rubber 1 went 3-0 (games 11-5 ×3); rubber 2's first game just ended 11-5.
+  const prev = { A: { sets: [11, 11, 11], points: 10 }, B: { sets: [5, 5, 5], points: 5 }, rubbers: [{ A: 3, B: 0, winner: 'A' }] };
+  const summary = { A: { sets: [11, 11, 11, 11], points: 0 }, B: { sets: [5, 5, 5, 5], points: 0 }, rubbers: [{ A: 3, B: 0, winner: 'A' as const }] };
+  expect(scorePush({ slug: 'tabletennis', summary, prevSummary: prev, side: 'A', teamName: 'Deccan' }))
+    .toEqual({ title: 'Game to Deccan', body: 'Deccan wins game 1 of rubber 2 · 11–5' });
+  // rubber 1, game 1 (no rubber finished yet): the tie block says it is a tie
+  const tie = { win: 'first' };
+  expect(scorePush({ slug: 'tabletennis', summary: { A: { sets: [11], points: 0 }, B: { sets: [5], points: 0 }, rubbers: [], tie } as never, prevSummary: { A: { sets: [] }, B: { sets: [] } }, side: 'A', teamName: 'Deccan' })?.body)
+    .toBe('Deccan wins game 1 of rubber 1 · 11–5');
+  // a single match (no rubbers) keeps its words
+  expect(scorePush({ slug: 'tabletennis', summary: { A: { sets: [11, 9], points: 0 }, B: { sets: [8, 11], points: 0 } }, prevSummary: { A: { sets: [11] }, B: { sets: [8] } }, side: 'B', teamName: 'Bina' })?.body)
+    .toBe('Bina wins game 2 · 11–9');
+});

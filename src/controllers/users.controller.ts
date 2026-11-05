@@ -1690,13 +1690,22 @@ export async function getSportProfile(req: Request, res: Response) {
   const p = (profile ?? NEW_PLAYER) as any;
   const rate = p.rating as number;
   const mp = (p.matches_played ?? 0) as number;
-  // The "standing above" predicate, shared by BOTH ranks: rating desc, then
-  // matches_played desc, then a stable user_id tie-break → a deterministic ordinal
-  // rank (not order-of-insertion). Only players with >=1 rated match qualify.
-  const aboveOrder =
-    `rating.gt.${rate},` +
-    `and(rating.eq.${rate},matches_played.gt.${mp}),` +
-    `and(rating.eq.${rate},matches_played.eq.${mp},user_id.lt.${id})`;
+  // N-R7-114 (Step 2, SP-PKB-C25): the rank is the RANKING's rank (leaderboard.controller
+  // all-time): a competition rank — players rated strictly higher + 1, so ties share a number —
+  // among players with >=1 rated match, without test accounts for a real viewer (B03). It was an
+  // ordinal rank (ties broken by matches played, then id) counting test accounts too, so the
+  // Sport hub showed 'YOUR PICKLEBALL RANK #22' over a ranking that put the same player at =15.
+  const hideTestRank = await hideTestFor(req.userId);
+  const rankBase = (cols: string) => {
+    let qb: any = supabase
+      .from('user_sport_profiles')
+      .select(hideTestRank ? `${cols}, tu:users!user_id!inner(is_test_seed)` : cols, { count: 'exact', head: true })
+      .eq('sport_id', sportId)
+      .gte('matches_played', 1)
+      .gt('rating', rate);
+    if (hideTestRank) qb = qb.eq('tu.is_test_seed', false);
+    return qb;
+  };
   // SC-329: ranks and sport-specific stats are INDEPENDENT → compute them
   // CONCURRENTLY so the endpoint's serial DB round-trips (was ~6-8 sequential)
   // overlap. Each branch is best-effort and writes its own result vars.
@@ -1706,13 +1715,7 @@ export async function getSportProfile(req: Request, res: Response) {
       // The global-rank COUNT and the city-id fetch don't depend on each other.
       const [globalRes, cityRow] = await Promise.all([
         mp >= 1
-          ? supabase
-              .from('user_sport_profiles')
-              .select('user_id', { count: 'exact', head: true })
-              .eq('sport_id', sportId)
-              .gte('matches_played', 1)
-              .neq('user_id', id)
-              .or(aboveOrder)
+          ? rankBase('user_id')
           : Promise.resolve({ count: null as number | null }),
         cityP,
       ]);
@@ -1722,14 +1725,7 @@ export async function getSportProfile(req: Request, res: Response) {
       // users.city_id (idx_users_city_id, migration 068). No city / no match → null.
       const cityId = (cityRow.data as { city_id?: string | null } | null)?.city_id ?? null;
       if (cityId && mp >= 1) {
-        const { count: aboveCity } = await supabase
-          .from('user_sport_profiles')
-          .select('user_id, users!inner(city_id)', { count: 'exact', head: true })
-          .eq('sport_id', sportId)
-          .eq('users.city_id', cityId)
-          .gte('matches_played', 1)
-          .neq('user_id', id)
-          .or(aboveOrder);
+        const { count: aboveCity } = await rankBase('user_id, users!inner(city_id)').eq('users.city_id', cityId);
         cityRank = (aboveCity ?? 0) + 1;
       } else {
         cityRank = null;

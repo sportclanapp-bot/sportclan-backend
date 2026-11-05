@@ -2833,6 +2833,22 @@ export async function setMatchOfficials(req: Request, res: Response) {
         // best-effort
       }
     }
+    // N-R7-S104: an official taken off (set back to None, or replaced) is told — they only ever heard they were named.
+    for (const k of fields) {
+      const was = before[k];
+      if (typeof was !== 'string' || was === body[k] || was === userId) continue;
+      try {
+        await notifyUser({
+          userId: was,
+          type: 'match_official_removed',
+          title: k === 'umpire_id' ? `You’re no longer the ${offLc}` : 'You’re no longer the scorer',
+          body: `You’ve been taken off as ${k === 'umpire_id' ? offLc : 'scorer'} for ${label}. You can’t score it any more.`,
+          data: { matchId: id, screen: 'MatchDetail' },
+        });
+      } catch {
+        // best-effort
+      }
+    }
     const people = await officialsOf(data as { umpire_id?: string | null; scorer_id?: string | null });
     return res.json({ match: data, ...people });
   } catch {

@@ -102,6 +102,9 @@ describe('PATCH /matches/:id/officials', () => {
     db.matches![0]!.umpire_id = UMP; db.matches![0]!.scorer_id = SCO;
     expect((await call(ORG, { scorer_id: null })).statusCode).toBe(200);
     expect(db.matches![0]).toMatchObject({ umpire_id: UMP, scorer_id: null });
+    // N-R7-S104: the scorer taken off is told (only them).
+    expect(mockNotify.mock.calls.map((c: any) => `${c[0].userId} ${c[0].type}`)).toEqual([`${SCO} match_official_removed`]);
+    mockNotify.mockClear();
     await call(ORG, { umpire_id: UMP });
     expect(mockNotify).not.toHaveBeenCalled();
   });

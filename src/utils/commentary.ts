@@ -436,8 +436,26 @@ function plainLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
 }
 
 /** The timeline line for one event, in every sport. */
+/** N-R7-120: '🚫 Match abandoned — Rain' / '🚫 Match abandoned · Tigers go through (walkover)'. */
+export function abandonLine(p: Record<string, any>, ctx: { teamA: string; teamB: string }): string {
+  const through = p.walkover_side === 'A' ? ctx.teamA : p.walkover_side === 'B' ? ctx.teamB : null;
+  const reason = typeof p.reason === 'string' ? p.reason.trim() : '';
+  return `🚫 Match abandoned${through ? ` · ${through} go through (walkover)` : ''}${reason ? ` — ${reason}` : ''}`;
+}
+
+/** N-R7-120: the abandon's reason as typed — one line, trimmed; '' when none. Longer than 200 → null (refused). */
+export const ABANDON_REASON_MAX = 200;
+export function abandonReasonOf(raw: unknown): string | null {
+  if (raw == null) return '';
+  if (typeof raw !== 'string') return null;
+  const t = raw.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return t.length > ABANDON_REASON_MAX ? null : t;
+}
+
 export function timelineLine(eventType: string, payload: unknown, ctx: CommentaryContext): TimelineLine {
   const p: Record<string, any> = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, any> : {};
+  // N-R7-120: an abandon from the pad (or Match Detail) ends the timeline in words, with its reason.
+  if (eventType === 'note' && p.kind === 'abandoned') return { text: abandonLine(p, ctx), isWicket: false, isBoundary: false };
   if (ctx.sport === 'cricket') {
     const c = cricketLine(eventType, p, ctx);
     if (c) return c;

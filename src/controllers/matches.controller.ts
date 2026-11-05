@@ -19,7 +19,7 @@ import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
 import { dlsWinner, deriveResultText, chasingSide, tiedOnDlsTarget } from '../utils/matchResult';
-import { ballWho, silentOnTimeline, timelineLine, wicketWords } from '../utils/commentary';
+import { ABANDON_REASON_MAX, abandonReasonOf, ballWho, silentOnTimeline, timelineLine, wicketWords } from '../utils/commentary';
 export { ballWho, wicketWords }; // moved to utils/commentary (audit batch 4); still exported here for old importers
 import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease, isStale, STALE_AFTER_MS } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
@@ -2972,6 +2972,9 @@ export async function abandonMatch(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const { advancing_team_id } = req.body || {};
+    // N-R7-120: an optional reason ("Rain") — it goes on the timeline's abandon line.
+    const reason = abandonReasonOf((req.body || {}).reason);
+    if (reason === null) return res.status(400).json({ error: `The reason can be up to ${ABANDON_REASON_MAX} characters.`, code: 'REASON_TOO_LONG' });
     const { data: match } = await supabase
       .from('matches')
       .select('id, created_by, umpire_id, scorer_id, status, tournament_id, round, group_label, next_match_id, team_a_id, team_b_id, team_a_name, team_b_name, sport_id, format, overs, rules, score_summary')
@@ -3039,6 +3042,17 @@ export async function abandonMatch(req: Request, res: Response) {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+
+    // N-R7-120: the timeline ends with the abandon in words (it ended on the last point). A note,
+    // so no score, stat or standings reader counts it. Best-effort: the abandon itself stands.
+    // Only after play began: a match nobody started has no timeline (and a line would read as played).
+    if (match.status === 'live') try {
+      const { error: noteErr } = await supabase.from('match_events').insert({
+        match_id: id, event_type: 'note', period: null, clock_seconds: null, created_by: userId,
+        payload: { kind: 'abandoned', ...(reason ? { reason } : {}), ...(walkoverWinner ? { walkover_side: walkoverWinner === match.team_a_id ? 'A' : 'B' } : {}) },
+      });
+      if (noteErr) console.error('abandon note failed:', noteErr.message);
+    } catch (e) { console.error('abandon note failed:', e instanceof Error ? e.message : e); }
 
     // Route through the shared engine for ANY tournament match: a bracket
     // walkover advances its winner; an abandoned RR/league match (SC-255) still

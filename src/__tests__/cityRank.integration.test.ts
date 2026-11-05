@@ -108,7 +108,8 @@ describe('SC-326 per-sport city rank', () => {
           (b.matches_played ?? 0) - (a.matches_played ?? 0) ||
           (a.user_id < b.user_id ? -1 : a.user_id > b.user_id ? 1 : 0),
       );
-    const expected = ranked.findIndex((r) => r.user_id === AARAV) + 1;
+    // N-R7-114: the profile's rank is the ranking's own (competition) rank — ties share it.
+    const expected = ranked.find((r) => r.user_id === AARAV)?.rank ?? 0;
 
     expect(expected).toBeGreaterThan(0); // Aarav is in Agra's cricket leaderboard
     expect(prof.cityRank).toBe(expected); // endpoint == direct query
@@ -139,7 +140,7 @@ describe('SC-326 per-sport city rank', () => {
     // Pick a target ~position 30 — deep enough that boundary tie-breaks can't shift it.
     const idx = Math.min(29, ranked.length - 1);
     const target = ranked[idx];
-    const expectedGlobal = idx + 1;
+    const expectedGlobal = target.rank; // N-R7-114: the ranking's own (competition) rank
 
     const prof = (await call('GET', `/users/${target.user_id}/sport-profile/${cricketId}`, token)).data.profile;
     expect(prof.globalRank).toBe(expectedGlobal); // endpoint == direct national query

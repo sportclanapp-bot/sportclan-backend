@@ -865,7 +865,9 @@ export async function createEvent(req: Request, res: Response) {
     const auth = await authorizeScorer(matchId, userId, deviceIdOf(req));
     if (!auth.ok) {
       // N-R7-S45: finished (on the phone that took over): an action it already has is still answered as recorded (N-R3-4).
-      const key = auth.code === 'MATCH_FINISHED' ? normalizeClientKey(idempotency_key) : null;
+      // N-R7-S105: so is one refused for the pad (another phone took over after a QR hand-off carried it) —
+      // the courier already delivered it; only a NEW action from this phone is refused.
+      const key = auth.status === 409 ? normalizeClientKey(idempotency_key) : null;
       if (key) {
         const { data: had } = await supabase.from('match_events').select('*').eq('match_id', matchId).eq('client_key', key).maybeSingle();
         if (had) return res.json({ event: had, replayed: true });

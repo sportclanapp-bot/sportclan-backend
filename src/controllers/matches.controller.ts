@@ -3063,9 +3063,15 @@ export async function abandonMatch(req: Request, res: Response) {
     // so no score, stat or standings reader counts it. Best-effort: the abandon itself stands.
     // Only after play began: a match nobody started has no timeline (and a line would read as played).
     if (match.status === 'live') try {
+      // N-R7-121: a side of one player 'goes through' (singles entries are one-player teams).
+      let walkoverOne = false;
+      if (walkoverWinner) {
+        const { data: members } = await supabase.from('team_members').select('user_id').eq('team_id', walkoverWinner);
+        walkoverOne = (members ?? []).length === 1;
+      }
       const { error: noteErr } = await supabase.from('match_events').insert({
         match_id: id, event_type: 'note', period: null, clock_seconds: null, created_by: userId,
-        payload: { kind: 'abandoned', ...(reason ? { reason } : {}), ...(walkoverWinner ? { walkover_side: walkoverWinner === match.team_a_id ? 'A' : 'B' } : {}) },
+        payload: { kind: 'abandoned', ...(reason ? { reason } : {}), ...(walkoverWinner ? { walkover_side: walkoverWinner === match.team_a_id ? 'A' : 'B', ...(walkoverOne ? { walkover_one: true } : {}) } : {}) },
       });
       if (noteErr) console.error('abandon note failed:', noteErr.message);
     } catch (e) { console.error('abandon note failed:', e instanceof Error ? e.message : e); }

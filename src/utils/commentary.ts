@@ -436,11 +436,12 @@ function plainLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
 }
 
 /** The timeline line for one event, in every sport. */
-/** N-R7-120: '🚫 Match abandoned — Rain' / '🚫 Match abandoned · Tigers go through (walkover)'. */
+/** N-R7-120: '🚫 Match abandoned — Rain' / '🚫 Match abandoned · Tigers go through (walkover)'.
+ *  N-R7-121: one player 'goes through' (the note's walkover_one: the side is a single player). */
 export function abandonLine(p: Record<string, any>, ctx: { teamA: string; teamB: string }): string {
   const through = p.walkover_side === 'A' ? ctx.teamA : p.walkover_side === 'B' ? ctx.teamB : null;
   const reason = typeof p.reason === 'string' ? p.reason.trim() : '';
-  return `🚫 Match abandoned${through ? ` · ${through} go through (walkover)` : ''}${reason ? ` — ${reason}` : ''}`;
+  return `🚫 Match abandoned${through ? ` · ${through} ${p.walkover_one === true ? 'goes' : 'go'} through (walkover)` : ''}${reason ? ` — ${reason}` : ''}`;
 }
 
 /** N-R7-120: the abandon's reason as typed — one line, trimmed; '' when none. Longer than 200 → null (refused). */

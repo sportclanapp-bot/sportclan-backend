@@ -23,7 +23,7 @@ import { byeWords, entryPlayers, type ByeKind } from '../utils/swissByeRequests'
 import { notifyUsers } from '../utils/notify';
 import { colourPreference, dutchHistory } from '../utils/swissDutch';
 import { computeStats } from '../utils/standings';
-import { swissContext, swissInsertRound, swissLateRounds, swissPairRound, type SwissByeKind } from './tournaments.controller';
+import { swissContext, swissInsertRound, swissLateRounds, swissPairRound, swissRepairDraft, type SwissByeKind } from './tournaments.controller';
 import { fillEntryLineups } from '../utils/entryLineups';
 
 type Ctx = NonNullable<Awaited<ReturnType<typeof swissContext>>>;
@@ -72,9 +72,10 @@ export async function getSwiss(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const id = String(req.params.id);
-  const ctx = await swissContext(id);
-  if (!ctx) return res.status(404).json({ error: 'This isn’t a Swiss tournament.', code: 'NOT_SWISS' });
+  const found = await swissContext(id);
+  if (!found) return res.status(404).json({ error: 'This isn’t a Swiss tournament.', code: 'NOT_SWISS' });
   const can = await canManagePairings(id, userId);
+  const ctx = can ? await swissRepairDraft(found, id) : found; // N-R7-S106
   const sw = ctx.sw;
   const base = { rounds: sw.rounds, paired: sw.paired ?? 0, check: sw.check === true, late_entry: sw.lateEntry ?? 'zero', colours: ctx.colours, can_manage: can };
   if (!can) return res.json(base);
@@ -325,8 +326,9 @@ export async function publishSwissRound(req: Request, res: Response) {
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const id = String(req.params.id);
   if (!(await canManagePairings(id, userId))) return res.status(403).json({ error: 'Only the organiser or an arbiter can publish a round.' });
-  const ctx = await swissContext(id);
-  if (!ctx) return res.status(404).json({ error: 'This isn’t a Swiss tournament.', code: 'NOT_SWISS' });
+  const found = await swissContext(id);
+  if (!found) return res.status(404).json({ error: 'This isn’t a Swiss tournament.', code: 'NOT_SWISS' });
+  const ctx = await swissRepairDraft(found, id); // N-R7-S106: never seat a player who left
   const draft = ctx.sw.draft;
   if (!draft) return res.status(409).json({ error: 'There’s no round waiting to be published.', code: 'NO_DRAFT' });
   // Claim it: the draft goes, the round is paired.

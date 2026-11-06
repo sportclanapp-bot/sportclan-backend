@@ -1661,6 +1661,10 @@ export async function updateEntry(req: Request, res: Response) {
     if (status === 'withdrawn') {
       try { await walkoverOnWithdraw(id, entry.team_id); } catch { /* best-effort */ }
     }
+    // N-R7-S106: a Swiss round waiting for the arbiter drops a player who left (best-effort; Publish checks again).
+    if ((status === 'withdrawn' || status === 'rejected') && entry.status === 'approved') {
+      try { const c = await swissContext(id); if (c) await swissRepairDraft(c, id); } catch { /* best-effort */ }
+    }
     // Stage 9 · T13: a place freed — the waitlist moves up (best-effort).
     if ((status === 'withdrawn' || status === 'rejected') && (entry.status === 'pending' || entry.status === 'approved')) {
       try { await promoteWaitlist(id); } catch { /* best-effort */ }
@@ -3656,6 +3660,24 @@ export function swissPairRound(ctx: NonNullable<Awaited<ReturnType<typeof swissC
   return { round, requested, late };
 }
 type GMatchRow = { team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; round: number | null; score_summary: any };
+
+/**
+ * N-R7-S106: a round drafted for the arbiter ('check each round') that holds a player who is no
+ * longer an approved entry (withdrawn or rejected after the draft was made) is paired again, so
+ * Publish never seats them. A draft of approved players only is left exactly as it is (swaps kept).
+ */
+export async function swissRepairDraft(ctx: NonNullable<Awaited<ReturnType<typeof swissContext>>>, tournamentId: string) {
+  const d = ctx.sw.draft;
+  if (!d) return ctx;
+  const seated = [...d.pairs.flatMap((p) => [p.white, p.black]), ...(d.bye ? [d.bye] : [])];
+  if (seated.every((id) => ctx.ids.includes(id))) return ctx;
+  const again = swissPairRound(ctx, d.round);
+  const sw = { ...ctx.sw, draft: { round: d.round, pairs: again.round.pairs, bye: again.round.bye } };
+  const settings = { ...ctx.settings, swiss: sw };
+  await supabase.from('tournaments').update({ settings, updated_at: new Date().toISOString() })
+    .eq('id', tournamentId).eq('settings->swiss->draft->>round', String(d.round));
+  return { ...ctx, settings, sw };
+}
 
 /** Stage 12 · CH2 · write a paired round (and its byes) as match rows, timed after the round before. */
 export async function swissInsertRound(ctx: NonNullable<Awaited<ReturnType<typeof swissContext>>>, roundNo: number, paired: ReturnType<typeof swissPairRound>): Promise<void> {

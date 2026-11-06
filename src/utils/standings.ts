@@ -769,10 +769,18 @@ export function openKnockoutPlaces(groupSizes: number[], qualifiersPerGroup: num
  * compared per game played — points, then difference, then scored — and the
  * team id settles a dead heat. `rankedGroups` is each group's order.
  */
+/**
+ * N-R7-S112 (SPP1-CHS-082) · why the best next-placed teams are in that order, for
+ * the screen: the tie-breaks left out between groups (head-to-head and the chess
+ * scores compare teams that met), and at the cut — the last team in and the first
+ * one out — the criterion that split them ('lots' a draw of lots, 'order' neither).
+ */
+export type BestPlacedWhy = { skipped?: string[]; cut?: { in: string; out: string; by: string } | null };
+
 export function bestPlacedAcrossGroups(
   rankedGroups: string[][], place: number, count: number, stats: Map<string, TeamStat>,
   /** Stage 8: the tournament's tie-break order (as rankTeams), and fair play / lots. */
-  tiebreakerRules?: any[], extra: RankExtra = {},
+  tiebreakerRules?: any[], extra: RankExtra = {}, why?: BestPlacedWhy,
 ): string[] {
   if (count <= 0) return [];
   // Stage 11 · PB7: groups of different sizes — each candidate's results against
@@ -813,14 +821,24 @@ export function bestPlacedAcrossGroups(
     return per(id, GLOBAL_CRITERION[c]);
   };
   const pool = rankedGroups.map((g) => g[place]).filter((id): id is string => !!id);
-  return pool.sort((x, y) => {
+  const sorted = pool.sort((x, y) => {
     for (const c of order) {
       const vx = value(x, c); const vy = value(y, c);
       if (vx == null || vy == null) continue;
       if (vy !== vx) return vy - vx;
     }
     return (lotIndex.get(x) ?? Infinity) - (lotIndex.get(y) ?? Infinity) || (x < y ? -1 : x > y ? 1 : 0);
-  }).slice(0, count);
+  });
+  if (why) {
+    why.skipped = sorted.length ? order.filter((c) => value(sorted[0], c) == null) : [];
+    const a = sorted[count - 1]; const b = sorted[count];
+    why.cut = a && b ? {
+      in: a, out: b,
+      by: order.find((c) => { const va = value(a, c); const vb = value(b, c); return va != null && vb != null && va !== vb; })
+        ?? ((lotIndex.get(a) ?? Infinity) !== (lotIndex.get(b) ?? Infinity) ? 'lots' : 'order'),
+    } : null;
+  }
+  return sorted.slice(0, count);
 }
 
 /**

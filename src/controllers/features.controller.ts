@@ -12,7 +12,7 @@ import { rootTournamentId } from '../utils/tournamentEvents';
 import { sanitizeError } from '../utils/response';
 import { activeSportIds } from '../utils/sports';
 import { notifyUser, notifyUnlessBlocked, allowedRecipients, sendPushToUsers, matchAudienceIds } from '../utils/notify';
-import { rankTeams, rankTeamsDetailed, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, bestNextCount } from '../utils/standings';
+import { type BestPlacedWhy, rankTeams, rankTeamsDetailed, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, bestNextCount } from '../utils/standings';
 import { settingsOf } from '../utils/tournamentSettings';
 import { istDay, istDayStartIso } from '../utils/appTime';
 import { formatTimeIst } from '../utils/scheduleFixtures';
@@ -156,6 +156,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
       .filter((m) => tournament.format !== 'groups_knockout' || !!m.group_label || !(Number(m.round) >= 1))
       .map((m) => m.group_label ?? 'default'));
     const byLot: Array<{ group: string | null; team_ids: string[] }> = [];
+    let bestNext: { place: number; count: number; skipped: string[]; cut: { in: string; out: string; by: string } | null } | null = null;
     for (const g of Array.from(byGroup.keys()).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) { // T16: Box 10 after Box 9
       const groupRows = byGroup.get(g)!;
       // SC-377: a withdrawn team is out of the competition — it keeps its played
@@ -223,8 +224,11 @@ export async function getTournamentStandings(req: Request, res: Response) {
         }
         const groups = Array.from(byGroupLive.keys()).sort().map((g) => byGroupLive.get(g)!);
         const count = bestNextCount(st8, groups.map((gr) => gr.length), qpg);
-        const best = new Set(bestPlacedAcrossGroups(groups, qpg, count, stats, tiebreakerRules, { ...extraFor(''), matches: tin.matches as any, pts })); // Stage 11 · PB7: groups of different sizes compared fairly
+        const why: BestPlacedWhy = {};
+        const best = new Set(bestPlacedAcrossGroups(groups, qpg, count, stats, tiebreakerRules, { ...extraFor(''), matches: tin.matches as any, pts }, why)); // Stage 11 · PB7: groups of different sizes compared fairly
         for (const row of standings) if (best.has(row.teamId)) (row as any).qualified = true;
+        // N-R7-S112: the screen says which rule decided between the groups (SPP1-CHS-082).
+        if (count > 0) bestNext = { place: qpg + 1, count, skipped: why.skipped ?? [], cut: why.cut ?? null };
       }
     }
 
@@ -240,7 +244,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
 
     // SC-268: sport slug → the FE picks the secondary standings column
     // (NRR cricket · GD football/hockey · PD basketball · none for rally/carrom).
-    return res.json({ standings: aliased, isCricket, sportSlug: sport?.slug ?? null, level, by_lot: byLot });
+    return res.json({ standings: aliased, isCricket, sportSlug: sport?.slug ?? null, level, by_lot: byLot, ...(bestNext ? { best_next: bestNext } : {}) });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

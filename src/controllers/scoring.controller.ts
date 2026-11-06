@@ -1995,6 +1995,10 @@ export async function recomputeSummary(
       // Result reason (checkmate/resignation/timeout/draw_agreement/stalemate/
       // repetition) — user-entered on the decisive result, no engine needed.
       chessReason = typeof pr.reason === 'string' ? pr.reason : null;
+      // N-R7-138 (OBS-A2-1): the result carries the clock of the side to move when it was recorded:
+      // that clock stops there (a resignation mid-turn), not back at its last move.
+      const atResult = (e as any).clock_seconds;
+      if (typeof atResult === 'number' && atResult >= 0) { if (chessMoveCount % 2 === 0) chessClockWhite = atResult; else chessClockBlack = atResult; }
       // Capture the winner the scorer credited on THIS result event (the last
       // decisive result wins, matching the score above). A draw carries no
       // winning player. player_id may be a guest:<id> — that's fine, it rides

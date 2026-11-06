@@ -622,6 +622,9 @@ export async function getSeasonRecap(req: Request, res: Response) {
         if (m.winner_team_id === m.team_a_id) winnerSide = 'A';
         else if (m.winner_team_id === m.team_b_id) winnerSide = 'B';
       }
+      // N-R7-S113 (SPP1-CHS-083): a drawn knockout chess game decided by Armageddon or the
+      // organiser was a draw (N-SPP1-CHS-4: rated and recorded so); the tie-break only says who went through.
+      if (ss.chess_tiebreak) winnerSide = null;
       if (!winnerSide) draws += 1;
       else if (winnerSide === row.team_side) wins += 1;
       else losses += 1;

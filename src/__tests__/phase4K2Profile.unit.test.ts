@@ -188,6 +188,18 @@ describe('K2-72 · the 90-day recap’s W/L/D come from the same 90 days (SC-320
     const r = await call(getSeasonRecap, { params: { id: ME } });
     expect(r.body.recap).toMatchObject({ totalMatches: 3, wins: 1, losses: 1, draws: 1 });
   });
+  it('N-R7-S113 (SPP1-CHS-083): a drawn knockout chess game decided by Armageddon counts as a draw for both players', async () => {
+    const TA = 'aaaaaaaa-0000-4000-8000-00000000000a'; const TB = 'bbbbbbbb-0000-4000-8000-00000000000b';
+    const arm = { id: 'm9', status: 'completed', is_ranked: true, team_a_id: TA, team_b_id: TB, winner_team_id: TB, created_at: '2026-09-20T10:00:00Z', voided_at: null,
+      score_summary: { winner_side: 'B', A: { score: 0.5 }, B: { score: 0.5 }, chess_tiebreak: { method: 'armageddon', armageddon: 'draw' } } };
+    mockNext = (q) => {
+      if (q[0] === 'from:user_sport_profiles') return { data: [] };
+      if (q[0] === 'from:match_participants') return { data: [{ team_side: 'A', match: arm }] };
+      return { data: [], count: 0 };
+    };
+    const r = await call(getSeasonRecap, { params: { id: ME } });
+    expect(r.body.recap).toMatchObject({ totalMatches: 1, wins: 0, losses: 0, draws: 1 });
+  });
 });
 
 describe('K2-74b · the orphan sport-agnostic city_rank is gone from profile reads (SC-328)', () => {

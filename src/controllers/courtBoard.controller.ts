@@ -50,6 +50,7 @@ export function boardOf(courts: string[], matches: M[], labelOf: Map<string, str
     id: m.id, tournament_id: m.tournament_id, event_label: labelOf.get(m.tournament_id) ?? null,
     team_a_name: m.team_a_name, team_b_name: m.team_b_name, scheduled_at: m.scheduled_at, ground_label: m.ground_label,
     status: m.status, called_at: m.called_at, round: m.round, umpire_id: m.umpire_id,
+    sides_known: known(m), // N-R7-149: a knockout place named 'Winner A' isn't a team yet (no Call)
   });
   const open = matches.filter((m) => !m.voided_at && (m.status === 'scheduled' || m.status === 'live'));
   const byTime = (a: M, b: M) => (Date.parse(a.scheduled_at ?? '') || Infinity) - (Date.parse(b.scheduled_at ?? '') || Infinity);

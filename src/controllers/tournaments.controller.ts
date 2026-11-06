@@ -3029,6 +3029,27 @@ function seededRound1(
   return round1;
 }
 
+/**
+ * N-R7-149 (SP-CHS-F01): until the groups are played, the knockout's first round
+ * names its places from the groups — 'Winner A' v 'Runner-up B', 'Winner B' v
+ * 'Runner-up A' — drawn the way maybeSeedKnockout will draw the real teams (tiers
+ * kept apart, then cross-paired); the seeds straight through by name. A place the
+ * best next-placed teams fill reads 'Best next-placed'; an empty one 'BYE'.
+ */
+export function groupKnockoutPlaceholders(labels: string[], quals: number, koSize: number, direct: TeamSlot[] = [], bestNext = false): Array<{ a: string; b: string }> {
+  const word = (r: number) => (r === 0 ? 'Winner' : r === 1 ? 'Runner-up' : r === 2 ? '3rd' : `${r + 1}th`);
+  const groupOf = (id: string) => (id.startsWith('ph:') ? id.split(':')[1] : undefined);
+  const tiers = Array.from({ length: quals }, (_, r) => labels.map((l) => `ph:${l}:${r}`));
+  const nameOf = new Map<string, string>(direct.map((d) => [d.id, d.name]));
+  for (const tier of tiers) for (const id of tier) { const [, l, r] = id.split(':'); nameOf.set(id, `${word(Number(r))} ${l}`); }
+  const ordered = placeGroupTiersApart(direct.map((d) => d.id), tiers, groupOf, koSize);
+  const seeds: TeamSlot[] = ordered.map((id) => ({ id, name: nameOf.get(id) ?? 'TBD' }));
+  const seedNo = new Map(seeds.map((x, i) => [x.id, i + 1]));
+  const r1 = crossGroupFirstRound(seededRound1(seeds, koSize), groupOf, (id) => seedNo.get(id));
+  const empty = bestNext ? 'Best next-placed' : 'BYE';
+  return r1.map((m) => ({ a: m.a?.name ?? (m.b ? empty : 'TBD'), b: m.b?.name ?? (m.a ? empty : 'TBD') }));
+}
+
 // SC-58: groups_knockout config. group_size / num_groups / qualifiers_per_group
 // were hardcoded (4 / derived / top-2), which made top-1-per-group and custom
 // group counts impossible and forced index-seeded byes. These knobs live on the
@@ -4835,6 +4856,13 @@ export async function generateFixtures(req: Request, res: Response) {
       }
       if (doubleElim) await insertDoubleElim(base, koRound1, (r, m) => schedGK.assignments.get(keyOf(r, m))); // Stage 11 · PB4
       else await insertSingleElim(base, koRound1, (r, m) => schedGK.assignments.get(keyOf(r, m)), thirdPlace);
+      // N-R7-149: the knockout's first round says whose places they are ('Winner A' v 'Runner-up B') until the groups are played.
+      if (!doubleElim) {
+        const st0 = settingsOf(tournament as { settings?: unknown });
+        const ph = groupKnockoutPlaceholders(plan.groups.map((g) => g.label), qualsPerGroup, koSize, [...directIds].map((tid) => slotOf.get(tid)!).filter(Boolean), !!(st0.bestThirds || st0.bestNext != null));
+        const ko1 = await allRows<{ id: string; match_no: number }>(() => supabase.from('matches').select('id, match_no').eq('tournament_id', id).is('group_label', null).is('bracket', null).eq('round', 1), 'match_no');
+        for (const k of ko1 ?? []) { const p = ph[k.match_no]; if (p) await supabase.from('matches').update({ team_a_name: p.a, team_b_name: p.b }).eq('id', k.id); }
+      }
 
       // F-52: drawing the fixtures is preparation, not a start whistle. This goes
       // live only if the start date has arrived; otherwise the hourly sweep

@@ -91,6 +91,24 @@ export function chessDeciderWords(stage: 'final' | 'third_place' | null): { titl
 }
 
 /**
+ * N-R7-166 (OBS-C5-3): a level team match's decider names the teams — a team has no colour in a team
+ * match (its boards alternate). In the Armageddon one player from each team plays: side A's has White
+ * and more time, side B's Black, and a draw goes to Black (armageddonWinner).
+ */
+export function chessTeamDeciderWords(stage: 'final' | 'third_place' | null, nameA: string, nameB: string): {
+  choice: string; armageddonMessage: string; result: Record<'white' | 'black' | 'draw', string>; organiser: Record<'A' | 'B', string>;
+} {
+  const { through } = chessDeciderWords(stage);
+  const draw = `a draw means ${nameB} ${through}`;
+  return {
+    choice: `Armageddon game · ${nameB} has Black; ${draw}`,
+    armageddonMessage: `One player from each team: ${nameA} has White and more time (say 5 v 4 minutes), ${nameB} has Black; ${draw}.`,
+    result: { white: `${nameA} won · ${nameA} ${through}`, black: `${nameB} won · ${nameB} ${through}`, draw: `Drawn · ${nameB} ${through}` },
+    organiser: { A: nameA, B: nameB },
+  };
+}
+
+/**
  * Stage 12 · CH8 · FIDE Laws 7.5.5, 9.5.3 and Appendix A.3 / B: the time an
  * arbiter gives the opponent for an illegal move or a wrong draw claim — 2
  * minutes in a standard game, 1 in rapid and blitz. A second illegal move by

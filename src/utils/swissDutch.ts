@@ -260,7 +260,10 @@ function pairOnce(inp: DutchInput, hardClub: boolean): { round: DutchRound; rela
       const upAgain = ps.filter(([a, b]) => mdps.includes(a) && hist(b)?.lastFloat === 'up').length;
       // Score difference of MDP pairings (pair an MDP with the highest resident possible).
       const mdpGap = ps.reduce((sum, [a, b]) => sum + Math.abs(pts(a) - pts(b)), 0);
-      return [sameClub, mdpGap, absMiss, strongMiss, downAgain, upAgain, mildMiss];
+      // N-R7-S109 · FIDE C.04.3 C.7: the same number float down either way, so float the lowest scores
+      // (highest first) — a 2-pointer left alone met a 0 two groups down while it could meet a 1.
+      const floatPts = left.map(pts).sort((x, y) => y - x);
+      return [sameClub, ...floatPts, mdpGap, absMiss, strongMiss, downAgain, upAgain, mildMiss];
     };
     const better = (x: number[], y: number[]) => { for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i]! < y[i]!; return false; };
 
@@ -283,7 +286,9 @@ function pairOnce(inp: DutchInput, hardClub: boolean): { round: DutchRound; rela
         const left = bracket.filter((id) => !used.has(id));
         const q = quality(cur, left);
         if (!best || better(q, best.q)) best = { pairs: cur.slice(), left, q };
-        return q.every((v) => v === 0); // perfect: stop
+        // perfect: stop — every count 0 and the floaters are the bracket's lowest scores (N-R7-S109)
+        const low = bracket.map(pts).sort((x, y) => x - y).slice(0, left.length).sort((x, y) => y - x);
+        return q.every((v, i) => (i >= 1 && i <= left.length ? v === low[i - 1] : v === 0));
       }
       const a = bracket.find((id) => !used.has(id) && !floated.has(id));
       if (!a) return false;

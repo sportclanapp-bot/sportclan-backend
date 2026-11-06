@@ -80,7 +80,8 @@ export async function getSwiss(req: Request, res: Response) {
   const base = { rounds: sw.rounds, paired: sw.paired ?? 0, check: sw.check === true, late_entry: sw.lateEntry ?? 'zero', colours: ctx.colours, can_manage: can };
   if (!can) return res.json(base);
   // A late entrant's missed rounds count as they will once the round is published (the pairing counts them already).
-  const pts = computeStats(ctx.ids, [...ctx.ms, ...swissLateRounds(ctx, sw.draft?.round ?? (sw.paired ?? 0) + 1).virtual] as never[], undefined, ctx.pts);
+  // N-R7-126: over scoreIds (Audit #58), so a win over a player who has since withdrawn still counts on the desk.
+  const pts = computeStats(ctx.scoreIds, [...ctx.ms, ...swissLateRounds(ctx, sw.draft?.round ?? (sw.paired ?? 0) + 1).virtual] as never[], undefined, ctx.pts);
   const requests = Object.entries(sw.requests ?? {}).flatMap(([team, byRound]) => Object.entries(byRound).map(([round, kind]) => ({ team_id: team, name: ctx.nameOf.get(team) ?? 'Player', round: Number(round), kind })))
     .sort((x, y) => x.round - y.round || x.name.localeCompare(y.name));
   const draft = sw.draft ? {

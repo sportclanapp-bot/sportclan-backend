@@ -15,7 +15,11 @@ import { tieNeed } from './tieCore';
 import { bestOfFor, lengthKey, winsNeeded } from './matchLength';
 
 export function walkoverScoreFor(sport: string | null | undefined, rules: MatchRules, tournamentSettings?: unknown): number | null {
-  const w = tournamentSettings && typeof tournamentSettings === 'object' ? (tournamentSettings as { walkoverScore?: unknown }).walkoverScore : undefined;
+  const set = tournamentSettings && typeof tournamentSettings === 'object' ? (tournamentSettings as { walkoverScore?: unknown }).walkoverScore : undefined;
+  // N-R7-143 (OBS-C2-1): a chess tournament without the setting (made through the API, or older)
+  // takes the sport's default, a straight win (1–0, as the create form fills in): a chess
+  // forfeit is always 1–0; it went down with no score ('– – –').
+  const w = set == null && lengthKey(sport) === 'chess' ? 'straight' : set;
   if (typeof w === 'number' && w > 0) return w;
   if (w === 'straight') {
     // N-SPP1-TTN-1: a team tie (or a best-of series) is scored in matches — its walkover is the

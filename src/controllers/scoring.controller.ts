@@ -2041,6 +2041,9 @@ export async function recomputeSummary(
     } else if (slug === 'cricket') { delete summary.tie; delete summary.rubbers; delete summary.rubber; delete summary.series_first; }
   }
   if (slug === 'chess' && !tieSummary) { // Stage 12 · CH5: a team match's summary is its tie's
+    // N-R7-132 (SP-CHS-S01): lost on time — the loser's clock ran out (0:00), not its last stored time.
+    if (chessReason === 'timeout' && chessWinner === 'A') chessClockBlack = 0;
+    if (chessReason === 'timeout' && chessWinner === 'B') chessClockWhite = 0;
     summary.result = chessResult ?? 'No result yet';
     summary.winner_side = chessWinner;
     // Real move/clock rollup (no eval, no SAN — those need an engine / heavy

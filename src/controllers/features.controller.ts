@@ -190,6 +190,10 @@ export async function getTournamentStandings(req: Request, res: Response) {
       orderIndex.clear();
       ladder.forEach((e: any, i: number) => { orderIndex.set(e.team_id, i); const r = table.get(e.team_id); if (r) (r as any).position = i + 1; });
       for (const r of rows) if (!orderIndex.has(r.teamId)) orderIndex.set(r.teamId, ladder.length + 1);
+      // N-R7-S111: no tie-break orders a ladder, so nobody on it is 'level on every
+      // tie-break' and no draw of lots applies (its tab asked for one, OBS-C6-1).
+      level.length = 0;
+      byLot.length = 0;
     }
     const standings = rows.sort(
       (a, b) => (orderIndex.get(a.teamId) ?? 0) - (orderIndex.get(b.teamId) ?? 0),

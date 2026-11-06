@@ -66,7 +66,7 @@ export type SportTerms = {
 };
 
 /** The words above that differ by sport (the rest default as for most sports). */
-type More = Partial<Pick<SportTerms, 'start' | 'shootout' | 'level' | 'draws' | 'credited' | 'end' | 'deskRoles'>> & { icon: string };
+type More = Partial<Pick<SportTerms, 'start' | 'shootout' | 'level' | 'draws' | 'credited' | 'end' | 'deskRoles' | 'assistant'>> & { icon: string };
 
 const key = (s: string | null | undefined): string => String(s ?? '').toLowerCase().replace(/[-_\s]/g, '');
 
@@ -108,7 +108,7 @@ const TERMS: Record<string, SportTerms> = {
     'e.g. Community Hall', 'e.g. Thane TT Championship 2026', 'e.g. Table 1, Table 2'),
   pickleball: t({ icon: '🥒' }, 'Court', 'Referee', [{ key: 'line_judge', label: 'Line judge' }],
     'e.g. City Indoor Stadium', 'e.g. Bengaluru Pickleball Open 2026', 'e.g. Court 1, Court 2', 'Head referee', 'Deputy head referee'),
-  chess: t({ icon: '♟️', level: 'Draw', draws: true, credited: null, end: 'Game over', deskRoles: { pairings: 'Pairings arbiter', sector: 'Sector arbiter', fair_play: 'Anti-cheating arbiter' } }, // Stage 12 · CH11 (FIDE)
+  chess: t({ icon: '♟️', level: 'Draw', draws: true, credited: null, end: 'Game over', assistant: 'Deputy arbiter' /* N-R7-154: as the fixture's Arbiter & scorer sheet */, deskRoles: { pairings: 'Pairings arbiter', sector: 'Sector arbiter', fair_play: 'Anti-cheating arbiter' } }, // Stage 12 · CH11 (FIDE)
     'Board', 'Arbiter', [{ key: 'deputy_arbiter', label: 'Deputy arbiter' }],
     'e.g. Community Hall', 'e.g. Thane Rapid Open 2026', 'e.g. Board 1, Board 2', 'Chief arbiter', 'Deputy chief arbiter'),
   carrom: t({ icon: '⚪' }, 'Board', 'Umpire', [],

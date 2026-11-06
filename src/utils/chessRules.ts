@@ -73,6 +73,24 @@ export function chessTiebreakText(winnerName: string, method: ChessTiebreakMetho
 }
 
 /**
+ * N-R7-150 (SP-CHS-F04): which knockout game a drawn game is — the third-place game, the final (no
+ * next match, as the server's koStage), or one whose winner goes through. The row must carry
+ * next_match_id to be called the final.
+ */
+export function chessKoStage(m: { third_place?: boolean | null; next_match_id?: string | null } | null | undefined): 'final' | 'third_place' | null {
+  if (!m) return null;
+  if (m.third_place) return 'third_place';
+  return 'next_match_id' in m && !m.next_match_id ? 'final' : null;
+}
+
+/** N-R7-150: the pad's decider sheets say what the game decides ('Who takes third place?', not 'Who goes through?'). */
+export function chessDeciderWords(stage: 'final' | 'third_place' | null): { title: string; message: string; through: string } {
+  const through = stage === 'final' ? 'wins the final' : stage === 'third_place' ? 'takes third place' : 'goes through';
+  const who = stage === 'final' ? 'Who wins the final?' : stage === 'third_place' ? 'Who takes third place?' : 'Who goes through?';
+  return { title: who, message: `The game stays a draw; this decides who ${through}.`, through };
+}
+
+/**
  * Stage 12 · CH8 · FIDE Laws 7.5.5, 9.5.3 and Appendix A.3 / B: the time an
  * arbiter gives the opponent for an illegal move or a wrong draw claim — 2
  * minutes in a standard game, 1 in rapid and blitz. A second illegal move by

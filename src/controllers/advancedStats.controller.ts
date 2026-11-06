@@ -115,7 +115,7 @@ export async function getAdvancedStats(req: Request, res: Response) {
     // the gateway refuses, and the read came back empty: no splits, no head-to-head.
     const matches = await selectAllIn<any>(idFilter, (c, f, to) => supabase
       .from('matches')
-      .select('id, team_a_id, team_b_id, team_a_name, team_b_name, winner_team_id, scheduled_at, format, city_id')
+      .select('id, team_a_id, team_b_id, team_a_name, team_b_name, winner_team_id, winner_side:score_summary->>winner_side, result_type, scheduled_at, format, city_id')
       .in('id', c)
       .is('voided_at', null) // SC-424
       .order('id').range(f, to)).catch(() => [] as any[]);
@@ -129,7 +129,10 @@ export async function getAdvancedStats(req: Request, res: Response) {
     for (const p of myParts ?? []) if (p.match_id) mySideByMatch.set(p.match_id as string, p.team_side as 'A' | 'B');
 
     // Result per match: use the actual winner for team matches (accurate for
-    // draws too); fall back to the rating delta sign for 1v1 / casual.
+    // draws too). N-R7-124: a teamless match (singles, casual) reads its stored
+    // result next, the same signals insights and the profile use: winner_side
+    // (W/L by my side) and result_type 'draw' (D). A draw between unequal ratings
+    // still moves both ratings, so the delta sign is only the last resort.
     const deltaByMatch = new Map<string, number>();
     history.forEach((h) => { if (h.match_id) deltaByMatch.set(h.match_id as string, Number(h.delta)); });
     function matchResult(mid: string): Result {
@@ -139,6 +142,10 @@ export async function getAdvancedStats(req: Request, res: Response) {
         const myTeam = mySide === 'A' ? m.team_a_id : m.team_b_id;
         if (m.winner_team_id) return m.winner_team_id === myTeam ? 'W' : 'L';
         return 'D';
+      }
+      if (m && mySide) {
+        if (m.winner_side === 'A' || m.winner_side === 'B') return m.winner_side === mySide ? 'W' : 'L';
+        if (m.result_type === 'draw') return 'D';
       }
       return resultFromDelta(deltaByMatch.get(mid) ?? 0);
     }

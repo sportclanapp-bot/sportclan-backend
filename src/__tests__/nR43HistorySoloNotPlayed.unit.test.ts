@@ -22,7 +22,8 @@ describe('the server fallback', () => {
     ];
     const sides = new Map([['r', 'A'], ['two', 'A'], ['solo', 'A']]);
     const h = buildHistory(rows, sides, 0, 10, new Map([['r', 1], ['two', 2], ['solo', 1]]));
-    expect(h.played_count).toBe(2);
+    expect(h.counted_count).toBe(2); // N-R7-162: the record's number moved to counted_count
+    expect(h.played_count).toBe(3); // N-R7-162: Played is every finished game listed
     expect(h.matches.map((x: any) => x.id)).toEqual(['solo', 'two', 'r']);
   });
 });
@@ -34,7 +35,8 @@ describe('a match that says whose record it counted (attributed_user_ids, since 
       { id: 'not', status: 'completed', completed_at: '2026-10-03', is_ranked: false, team_a_name: 'Reds', team_b_name: 'Blues', score_summary: { attributed_user_ids: [] } },
     ];
     const h = buildHistory(rows, new Map([['agreed', 'A'], ['not', 'A']]), 0, 10, new Map([['agreed', 2], ['not', 2]]), 'me');
-    expect(h.played_count).toBe(1);
+    expect(h.counted_count).toBe(1); // N-R7-162: the record's number moved to counted_count
+    expect(h.played_count).toBe(2);
   });
 });
 

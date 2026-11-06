@@ -685,7 +685,7 @@ export function buildHistory(
   players?: Map<string, number>,
   /** N-R4-3: whose history this is — a result that names whose record it counted decides for them. */
   userId?: string,
-): { matches: any[]; played_count: number; officiated_count: number; has_more: boolean } {
+): { matches: any[]; played_count: number; counted_count: number; officiated_count: number; has_more: boolean } {
   const at = (m: any) => Date.parse(m.completed_at ?? m.updated_at ?? m.scheduled_at ?? '') || 0;
   const sorted = [...rows].sort((x, y) => at(y) - at(x));
   for (const m of sorted) {
@@ -700,13 +700,16 @@ export function buildHistory(
   // N-R4-3 (launch test plan): Played is what the Profile counted. A result since Audit #56 says
   // whose record it changed (attributed_user_ids — only players who agreed, no walkover, …);
   // an older one goes by the Profile's rule (SC-283): ranked, or two or more real players.
+  // N-R7-162 (OBS-A5-1): Played is every finished game the list shows as played ('Played 2' sat over
+  // 109 listed games); counted_count is the record's number (N-R4-3, what the Profile counts).
   const counted = (m: any) => countsForUser(m, userId, players?.get(m.id) ?? 0);
-  const played = players
+  const onRecord = players
     ? sorted.filter((m) => m.my_role === 'played' && counted(m)).length
     : counts('played');
   return {
     matches: sorted.slice(offset, offset + limit),
-    played_count: played,
+    played_count: counts('played'),
+    counted_count: onRecord,
     officiated_count: counts('officiated'),
     has_more: offset + limit < sorted.length,
   };
@@ -721,7 +724,7 @@ export async function matchHistory(req: Request, res: Response) {
     if (!/^[0-9a-f-]{36}$/i.test(target)) return res.status(400).json({ error: 'user_id must be a user id' });
     // A block hides a person's history from the other, in both directions.
     if (target !== viewer && (await isBlockedBetween(viewer, target))) {
-      return res.json({ matches: [], played_count: 0, officiated_count: 0, has_more: false });
+      return res.json({ matches: [], played_count: 0, counted_count: 0, officiated_count: 0, has_more: false });
     }
     const limit = Math.min(Math.max(Number((req.query as any).limit ?? 50) || 50, 1), 100);
     const offset = Math.max(Number((req.query as any).offset ?? 0) || 0, 0);
@@ -733,7 +736,7 @@ export async function matchHistory(req: Request, res: Response) {
     // the person ever played (6,161 for QA B, ~75 round trips: 31 s on live).
     const fast = await supabase.rpc('match_history_page', { p_user: target, p_offset: offset, p_limit: limit, p_q: q0 ? escapeLike(q0) : null, p_hide_voided: hideVoided });
     if (!fast.error && Array.isArray((fast.data as { page?: unknown } | null)?.page)) {
-      const h = fast.data as { played_count: number; officiated_count: number; voided_count: number; total: number; page: Array<{ id: string; side: string | null; role: 'played' | 'officiated' }> };
+      const h = fast.data as { played_count: number; counted_count?: number; officiated_count: number; voided_count: number; total: number; page: Array<{ id: string; side: string | null; role: 'played' | 'officiated' }> };
       const page = h.page ?? [];
       const { data: rowsP, error: errP } = page.length
         ? await supabase.from('matches').select('*').in('id', page.map((p) => p.id))
@@ -742,7 +745,7 @@ export async function matchHistory(req: Request, res: Response) {
       const byId = new Map(((rowsP ?? []) as any[]).map((m) => [m.id as string, m]));
       const matches = page.map((p) => byId.get(p.id) ? { ...byId.get(p.id), my_role: p.role, my_side: p.side ?? null } : null).filter(Boolean) as any[];
       await attachTeamNames(matches);
-      return res.json({ matches, played_count: Number(h.played_count) || 0, officiated_count: Number(h.officiated_count) || 0, voided_count: Number(h.voided_count) || 0, total: Number(h.total) || 0, has_more: offset + limit < (Number(h.total) || 0) });
+      return res.json({ matches, played_count: Number(h.played_count) || 0, counted_count: Number(h.counted_count ?? h.played_count) || 0, officiated_count: Number(h.officiated_count) || 0, voided_count: Number(h.voided_count) || 0, total: Number(h.total) || 0, has_more: offset + limit < (Number(h.total) || 0) });
     }
 
     // Before migration 150 is on the database: the old way (slow for a big history).
@@ -758,7 +761,7 @@ export async function matchHistory(req: Request, res: Response) {
     for (const p of parts) sideOf.set(p.match_id as string, p.team_side as string);
     const officiated = new Set(umps.map((m) => m.id as string));
     const ids = Array.from(new Set([...sideOf.keys(), ...officiated]));
-    if (ids.length === 0) return res.json({ matches: [], played_count: 0, officiated_count: 0, has_more: false });
+    if (ids.length === 0) return res.json({ matches: [], played_count: 0, counted_count: 0, officiated_count: 0, has_more: false });
 
     const rows: any[] = [];
     for (let i = 0; i < ids.length; i += 200) {
@@ -782,7 +785,7 @@ export async function matchHistory(req: Request, res: Response) {
     const shown = String((req.query as any).voided ?? '') === 'hide' ? named.filter((m) => !m.voided_at) : named;
     const out = buildHistory(shown, sideOf, offset, limit);
     await attachTeamNames(out.matches);
-    return res.json({ ...out, played_count: all.played_count, officiated_count: all.officiated_count, voided_count: voidedCount, total: shown.length });
+    return res.json({ ...out, played_count: all.played_count, counted_count: all.counted_count, officiated_count: all.officiated_count, voided_count: voidedCount, total: shown.length });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

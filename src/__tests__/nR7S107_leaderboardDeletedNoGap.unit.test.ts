@@ -13,7 +13,7 @@ const CR = id(900); const VIEWER = id(60);
 let db = fakeDb({});
 jest.mock('../utils/supabase', () => ({ get supabase() { return db.client; } }));
 jest.mock('../utils/sportCache', () => ({ getSport: jest.fn(async () => ({ slug: 'carrom' })) }));
-jest.mock('../utils/blocks', () => ({ ...jest.requireActual('../utils/blocks'), targetUserHidden: jest.fn(async () => false) }), { virtual: true });
+jest.mock('../utils/blocks', () => ({ ...jest.requireActual('../utils/blocks'), targetUserHidden: jest.fn(async () => false) }));
 
 const prof = (n: number, rating: number, deleted = false) => ({ user_id: id(n), sport_id: CR, rating, matches_played: 3, wins: 2, losses: 1, draws: 0, gender_category: null, tu: { is_test_seed: false, deleted_at: deleted ? '2026-10-01T00:00:00Z' : null } });
 const user = (n: number, deleted = false) => ({ id: id(n), name: `P${n}`, username: `p${n}`, city_id: null, is_test_seed: false, deleted_at: deleted ? '2026-10-01T00:00:00Z' : null });

@@ -3603,8 +3603,11 @@ export async function swissContext(tournamentId: string) {
   const clubOfTeam = new Map(entries.map((e) => [e.team_id, e.club?.trim() || null]));
   const ms = ((await allRows(() => supabase
     // Stage 13 · CR9: the Swiss rounds only (not the knockout after them).
-    .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, scheduled_at, overs, round')
-    .eq('tournament_id', tournamentId).is('voided_at', null).is('bracket', null))) ?? []) as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; score_summary: any; scheduled_at: string | null; round: number | null }>;
+    .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, scheduled_at, overs, round, match_no')
+    .eq('tournament_id', tournamentId).is('voided_at', null).is('bracket', null))) ?? []) as Array<{ id: string; team_a_id: string | null; team_b_id: string | null; winner_team_id: string | null; status: string; score_summary: any; scheduled_at: string | null; round: number | null; match_no?: number | null }>;
+  // N-R7-125: allRows pages by id, so put the games back in board order (round, then match_no):
+  // the desk's current boards are read straight off this list.
+  ms.sort((a, b) => (Number(a.round ?? 0) - Number(b.round ?? 0)) || (Number(a.match_no ?? Number.MAX_SAFE_INTEGER) - Number(b.match_no ?? Number.MAX_SAFE_INTEGER)));
   const pts = await tournamentPoints(t as any);
   const slug = normSportSlug((await getSport(t.sport_id as string))?.slug);
   // Audit #58: scores and pairing history count a withdrawn player's games too

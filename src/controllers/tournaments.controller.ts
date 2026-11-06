@@ -2461,6 +2461,14 @@ export function decidedBy(m: { result_type?: string | null; score_summary?: any 
   return null;
 }
 /** N-R7-75: the bracket card's 'how it ended' — decided_by (walkover / default / awarded) or retired. */
+/** N-R7-147 (SP-CHS-F02): a bye row says which bye it is — the pairing's (a win), a half-point,
+ *  zero-point or full-point bye asked for, or absent — so the Rounds list can show what it scored. */
+export function fixtureBye(m: { team_b_id?: string | null; score_summary?: any }): { bye?: 'pairing' | 'half' | 'zero' | 'full'; absent?: true } {
+  const ss = m.score_summary ?? {};
+  if (ss.bye !== true || m.team_b_id) return {};
+  const kind = ss.bye_kind === 'half' || ss.bye_kind === 'zero' || ss.bye_kind === 'full' ? ss.bye_kind : 'pairing';
+  return { bye: kind, ...(ss.absent === true ? { absent: true as const } : {}) };
+}
 export function decidedFields(m: { result_type?: string | null; score_summary?: any }): { decided_by?: 'walkover' | 'default' | 'awarded'; retired?: true } {
   const d = decidedBy(m);
   if (d) return { decided_by: d };
@@ -2601,6 +2609,8 @@ export async function getBracket(req: Request, res: Response) {
           ...fixtureFinish(slug, m as any), // N-R7-S64: '(5–4 pens)', 'After extra time'
           ...(de ? { next_match_id: (m as any).next_match_id ?? null } : {}), // Stage 11 · PB4: the back draw's lines follow the links
           ...((fmtLc === 'box' || fmtLc === 'groups_knockout') && m.group_label ? { group_label: m.group_label } : {}), // Stage 9 · T16: the match's box · N-R7-54: a groups stage's group
+          // N-R7-147 (SP-CHS-F02): a bye row says which bye it is — the pairing's (a win), a half-point or zero-point bye asked for, absent — so the Rounds list can show what it scored.
+          ...fixtureBye(m as any),
         };
       }),
     }));

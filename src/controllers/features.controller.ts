@@ -178,6 +178,8 @@ export async function getTournamentStandings(req: Request, res: Response) {
       const playedOut = !pendingGroups.has(g) && !(tournament.format !== 'groups_knockout' && pendingGroups.size > 0);
       for (const cl of detail.level) if (playedOut && cl.every((tid) => (stats.get(tid)?.played ?? 0) > 0) && cl.some((id) => !withdrawnIds.has(id))) level.push({ group: g === 'default' ? null : g, team_ids: cl.filter((id) => !withdrawnIds.has(id)) });
       for (const cl of detail.byLot) byLot.push({ group: g === 'default' ? null : g, team_ids: cl });
+      // N-R7-147: a chess table's tie-break values, in the order's steps.
+      for (const r of groupRows) { const tb = detail.tiebreaks.get(r.teamId); if (tb) (r as any).tiebreaks = tb; }
       for (const id of ranked.filter((i) => !withdrawnIds.has(i))) orderIndex.set(id, running++);
       for (const id of ranked.filter((i) => withdrawnIds.has(i))) orderIndex.set(id, running++);
     }

@@ -598,7 +598,7 @@ export function rankTeams(
  */
 export function rankTeamsDetailed(
   teamIds: string[], matches: GMatch[], tiebreakerRules?: any[], pts: PointsModel = DEFAULT_POINTS, extra: RankExtra = {},
-): { order: string[]; level: string[][]; byLot: string[][] } {
+): { order: string[]; level: string[][]; byLot: string[][]; tiebreaks: Map<string, Array<{ key: string; value: number }>> } {
   const levelClusters: string[][] = [];
   const lotClusters: string[][] = [];
   const lotIndex = new Map((extra.lots ?? []).map((id, i) => [id, i]));
@@ -732,7 +732,16 @@ export function rankTeamsDetailed(
   levelClusters.sort((a, b) => (pos.get(a[0]!) ?? 0) - (pos.get(b[0]!) ?? 0));
   for (const cl of levelClusters) cl.sort((a, b) => (pos.get(a) ?? 0) - (pos.get(b) ?? 0));
   lotClusters.sort((a, b) => (pos.get(a[0]!) ?? 0) - (pos.get(b[0]!) ?? 0));
-  return { order: ordered, level: levelClusters, byLot: lotClusters };
+  // N-R7-147 (SP-CHS-F02): each entry's value on every chess tie-break of the order
+  // (Buchholz Cut-1, Buchholz, Sonneborn-Berger…), worked out over the whole field as
+  // the ranking reads them, so the table can show why a player is above another.
+  const tiebreaks = new Map<string, Array<{ key: string; value: number }>>();
+  const chessSteps = order.filter(isChessCriterion);
+  if (chessSteps.length) {
+    const maps = chessSteps.map((c) => [c, keyMapFor(c, teamIds)] as const);
+    for (const id of teamIds) tiebreaks.set(id, maps.map(([c, m]) => ({ key: c, value: Math.round((m.get(id) ?? 0) * 100) / 100 })));
+  }
+  return { order: ordered, level: levelClusters, byLot: lotClusters, tiebreaks };
 }
 
 // ── BUILD 4.5 · best next-placed teams across groups ─────────────────────────

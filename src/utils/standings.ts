@@ -830,7 +830,8 @@ export function bestPlacedAcrossGroups(
     return (lotIndex.get(x) ?? Infinity) - (lotIndex.get(y) ?? Infinity) || (x < y ? -1 : x > y ? 1 : 0);
   });
   if (why) {
-    why.skipped = sorted.length ? order.filter((c) => value(sorted[0], c) == null) : [];
+    const top = sorted[0];
+    why.skipped = top ? order.filter((c) => value(top, c) == null) : [];
     const a = sorted[count - 1]; const b = sorted[count];
     why.cut = a && b ? {
       in: a, out: b,

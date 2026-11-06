@@ -1699,11 +1699,12 @@ export async function getSportProfile(req: Request, res: Response) {
   const rankBase = (cols: string) => {
     let qb: any = supabase
       .from('user_sport_profiles')
-      .select(hideTestRank ? `${cols}, tu:users!user_id!inner(is_test_seed)` : cols, { count: 'exact', head: true })
+      .select(`${cols}, tu:users!user_id!inner(is_test_seed, deleted_at)`, { count: 'exact', head: true }) // N-R7-S107: the user always joined
       .eq('sport_id', sportId)
       .gte('matches_played', 1)
       .gt('rating', rate);
     if (hideTestRank) qb = qb.eq('tu.is_test_seed', false);
+    qb = qb.is('tu.deleted_at', null); // N-R7-S107: a deleted account is not ranked above you (as the ranking)
     return qb;
   };
   // SC-329: ranks and sport-specific stats are INDEPENDENT → compute them

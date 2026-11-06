@@ -100,7 +100,10 @@ export async function getLeaderboard(req: Request, res: Response) {
     // exist'. Their row is left out of the page — everyone else keeps their real
     // rank (as a deleted account's row is dropped, SC-78), as search does (SC-82).
     const blocked = await blockedUserIds(userId);
-    const TU = hideTest ? ', tu:users!user_id!inner(is_test_seed)' : '';
+    // N-R7-S107: the user is always joined, so a soft-deleted account leaves the ALL-TIME
+    // ranking in the query (as the monthly one drops it before numbering): no gap in the ranks,
+    // a full page, and a total that counts only the players shown.
+    const TU = ', tu:users!user_id!inner(is_test_seed, deleted_at)';
     // A plain `string` (not a literal) so the typed select parser doesn't try to read TU.
     const withTU = (cols: string): string => cols + TU;
     if (scope === 'city') {
@@ -192,6 +195,7 @@ export async function getLeaderboard(req: Request, res: Response) {
     const scoped = <T>(q: T): T => {
       let qb: any = (q as any).eq('sport_id', sportId).gt('matches_played', 0);
       if (hideTest) qb = qb.eq('tu.is_test_seed', false); // B03: needs TU in the select
+      qb = qb.is('tu.deleted_at', null); // N-R7-S107: deleted accounts are not ranked (needs TU)
       if (genderCategory) qb = qb.eq('gender_category', genderCategory);
       if (cityUserIds) qb = qb.in('user_id', cityUserIds);
       return qb as T;
@@ -233,7 +237,7 @@ export async function getLeaderboard(req: Request, res: Response) {
       ).gt('rating', rating)).then(({ count }) => count);
     const [aboveFirst, delAllTime, userMap, myAbove] = await Promise.all([
       pageRows.length > 0 ? countAbove(pageRows[0].rating) : Promise.resolve(null),
-      // SC-78: drop soft-deleted accounts from the page (rank positions preserved).
+      // SC-78 (belt and braces since N-R7-S107 filters them in the query): never show a deleted account.
       deletedIdSet(ids),
       fetchUserMap(ids),
       // Requester's own rank — competition rank by rating (count of stronger

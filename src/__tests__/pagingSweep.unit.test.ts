@@ -140,11 +140,12 @@ test('match history: every match counts (1500), searched and voided on the serve
 });
 
 test('the results list: `q` and voided=hide go to the database; voided_count is counted there', async () => {
-  mockDb = (q) => (q[0] === 'from:teams' ? { rows: [{ id: uid(1) }] } : { rows: Array.from({ length: 30 }, (_, i) => ({ id: uid(i) })) });
+  // N-R7-S110: a registered team's name reaches the list through the ids of its matches whose stored side name differs
+  mockDb = (q) => (has(q, 'ilike:["nt.name"') ? { rows: [{ id: uid(1) }] } : { rows: Array.from({ length: 30 }, (_, i) => ({ id: uid(i) })) });
   const r = await call(listMatches, { query: { status: 'completed', q: 'lions', voided: 'hide' } });
-  const list = mockLog.find((x) => x[0] === 'from:matches' && has(x, 'range:'))!;
+  const list = mockLog.find((x) => x[0] === 'from:matches' && has(x, 'range:') && !has(x, 'ilike:["nt.name"'))!;
   expect(arg(list, 'or')[0]).toContain('team_a_name.ilike."%lions%"');
-  expect(arg(list, 'or')[0]).toContain(`team_a_id.in.(${uid(1)})`);
+  expect(arg(list, 'or')[0]).toContain(`id.in.(${uid(1)})`);
   expect(has(list, 'is:["voided_at",null]')).toBe(true);
   const voided = mockLog.find((x) => x[0] === 'from:matches' && has(x, 'not:["voided_at","is",null]'))!;
   expect(arg(voided, 'select')[1]).toEqual({ count: 'exact', head: true });

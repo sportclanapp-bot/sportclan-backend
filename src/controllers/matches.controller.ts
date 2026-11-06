@@ -1447,10 +1447,25 @@ export async function listMatches(req: Request, res: Response) {
     // stored side name, or a registered team's name — and `voided=hide` /
     // voided_count replace the page-local filter and count.
     const q = typeof (req.query as Record<string, unknown>).q === 'string' ? String((req.query as Record<string, unknown>).q).trim().slice(0, 60) : '';
-    let namedTeamIds: string[] = [];
+    // A registered team's name can differ from the side name stored on its
+    // matches (renamed since, or never stored). Those matches are found through
+    // the team join itself, so the address carries only their own match ids.
+    // N-R7-S110: it carried every matching team's id, twice (up to 2 × 200) —
+    // 228 teams named 'FMT Chess' made the read fail with a 500.
+    let renamedIds: string[] = [];
     if (q) {
-      const { data: named } = await supabase.from('teams').select('id').ilike('name', `%${escapeLike(q)}%`).limit(200);
-      namedTeamIds = ((named ?? []) as Array<{ id: string }>).map((t) => t.id);
+      const like = `%${escapeLike(q)}%`;
+      const side = (idCol: 'team_a_id' | 'team_b_id', nameCol: 'team_a_name' | 'team_b_name') =>
+        selectAll<{ id: string }>((from, to) => {
+          let x: any = supabase.from('matches').select(`id, nt:teams!${idCol}!inner(name)`).ilike('nt.name', like)
+            .or(`${nameCol}.is.null,${orIlikeContains([nameCol], q).replace('.ilike.', '.not.ilike.')}`);
+          if (resolvedSportId) x = x.eq('sport_id', resolvedSportId);
+          if (status) x = x.eq('status', status);
+          if (tournament_id) x = x.eq('tournament_id', tournament_id);
+          return x.order('id').range(from, to);
+        });
+      const [a, b] = await Promise.all([side('team_a_id', 'team_a_name'), side('team_b_id', 'team_b_name')]);
+      renamedIds = [...new Set([...a, ...b].map((m) => m.id))];
     }
     const hideTestRows = !mine && !team_id && !tournament_id && (await hideTestFor(userId));
     const activeIds = await activeSportIds();
@@ -1464,7 +1479,7 @@ export async function listMatches(req: Request, res: Response) {
       if (mine === '1') x = x.eq('created_by', userId);
       if (q) {
         const byName = orIlikeContains(['team_a_name', 'team_b_name'], q);
-        x = x.or(namedTeamIds.length ? `${byName},team_a_id.in.(${namedTeamIds.join(',')}),team_b_id.in.(${namedTeamIds.join(',')})` : byName);
+        x = x.or(renamedIds.length ? `${byName},id.in.(${renamedIds.join(',')})` : byName);
       }
       if (activeIds) x = x.in('sport_id', activeIds);
       if (hideTestRows) x = excludeTest(x);

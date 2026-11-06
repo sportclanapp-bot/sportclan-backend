@@ -3178,6 +3178,11 @@ const SLOW_AFTER_MS = 5000;
 /** F191: set only by the server's own stale-match sweep (never from a request) — it ends a decided match. */
 export const SYSTEM_COMPLETION = Symbol('systemCompletion');
 
+/** N-R7-S108: the tie's summary once the rubber-retire note is in (the only second build, and only on this rare path; completeMatch's fast path builds it once). */
+async function tieSummaryAfterRetire(id: string) {
+  return (await recomputeSummary(id, { persist: true })) as { tie?: { decided?: unknown } } | null;
+}
+
 export async function completeMatch(req: Request, res: Response) {
   const userId = req.userId;
   const system = (req as unknown as Record<symbol, unknown>)[SYSTEM_COMPLETION] === true;
@@ -3268,12 +3273,12 @@ export async function completeMatch(req: Request, res: Response) {
     // play — that rubber goes to the other side and the tie goes on (ICF). Recorded as a 'retire' note
     // in the rubber; only if that gives the other side the tie does the tie end, as a normal win.
     if (retired && !system && match.status === 'live' && !match.voided_at && (match.rules as { tie?: unknown } | null)?.tie) {
-      const before = await recomputeSummary(id, { persist: false }).catch(() => null) as { tie?: { decided?: unknown } } | null;
+      const before = await canonicalP as { tie?: { decided?: unknown } } | null; // the summary already being built above
       const rSide: 'A' | 'B' | null = retiredSideIn ?? (retiredTeamId && retiredTeamId === match.team_a_id ? 'A' : retiredTeamId && retiredTeamId === match.team_b_id ? 'B' : null);
       if (before?.tie && !before.tie.decided && rSide) {
         const ev = await recordEventIdempotent({ matchId: id, createdBy: userId, eventType: 'note', payload: { kind: 'retire', team_side: rSide, ...(walkover_reason ? { reason: String(walkover_reason).slice(0, 80) } : {}) } });
         if (ev.error) return res.status(500).json({ error: 'Internal server error' });
-        const after = await recomputeSummary(id, { persist: true }) as { tie?: { decided?: unknown } } | null;
+        const after = await tieSummaryAfterRetire(id);
         const d = after?.tie?.decided;
         if (d === 'A' || d === 'B') {
           req.body = { winner_side: d, ...((d === 'A' ? match.team_a_id : match.team_b_id) ? { winner_team_id: d === 'A' ? match.team_a_id : match.team_b_id } : {}) };

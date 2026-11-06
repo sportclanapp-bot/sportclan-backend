@@ -196,6 +196,8 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   // Stage 11 · PB6: what a technical foul or a game forfeit did to the score.
   if (eventType === 'note' && p.kind === 'point_off') return `➖ A point off ${team}`;
   if (eventType === 'note' && p.kind === 'game_forfeit') return `🏳️ Game forfeited by ${team}`;
+  // N-R7-S108: a player retired inside a team tie — the rubber in play goes to the other side.
+  if (eventType === 'note' && p.kind === 'retire') return `🏳️ ${team}'s player retired${p.reason ? ` (${String(p.reason)})` : ''} — this match goes to the other side`;
   // Stage 10 · TT3: a paper-scored match typed in.
   if (eventType === 'note' && p.kind === 'typed_score') return `📝 Result entered from the score sheet${typeof p.text === 'string' && p.text.trim() ? `: ${p.text.trim()}` : ''}`;
   if (eventType === 'note' && p.kind === 'warmup') return '⏱ Warm-up';

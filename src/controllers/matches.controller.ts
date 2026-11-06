@@ -56,7 +56,7 @@ import { isTerminalMatchStatus, LIMITS, isCount, normaliseVenue, VENUE_TOO_LONG 
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner, recrownAfterVoidChange, tournamentSettingsOf } from './tournaments.controller';
 import { basketballEndRefusal } from '../utils/pointsGameEnd';
-import { recomputeSummary, writeCricketInningsStats, bestOfState, rollupTieSpec } from './scoring.controller';
+import { recomputeSummary, writeCricketInningsStats, bestOfState, rollupTieSpec, recordEventIdempotent } from './scoring.controller';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { awardBadgesSafe, revokeRecordBadgesSafe } from './badges.controller';
 import { isUuid } from '../utils/uuid';
@@ -3263,6 +3263,24 @@ export async function completeMatch(req: Request, res: Response) {
     // decision — a plain tournament scorer could give one through the API though the app keeps it from them.
     if (!system && walkoverIn === true && !retired && !defaulted && !!match.tournament_id && !(await canDefault(match, userId))) {
       return res.status(403).json({ error: 'Only the referee, the umpire or the organiser can give a walkover.', code: 'NOT_REFEREE_WALKOVER' });
+    }
+    // N-R7-S108 (Step 2, SPP1-CRM-056): in a team tie a retirement is the player's in the rubber in
+    // play — that rubber goes to the other side and the tie goes on (ICF). Recorded as a 'retire' note
+    // in the rubber; only if that gives the other side the tie does the tie end, as a normal win.
+    if (retired && !system && match.status === 'live' && !match.voided_at && (match.rules as { tie?: unknown } | null)?.tie) {
+      const before = await recomputeSummary(id, { persist: false }).catch(() => null) as { tie?: { decided?: unknown } } | null;
+      const rSide: 'A' | 'B' | null = retiredSideIn ?? (retiredTeamId && retiredTeamId === match.team_a_id ? 'A' : retiredTeamId && retiredTeamId === match.team_b_id ? 'B' : null);
+      if (before?.tie && !before.tie.decided && rSide) {
+        const ev = await recordEventIdempotent({ matchId: id, createdBy: userId, eventType: 'note', payload: { kind: 'retire', team_side: rSide, ...(walkover_reason ? { reason: String(walkover_reason).slice(0, 80) } : {}) } });
+        if (ev.error) return res.status(500).json({ error: 'Internal server error' });
+        const after = await recomputeSummary(id, { persist: true }) as { tie?: { decided?: unknown } } | null;
+        const d = after?.tie?.decided;
+        if (d === 'A' || d === 'B') {
+          req.body = { winner_side: d, ...((d === 'A' ? match.team_a_id : match.team_b_id) ? { winner_team_id: d === 'A' ? match.team_a_id : match.team_b_id } : {}) };
+          return completeMatch(req, res);
+        }
+        return res.json({ match: { ...match, score_summary: after }, rubber_retired: { side: rSide } });
+      }
     }
     // N1 (visual review): a match voided while live could still be completed,
     // and completion then moved the rating, wrote rating_history, paid the win

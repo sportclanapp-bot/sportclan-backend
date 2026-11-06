@@ -1235,7 +1235,7 @@ export function rollupSets(
 export function rollupTieSpec(
   slug: string, rules: MatchRules, spec: TieSpec,
   events: { event_type: string; payload: any }[], sideOf: (p: any) => 'A' | 'B',
-): { scoreA: number; scoreB: number; setsA: number[]; setsB: number[]; gamesA: number; gamesB: number; curA: number; curB: number; rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw'; key: string; label: string; unitsA: number; unitsB: number; pens?: { A: number; B: number } }>; tie: { win: string; rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: 'A' | 'B' | 'draw' | null; decider?: boolean }; finished: RubberResult[]; ends: number[]; setTiebreaks?: Array<{ A: number; B: number } | null> } {
+): { scoreA: number; scoreB: number; setsA: number[]; setsB: number[]; gamesA: number; gamesB: number; curA: number; curB: number; rubber: number; results: Array<{ A: number; B: number; winner: 'A' | 'B' | 'draw'; retired?: 'A' | 'B'; key: string; label: string; unitsA: number; unitsB: number; pens?: { A: number; B: number } }>; tie: { win: string; rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: 'A' | 'B' | 'draw' | null; decider?: boolean }; finished: RubberResult[]; ends: number[]; setTiebreaks?: Array<{ A: number; B: number } | null> } {
   let lastTbs: Array<{ A: number; B: number } | null> = []; const tbsByKey = new Map<string, Array<{ A: number; B: number } | null>>();
   const own = !!rules.tie;
   const single = { ...rules, tie: null, rubbers: null } as MatchRules;
@@ -1304,6 +1304,9 @@ export function rollupTieSpec(
   };
   const split = splitTie(events, spec, (evs, r) => {
     const x = read(evs, r);
+    // N-R7-S108: a player who retires hands the rubber in play to the other side; the tie goes on.
+    const ret = evs.find((e) => e.event_type === 'note' && e.payload?.kind === 'retire');
+    if (ret) { const rs = sideOf(ret.payload); return { winner: rs === 'A' ? 'B' : 'A', retired: rs, sets: x.sets, units: { A: unitsOf(x.sets.A), B: unitsOf(x.sets.B) }, games: { A: unitsFor(slug, x.sets.A, x.sets.B), B: unitsFor(slug, x.sets.B, x.sets.A) } }; }
     if (slug === 'tennis') tbsByKey.set(r.key, lastTbs); // the last read of a rubber is the one that ended it
     return { winner: x.winner, sets: x.sets, units: { A: unitsOf(x.sets.A), B: unitsOf(x.sets.B) }, games: { A: unitsFor(slug, x.sets.A, x.sets.B), B: unitsFor(slug, x.sets.B, x.sets.A) } }; // F165: games won beside the points
   });
@@ -1317,7 +1320,7 @@ export function rollupTieSpec(
     setsA: [...split.results.flatMap((r) => r.sets.A), ...(cur ? cur.sets.A : [])], setsB: [...split.results.flatMap((r) => r.sets.B), ...(cur ? cur.sets.B : [])],
     gamesA: cur?.games.A ?? 0, gamesB: cur?.games.B ?? 0, curA: cur?.points.A ?? 0, curB: cur?.points.B ?? 0,
     rubber: o.finished ? split.results.length : split.results.length + 1,
-    results: split.results.map((r) => ({ A: won(r.sets.A, r.sets.B), B: won(r.sets.B, r.sets.A), winner: r.winner, key: r.key, label: spec.rubbers.find((x) => x.key === r.key)?.label ?? r.key, unitsA: r.units.A, unitsB: r.units.B, ...(seriesPens.has(r.key) ? { pens: seriesPens.get(r.key)! } : {}) })),
+    results: split.results.map((r) => ({ A: won(r.sets.A, r.sets.B), B: won(r.sets.B, r.sets.A), winner: r.winner, ...(r.retired ? { retired: r.retired } : {}), key: r.key, label: spec.rubbers.find((x) => x.key === r.key)?.label ?? r.key, unitsA: r.units.A, unitsB: r.units.B, ...(seriesPens.has(r.key) ? { pens: seriesPens.get(r.key)! } : {}) })),
     tie: { win: spec.win, rubbersA: o.rubbersA, rubbersB: o.rubbersB, unitsA: o.unitsA, unitsB: o.unitsB, decided: o.decided, ...(o.decider ? { decider: true } : {}), // Stage 11 · PB3: won in the deciding match
       // Stage 12 follow-up: boards on their own clocks — how many are finished.
       ...(split.boards ? { boards: { done: split.results.length, of: spec.rubbers.length } } : {}) },

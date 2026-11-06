@@ -339,7 +339,7 @@ export function tieNeed(spec: TieSpec): number {
  * level), its sets (games / points per set), and the units it adds (tennis:
  * games; rally: points).
  */
-export type RubberResult = { key: string; winner: TieSide | 'draw'; sets: { A: number[]; B: number[] }; units: { A: number; B: number }; /** F165: games won (tennis: games); absent = units */ games?: { A: number; B: number } };
+export type RubberResult = { key: string; winner: TieSide | 'draw'; sets: { A: number[]; B: number[] }; units: { A: number; B: number }; /** F165: games won (tennis: games); absent = units */ games?: { A: number; B: number }; /** N-R7-S108: the side whose player retired */ retired?: TieSide };
 /** Stage 11 · PB3: `decider` — the tie went to its deciding match (the 3/2/1/0 table points read it). */
 export type TieOutcome = { rubbersA: number; rubbersB: number; unitsA: number; unitsB: number; decided: TieSide | 'draw' | null; finished: boolean; decider?: boolean;
   /** F165: games won (a rally sport's own count; the units where none is kept) — a 'games' tie's score. */
@@ -426,7 +426,7 @@ export function tieOutcome(spec: TieSpec, results: ReadonlyArray<RubberResult>):
 }
 
 /** One rubber's events read by the sport's engine: its winner (if decided; Stage 11 · PB9: 'draw' when it ended level), sets and units. */
-export type RubberRead = { winner: TieSide | 'draw' | null; sets: { A: number[]; B: number[] }; units: { A: number; B: number }; games?: { A: number; B: number } };
+export type RubberRead = { winner: TieSide | 'draw' | null; sets: { A: number[]; B: number[] }; units: { A: number; B: number }; games?: { A: number; B: number }; /** N-R7-S108: the side whose player retired (the rubber went to the other side) */ retired?: TieSide };
 
 /**
  * Split a match's events into the tie's rubbers. Every event belongs to the
@@ -456,7 +456,7 @@ export function splitTie<E extends { event_type: string }>(
       const rubber = spec.rubbers.find((r) => r.key === key)!;
       const r = rubberOf(evs.get(key)!, rubber);
       if (!r.winner) continue;
-      done.set(key, { key, winner: r.winner, sets: r.sets, units: r.units, ...(r.games ? { games: r.games } : {}) }); endAt.set(key, i);
+      done.set(key, { key, winner: r.winner, sets: r.sets, units: r.units, ...(r.games ? { games: r.games } : {}), ...(r.retired ? { retired: r.retired } : {}) }); endAt.set(key, i);
     }
     const order = spec.rubbers.filter((r) => done.has(r.key));
     const results = order.map((r) => done.get(r.key)!);
@@ -486,7 +486,7 @@ export function splitTie<E extends { event_type: string }>(
     const rubber = spec.rubbers[results.length]!;
     const r = rubberOf(cur, rubber);
     if (!r.winner) continue;
-    results.push({ key: rubber.key, winner: r.winner, sets: r.sets, units: r.units, ...(r.games ? { games: r.games } : {}) });
+    results.push({ key: rubber.key, winner: r.winner, sets: r.sets, units: r.units, ...(r.games ? { games: r.games } : {}), ...(r.retired ? { retired: r.retired } : {}) });
     ends.push(i);
     cur = [];
     outcome = tieOutcome(spec, results);

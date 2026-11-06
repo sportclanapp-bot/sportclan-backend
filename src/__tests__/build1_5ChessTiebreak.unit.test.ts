@@ -109,12 +109,12 @@ describe('a drawn knockout chess game', () => {
     const r = await call({ is_draw: true });
     expect([r.statusCode, r.body.code]).toEqual([400, 'BRACKET_NEEDS_WINNER']);
   });
-  test('with chess_tiebreak and the winner it completes: "Hikaru won on tie-break"', async () => {
+  test('with chess_tiebreak and the winner it completes: "Hikaru wins the final on tie-break"', async () => {
     setup();
     const r = await call({ winner_team_id: TB, winner_side: 'B', chess_tiebreak: true });
     expect(r.statusCode).toBe(200);
     const w = writes().map((q) => q.join()).join(' ');
-    expect(w).toContain('Hikaru won on tie-break');
+    expect(w).toContain('Hikaru wins the final on tie-break'); // N-R7-150: this game (no next match) is the final
     expect(w).toContain('"chess_tiebreak":{"winner_side":"B"}');
   });
   test('a decisive chess game can\'t claim a tie-break', async () => {

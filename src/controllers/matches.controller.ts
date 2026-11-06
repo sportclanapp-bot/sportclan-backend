@@ -4189,7 +4189,10 @@ export async function completeMatch(req: Request, res: Response) {
         // BUILD 3.69: how it was decided, and the line that says so.
         const method = tbMethod === 'armageddon' || tbMethod === 'organiser' ? tbMethod : null;
         ss.chess_tiebreak = { winner_side: derivedSide, ...(method ? { method } : {}), ...(method === 'armageddon' ? { armageddon: tbArmageddon } : {}) };
-        ss.result = chessTiebreakText(derivedSide === 'A' ? aName : bName, method, method === 'armageddon' ? (tbArmageddon as 'white' | 'black' | 'draw') : null);
+        // N-R7-150: the final and the third-place game say what was won, not 'goes through'.
+        const { data: koRow } = await supabase.from('matches').select('third_place, next_match_id').eq('id', match.id).maybeSingle();
+        const koStage = (koRow as { third_place?: boolean } | null)?.third_place ? 'third_place' as const : koRow && !(koRow as { next_match_id?: string | null }).next_match_id ? 'final' as const : null;
+        ss.result = chessTiebreakText(derivedSide === 'A' ? aName : bName, method, method === 'armageddon' ? (tbArmageddon as 'white' | 'black' | 'draw') : null, koStage);
         resultForNotice = ss.result;
       }
       // Decision 2026-09-26: an awarded result names the winner with no margin —

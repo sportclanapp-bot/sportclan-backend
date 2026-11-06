@@ -64,10 +64,12 @@ export function armageddonWinner(result: ArmageddonResult): 'A' | 'B' {
 }
 
 /** The result line: "Magnus won the Armageddon", "… goes through (organiser's call)". */
-export function chessTiebreakText(winnerName: string, method: ChessTiebreakMethod | null, result?: ArmageddonResult | null): string {
-  if (method === 'armageddon') return result === 'draw' ? `${winnerName} went through on the Armageddon draw` : `${winnerName} won the Armageddon`;
-  if (method === 'organiser') return `${winnerName} goes through (organiser's call)`;
-  return `${winnerName} won on tie-break`;
+/** N-R7-150 (SP-CHS-F04): nobody "goes through" from the final or the third-place game — it says what they won. */
+export function chessTiebreakText(winnerName: string, method: ChessTiebreakMethod | null, result?: ArmageddonResult | null, stage: 'final' | 'third_place' | null = null): string {
+  const won = stage === 'final' ? 'wins the final' : stage === 'third_place' ? 'takes third place' : null;
+  if (method === 'armageddon') return result === 'draw' ? (won ? `${winnerName} ${won} on the Armageddon draw` : `${winnerName} went through on the Armageddon draw`) : `${winnerName} won the Armageddon`;
+  if (method === 'organiser') return `${winnerName} ${won ?? 'goes through'} (organiser's call)`;
+  return won ? `${winnerName} ${won} on tie-break` : `${winnerName} won on tie-break`;
 }
 
 /**

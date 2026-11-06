@@ -3,6 +3,7 @@ import { sportKeyOf, storedPoints, pointsPresetFor, type TournamentSettings } fr
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { swissMaxRounds, swissDefaultTiebreaks } from '../utils/tournamentSettings';
 import { deleteMatching, deleteWithReason } from '../utils/softDelete';
+import { drawStarted } from './redraw.controller';
 import { TEAM_DISBANDED, isTeamDisbanded } from '../utils/teamVisibility';
 import { rankExtrasFor } from '../utils/rankExtras';
 import { sportTerms } from '../utils/sportTerms';
@@ -3748,6 +3749,33 @@ async function swissSeedKnockout(tournamentId: string): Promise<void> {
 }
 
 /**
+ * N-R7-130 (Step 2 · SCR-T-192): a player in the top N withdraws after the last Swiss round. The
+ * knockout is drawn at once (swissSeedKnockout), so the withdrawal used to hand the next seed a
+ * walkover and the next player on the table never moved in. While no knockout game has been played
+ * or begun (a bye doesn't count, as for a redraw), the knockout is cleared (soft-deleted with a
+ * reason, as redraw does) and drawn again from the table without them: seeds 1st, 3rd, 4th, 5th.
+ * Once a knockout game is under way the old rule stands (a walkover). Returns true when it redrew.
+ */
+async function swissKnockoutRedrawOnWithdraw(tournamentId: string, teamId: string): Promise<boolean> {
+  const { data: t } = await supabase.from('tournaments').select('id, format, settings, created_by').eq('id', tournamentId).maybeSingle();
+  if (!t || (t as { format?: string }).format !== 'swiss') return false;
+  const settings = settingsOf(t as { settings?: unknown });
+  const sw = settings.swiss;
+  if (!sw?.koDrawn) return false;
+  const ko = ((await allRows(() => supabase.from('matches')
+    .select('id, status, team_a_id, team_b_id, team_a_name, team_b_name, score_summary, voided_at')
+    .eq('tournament_id', tournamentId).eq('bracket', 'ko'))) ?? []) as Array<Parameters<typeof drawStarted>[0][number]>;
+  if (ko.length === 0 || !ko.some((m) => !m.voided_at && (m.team_a_id === teamId || m.team_b_id === teamId))) return false;
+  if (drawStarted(ko)) return false;
+  const { error } = await deleteMatching('matches', (q) => q.in('id', ko.map((m) => m.id)), (t as { created_by?: string | null }).created_by ?? null, 'unplayed Swiss knockout drawn again after a withdrawal');
+  if (error) return false;
+  const { koDrawn: _was, ...rest } = sw;
+  await supabase.from('tournaments').update({ settings: { ...settings, swiss: rest }, updated_at: new Date().toISOString() }).eq('id', tournamentId);
+  await swissSeedKnockout(tournamentId);
+  return true;
+}
+
+/**
  * BUILD 4.15 · after a Swiss result: once the round is finished, pair the next
  * one (a CAS on settings.swiss.paired, so two results landing together pair it
  * once), or — after the last round — crown the standings leader.
@@ -3996,6 +4024,8 @@ async function completeBracketIfDone(tournamentId: string, knownFinal: FinalRow 
 // valid opponent (empty slot, or the opponent has ALSO withdrawn) the match is
 // abandoned with no winner and nothing advances.
 export async function walkoverOnWithdraw(tournamentId: string, teamId: string): Promise<void> {
+  // N-R7-130: a Swiss's knockout not begun yet is drawn again without the player who left.
+  if (await swissKnockoutRedrawOnWithdraw(tournamentId, teamId)) return;
   const matches = await allRows(() => supabase
     .from('matches')
     .select('id, team_a_id, team_b_id, status, sport_id, format, overs, rules, score_summary')

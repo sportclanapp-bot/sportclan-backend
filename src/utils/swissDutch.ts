@@ -372,8 +372,7 @@ export function dutchFirstRound(players: string[], colours: boolean, initialColo
 /**
  * Each player's history from the games so far (side A White). `games` are in
  * round order; byes and forfeits are unplayed (no colour, no meeting); a
- * pairing bye or a forfeit win bars another pairing bye, and a forfeit loss in the
- * last round bars the next one (N-R7-S116). Floats: a player
+ * pairing bye or a forfeit win bars another pairing bye. Floats: a player
  * paired with someone on fewer points floated down that round (and the other
  * up); the pairing bye counts as floating down.
  */
@@ -396,9 +395,6 @@ export function dutchHistory(
     const w = h.get(g.white); const b = h.get(g.black);
     if (g.forfeit) {
       if (g.winner && h.get(g.winner)) h.get(g.winner)!.noBye = true;
-      // N-R7-S116 (SPP1-CHS-137): the player who didn't turn up last round isn't handed the
-      // next round's pairing bye (a free point) for it; the bye goes to the next eligible player.
-      if (g.winner && g.round === lastRound) { const loser = g.winner === g.white ? b : g.winner === g.black ? w : null; if (loser) loser.noBye = true; }
       continue;
     }
     w?.opponents.add(g.black); b?.opponents.add(g.white);

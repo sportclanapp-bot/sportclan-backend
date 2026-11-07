@@ -2425,10 +2425,13 @@ export async function typedScore(req: Request, res: Response) {
  * the other player whose step's effect is time, for the game's penalty (2 min classical, else 1)?
  */
 export function ladderTimePenaltyOk(match: { rules?: unknown }, payload: { kind?: unknown; side?: unknown; seconds?: unknown }, prev: { event_type?: unknown; payload?: unknown } | null | undefined): boolean {
-  const v = (prev?.payload && typeof prev.payload === 'object' ? prev.payload : {}) as { kind?: unknown; team_side?: unknown; penalty?: unknown };
+  const v = (prev?.payload && typeof prev.payload === 'object' ? prev.payload : {}) as { kind?: unknown; team_side?: unknown; colour?: unknown; penalty?: unknown };
   if (prev?.event_type !== 'note' || v.kind !== 'violation' || typeof v.penalty !== 'string') return false;
   if (ladderStepDef('chess', v.penalty).effect !== 'time') return false;
-  if ((payload.side !== 'A' && payload.side !== 'B') || v.team_side !== (payload.side === 'A' ? 'B' : 'A')) return false;
+  // N-R7-185 (OBS-Q2d-2): a team chess board's note names the offender's team and keeps their colour;
+  // the time goes to the other colour's clock (a single game's team_side is the colour side).
+  const offender = v.colour === 'white' ? 'A' : v.colour === 'black' ? 'B' : v.team_side;
+  if ((payload.side !== 'A' && payload.side !== 'B') || offender !== (payload.side === 'A' ? 'B' : 'A')) return false;
   return payload.seconds === chessPenaltySeconds(chessSpeedOf(rulesOf('chess', match as never)));
 }
 

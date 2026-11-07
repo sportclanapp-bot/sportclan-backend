@@ -191,7 +191,9 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     };
     const cw = conductWords(ctx.sport);
     // Stage 11 · PB6: each step in the sport's own words (CONDUCT_STEPS).
-    return `⚠️ ${cw.title.charAt(0).toUpperCase()}${cw.title.slice(1)} — ${player && player !== team ? `${player} (${team})` : team /* N-R7-79: a singles side named after its player said it twice */} · ${OFFENCE[String(p.offence)] ?? 'conduct'} · ${ladderStepDef(ctx.sport, String(p.penalty ?? 'warning')).label}`;
+    // N-R7-185 (OBS-Q2d-2): a team chess board's note says the board (its key B<n>).
+    const board = ctx.sport === 'chess' && typeof p.board === 'string' && /^B\d+$/.test(p.board) ? ` · board ${p.board.slice(1)}` : '';
+    return `⚠️ ${cw.title.charAt(0).toUpperCase()}${cw.title.slice(1)} — ${player && player !== team ? `${player} (${team})` : team /* N-R7-79: a singles side named after its player said it twice */}${board} · ${OFFENCE[String(p.offence)] ?? 'conduct'} · ${ladderStepDef(ctx.sport, String(p.penalty ?? 'warning')).label}`;
   }
   // Stage 11 · PB6: what a technical foul or a game forfeit did to the score.
   if (eventType === 'note' && p.kind === 'point_off') return `➖ A point off ${team}`;

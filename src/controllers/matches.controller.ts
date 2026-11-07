@@ -3213,7 +3213,9 @@ export async function completeMatch(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const timer = stepTimer();
-    const { winner_team_id, winner_side, walkover: walkoverIn, walkover_reason, is_draw, idempotent } = req.body || {};
+    const { winner_side, walkover: walkoverIn, walkover_reason, is_draw, idempotent } = req.body || {};
+    // N-R7-S118: a bracket match's winner may come as a side (a chess Armageddon draw) — it names the team below.
+    let winner_team_id: string | undefined = (req.body || {}).winner_team_id;
     // Badminton gap 6: a retirement ("ret.") — a player can't go on. Decided for
     // the other side with the score as it stood; like a walkover it needs no
     // finished score and moves no rating, but the score is kept and the result
@@ -3716,6 +3718,7 @@ export async function completeMatch(req: Request, res: Response) {
         return res.status(400).json({ error: slugNow === 'hockey' ? 'This match can’t end level — decide it in a shoot-out.' : 'This match can’t end level — decide it on penalties.', code: 'DRAW_NOT_ALLOWED' });
       }
     }
+    if (isBracketMatch && !winner_team_id && (winnerSide === 'A' || winnerSide === 'B')) winner_team_id = (winnerSide === 'A' ? match.team_a_id : match.team_b_id) ?? undefined;
     if (isBracketMatch && !winner_team_id) {
       return res.status(400).json({
         error: 'Bracket matches need a decisive winner — pick the winning team (a bracket can\'t advance on a tie).',

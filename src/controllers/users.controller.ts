@@ -28,6 +28,7 @@ import { istDate, istDay } from '../utils/appTime';
 import { COIN_RULES } from '../utils/coinRules';
 import { isByeMatch } from '../utils/matchCounts';
 import { isRangeError, parsePagination } from '../utils/pagination';
+import { shiftForVoided } from '../utils/ratingHistoryShift'; // N-R7-S115
 import { notifyUsers, notifyUser } from '../utils/notify';
 import { stepTimer } from '../utils/stepTimer';
 import { getSport } from '../utils/sportCache';
@@ -1572,26 +1573,25 @@ export async function getRatingHistory(req: Request, res: Response) {
     targetUserHidden(id, req.userId),
     // SC-335: never surface per-sport data for an out-of-scope sport (no kabaddi/athletics).
     isSportInactive(sportId),
-    supabase
+    // N-R7-S115 (OBS-P6-1): every row, the voided ones too: a voided game's delta came off
+    // the rating, so the later games are shown that much lower (shiftForVoided). The voided
+    // rows themselves are still never shown (V041/V211).
+    selectAll<any>((from, to) => supabase
       .from('rating_history')
-      // V041/V211 (visual review): a voided match's row stays in rating_history
-      // on purpose (a restore re-applies it) but it must not be SHOWN — the
-      // card read "1200" with "1216 after 1 rated match" beneath it. Same
-      // inner-join filter as advancedStats (SC-424) and the leaderboard.
       .select('old_rating, new_rating, delta, created_at, match:matches!inner(id, voided_at)')
       .eq('user_id', id)
       .eq('sport_id', sportId)
-      .is('match.voided_at', null)
-      .order('created_at', { ascending: false })
-      .limit(10),
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to))
+      .then((data) => ({ data, error: null as null | { message: string } }), (e) => ({ data: null, error: { message: String(e?.message ?? e) } })),
   ]);
   if (hidden) return res.status(404).json({ error: 'User not found' });
   if (inactive) return res.status(404).json({ error: 'Sport not available' });
   if (error) return res.status(500).json({ error: error.message });
 
-  // Oldest → newest.
-  // The join only filters; the response keeps its old shape.
-  const ordered = (data ?? []).reverse().map(({ match: _m, ...row }: any) => row);
+  // Oldest → newest, the last 10 kept games; the response keeps its old shape.
+  const ordered = shiftForVoided((data ?? []).map(({ match, ...row }: any) => ({ ...row, voided: !!match?.voided_at })), 10);
   return res.json({ history: ordered });
 }
 

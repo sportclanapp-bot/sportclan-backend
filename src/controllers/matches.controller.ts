@@ -71,6 +71,7 @@ import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
 import { applyChessTcDeltas, recordChessTc } from '../utils/chessTcRatings';
 import { DOUBLES_PLAYERS, DOUBLES_SPORTS, doublesLineupProblem, rulesFromLegacy, legacyFromRules, normalizeRules, rulesOf, rulesRefusal, type MatchRules, conductWords, tieSpecOf } from '../utils/matchRules';
 import { boardWhite, tieTossOf, tieTossText, tieTrumpResultLines, tieTrumpText } from '../utils/tieCore';
+import { timelineBoardIndex } from '../utils/chessTimelineBoard'; // N-R7-S114
 import { hasTrump, trumpsFor } from '../utils/tieTrumps';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, superOverPlayedText, tieFallbackText, boundariesOf, type SuperOverState, type TieFallback, typedScoreRefusal, typedScoreWinner, typedOversToBalls, type UnfinishedEnd } from '../utils/cricketRules';
@@ -1759,6 +1760,10 @@ export async function getCommentary(req: Request, res: Response) {
     // N-SPP1-CHS-2 / CHS-3: a team chess match on clocks — each board's own moves, and its White.
     const chessSpec = slug === 'chess' ? tieSpecOf('chess', rulesOf('chess', match)) : null;
     const movesByBoard = new Map<string, number>();
+    // N-R7-S114 (SPP1-CHS-133): a board result sent without its board (results entered one after
+    // another, from an older pad or the API) belongs to the board in play — the first one not yet
+    // decided, as the app's tie split reads it — so its timeline line can name the board.
+    const decidedBoards = new Set<string>();
     const legalBallsBySide: Record<'A' | 'B', number> = { A: 0, B: 0 };
     const enriched: Array<any> = [];
     for (const ev of events ?? []) {
@@ -1788,7 +1793,7 @@ export async function getCommentary(req: Request, res: Response) {
       let isBoundary = false;
       if (ev.event_type === 'period_change') periods += 1;
       if (ev.event_type === 'move') moves += 1;
-      const boardIdx = chessSpec && typeof p.board === 'string' ? chessSpec.rubbers.findIndex((r) => r.key === p.board) : -1;
+      const boardIdx = timelineBoardIndex(chessSpec, ev.event_type as string, p, decidedBoards);
       if (boardIdx >= 0 && ev.event_type === 'move') movesByBoard.set(p.board, (movesByBoard.get(p.board) ?? 0) + 1);
       const boardCtx = boardIdx >= 0 ? { board: chessSpec!.rubbers[boardIdx]!.label, boardWhiteTeam: boardWhite(chessSpec!, boardIdx), move: movesByBoard.get(p.board) ?? 0 } : {};
       // Audit batch 4 (#111 / #112 / #136): every line from one place (utils/commentary) — cricket too, and

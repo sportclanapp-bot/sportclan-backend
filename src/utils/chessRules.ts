@@ -58,9 +58,15 @@ export function flagFallen(remainingSeconds: number): boolean {
 export type ChessTiebreakMethod = 'armageddon' | 'organiser';
 export type ArmageddonResult = 'white' | 'black' | 'draw';
 
-/** Who goes through after Armageddon: White (side A) only on a White win. */
-export function armageddonWinner(result: ArmageddonResult): 'A' | 'B' {
-  return result === 'white' ? 'A' : 'B';
+/**
+ * Who goes through after Armageddon: White only on a White win, Black on a Black win or a draw.
+ * N-R7-183 (SPP1-CHS-099, Dipak 7 Nov): the arbiter draws the Armageddon's colours, so `white` says
+ * which side had White (the sheet asks); left out it is side A, as before.
+ */
+export type ArmageddonWhite = 'A' | 'B';
+export function armageddonWinner(result: ArmageddonResult, white: ArmageddonWhite = 'A'): 'A' | 'B' {
+  const black: ArmageddonWhite = white === 'A' ? 'B' : 'A';
+  return result === 'white' ? white : black;
 }
 
 /** The result line: "Magnus won the Armageddon", "… goes through (organiser's call)". */
@@ -92,19 +98,57 @@ export function chessDeciderWords(stage: 'final' | 'third_place' | null): { titl
 
 /**
  * N-R7-166 (OBS-C5-3): a level team match's decider names the teams — a team has no colour in a team
- * match (its boards alternate). In the Armageddon one player from each team plays: side A's has White
- * and more time, side B's Black, and a draw goes to Black (armageddonWinner).
+ * match (its boards alternate). N-R7-183: who has White in the Armageddon is asked next
+ * (armageddonAskWords), so the choice only says a draw goes to the team with Black.
  */
 export function chessTeamDeciderWords(stage: 'final' | 'third_place' | null, nameA: string, nameB: string): {
-  choice: string; armageddonMessage: string; result: Record<'white' | 'black' | 'draw', string>; organiser: Record<'A' | 'B', string>;
+  choice: string; organiser: Record<'A' | 'B', string>;
 } {
   const { through } = chessDeciderWords(stage);
-  const draw = `a draw means ${nameB} ${through}`;
   return {
-    choice: `Armageddon game · ${nameB} has Black; ${draw}`,
-    armageddonMessage: `One player from each team: ${nameA} has White and more time (say 5 v 4 minutes), ${nameB} has Black; ${draw}.`,
-    result: { white: `${nameA} won · ${nameA} ${through}`, black: `${nameB} won · ${nameB} ${through}`, draw: `Drawn · ${nameB} ${through}` },
+    choice: `Armageddon game · one player from each team; a draw means the team with Black ${through}`,
     organiser: { A: nameA, B: nameB },
+  };
+}
+
+/**
+ * N-R7-183 (SPP1-CHS-099, Dipak 7 Nov): the Armageddon sheet ASKS who has White (the arbiter draws
+ * the colours; White has more time, a draw goes to Black). `team`: a team match, one player from each team.
+ */
+export function armageddonAskWords(stage: 'final' | 'third_place' | null, nameA: string, nameB: string, team = false): {
+  title: string; message: string; ask: Record<ArmageddonWhite, string>;
+} {
+  const { through } = chessDeciderWords(stage);
+  if (team) {
+    return {
+      title: 'Armageddon · whose player has White?',
+      message: `One player from each team. White has more time (say 5 v 4 minutes); a draw means the team with Black ${through}.`,
+      ask: { A: `${nameA}'s player has White`, B: `${nameB}'s player has White` },
+    };
+  }
+  return {
+    title: 'Armageddon · who has White?',
+    message: `White has more time (say 5 v 4 minutes); a draw means Black ${through}.`,
+    ask: { A: `${nameA} has White`, B: `${nameB} has White` },
+  };
+}
+
+/** N-R7-183: then how it ended, by player — the lines name who had White and who had Black. */
+export function armageddonResultWords(stage: 'final' | 'third_place' | null, nameA: string, nameB: string, white: ArmageddonWhite, team = false): {
+  message: string; result: Record<ArmageddonResult, string>;
+} {
+  const { through } = chessDeciderWords(stage);
+  const w = white === 'A' ? nameA : nameB;
+  const b = white === 'A' ? nameB : nameA;
+  return {
+    message: team
+      ? `${w}'s player has White and more time, ${b}'s has Black; a draw means ${b} ${through}.`
+      : `${w} has White and more time, ${b} has Black; a draw means ${b} ${through}.`,
+    result: {
+      white: `${w} won with White · ${w} ${through}`,
+      black: `${b} won with Black · ${b} ${through}`,
+      draw: `Drawn · ${b} had Black · ${b} ${through}`,
+    },
   };
 }
 

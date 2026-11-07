@@ -78,7 +78,7 @@ export interface HandoffResultHow {
   so?: { A: number; B: number } | null;
   sov?: { A: number; B: number } | null;
   un?: 'award' | 'dls' | null;
-  ct?: boolean | { method: 'armageddon' | 'organiser'; armageddon?: 'white' | 'black' | 'draw' } | null;
+  ct?: boolean | { method: 'armageddon' | 'organiser'; armageddon?: 'white' | 'black' | 'draw'; white?: 'A' | 'B' } | null;
   tf?: 'seed' | 'boundaries' | 'toss' | null;
 }
 const pair = (v: unknown) => v === null || v === undefined || (typeof v === 'object' && !Array.isArray(v)
@@ -96,9 +96,10 @@ export function isResultHow(c: unknown): c is HandoffResultHow {
   if (!(h.tf == null || h.tf === 'seed' || h.tf === 'boundaries' || h.tf === 'toss')) return false;
   if (h.ct != null && typeof h.ct !== 'boolean') {
     const ct = h.ct as Record<string, unknown>;
-    if (typeof ct !== 'object' || Array.isArray(ct) || Object.keys(ct).some((k) => k !== 'method' && k !== 'armageddon')) return false;
+    if (typeof ct !== 'object' || Array.isArray(ct) || Object.keys(ct).some((k) => k !== 'method' && k !== 'armageddon' && k !== 'white')) return false;
     if (ct.method !== 'armageddon' && ct.method !== 'organiser') return false;
     if (!(ct.armageddon == null || ['white', 'black', 'draw'].includes(String(ct.armageddon)))) return false;
+    if (!(ct.white == null || ct.white === 'A' || ct.white === 'B')) return false; // N-R7-183
   }
   return true;
 }

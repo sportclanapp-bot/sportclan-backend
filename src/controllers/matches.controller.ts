@@ -3569,6 +3569,10 @@ export async function completeMatch(req: Request, res: Response) {
     const chessTiebreak = tbBody === true || (!!tbBody && typeof tbBody === 'object');
     const tbMethod = tbBody && typeof tbBody === 'object' ? (tbBody as { method?: unknown }).method : null;
     const tbArmageddon = tbBody && typeof tbBody === 'object' ? (tbBody as { armageddon?: unknown }).armageddon : null;
+    // N-R7-183 (SPP1-CHS-099, Dipak 7 Nov): which side had White in the Armageddon (the arbiter draws
+    // the colours; the sheet asks). Left out it is side A, as before.
+    const tbWhiteIn = tbBody && typeof tbBody === 'object' ? (tbBody as { white?: unknown }).white : undefined;
+    const tbWhite: 'A' | 'B' = tbWhiteIn === 'B' ? 'B' : 'A';
     if (chessTiebreak && tbMethod != null && tbMethod !== 'armageddon' && tbMethod !== 'organiser') {
       return res.status(400).json({ error: 'A tie-break is an Armageddon game or the organiser’s call.', code: 'BAD_CHESS_TIEBREAK' });
     }
@@ -3576,7 +3580,10 @@ export async function completeMatch(req: Request, res: Response) {
       if (tbArmageddon !== 'white' && tbArmageddon !== 'black' && tbArmageddon !== 'draw') {
         return res.status(400).json({ error: 'Say how the Armageddon game ended: White won, Black won or a draw.', code: 'BAD_CHESS_TIEBREAK' });
       }
-      if (winnerSide && armageddonWinner(tbArmageddon) !== winnerSide) {
+      if (tbWhiteIn != null && tbWhiteIn !== 'A' && tbWhiteIn !== 'B') {
+        return res.status(400).json({ error: 'Say which player had White in the Armageddon.', code: 'BAD_CHESS_TIEBREAK' });
+      }
+      if (winnerSide && armageddonWinner(tbArmageddon, tbWhite) !== winnerSide) {
         return res.status(400).json({ error: 'In Armageddon a draw sends Black through — White has to win it.', code: 'ARMAGEDDON_WINNER_MISMATCH' });
       }
     }
@@ -4219,7 +4226,7 @@ export async function completeMatch(req: Request, res: Response) {
       if (chessTiebreak && derivedSide) {
         // BUILD 3.69: how it was decided, and the line that says so.
         const method = tbMethod === 'armageddon' || tbMethod === 'organiser' ? tbMethod : null;
-        ss.chess_tiebreak = { winner_side: derivedSide, ...(method ? { method } : {}), ...(method === 'armageddon' ? { armageddon: tbArmageddon } : {}) };
+        ss.chess_tiebreak = { winner_side: derivedSide, ...(method ? { method } : {}), ...(method === 'armageddon' ? { armageddon: tbArmageddon, white: tbWhite } : {}) };
         // N-R7-150: the final and the third-place game say what was won, not 'goes through'.
         const { data: koRow } = await supabase.from('matches').select('third_place, next_match_id').eq('id', match.id).maybeSingle();
         const koStage = (koRow as { third_place?: boolean } | null)?.third_place ? 'third_place' as const : koRow && !(koRow as { next_match_id?: string | null }).next_match_id ? 'final' as const : null;

@@ -186,6 +186,16 @@ export function boardPointsFor(spec: Pick<TieSpec, 'boardPoints'>, result: 'whit
   return result === 'white' ? { white: bp.win, black: 0 } : { white: 0, black: bp.winBlack ?? bp.win };
 }
 
+/**
+ * N-R7-184 (OBS-Q2d-1): what a team chess match's running score counts — 'game points' (win 1, draw ½),
+ * or 'board points' when the boards are worth something else (the Global Chess League: 3, 4 with Black, 1).
+ */
+export function teamChessPointsWord(spec: Pick<TieSpec, 'boardPoints'>): 'game points' | 'board points' {
+  const bp = spec.boardPoints;
+  if (!bp) return 'game points';
+  return bp.win === 1 && bp.draw === 0.5 && (bp.winBlack == null || bp.winBlack === 1) ? 'game points' : 'board points';
+}
+
 /** Stage 11 follow-up · why a side's trump pick can't stand, or null: one of the tie's matches, not a deciding one. */
 export function tieTrumpProblem(spec: TieSpec, key: unknown): string | null {
   if (!spec.trump) return 'This tie has no trump match.';

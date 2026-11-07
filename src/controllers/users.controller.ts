@@ -1591,7 +1591,7 @@ export async function getRatingHistory(req: Request, res: Response) {
   if (error) return res.status(500).json({ error: error.message });
 
   // Oldest → newest, the last 10 kept games; the response keeps its old shape.
-  const ordered = shiftForVoided((data ?? []).map(({ match, ...row }: any) => ({ ...row, voided: !!match?.voided_at })), 10);
+  const ordered = shiftForVoided((data ?? []).map(({ match, ...row }: any) => ({ ...row, voided_at: match?.voided_at ?? null })), 10);
   return res.json({ history: ordered });
 }
 

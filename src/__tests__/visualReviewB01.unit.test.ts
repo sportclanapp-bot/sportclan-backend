@@ -141,7 +141,7 @@ describe('N1 · a voided match cannot be completed', () => {
 describe('V041/V211 · voided matches leave every rating-history read', () => {
   const reads: Array<[string, RegExp]> = [
     // N-R7-S115: rating-history reads the voided rows too, to shift the later games, and leaves them out (shiftForVoided; nR7S115… tests it)
-    ['controllers/users.controller.ts', /getRatingHistory[\s\S]*?\.from\('rating_history'\)[\s\S]{0,200}matches!inner\(id, voided_at\)[\s\S]{0,900}shiftForVoided\(\(data \?\? \[\]\)\.map\(\(\{ match, \.\.\.row \}: any\) => \(\{ \.\.\.row, voided: !!match\?\.voided_at \}\)\)/],
+    ['controllers/users.controller.ts', /getRatingHistory[\s\S]*?\.from\('rating_history'\)[\s\S]{0,200}matches!inner\(id, voided_at\)[\s\S]{0,900}shiftForVoided\(\(data \?\? \[\]\)\.map\(\(\{ match, \.\.\.row \}: any\) => \(\{ \.\.\.row, voided_at: match\?\.voided_at \?\? null \}\)\)/],
     ['controllers/insights.controller.ts', /\.from\('rating_history'\)\s*\.select\('new_rating, match:matches!inner\(voided_at\)'\)[\s\S]{0,80}\.is\('match\.voided_at', null\)/],
     ['controllers/seasons.controller.ts', /\.from\('rating_history'\)\s*\.select\('id, match:matches!inner\(voided_at\)'[\s\S]{0,200}\.is\('match\.voided_at', null\)/],
     ['controllers/notifications.controller.ts', /\.from\('rating_history'\)\s*\.select\('delta, match:matches!inner\(voided_at\)'\)[\s\S]{0,80}\.is\('match\.voided_at', null\)/],
@@ -150,7 +150,7 @@ describe('V041/V211 · voided matches leave every rating-history read', () => {
     expect(code(file)).toMatch(re);
   });
   it('the rating-history response keeps its old shape (no nested match)', () => {
-    expect(code('controllers/users.controller.ts')).toMatch(/\.map\(\(\{ match, \.\.\.row \}: any\) => \(\{ \.\.\.row, voided: !!match\?\.voided_at \}\)\)/); // N-R7-S115: shiftForVoided returns rows without `match` / `voided`
+    expect(code('controllers/users.controller.ts')).toMatch(/\.map\(\(\{ match, \.\.\.row \}: any\) => \(\{ \.\.\.row, voided_at: match\?\.voided_at \?\? null \}\)\)/); // N-R7-S115: shiftForVoided returns rows without `match` / `voided_at`
   });
   it('the weekly digest skips voided matches in matches_played', () => {
     expect(code('controllers/notifications.controller.ts')).toMatch(/m\.status !== 'completed' \|\| m\.voided_at/);

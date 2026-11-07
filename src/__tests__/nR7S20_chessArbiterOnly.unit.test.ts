@@ -20,5 +20,5 @@ test('moves, ordinary results, added time (the ladder’s time step) and warning
 test('the event checks use it with the sender', () => {
   const src = fs.readFileSync(path.join(__dirname, '../controllers/scoring.controller.ts'), 'utf8');
   expect(src).toContain("if (userId && chessArbiterOnly(ev.event_type, ev.payload) && !(await canDefault(match as never, userId))) {");
-  expect(src).toContain('await validateScoringEvent(matchId, match, { event_type, period, clock_seconds, payload }, userId);');
+  expect(src).toContain('await validateScoringEvent(matchId, match, { event_type, period, clock_seconds, payload }, userId, { clientKey: knownKey });');
 });

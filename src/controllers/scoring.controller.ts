@@ -28,13 +28,13 @@ import { gameEndSuperOver, superOverWinner, allOutBySide, allowedOnFreeHit, bowl
 import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { FOUL_KINDS, canStartNextPeriodOf } from '../utils/basketballRules';
 import { gameShootout, shootoutKicksOf, shootoutProblem } from '../utils/shootoutRules'; // Stage 15 follow-up
-import { BASKETBALL_STAT_KEYS, goalHowFor, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules, expediteCutoff } from '../utils/matchRules';
+import { BASKETBALL_STAT_KEYS, goalHowFor, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules, expediteCutoff, chessSpeedOf } from '../utils/matchRules';
 import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsFor, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { trumpsFor } from '../utils/tieTrumps';
 import { sideOutReplay } from '../utils/pickleballCore';
 import { takesSideOutRally, tieHasTimedMatch } from '../utils/sideOutRally';
 import { CRICKET_EXTRA_TYPES, isKnownWicketType } from '../utils/cricketEventTypes';
-import { isValidChessReason } from '../utils/chessRules';
+import { chessPenaltySeconds, isValidChessReason } from '../utils/chessRules';
 
 // Fire-and-forget: push the big moments of a live match (wickets, goals) to
 // every participant in the match. Failures are swallowed — the fan-out must
@@ -218,7 +218,13 @@ export async function validateScoringEvent(
   ev: { event_type: unknown; period?: unknown; clock_seconds?: unknown; payload?: any },
   userId?: string,
   /** A QR hand-over's ops are all checked against the score before the first of them (no per-op state checks). */
-  opts: { batch?: boolean } = {},
+  opts: {
+    batch?: boolean;
+    /** N-R7-S117: a QR hand-over's op just before this one (null for its first op: the match's last stored event counts). */
+    prev?: { event_type: unknown; payload?: unknown } | null;
+    /** N-R7-S117: this event's idempotency key — a re-send of a stored add_time is still the ladder's. */
+    clientKey?: string | null;
+  } = {},
 ): Promise<{ status: number; body: { error: string; code?: string } } | null> {
   const refuse = (status: number, body: { error: string; code?: string }) => ({ status, body });
   // N-R7-S20: the chess arbiter's calls (an illegal move, a wrong draw claim, a game lost for a
@@ -226,6 +232,13 @@ export async function validateScoringEvent(
   // scorer could send them through the API although the pad hides them.
   if (userId && chessArbiterOnly(ev.event_type, ev.payload) && !(await canDefault(match as never, userId))) {
     return refuse(403, { error: 'That’s the arbiter’s call — only the arbiter or the organiser can record it.', code: 'NOT_ARBITER' });
+  }
+  // N-R7-S117 (SP-CHS-042): added time is the arbiter's too (the pad shows 'Add time' only to them) —
+  // except the misconduct ladder's time step, which any scorer records: its time note goes straight
+  // after the 'violation' note, to the other player, for the game's penalty seconds.
+  if (userId && ev.event_type === 'note' && ev.payload?.kind === 'add_time' && !(await addTimeIsLadderPenalty(matchId, match, ev.payload, opts))
+    && !(await canDefault(match as never, userId))) {
+    return refuse(403, { error: 'That’s the arbiter’s call — only the arbiter or the organiser can add time.', code: 'NOT_ARBITER' });
   }
   // N-R7-S31: a conduct step that ends the match (a default / match forfeit) is the referee's or the
   // organiser's, as at /complete — a plain scorer's "default" note was stored though the default was refused.
@@ -904,7 +917,7 @@ export async function createEvent(req: Request, res: Response) {
 
     // B06-F1: every check on the event itself lives in validateScoringEvent, so
     // the signed QR handoff (qrHandoff.controller) runs exactly the same ones.
-    const refused = await validateScoringEvent(matchId, match, { event_type, period, clock_seconds, payload }, userId);
+    const refused = await validateScoringEvent(matchId, match, { event_type, period, clock_seconds, payload }, userId, { clientKey: knownKey });
     if (refused) return res.status(refused.status).json(refused.body);
     const startsPlay = startsPlayEvent(event_type, payload); // V-3 · N-R7-S15: pre-play events don't start the match
 
@@ -2405,6 +2418,34 @@ export async function typedScore(req: Request, res: Response) {
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
+}
+
+/**
+ * N-R7-S117 · is this add_time the misconduct ladder's time step for `prev` — a 'violation' note on
+ * the other player whose step's effect is time, for the game's penalty (2 min classical, else 1)?
+ */
+export function ladderTimePenaltyOk(match: { rules?: unknown }, payload: { kind?: unknown; side?: unknown; seconds?: unknown }, prev: { event_type?: unknown; payload?: unknown } | null | undefined): boolean {
+  const v = (prev?.payload && typeof prev.payload === 'object' ? prev.payload : {}) as { kind?: unknown; team_side?: unknown; penalty?: unknown };
+  if (prev?.event_type !== 'note' || v.kind !== 'violation' || typeof v.penalty !== 'string') return false;
+  if (ladderStepDef('chess', v.penalty).effect !== 'time') return false;
+  if ((payload.side !== 'A' && payload.side !== 'B') || v.team_side !== (payload.side === 'A' ? 'B' : 'A')) return false;
+  return payload.seconds === chessPenaltySeconds(chessSpeedOf(rulesOf('chess', match as never)));
+}
+
+/** N-R7-S117 · the event the ladder's add_time follows: the hand-over's previous op, or the match's last stored event(s). */
+async function addTimeIsLadderPenalty(matchId: string, match: { rules?: unknown }, payload: { kind?: unknown; side?: unknown; seconds?: unknown }, opts: { batch?: boolean; prev?: { event_type: unknown; payload?: unknown } | null; clientKey?: string | null }): Promise<boolean> {
+  if (opts.prev) return ladderTimePenaltyOk(match, payload, opts.prev);
+  const { data } = await supabase
+    .from('match_events')
+    .select('event_type, payload, client_key')
+    .eq('match_id', matchId)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(2);
+  const rows = (data ?? []) as Array<{ event_type: unknown; payload?: unknown; client_key?: string | null }>;
+  // A re-send of this very add_time (its key is the last event): the step before it counts.
+  const before = opts.clientKey && rows[0]?.client_key === opts.clientKey ? rows[1] : rows[0];
+  return ladderTimePenaltyOk(match, payload, before);
 }
 
 /** N-R7-S20 · the chess events only an arbiter or the organiser may send (the pad's mayDefault rows). */

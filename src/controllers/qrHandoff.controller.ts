@@ -178,13 +178,13 @@ export async function uploadHandoff(req: Request, res: Response) {
     // a side "Z" and a pending ranked opponent all used to go straight in). One
     // bad op refuses the whole code, so nothing is half-applied.
     const scorerMatch = (auth as { ok: true; match: Parameters<typeof validateScoringEvent>[1] }).match;
-    for (const op of eventOps) {
+    for (const [i, op] of eventOps.entries()) {
       const refused = await validateScoringEvent(id!, scorerMatch, {
         event_type: op.e.event_type,
         period: op.e.period,
         clock_seconds: op.e.clock_seconds,
         payload: op.e.payload,
-      }, p.u, { batch: true }); // N-R7-S32: the period check reads the score before these ops
+      }, p.u, { batch: true, prev: i > 0 ? eventOps[i - 1].e : null, clientKey: op.k ?? null }); // N-R7-S32: the period check reads the score before these ops; N-R7-S117: the op before it
       if (refused) {
         return res.status(400).json({
           error: `This code has a scoring action the server can't accept (${refused.body.error}). Nothing from it was applied.`,

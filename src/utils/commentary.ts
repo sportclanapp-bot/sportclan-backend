@@ -244,9 +244,11 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   }
   if (ctx.sport === 'chess' && eventType === 'result') {
     const why = typeof p.reason === 'string' ? CHESS_REASON[p.reason] ?? p.reason.replace(/_/g, ' ') : null;
-    if (p.winner === 'draw') return `🤝 Draw${why ? ` — ${why}` : ''}`;
+    // N-R7-S114 (SPP1-CHS-133): a team board's result says its board, as its moves do ('· Board 2').
+    const on = ctx.board ? ` · ${ctx.board}` : '';
+    if (p.winner === 'draw') return `🤝 Draw${why ? ` — ${why}` : ''}${on}`;
     const who = p.winner === 'black' ? 'Black' : 'White';
-    return `🏁 ${who} wins${why ? ` — ${why}` : ''}${player ? ` (${player})` : ''}`;
+    return `🏁 ${who} wins${why ? ` — ${why}` : ''}${player ? ` (${player})` : ''}${on}`;
   }
   // Audit #113: a doubles partner swap is not a change of server between the sides.
   if (eventType === 'serve_swap') return p.kind === 'partner' ? `🔁 ${team}: the other partner serves` : '🔁 Serve changed';

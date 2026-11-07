@@ -123,7 +123,7 @@ export function armageddonAskWords(stage: 'final' | 'third_place' | null, nameA:
     return {
       title: 'Armageddon · whose player has White?',
       message: `One player from each team. White has more time (say 5 v 4 minutes); a draw means the team with Black ${through}.`,
-      ask: { A: `${nameA}'s player has White`, B: `${nameB}'s player has White` },
+      ask: { A: `Player from ${nameA} has White`, B: `Player from ${nameB} has White` },
     };
   }
   return {
@@ -142,7 +142,7 @@ export function armageddonResultWords(stage: 'final' | 'third_place' | null, nam
   const b = white === 'A' ? nameB : nameA;
   return {
     message: team
-      ? `${w}'s player has White and more time, ${b}'s has Black; a draw means ${b} ${through}.`
+      ? `The player from ${w} has White and more time, the player from ${b} has Black; a draw means ${b} ${through}.`
       : `${w} has White and more time, ${b} has Black; a draw means ${b} ${through}.`,
     result: {
       white: `${w} won with White · ${w} ${through}`,

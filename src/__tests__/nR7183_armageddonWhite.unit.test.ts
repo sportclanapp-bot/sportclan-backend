@@ -26,7 +26,7 @@ test('the sheet asks who has White, then names the players', () => {
   expect(r.message).toBe('Bala has White and more time, Arjun has Black; a draw means Arjun goes through.');
   expect(armageddonResultWords('final', 'Arjun', 'Bala', 'A').result.draw).toBe('Drawn · Bala had Black · Bala wins the final');
   const team = armageddonAskWords('third_place', 'Knights', 'Rooks', true);
-  expect(team.ask).toEqual({ A: "Knights's player has White", B: "Rooks's player has White" });
+  expect(team.ask).toEqual({ A: "Player from Knights has White", B: "Player from Rooks has White" });
   expect(chessTeamDeciderWords(null, 'Knights', 'Rooks').choice).toBe('Armageddon game · one player from each team; a draw means the team with Black goes through');
 });
 

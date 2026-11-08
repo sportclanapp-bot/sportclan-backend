@@ -3539,6 +3539,11 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
   const tiebreakerRules = ((trow as any)?.tiebreaker_rules ?? []) as any[];
   const pts = await tournamentPoints(trow as any);
 
+  // N-R7-202 (SP-CRM-136): nothing counted (every fixture a no-result: abandoned with no winner) —
+  // the table is all 0 and the team-id terminator would crown someone. No champion; the league stays
+  // live until a fixture counts (deciding the abandoned one crowns as before).
+  const counts = (matches ?? []).some((x: any) => x.status === 'completed' || (x.status === 'abandoned' && x.winner_team_id));
+  if (!counts) return;
   const tin = tableInputs((trow as any)?.settings, teamIds as string[], (matches ?? []) as any[], await withdrawnTeamIds(tournamentId)); // gap 6
   const ordered = rankTeams(tin.teamIds, tin.matches, tiebreakerRules, pts, (await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>))('')); // Stage 8 · F8
   const championId = ordered.find((id) => !goneIds.has(id));

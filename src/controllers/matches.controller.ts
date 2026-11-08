@@ -4060,6 +4060,20 @@ export async function completeMatch(req: Request, res: Response) {
     } else {
       const out = fin.data as { applied?: boolean; match?: any } | null;
       if (out && out.applied === false) {
+        // N-R7-S119 (hub auto-send, 8 Nov): a replay-safe request that LOST the in-txn
+        // status CAS to another copy of itself is a replay too — answer it like the
+        // early SC-421 path (200 already_completed; F119: a different result is a dispute),
+        // not with a 400 the hub reads as "not accepted". Nothing was applied twice.
+        if (idempotent && out.match) {
+          const won = (out.match as { winner_team_id?: string | null }).winner_team_id ?? null;
+          if (won !== (winner_team_id || null)) {
+            return res.status(409).json({
+              error: 'This match already has a different result on the server. Nothing was changed — an organiser needs to decide.',
+              code: 'RESULT_DISPUTED',
+            });
+          }
+          return res.json({ match: out.match, already_completed: true });
+        }
         return res.status(400).json({ error: 'Match already completed' });
       }
       updatedMatch = out?.match ?? null;

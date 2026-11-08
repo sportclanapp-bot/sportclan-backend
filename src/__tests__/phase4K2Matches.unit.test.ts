@@ -181,6 +181,25 @@ describe('K2-12 · completion persists through the atomic finalize_match RPC (SC
     const r = await call(completeMatch, { body: {} });
     expect([r.statusCode, r.body.error]).toEqual([400, 'Match already completed']);
   });
+  // N-R7-S119 (Dipak, 8 Nov · hub auto-send): two replay-safe sends of the SAME result racing —
+  // the one that loses the in-txn status CAS is a replay too, and answers like one (200
+  // already_completed), not 400 "Match already completed" (which the hub showed as "not accepted").
+  it('N-R7-S119: idempotent request losing the CAS with the same result → 200 already_completed, no second apply', async () => {
+    mockNext = live;
+    mockRpc = (n) => (n === 'finalize_match' ? { data: { applied: false, match: { id: MATCH, status: 'completed', winner_team_id: null } } } : {});
+    const r = await call(completeMatch, { body: { idempotent: true } });
+    expect(r.statusCode).toBe(200);
+    expect(r.body.already_completed).toBe(true);
+    expect(r.body.match.id).toBe(MATCH);
+    expect(mockRpcCalls.filter(([n]) => n === 'finalize_match')).toHaveLength(1);
+    expect(completedWrites()).toHaveLength(0);
+  });
+  it('N-R7-S119: idempotent request losing the CAS to a DIFFERENT result → 409 RESULT_DISPUTED', async () => {
+    mockNext = live;
+    mockRpc = (n) => (n === 'finalize_match' ? { data: { applied: false, match: { id: MATCH, status: 'completed', winner_team_id: 'someone-else' } } } : {});
+    const r = await call(completeMatch, { body: { idempotent: true } });
+    expect([r.statusCode, r.body.code]).toEqual([409, 'RESULT_DISPUTED']);
+  });
 });
 
 describe('K2-39b / K2-40 · a decisive sport can’t be completed level without a winner (SC-227, now SC-268 allows_draw)', () => {

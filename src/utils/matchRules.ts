@@ -283,7 +283,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   // Stage 14 · VB2 / VB4 / VB7 / VB12: 6 subs a set back to the same spot, 2 liberos, the indoor court change, no PVL extras.
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point', maxSubs: 6, subsPer: 'set', reentry: 'same_spot', liberos: 2, sideSwitchEvery: null, decidingSwitchEvery: null, superPoint: false, superPointBefore: 11, superServe: false, minWomen: null, tie: null }, // Stage 15 · BB6: a series // Stage 11 · PB9 timed
   tennis: { players: null, bestOf: 3, gamesPerSet: 6, tiebreak: true, tiebreakTo: 7, matchTiebreak: false, adScoring: 'ad', timeLimitMinutes: null, tiebreakAt: null, finalSetTiebreakTo: null, noLet: false, ballChange: false, penaltyLadder: null, tie: null }, // BUILD 3.59–3.66; Stage 9 · T2, T10, T9, T3 (players 2 = doubles)
-  carrom: { bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50, tie: null, penaltyLadder: null }, // BUILD 3.72–3.77 · Stage 12 · CH5: team events
+  carrom: { players: null, bestOf: 3, target: 25, cap: null, finalTarget: null, winBy2: false, queenPoints: 3, queenCutoff: true, boardCap: null, gameMinutes: null, carromMode: 'board', queenValue: 50, tie: null, penaltyLadder: null }, // BUILD 3.72–3.77 · Stage 12 · CH5: team events
   football: { players: null, periods: 2, periodMinutes: null, halfTimeMinutes: null, penaltyKicks: 5, extraTimeMinutes: 0, walkoverGoals: 3, rollingSubs: false, offside: true, sinBinMinutes: null, drawAllowed: true, maxSubs: null, subWindows: null, goldenGoal: false, minOnPitch: null, subsPer: 'match', reentry: 'free', tie: null, shootoutSameTakers: null }, // Stage 15 · BB6: a series // Stage 14 · VB2: as before — a count a match, no re-entry check
   hockey: { players: null, periods: 4, periodMinutes: null, shootoutTakers: 5, yellowCardMinutes: 5, drawAllowed: true, maxSubs: null, subsPer: 'match', reentry: 'free', tie: null, shootoutSameTakers: null }, // Stage 14 · VB2: rolling subs (FIH) · Stage 15 · BB6: a series
   basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false, maxSubs: null, subsPer: 'match', reentry: 'free', timeouts: null, teamFoulBonus: null, teamFoulPossessionAt: null, overtimeTo: null, ejectAfter: 2, ejectCounts: 'tech_flagrant', coachEjectC: 2, coachEjectB: 3, tie: null }, // Stage 14 · VB2: unlimited (FIBA) · Stage 15: time-outs, the bonus, 3x3's overtime, ejections (null = by the game); a series (tie)
@@ -880,6 +880,10 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'pickleball' && r.players !== null && r.players !== DOUBLES_PLAYERS) {
     return refuse('Pickleball players a side is 2 (doubles), or not set for singles.', 'players');
   }
+  // N-R7-196: carrom doubles is 2 a side; singles leaves it unset.
+  if (key === 'carrom' && r.players !== null && r.players !== DOUBLES_PLAYERS) {
+    return refuse('Carrom players a side is 2 (doubles), or not set for singles.', 'players');
+  }
   // BUILD 3.56: pickleball plays win by 2, or a golden point (winBy2 false).
   if ((key === 'pickleball' || key === 'tabletennis') && typeof r.winBy2 !== 'boolean') return refuse('Win by 2 is on or off (golden point).', 'winBy2'); // Stage 10 · TT5: table tennis too
   // Stage 10 · TT5: every game played — on or off; it needs an odd number of games (no level matches).
@@ -1282,7 +1286,7 @@ export const DOUBLES_PLAYERS = 2;
  * (singles, other sports) are never refused here.
  */
 /** F071 (launch test plan): the sports whose doubles is two a side (it held only badminton). */
-export const DOUBLES_SPORTS: readonly string[] = ['badminton', 'tennis', 'pickleball'];
+export const DOUBLES_SPORTS: readonly string[] = ['badminton', 'tennis', 'pickleball', 'carrom']; // N-R7-196: carrom doubles too
 
 export function doublesLineupProblem(
   sport: string | null | undefined,

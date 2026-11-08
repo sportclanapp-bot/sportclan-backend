@@ -11,7 +11,7 @@ describe('match_result audience', () => {
     const at = body.indexOf("type: 'match_result'");
     const before = body.slice(0, at);
     expect(before).toContain('matchFollowerIds(id)');
-    expect(before).toContain('new Set([...players, ...followers])');
+    expect(before).toContain('new Set([...players, ...followers, ...organisers])'); // N-R7-205: + a tournament's organisers for a walkover / default / retirement
   });
   test('the follower lookup reads match_followers', () => {
     const n = fs.readFileSync(path.join(__dirname, '../utils/notify.ts'), 'utf8');

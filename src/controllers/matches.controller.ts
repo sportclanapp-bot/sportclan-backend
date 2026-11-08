@@ -29,7 +29,7 @@ import { supabase } from '../utils/supabase';
 import { DB_UNAVAILABLE, DB_UNAVAILABLE_STATUS } from '../utils/dbUnavailable';
 import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers, matchAudienceIds, matchFollowerIds } from '../utils/notify';
-import { isTournamentOrganiser, canOfficiateMatch, canDefault } from '../utils/tournamentAuth';
+import { isTournamentOrganiser, canOfficiateMatch, canDefault, tournamentOrganiserIds } from '../utils/tournamentAuth';
 import { familyLookupIds } from '../utils/tournamentEvents';
 import { blockedUserIds } from '../utils/blocks';
 import { upsertVenue, venueCityFor } from './venues.controller';
@@ -4452,7 +4452,10 @@ export async function completeMatch(req: Request, res: Response) {
             matchAudienceIds(id, match.team_a_id, match.team_b_id),
             matchFollowerIds(id),
           ]);
-          const audience = Array.from(new Set([...players, ...followers]));
+          // N-R7-205 (SPP1-CRM-125): a walkover, default or retirement in a tournament — often given by
+          // a chief referee — is told to its organisers too (they heard nothing).
+          const organisers = match.tournament_id && (walkover || defaulted || retired) ? await tournamentOrganiserIds(match.tournament_id as string).catch(() => [] as string[]) : [];
+          const audience = Array.from(new Set([...players, ...followers, ...organisers]));
           if (audience.length > 0) {
             const names = await matchNamesForNotice(match);
             void notifyUsers(audience, {

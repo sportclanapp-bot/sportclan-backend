@@ -19,7 +19,8 @@ type P = Record<string, any>;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const words = (s: string) => s.replace(/_/g, ' ').trim();
-const NOTE_WORDS: Record<string, string> = { warmup: 'warm-up', medical_timeout: 'medical time-out' };
+// N-R7-201 (SPP1-CRM-035): the buzzer note is the pad's ⏱ TIME CALLED ('undid: buzzer' read raw).
+const NOTE_WORDS: Record<string, string> = { warmup: 'warm-up', medical_timeout: 'medical time-out', buzzer: 'time called' };
 
 function teamOf(p: P, ctx: LogContext): string {
   return p.team_side === 'B' ? ctx.teamB : ctx.teamA;
@@ -71,6 +72,8 @@ export function describeEvent(type: string | null | undefined, p: P | null | und
       if (x.kind === 'rally' && x.side_out === true) return `${team} won the rally — side out, no point`;
       if (x.kind === 'ace') return `${team} ace`;
       if (x.kind === 'double_fault') return `double fault — ${team} point`;
+      // N-R7-201 (SPP1-CRM-035): a carrom slam board names its slam ('Bina White slam +12').
+      if ((x.kind === 'board' || ctx.sport === 'carrom') && (x.slam === 'white' || x.slam === 'black')) return `${team} ${x.slam === 'white' ? 'White' : 'Black'} slam +${v || 1}`;
       if (x.kind === 'board' || ctx.sport === 'carrom') return `${team} +${v || 1}`;
       if (ctx.sport === 'basketball') return v === 1 ? `${team} free throw` : `${team} ${v || 2}-pointer`;
       return v > 1 ? `${team} +${v}` : `${team} point`;

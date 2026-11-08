@@ -831,7 +831,8 @@ export function bestPlacedAcrossGroups(
   });
   if (why) {
     const top = sorted[0];
-    why.skipped = top ? order.filter((c) => value(top, c) == null) : [];
+    // N-R7-204 (SPP1-CRM-161): run rate is never left out for 'never met' — it is null only where a sport has none.
+    why.skipped = top ? order.filter((c) => c !== 'score_rate' && value(top, c) == null) : [];
     const a = sorted[count - 1]; const b = sorted[count];
     why.cut = a && b ? {
       in: a, out: b,

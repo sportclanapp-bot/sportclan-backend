@@ -258,7 +258,7 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     const v = Number(p.value ?? 0);
     // Stage 13 · CR6: a slam says so (White: break to finish; Black: all the rest in the first turn).
     const slam = p.slam === 'white' ? '🎯 White slam! ' : p.slam === 'black' ? '🎯 Black slam! ' : '';
-    return `${slam}⚪ Board to ${team} · +${v}${player ? ` (${player})` : ''}`;
+    return `${slam}⚪ Board to ${team} · +${v}${player && player !== team ? ` (${player})` : ''}`; // N-R7-206: a singles side is its player
   }
   // Stage 13 · CR4: the toss — who won it and what they chose; the extra board's toss after the board limit.
   if (ctx.sport === 'carrom' && eventType === 'note' && p.kind === 'toss') {
@@ -438,7 +438,7 @@ function plainLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     : kind ? plainWords(kind) : EVENT_WORDS[eventType] ?? (plainWords(eventType) || 'Update');
   const player = typeof p.player_name === 'string' && p.player_name.trim() ? p.player_name.trim() : null;
   const team = p.team_side === 'A' ? ctx.teamA : p.team_side === 'B' ? ctx.teamB : null;
-  return `${what}${player || team ? ` — ${player && team ? `${player} (${team})` : player ?? team}` : ''}`;
+  return `${what}${player || team ? ` — ${player && team && player !== team ? `${player} (${team})` : player ?? team}` : ''}`; // N-R7-206
 }
 
 /** The timeline line for one event, in every sport. */

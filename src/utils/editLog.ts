@@ -8,6 +8,7 @@
  * type it doesn't know. Never raw JSON.
  */
 import { extraPenaltyOf, isBallOfOver } from './cricketRules';
+import { sportCommentary } from './commentary';
 
 export interface LogContext {
   sport: string;
@@ -20,6 +21,7 @@ type P = Record<string, any>;
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const words = (s: string) => s.replace(/_/g, ' ').trim();
 // N-R7-201 (SPP1-CRM-035): the buzzer note is the pad's ⏱ TIME CALLED ('undid: buzzer' read raw).
+const WORDED_NOTES = new Set(['violation', 'rotation', 'libero', 'super_point']);
 const NOTE_WORDS: Record<string, string> = { warmup: 'warm-up', medical_timeout: 'medical time-out', buzzer: 'time called' };
 
 function teamOf(p: P, ctx: LogContext): string {
@@ -99,7 +101,17 @@ export function describeEvent(type: string | null | undefined, p: P | null | und
     // Rally sports
     case 'serve_swap': return 'serve change';
     // N-R7-92 (SPP1-TTN-017): a note kind the way the pad says it ('warmup' read 'deleted: warmup').
-    case 'note': return x.kind ? NOTE_WORDS[String(x.kind)] ?? words(String(x.kind)) : 'note';
+    case 'note': {
+      if (!x.kind) return 'note';
+      if (NOTE_WORDS[String(x.kind)]) return NOTE_WORDS[String(x.kind)];
+      // N-R7-S120 (SPP2-VOL-089): a misconduct note (and volleyball's line-up / libero / Super Point notes) read
+      // 'undid: violation' — now in the timeline's own words, without its emoji.
+      if (WORDED_NOTES.has(String(x.kind))) {
+        const line = sportCommentary('note', x, { sport: ctx.sport, teamA: ctx.teamA, teamB: ctx.teamB, period: 1 });
+        if (line) { const t2 = line.replace(/^[^\p{L}\p{N}]+/u, ''); return String(x.kind) === 'violation' ? t2.charAt(0).toLowerCase() + t2.slice(1) : t2; }
+      }
+      return words(String(x.kind));
+    }
     default:
       return t ? `a ${words(t)} entry` : 'an entry';
   }

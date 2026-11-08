@@ -134,18 +134,39 @@ export function makeLease<T extends LeaseRow>(table: string, idColumn: string) {
     if (existing && (existing.user_id !== userId || existing.device_id !== deviceId)) {
       return { taken: false, lease: null, heldBy: existing };
     }
+    // N-R7-S121 (SCR-M-S03): two phones claiming at once both read "no lease" and both UPSERTED, so
+    // each was told it holds the pad. A refresh now updates only the caller's own row, and a fresh
+    // claim INSERTS — the row's unique key lets exactly one phone win; the other is told who holds it.
+    if (existing) {
+      const { data, error } = await supabase
+        .from(table)
+        .update({ heartbeat_at: nowIso })
+        .eq(idColumn, id).eq('user_id', userId).eq('device_id', deviceId)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (data) return { taken: true, lease: data as T };
+      // released or taken over meanwhile: claim afresh below
+    }
     const { data, error } = await supabase
       .from(table)
-      .upsert({
+      .insert({
         [idColumn]: id,
         user_id: userId,
         device_id: deviceId,
-        claimed_at: existing ? existing.claimed_at : nowIso,
+        claimed_at: nowIso,
         heartbeat_at: nowIso,
-      }, { onConflict: idColumn })
+      })
       .select('*')
       .single();
-    if (error) throw error;
+    if (error) {
+      if ((error as { code?: string }).code === '23505') {
+        const held = await get(id);
+        if (held && held.user_id === userId && held.device_id === deviceId) return { taken: true, lease: held };
+        if (held) return { taken: false, lease: null, heldBy: held };
+      }
+      throw error;
+    }
     return { taken: true, lease: data as T };
   }
 

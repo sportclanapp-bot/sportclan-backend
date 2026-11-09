@@ -19,6 +19,7 @@ import { settingsOf, settingsRefusal, storedSettings, type PickedAward } from '.
 import { selectAllIn } from '../utils/selectAll';
 import { rankExtrasFor } from '../utils/rankExtras';
 import { plural } from '../utils/plural';
+import { detectProfanity } from '../utils/profanity';
 
 export type Placing = { place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string; players: Array<{ id: string; name: string }> };
 type M = { id: string; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null; winner_team_id: string | null; status: string; round: number | null; group_label: string | null; third_place?: boolean | null; voided_at: string | null; score_summary?: unknown; overs?: number | null; bracket?: string | null };
@@ -223,6 +224,16 @@ export async function getAwards(req: Request, res: Response) {
   }
 }
 
+/** N-R7-S122: the words from the check in any award's title or typed name (none: []). */
+export function awardsProfanity(awards: unknown): string[] {
+  if (!Array.isArray(awards)) return [];
+  const found = awards.flatMap((x) => {
+    const a = (x ?? {}) as { title?: unknown; name?: unknown };
+    return [a.title, a.name].flatMap((v) => (typeof v === 'string' && v.trim() ? detectProfanity(v) : []));
+  });
+  return [...new Set(found)];
+}
+
 export async function setAwards(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -236,6 +247,10 @@ export async function setAwards(req: Request, res: Response) {
     const sport = (await getSport(String((t as { sport_id?: string }).sport_id)))?.slug ?? null;
     const bad = settingsRefusal(sport, (t as { format?: string }).format ?? null, { awards: awards ?? [] });
     if (bad) return res.status(400).json(bad);
+    // N-R7-S122 (GF2-083): an award's title and typed name pass the same word check as team names and posts
+    // — they go on the awards poster and on a player's certificate.
+    const words = awardsProfanity(awards);
+    if (words.length > 0) return res.status(400).json({ error: 'PROFANITY_DETECTED', detected_words: words });
     const next = storedSettings({ awards: awards ?? [] }, settingsOf(t as { settings?: unknown }));
     const { error } = await supabase.from('tournaments').update({ settings: next }).eq('id', id);
     if (error) return res.status(500).json({ error: 'Couldn’t save the awards.' });

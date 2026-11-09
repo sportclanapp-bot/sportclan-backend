@@ -1479,13 +1479,20 @@ export async function getRival(req: Request, res: Response) {
   }
 
   // Query all candidate profiles with higher rating and sort by delta.
-  const { data: higher } = await supabase
+  // N-R7-S125: the rival card is a discovery read — a real user is never shown
+  // a test player (is_test_seed) to chase, like Rankings (B03); test accounts
+  // still see each other. Filtered in the query (embedded users join), so the
+  // nearest-higher window isn't spent on hidden rows.
+  const hideTest = await hideTestFor(userId);
+  let higherQ: any = supabase
     .from('user_sport_profiles')
-    .select('user_id, rating, matches_played, wins')
+    .select(hideTest ? 'user_id, rating, matches_played, wins, tu:users!user_id!inner(is_test_seed)' : 'user_id, rating, matches_played, wins')
     .eq('sport_id', sportId)
-    .gt('rating', myProfile.rating)
+    .gt('rating', myProfile.rating);
+  if (hideTest) higherQ = higherQ.eq('tu.is_test_seed', false);
+  const { data: higher } = await higherQ
     .order('rating', { ascending: true })
-    .limit(200);
+    .limit(200) as { data: Array<{ user_id: string; rating: number; matches_played: number; wins: number }> | null };
 
   if (!higher || higher.length === 0) {
     return res.json({ rival: null });

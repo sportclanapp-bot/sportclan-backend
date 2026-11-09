@@ -160,7 +160,10 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   // belongs to the side that won it: when that side has exactly one player
   // (singles), it is theirs; otherwise nobody can say whose it was.
   const onlyPlayerOf = new Map<string, string | null>();
-  for (const p of participants ?? []) {
+  // N-R7-S127 (Step 2 B10, SIDE-C5-POTM1): volleyball is a team sport — a side entered by one person
+  // (a tournament team's captain) isn't singles, so an unattributed point (a typed score sheet) is
+  // nobody's; it credited every point to the captain and named them Player of the Match.
+  if (slug !== 'volleyball') for (const p of participants ?? []) {
     const side = p.team_side as string;
     onlyPlayerOf.set(side, onlyPlayerOf.has(side) ? null : p.user_id);
   }

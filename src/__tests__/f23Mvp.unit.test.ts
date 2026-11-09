@@ -62,12 +62,31 @@ describe('F-36 · game-and-set sports: Player of the Match is on the winning sid
   // Session 4, R8: A won pickleball 2-1 (11-8, 5-11, 11-9) but B won more points
   // (28 to 27) and was named Player of the Match. Decision 2026-09-25.
   const r8 = () => [...Array(27)].map(() => pt('A', 'scorerA')).concat([...Array(28)].map(() => pt('B', 'scorerA')));
-  test.each(['badminton', 'tabletennis', 'pickleball', 'volleyball', 'tennis', 'carrom'])('%s: the winner, even with fewer points', async (sport) => {
+  test.each(['badminton', 'tabletennis', 'pickleball', 'tennis', 'carrom'])('%s: the winner, even with fewer points', async (sport) => {
     db.sport = sport;
     db.summary = { winner_side: 'A' };
     db.parts = [{ user_id: 'scorerA', team_side: 'A' }, { user_id: 'oppB', team_side: 'B' }];
     db.events = r8();
     expect(await calculateAndSetMVP('m')).toBe('scorerA');
+  });
+  // N-R7-S127 (Step 2 B10, SIDE-C5-POTM1): volleyball left the list above. Its example had one
+  // participant a side with every point unattributed — the singles rule — but a volleyball side is a
+  // team: a one-person side is a tournament team's captain, and crediting them every typed point named
+  // them Player of the Match for a score sheet that credits nobody (SP-VBL-S08: points only). The
+  // F-36 rule itself (the winner, even with fewer points) still holds for credited volleyball points.
+  test('volleyball: the winner, even with fewer points (credited points)', async () => {
+    db.sport = 'volleyball';
+    db.summary = { winner_side: 'A' };
+    db.parts = [{ user_id: 'scorerA', team_side: 'A' }, { user_id: 'oppB', team_side: 'B' }];
+    db.events = [...Array(27)].map(() => pt('A', 'scorerA', 'scorerA')).concat([...Array(28)].map(() => pt('B', 'scorerA', 'oppB')));
+    expect(await calculateAndSetMVP('m')).toBe('scorerA');
+  });
+  test('volleyball: a one-person side (the captain) is not credited unattributed points', async () => {
+    db.sport = 'volleyball';
+    db.summary = { winner_side: 'A' };
+    db.parts = [{ user_id: 'captainA', team_side: 'A' }, { user_id: 'captainB', team_side: 'B' }];
+    db.events = r8();
+    expect(await calculateAndSetMVP('m')).toBeNull();
   });
   test('doubles: the winning side\'s top scorer, not the other side\'s', async () => {
     db.sport = 'volleyball';

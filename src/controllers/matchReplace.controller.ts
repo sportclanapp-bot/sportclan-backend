@@ -98,6 +98,9 @@ export async function replaceVoidedMatch(req: Request, res: Response) {
     const copies = ((parts ?? []) as Row[]).map((p) => { const r: Row = { match_id: newId }; for (const k of PART_COPY) if (k in p) r[k] = p[k]; return r; });
     if (copies.length) await supabase.from('match_participants').insert(copies);
     await moveFeeders(m.tournament_id, id, newId);
+    // A tournament with a fixture to play is live again (the void un-crowned a finished one), so the
+    // copy's result crowns and finishes it the usual way.
+    await supabase.from('tournaments').update({ status: 'live', updated_at: now }).eq('id', m.tournament_id).eq('status', 'completed');
     return res.json({ success: true, match: made, replaces: id });
   } catch (e) {
     console.error('replaceVoidedMatch error:', e instanceof Error ? e.message : e);

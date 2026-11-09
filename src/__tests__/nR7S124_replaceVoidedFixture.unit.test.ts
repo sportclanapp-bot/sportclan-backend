@@ -62,6 +62,12 @@ test('a voided fixture gets a fresh copy in its place; the semi feeds the copy; 
   expect(await replacedMatchIds(T)).toEqual(new Set([M]));
 });
 
+test('a finished tournament (its final voided) is live again, so the copy crowns it', async () => {
+  seed(); db.t('tournaments')[0].status = 'completed';
+  expect((await replace()).statusCode).toBe(200);
+  expect(db.t('tournaments')[0].status).toBe('live');
+});
+
 test('a second tap makes no second copy', async () => {
   seed(); await replace(); const r = await replace();
   expect([r.statusCode, r.body.already_replaced]).toEqual([200, true]);

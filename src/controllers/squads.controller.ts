@@ -383,8 +383,13 @@ export async function getWomenOnCourt(req: Request, res: Response) {
   try {
     const ev = await coedEvent(String(req.params.id));
     if (!ev || !ev.minWomen) return res.json({ min_women: null, genders: {}, marked: [] });
-    const { data: parts } = await supabase.from('match_participants').select('user_id').eq('match_id', ev.m.id);
-    const ids = ((parts ?? []) as Array<{ user_id: string }>).map((p) => p.user_id);
+    // N-R7-S126 (Step 2 B10, RW-D2-237): the pad's court line-up offers a side's team roster when the
+    // fixture has no match line-up for it, so the genders cover both teams' members too — not only the
+    // match line-up (a registered woman placed from the roster counted as unknown, and her W was refused).
+    const parts = await allRows<{ user_id: string }>(() => supabase.from('match_participants').select('id, user_id').eq('match_id', ev.m.id));
+    const teamIds = [ev.m.team_a_id, ev.m.team_b_id].filter((x): x is string => !!x);
+    const members = teamIds.length ? await allRows<{ user_id: string }>(() => supabase.from('team_members').select('id, user_id').in('team_id', teamIds)) : [];
+    const ids = [...new Set([...parts, ...members].map((p) => p.user_id).filter(Boolean))];
     const users = ids.length ? await selectAllIn(ids, (c, f, to) => supabase.from('users').select('id, gender').in('id', c).order('id').range(f, to)) : [];
     const marks = settingsOf(ev.t as { settings?: unknown }).genderMarks ?? {};
     const genders: Record<string, 'male' | 'female' | null> = {};

@@ -1279,6 +1279,9 @@ export const SUB_PAD_SPORTS: ReadonlySet<string> = new Set(['football', 'hockey'
 
 /** BUILD 3.47: doubles is exactly two a side. */
 export const DOUBLES_PLAYERS = 2;
+/** N-R7-230 / N-R7-231: volleyball played 2 a side follows the beach rules (no substitutes, no positional faults). */
+export const isBeachVolleyball = (sport: string, rules: { players?: number | null } | null | undefined): boolean =>
+  sport === 'volleyball' && rules?.players === DOUBLES_PLAYERS;
 /**
  * BUILD 3.47 · why a doubles line-up can't stand, or null. `phase` 'lineup':
  * no side may have more than 2; 'start': no side may have just 1 (0 is a

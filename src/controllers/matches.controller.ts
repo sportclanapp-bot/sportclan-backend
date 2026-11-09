@@ -4188,6 +4188,8 @@ export async function completeMatch(req: Request, res: Response) {
         // F-15: who chased without a toss, and a DLS revised target.
         firstBattingSide: (ss?.first_batting_side as 'A' | 'B' | undefined) ?? null,
         dlsTarget: ss?.dls_applied ? Number(ss?.dls_target ?? 0) || null : null,
+        // N-R7-S128: a one-set volleyball match's sentence gives the set.
+        setScores: Array.isArray(ss?.A?.sets) && Array.isArray(ss?.B?.sets) ? { A: (ss.A.sets as unknown[]).map(Number), B: (ss.B.sets as unknown[]).map(Number) } : null,
       });
 
       ss.result = resultText;

@@ -52,6 +52,8 @@ export interface ResultInput {
   firstBattingSide?: Side | null;
   /** F-15 · cricket: a DLS revised target for the chasing side (score_summary.dls_target). */
   dlsTarget?: number | null;
+  /** N-R7-S128 · volleyball: each side's set scores (score_summary.A.sets / B.sets). */
+  setScores?: { A: number[]; B: number[] } | null;
 }
 
 const SET_SPORTS = new Set(['badminton', 'tennis', 'tabletennis', 'pickleball', 'volleyball']);
@@ -150,6 +152,14 @@ export function deriveResultText(input: ResultInput): {
       return { text: `${winnerName} won by ${wicketsInHand(input, winnerSide)}`, winnerSide };
     }
     return { text: `${winnerName} won by ${diff} run${diff === 1 ? '' : 's'}`, winnerSide };
+  }
+
+  // N-R7-S128 (Step 2 B10, SIDE-C5-ONESET): a one-set volleyball match reads by its set, as its
+  // headline does ('won 14–12', not 'won 1–0').
+  const ss = input.setScores;
+  if (sport === 'volleyball' && hi === 1 && lo === 0 && ss && ss.A.length === 1 && ss.B.length === 1) {
+    const [w, l] = winnerSide === 'A' ? [ss.A[0]!, ss.B[0]!] : [ss.B[0]!, ss.A[0]!];
+    if (Number.isFinite(w) && Number.isFinite(l) && w !== l) return { text: `${winnerName} won ${w}–${l}`, winnerSide };
   }
 
   // Set sports report sets won; everything else reports goals/points/boards.

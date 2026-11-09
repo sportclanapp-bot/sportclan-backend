@@ -252,6 +252,7 @@ export function tiebreakLabel(sport: string | null | undefined, t: TiebreakToken
           : key === 'chess' ? 'Score' : 'Game';
   // Stage 12 · CH5: a team chess table — game points (each board's), match points first.
   if (key === 'chess' && tie && (t === 'score_scored' || t === 'score_diff')) return t === 'score_scored' ? 'Game points' : 'Game point difference';
+  if ((t as string) === 'score_rate') return 'Net run rate'; // N-R7-204: the server's name for it (best_next.skipped)
   switch (t) {
     case 'head_to_head': return key === 'chess' ? 'Direct encounter' : 'Head-to-head'; // Stage 12 · CH1: FIDE's word
     case 'wins': return 'Wins';

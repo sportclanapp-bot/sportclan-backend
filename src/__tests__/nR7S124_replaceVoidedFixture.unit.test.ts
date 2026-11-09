@@ -112,6 +112,8 @@ test('Restore is refused once the copy has been played', async () => {
 test('the bracket leaves out a replaced fixture; the route is wired', () => {
   const src = fs.readFileSync(path.join(__dirname, '../controllers/tournaments.controller.ts'), 'utf8');
   const b = src.slice(src.indexOf('export async function getBracket'), src.indexOf('export async function joinByCode'));
-  expect(b).toMatch(/replacedMatchIds\(/);
+  // the bracket's own matches query carries replaced_by and drops the replaced original (no second query)
+  expect(b).toMatch(/result_type, replaced_by'\)/);
+  expect(b).toMatch(/filter\(\(m: any\) => !m\.replaced_by\)/);
   expect(fs.readFileSync(path.join(__dirname, '../routes/matches.routes.ts'), 'utf8')).toMatch(/'\/:id\/replace', authenticateToken, replaceVoidedMatch/);
 });

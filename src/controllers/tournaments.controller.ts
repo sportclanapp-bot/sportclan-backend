@@ -2496,15 +2496,15 @@ export async function getBracket(req: Request, res: Response) {
       // SC-433: next_match_id / next_slot say where each winner goes. The offline
       // hub needs them to show the next round locally — without them it would
       // have to guess a bracket shape the server would then disagree with.
-      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label, venue, ground_label, voided_at, next_match_id, next_slot, third_place, bracket, rules, loser_next_match_id, loser_next_slot, result_type')
+      .select('id, team_a_name, team_b_name, team_a_id, team_b_id, score_summary, status, winner_team_id, scheduled_at, round, match_no, group_label, venue, ground_label, voided_at, next_match_id, next_slot, third_place, bracket, rules, loser_next_match_id, loser_next_slot, result_type, replaced_by')
       .eq('tournament_id', id)
       .order('round', { ascending: true })
       .order('match_no', { ascending: true })
       .order('scheduled_at', { ascending: true });
     if (error) return res.status(500).json({ error: sanitizeError(error) });
     // N-R7-S124: a replaced fixture (voided, its corrected copy in its place) isn't drawn — the copy is.
-    const replaced = await replacedMatchIds(String(id));
-    const matches = replaced.size ? (matchesAll ?? []).filter((m: any) => !replaced.has(m.id)) : matchesAll;
+    // (read from this same query: replaced_by is set only on the voided original)
+    const matches = (matchesAll ?? []).filter((m: any) => !m.replaced_by);
 
     // Group by the PERSISTED round (SC-23) — no more count-heuristic guessing.
     // round 0 = group stage (groups_knockout); 1..R = the bracket rounds.

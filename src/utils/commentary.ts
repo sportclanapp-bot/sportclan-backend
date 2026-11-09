@@ -124,7 +124,8 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     return `🔄 Libero${lib ? ` ${lib}` : ''} in${rep ? ` for ${rep}` : ''} — ${team}`;
   }
   if (ctx.sport === 'volleyball' && eventType === 'note' && p.kind === 'super_point') return `⚡ Super Point called — ${team}`;
-  if (ctx.sport === 'volleyball' && eventType === 'score' && p.kind === 'fault') return `🔢 Positional fault by ${other} — point to ${team}`;
+  // N-R7-231: the beach's fault is a service order fault (FIVB Beach 7.4 / 7.7: no positional faults there).
+  if (ctx.sport === 'volleyball' && eventType === 'score' && p.kind === 'fault') return `🔢 ${p.fault === 'service_order' ? 'Service order' : 'Positional'} fault by ${other} — point to ${team}`;
   if (ctx.sport === 'volleyball' && eventType === 'score' && p.super_serve === true) return `🎯 Super Serve — an ace by ${player ? `${player} (${team})` : team}, +2`;
   // Stage 14 · VB8: how a rally point was won, when the scorer said.
   if (eventType === 'score' && p.kind === 'point' && (typeof p.how === 'string' || p.super_point === true)) {

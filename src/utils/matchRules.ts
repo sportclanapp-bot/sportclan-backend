@@ -1370,7 +1370,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     // Stage 14 · VB2 / VB4 / VB7 / VB12: volleyball's own, when not the standard.
     if (key === 'volleyball') {
       const sw = courtSwitchOf(rules);
-      if (sw) parts.push(`courts every ${sw.every}${sw.deciding !== sw.every ? ` (${sw.deciding} in the decider)` : ''}`);
+      if (sw) parts.push(`courts every ${sw.every}${sw.deciding !== sw.every && (rules.bestOf ?? 3) > 1 ? ` (${sw.deciding} in the decider)` : ''}`); // N-R7-236 (SP-VBL-139): a one-set match has no decider
       const subs = subsWords(rules, std);
       if (subs) parts.push(subs);
       if (rules.liberos !== undefined && rules.liberos !== std.liberos) parts.push(rules.liberos === 0 ? 'no libero' : rules.liberos == null ? 'any liberos' : `${rules.liberos} libero${rules.liberos === 1 ? '' : 's'}`);

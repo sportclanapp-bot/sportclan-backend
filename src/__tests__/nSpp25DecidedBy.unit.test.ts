@@ -12,6 +12,6 @@ test('walkover, default, award — else nothing', () => {
 });
 test('the bracket reads result_type and sends it', () => {
   const s = fs.readFileSync(path.join(__dirname, '../controllers/tournaments.controller.ts'), 'utf8');
-  expect(s).toContain('loser_next_match_id, loser_next_slot, result_type\')');
+  expect(s).toContain('loser_next_match_id, loser_next_slot, result_type, replaced_by\')'); // + replaced_by (N-R7-S124)
   expect(s).toContain('...decidedFields(m as any), // N-R7-75'); // N-R7-75: decided_by now comes from decidedFields (which also sends retired)
 });

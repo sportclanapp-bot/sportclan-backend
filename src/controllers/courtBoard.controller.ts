@@ -19,7 +19,7 @@ import { isUuid } from '../utils/uuid';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { notifyUsers, matchAudienceIds } from '../utils/notify';
 import { familyIds, rootTournamentId } from '../utils/tournamentEvents';
-import { formatTimeIst } from '../utils/scheduleFixtures';
+import { formatTimeIst, groundIndexOf } from '../utils/scheduleFixtures';
 import { plural } from '../utils/plural';
 
 type M = {
@@ -30,13 +30,37 @@ type M = {
 const M_COLS = 'id, tournament_id, team_a_id, team_b_id, team_a_name, team_b_name, scheduled_at, ground_label, status, called_at, called_by, round, umpire_id, scorer_id, voided_at';
 const LATE_MIN = 1; // Stage 13 · CR3: no top
 const LATE_MAX = Number.MAX_SAFE_INTEGER;
+/** N-R7-220: the court board's courts come a page at a time (the app asks for more). */
+export const COURT_PAGE = 50;
 
-/** Courts, in order: the tournament's grounds (named or numbered), then any other label a fixture carries. */
-export function courtsOf(t: { ground_count?: number | null; ground_names?: string[] | null }, labels: Array<string | null>, sport?: string | null): string[] {
-  const n = Math.max(1, Number(t.ground_count ?? 0) || 0, (t.ground_names ?? []).length);
-  const named = Array.from({ length: n }, (_, i) => (t.ground_names && t.ground_names[i]) || (sport ? areaLabel(sport, i) : `Ground ${i + 1}`));
-  for (const l of labels) if (l && !named.includes(l)) named.push(l);
-  return named;
+type Grounds = { ground_count?: number | null; ground_names?: string[] | null };
+
+/**
+ * N-R7-220 · the courts, in order: the tournament's grounds (named or numbered),
+ * then any other label a fixture carries. Counted and read one at a time, never
+ * listed whole: a tournament can have 3,00,00,00,128 boards (no caps).
+ */
+function courtList(t: Grounds, labels: Array<string | null>, sport?: string | null) {
+  const grounds = Math.max(1, Number(t.ground_count ?? 0) || 0, (t.ground_names ?? []).length);
+  const word = sport ? areaLabel(sport, 0).replace(/ 1$/, '') : 'Ground';
+  const names = t.ground_names ?? null;
+  const extra: string[] = [];
+  for (const l of labels) if (l && !extra.includes(l) && groundIndexOf(l, grounds, names, word) < 0) extra.push(l);
+  return { count: grounds + extra.length, at: (i: number) => (i < grounds ? (names && names[i]) || (sport ? areaLabel(sport, i) : `Ground ${i + 1}`) : extra[i - grounds]!) };
+}
+
+/** How many courts there are: grounds plus any other label a fixture carries. */
+export function courtCount(t: Grounds, labels: Array<string | null>, sport?: string | null): number {
+  return courtList(t, labels, sport).count;
+}
+
+/** The courts `from` to `from + limit` (in order). */
+export function courtsOf(t: Grounds, labels: Array<string | null>, sport?: string | null, from = 0, limit = COURT_PAGE): string[] {
+  const c = courtList(t, labels, sport);
+  const end = Math.min(c.count, from + Math.max(0, limit));
+  const out: string[] = [];
+  for (let i = Math.max(0, from); i < end; i++) out.push(c.at(i));
+  return out;
 }
 
 const known = (m: M) => !!m.team_a_id && !!m.team_b_id;
@@ -96,8 +120,14 @@ export async function getCourtBoard(req: Request, res: Response) {
     if (!isUuid(id)) return res.status(404).json({ error: 'Tournament not found' });
     const f = await loadFamily(id);
     if (!f.rootRow) return res.status(404).json({ error: 'Tournament not found' });
-    const courts = courtsOf(f.rootRow, f.matches.map((m) => m.ground_label), f.sport);
-    return res.json({ ...boardOf(courts, f.matches, f.labelOf, f.playersOf), can_run: await isTournamentOrganiser(f.root, userId) });
+    // N-R7-220: a page of courts (?from=&limit=, as many as asked) and the exact count.
+    const labels = f.matches.map((m) => m.ground_label);
+    const total = courtCount(f.rootRow, labels, f.sport);
+    const from = Math.min(total, Math.max(0, Math.floor(Number(req.query.from)) || 0));
+    const limit = Math.max(1, Math.floor(Number(req.query.limit)) || COURT_PAGE);
+    const courts = courtsOf(f.rootRow, labels, f.sport, from, limit);
+    const next = from + courts.length < total ? from + courts.length : null;
+    return res.json({ ...boardOf(courts, f.matches, f.labelOf, f.playersOf), court_count: total, courts_from: from, next_from: next, can_run: await isTournamentOrganiser(f.root, userId) });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -189,8 +219,9 @@ export async function nextToCourt(req: Request, res: Response) {
     if (!(await isTournamentOrganiser(f.root, userId))) return res.status(403).json({ error: 'Only the organiser can send matches to courts.' });
     const court = typeof req.body?.court === 'string' ? req.body.court.trim().slice(0, 40) : '';
     if (!court) return res.status(400).json({ error: 'Pick a court.', code: 'NO_COURT' });
-    const board = boardOf(courtsOf(f.rootRow, f.matches.map((m) => m.ground_label), f.sport), f.matches, f.labelOf, f.playersOf);
-    const here = board.courts.find((c) => c.label === court);
+    // N-R7-220: only this court's state (it's always a court — any label a fixture carries is one).
+    const board = boardOf([court], f.matches, f.labelOf, f.playersOf);
+    const here = board.courts[0];
     if (here && !here.free) return res.status(409).json({ error: `${court} isn’t free.`, code: 'COURT_BUSY' });
     // Players, not just teams: a player in two events can't be on two courts.
     const nextCard = board.ready.find((r) => !r.busy);

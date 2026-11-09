@@ -787,13 +787,15 @@ export function categoryProblem(c: Category | null | undefined, players: Categor
       const age = p.dob ? (byYear ? ageInYear(p.dob, on) : ageOn(p.dob, on)) : null;
       if (age == null) return `${poss(p.name)} profile doesn’t list their date of birth, and this event has an age limit. Add it to the profile first.`;
       const year = on.getUTCFullYear();
+      // N-R7-S123: the start date in day-month-year, as the born-on-or-after refusal names its dates.
+      const onWords = dateWords(on.toISOString().slice(0, 10));
       if (c.underAge != null && !c.bornFrom && age >= c.underAge) {
         return byYear ? `This is an under-${c.underAge} event by birth year (born ${year - c.underAge + 1} or later), and ${p.name} turns ${age} in ${year}.`
-          : `This is an under-${c.underAge} event, and ${p.name} is ${age} on the start date.`;
+          : `This is an under-${c.underAge} event, and ${p.name} is ${age} on the start date (${onWords}).`;
       }
       if (c.minAge != null && !c.bornTo && age < c.minAge) {
         return byYear ? `This event is for ${c.minAge} and over by birth year (born ${year - c.minAge} or earlier), and ${p.name} turns ${age} in ${year}.`
-          : `This event is for ${c.minAge} and over, and ${p.name} is ${age} on the start date.`;
+          : `This event is for ${c.minAge} and over, and ${p.name} is ${age} on the start date (${onWords}).`;
       }
     }
     if (c.maxRating != null && p.rating != null && p.rating > c.maxRating) return `This event is for players rated up to ${c.maxRating}, and ${p.name} is rated ${Math.round(p.rating)}.`;

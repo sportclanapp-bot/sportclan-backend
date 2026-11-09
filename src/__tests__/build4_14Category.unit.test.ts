@@ -73,10 +73,10 @@ describe('BUILD 4.14 · the rules', () => {
     [{ gender: 'women' }, [P('Asha', 'female', null), P('Ravi', 'male', null)], 'This is a women’s event, and Ravi can’t play in it.'],
     [{ gender: 'men' }, [P('Kiran', null, null)], 'Kiran’s profile doesn’t list their gender as man. Add it to the profile first.'],
     [{ gender: 'mixed' }, [P('A', 'male', null), P('B', 'male', null)], 'A mixed event needs at least one man and one woman on the team.'],
-    [{ underAge: 14 }, [P('Tara', 'female', '2012-10-10')], 'This is an under-14 event, and Tara is 14 on the start date.'],
+    [{ underAge: 14 }, [P('Tara', 'female', '2012-10-10')], 'This is an under-14 event, and Tara is 14 on the start date (10 Oct 2026).'],
     [{ underAge: 14 }, [P('Tara', 'female', '2012-10-11')], null],
     [{ underAge: 14 }, [P('Neel', 'male', null)], 'Neel’s profile doesn’t list their date of birth, and this event has an age limit. Add it to the profile first.'],
-    [{ minAge: 40 }, [P('Old', 'male', '1990-01-01')], 'This event is for 40 and over, and Old is 36 on the start date.'],
+    [{ minAge: 40 }, [P('Old', 'male', '1990-01-01')], 'This event is for 40 and over, and Old is 36 on the start date (10 Oct 2026).'],
     [{ maxRating: 1600 }, [P('Magnus', 'male', null, 1650.4)], 'This event is for players rated up to 1600, and Magnus is rated 1650.'],
     [{ maxRating: 1600 }, [P('New', 'male', null, null)], null],
     [{ minRating: 1800 }, [P('New', 'male', null, null)], 'New has no rating in this sport yet (this event is for 1800 and up).'],
@@ -109,7 +109,7 @@ describe('BUILD 4.14 · entries', () => {
   test('a player too old → 400 CATEGORY naming them, nothing inserted', async () => {
     setup({ underAge: 14 }, [{ id: 'u1', name: 'Tara', gender: 'female', dob: '2012-10-11' }, { id: 'u2', name: 'Arjun', gender: 'male', dob: '2011-05-01' }]);
     const r = await run(createEntry, { body: { team_id: TEAM } });
-    expect([r.statusCode, r.body.code, r.body.error]).toEqual([400, 'CATEGORY', 'This is an under-14 event, and Arjun is 15 on the start date.']);
+    expect([r.statusCode, r.body.code, r.body.error]).toEqual([400, 'CATEGORY', 'This is an under-14 event, and Arjun is 15 on the start date (10 Oct 2026).']);
     expect(written('tournament_entries', 'insert')).toEqual([]);
   });
   test('the organiser’s add is checked too', async () => {
@@ -136,7 +136,7 @@ describe('BUILD 4.14 · the draw re-checks', () => {
       return { data: [] };
     };
     const r = await run(generateFixtures, {});
-    expect([r.statusCode, r.body.code, r.body.error]).toEqual([400, 'CATEGORY', 'P3 Juniors: This is an under-14 event, and Late Joiner is 26 on the start date.']);
+    expect([r.statusCode, r.body.code, r.body.error]).toEqual([400, 'CATEGORY', 'P3 Juniors: This is an under-14 event, and Late Joiner is 26 on the start date (10 Oct 2026).']);
     expect(mockLog.some((q) => q[0] === 'from:matches' && has(q, 'insert:'))).toBe(false);
   });
 });

@@ -123,7 +123,7 @@ describe('POST /tournaments/:id/entry-check', () => {
     const v = await verdicts([OK, BADMINTON, OLD, PENDING, NOT_MINE, REJECTED]);
     expect(v[OK]).toEqual({ team_id: OK, ok: true, code: null, reason: null });
     expect(v[BADMINTON]).toMatchObject({ ok: false, code: 'WRONG_SPORT', reason: 'This is a cricket tournament — enter a cricket team.' });
-    expect(v[OLD]).toMatchObject({ ok: false, code: 'CATEGORY', reason: 'This is an under-19 event, and Arjun is 26 on the start date.' });
+    expect(v[OLD]).toMatchObject({ ok: false, code: 'CATEGORY', reason: 'This is an under-19 event, and Arjun is 26 on the start date (20 Oct 2026).' });
     expect(v[PENDING]).toMatchObject({ ok: false, code: 'ALREADY_ENTERED', reason: 'Already entered — waiting for the organiser.' });
     expect(v[NOT_MINE]).toMatchObject({ ok: false, code: 'NOT_CAPTAIN' });
     expect(v[REJECTED]!.ok).toBe(true); // a captain's entry reopens it
@@ -219,7 +219,7 @@ describe('GET /tournaments/code/:code/teams · join by code in one request', () 
     expect(r.body.tournament).toMatchObject({ id: T, name: 'P3 U-19 Cup', sport_id: 'ck', category: { underAge: 19 } });
     expect(r.body.teams).toEqual([
       { id: OK, name: 'Alpha', sport_id: 'ck', my_role: 'vice_captain', ok: true, code: null, reason: null },
-      { id: OLD, name: 'Veterans', sport_id: 'ck', my_role: 'captain', ok: false, code: 'CATEGORY', reason: 'This is an under-19 event, and Arjun is 26 on the start date.' },
+      { id: OLD, name: 'Veterans', sport_id: 'ck', my_role: 'captain', ok: false, code: 'CATEGORY', reason: 'This is an under-19 event, and Arjun is 26 on the start date (20 Oct 2026).' },
       { id: PENDING, name: 'Waiting XI', sport_id: 'ck', my_role: 'captain', ok: false, code: 'ALREADY_ENTERED', reason: 'Already entered — waiting for the organiser.' },
     ]);
     expect(r.body.other_sport_teams).toBe(1); // the football team; the disbanded one isn't counted

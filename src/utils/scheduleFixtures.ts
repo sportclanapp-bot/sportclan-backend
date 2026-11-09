@@ -80,6 +80,18 @@ export function daysInclusive(startYmd: string, endYmd: string): number {
 const groundLabelFor = (i: number, names: string[] | null, word = 'Ground'): string =>
   (names && names[i]) ? names[i] : `${word} ${i + 1}`;
 
+/**
+ * N-R7-220 · which ground `label` is (the first with that name), or -1 — found
+ * without listing every ground: a tournament can have 3,00,00,00,128 boards.
+ */
+export function groundIndexOf(label: string, count: number, names: string[] | null, word = 'Ground'): number {
+  const hits: number[] = [];
+  if (names) { const k = names.findIndex((x, i) => i < count && !!x && x === label); if (k >= 0) hits.push(k); }
+  const m = /^(.*) (\d+)$/.exec(label);
+  if (m) { const k = Number(m[2]) - 1; if (k >= 0 && k < count && groundLabelFor(k, names, word) === label) hits.push(k); }
+  return hits.length ? Math.min(...hits) : -1;
+}
+
 /** IST wall-clock (startDate + dayIndex, at wallMin) → UTC ISO. */
 function slotUtcIso(startYmd: string, dayIndex: number, wallMin: number): string {
   const [y, m, d] = startYmd.split('-').map(Number);
@@ -138,16 +150,18 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
   }
 
   const rawCapacity = totalTimeSlots * G;
-  const usedGround: boolean[][] = Array.from({ length: totalTimeSlots }, () => new Array(G).fill(false));
+  // N-R7-220: the grounds taken at each time-slot (only those) — never one flag per ground (3,00,00,00,128 boards).
+  const usedGround: Array<Set<number>> = Array.from({ length: totalTimeSlots }, () => new Set<number>());
+  const firstFree = (taken: Set<number>): number => { let g = 0; while (taken.has(g)) g++; return g < G ? g : -1; };
   // Badminton gap 3: a court another event holds at that time is taken.
   const shared = (cfg.busyGrounds?.length ?? 0) > 0 || (cfg.playerBusy?.size ?? 0) > 0;
   if (cfg.busyGrounds?.length) {
     for (const bz of cfg.busyGrounds) {
-      const g = Array.from({ length: G }, (_, i) => groundLabelFor(i, cfg.groundNames, cfg.areaWord)).indexOf(bz.ground);
+      const g = groundIndexOf(bz.ground, G, cfg.groundNames, cfg.areaWord);
       if (g === -1) continue;
       for (let o = 0; o < totalTimeSlots; o++) {
         const at = timeSlotMeta[o]!.dayIndex * 1440 + timeSlotMeta[o]!.wallMin;
-        if (at < bz.end && at + D > bz.start) usedGround[o]![g] = true;
+        if (at < bz.end && at + D > bz.start) usedGround[o]!.add(g);
       }
     }
   }
@@ -215,9 +229,9 @@ export function buildSchedule(fixtures: FixtureShape[], cfg: SchedulingConfig): 
           .some((p) => (playerBusy.get(p) ?? []).some(([s0, e0]) => at < e0 + R && at + D + R > s0));
         if (clash) continue;
       }
-      const groundIdx = usedGround[order].findIndex((u) => !u);
+      const groundIdx = firstFree(usedGround[order]!);
       if (groundIdx === -1) continue; // this time-slot's grounds are all taken
-      usedGround[order][groundIdx] = true;
+      usedGround[order]!.add(groundIdx);
       if (hasTeams) {
         teamsAt[order].add(f.team_a_id!);
         teamsAt[order].add(f.team_b_id!);

@@ -78,7 +78,7 @@ export async function replaceVoidedMatch(req: Request, res: Response) {
     const newId = crypto.randomUUID();
     // Claimed first (N-R7-S57 style): of two taps only one makes a copy.
     const { data: claimed, error: cErr } = await supabase.from('matches').update({ replaced_by: newId }).eq('id', id).is('replaced_by', null).not('voided_at', 'is', null).select('id');
-    if (cErr) return res.status(500).json({ error: 'The fixture wasn’t replaced. Try again.' });
+    if (cErr) { console.error('replace claim failed:', cErr.message); return res.status(500).json({ error: 'The fixture wasn’t replaced. Try again.' }); }
     if (!(claimed ?? []).length) {
       const { data: now } = await supabase.from('matches').select('replaced_by').eq('id', id).maybeSingle();
       const { data: copy } = (now as Row | null)?.replaced_by ? await supabase.from('matches').select('*').eq('id', (now as Row).replaced_by).maybeSingle() : { data: null };
@@ -89,6 +89,7 @@ export async function replaceVoidedMatch(req: Request, res: Response) {
     for (const k of COPY) if (k in m) row[k] = m[k];
     const { data: made, error: iErr } = await supabase.from('matches').insert(row).select('*').single();
     if (iErr || !made) {
+      console.error('replace insert failed:', iErr?.message);
       await supabase.from('matches').update({ replaced_by: null }).eq('id', id).eq('replaced_by', newId);
       return res.status(500).json({ error: 'The fixture wasn’t replaced. Try again.' });
     }

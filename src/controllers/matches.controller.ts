@@ -84,6 +84,7 @@ import { viewerCanPlay } from '../utils/viewerCanPlay';
 import { possessive } from '../utils/possessive';
 import { OFFICIATING_TYPES } from '../constants/accountTypes';
 import { isOlderApp, updateRequired } from '../utils/clientVersion';
+import { undoReplacement } from './matchReplace.controller';
 
 // POST /matches — create. FREE for all (Change #6).
 /**
@@ -4784,6 +4785,13 @@ export async function unvoidMatch(req: Request, res: Response) {
     }
     if (!match.voided_at) {
       return res.json({ success: true, already_active: true, match });
+    }
+    // N-R7-S124: a voided fixture with a corrected copy — restoring it cancels the
+    // copy while that is unplayed (the bracket goes back to the original), else 409.
+    if (match.tournament_id) {
+      const { data: full } = await supabase.from('matches').select('*').eq('id', id).maybeSingle();
+      const undone = full ? await undoReplacement(full as Record<string, any>) : null;
+      if (undone) return res.status(undone.status).json(undone.body);
     }
 
     // Clear the flag FIRST so the same calculation that voided it sees a live

@@ -37,6 +37,7 @@ import {
   matchHistory,
   nextMatch,
 } from '../controllers/matches.controller';
+import { replaceVoidedMatch } from '../controllers/matchReplace.controller';
 import { getNearbyMatches } from '../controllers/features.controller';
 import { uploadHandoff } from '../controllers/qrHandoff.controller';
 import {
@@ -85,6 +86,8 @@ router.get('/:id/roster/:side', authenticateToken, getMatchRoster); // N-GF2-B2
 // SC-424: void keeps the match and its events and stops it counting anywhere.
 router.post('/:id/void', authenticateToken, voidMatch);
 router.post('/:id/unvoid', authenticateToken, unvoidMatch);
+// N-R7-S124: a voided tournament fixture's corrected copy (enter the correct result).
+router.post('/:id/replace', authenticateToken, replaceVoidedMatch);
 // SC-430 · one scorer per match. Claim on opening the pad, heartbeat while it is
 // open, release on leaving. A STALE lease is takeable — with a reason — but never
 // auto-released, so an offline scorer's queue survives. See utils/scoringLease.

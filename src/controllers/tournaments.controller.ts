@@ -14,6 +14,7 @@ import { syncTournamentChatMembers, syncAfterSuccess, canOpenTournamentChat } fr
 import { isTeamManager } from '../utils/teamAuth';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { replacedMatchIds } from './matchReplace.controller';
 import { statusAfterFixtures, shouldGoLive, ymd, ymdIn } from '../utils/tournamentStatus';
 
 /**
@@ -835,7 +836,8 @@ export async function getTournament(req: Request, res: Response) {
       .from('matches')
       .select('id', { count: 'exact', head: true })
       .eq('tournament_id', id);
-    (tournament as { fixtures_count?: number }).fixtures_count = fixturesCount ?? 0;
+    // N-R7-S124: a replaced fixture isn't one of the bracket's (its corrected copy is).
+    (tournament as { fixtures_count?: number }).fixtures_count = Math.max(0, (fixturesCount ?? 0) - (fixturesCount ? (await replacedMatchIds(String(tournament.id))).size : 0));
     // BUILD 4.1: whether any result is in — the points and tie-breaks are fixed from then on.
     (tournament as { has_results?: boolean }).has_results = (fixturesCount ?? 0) > 0 ? await tournamentHasResult(String(tournament.id)) : false;
     // B02 (N2): whether THIS viewer may open the tournament chat, so the app can
@@ -2487,7 +2489,7 @@ export async function getBracket(req: Request, res: Response) {
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     const slug = normSportSlug((await getSport(String((tournament as { sport_id?: string }).sport_id)))?.slug); // N-R7-S64
 
-    const { data: matches, error } = await supabase
+    const { data: matchesAll, error } = await supabase
       .from('matches')
       // SC-428: voided_at travels so a voided fixture renders as Voided in the
       // fixtures list and the bracket, rather than as live or completed.
@@ -2500,6 +2502,9 @@ export async function getBracket(req: Request, res: Response) {
       .order('match_no', { ascending: true })
       .order('scheduled_at', { ascending: true });
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    // N-R7-S124: a replaced fixture (voided, its corrected copy in its place) isn't drawn — the copy is.
+    const replaced = await replacedMatchIds(String(id));
+    const matches = replaced.size ? (matchesAll ?? []).filter((m: any) => !replaced.has(m.id)) : matchesAll;
 
     // Group by the PERSISTED round (SC-23) — no more count-heuristic guessing.
     // round 0 = group stage (groups_knockout); 1..R = the bracket rounds.

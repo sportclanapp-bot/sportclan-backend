@@ -11,7 +11,8 @@ describe('N-R7-92 · note kinds in words', () => {
   test('medical time-out', () => expect(describeEvent('note', { kind: 'medical_timeout' }, ctx)).toBe('medical time-out'));
   test('the others keep their words', () => {
     expect(describeEvent('note', { kind: 'expedite' }, ctx)).toBe('expedite');
-    expect(describeEvent('note', { kind: 'violation' }, ctx)).toBe('violation');
+    // N-R7-S120: a misconduct note now reads in the timeline's own words, not the bare kind
+    expect(describeEvent('note', { kind: 'violation' }, ctx)).toMatch(/^misconduct — /);
     expect(describeEvent('note', { kind: 'clock_pause' }, ctx)).toBe('clock pause');
   });
 });

@@ -51,3 +51,26 @@ export function backNext(k: number, round: number, matchNo: number): { bracket: 
 export function backRoundName(k: number, round: number): string {
   return round >= 2 * (k - 1) ? 'Back draw final' : `Back draw round ${round}`;
 }
+
+/**
+ * N-R7-253 (Step 2 B10, SPP2-VOL-015) · the back draw, the final and the reset
+ * on the schedule's own clock: after the main draw (rounds 1…k) each back round,
+ * then the final, then the reset is one more scheduler round, so they take the
+ * courts and day hours like every other match (they were the main final's time
+ * plus a round's gap, all of a round at one time, at night). These are the
+ * scheduler's round numbers (`scheduleRound`), not the stored ones.
+ */
+export function scheduleRound(k: number, bracket: 'back' | 'final' | 'reset', round: number): number {
+  const back = 2 * Math.max(0, k - 1);
+  if (bracket === 'back') return k + round;
+  return bracket === 'final' ? k + back + 1 : k + back + 2;
+}
+
+/** N-R7-253 · the slots to schedule for the back draw, the final and the reset (no teams yet). */
+export function deScheduleShape(k: number): Array<{ round: number; match_no: number; team_a_id: null; team_b_id: null }> {
+  const out: Array<{ round: number; match_no: number; team_a_id: null; team_b_id: null }> = [];
+  backRounds(k).forEach((n, i) => { for (let m = 0; m < n; m++) out.push({ round: scheduleRound(k, 'back', i + 1), match_no: m, team_a_id: null, team_b_id: null }); });
+  out.push({ round: scheduleRound(k, 'final', 0), match_no: 0, team_a_id: null, team_b_id: null });
+  out.push({ round: scheduleRound(k, 'reset', 0), match_no: 0, team_a_id: null, team_b_id: null });
+  return out;
+}

@@ -64,7 +64,7 @@ import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { allRows, selectAll, selectAllIn, IN_CHUNK } from '../utils/selectAll';
-import { backNext, backRoundName, backRounds, loserTarget } from '../utils/doubleElim'; // Stage 11 · PB4
+import { backNext, backRoundName, backRounds, loserTarget, scheduleRound, deScheduleShape } from '../utils/doubleElim'; // Stage 11 · PB4; N-R7-253 the back draw on the schedule
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, isCount, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { rankTeams, rankTeamsDetailed, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, bestNextCount, groupsKnockoutSize, type PointsModel } from '../utils/standings';
 import { placeGroupTiersApart, crossGroupFirstRound } from '../utils/koFirstRound';
@@ -3105,6 +3105,15 @@ export function knockoutStage(round: number, roundsCount: number): Stage {
   return roundsCount - round <= 2 ? 'qf' : 'knockout';
 }
 
+/** N-R7-252 · a round-1 bye's date: the round's first real match (no court); none → the draw's fallback. */
+export function byeSlot(
+  round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>,
+  slotFor: (round: number, matchNo: number) => { scheduled_at: string; ground_label: string } | undefined,
+): { scheduled_at: string; ground_label: string | null } | undefined {
+  const times = round1.flatMap((p, m) => (!!p.a?.id === !!p.b?.id ? [slotFor(1, m)?.scheduled_at] : [])).filter((x): x is string => !!x).sort();
+  return times[0] ? { scheduled_at: times[0], ground_label: null } : undefined;
+}
+
 async function insertSingleElim(
   base: BracketBase,
   round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>,
@@ -3137,7 +3146,10 @@ async function insertSingleElim(
         bName = b?.name ?? (a ? 'BYE' : 'TBD');
       }
       // BUILD 4.12: the schedule has the final second in its round (bracketShape).
-      const slot = slotFor(r, r === roundsCount && withThird ? 1 : m);
+      // N-R7-252: a bye has no slot of its own: it is dated with its round's
+      // first match (as a Swiss bye is) and has no court.
+      const isBye = r === 1 && !!a?.id !== !!b?.id;
+      const slot = isBye ? byeSlot(round1, slotFor) : slotFor(r, r === roundsCount && withThird ? 1 : m);
       rows.push({
         sport_id: base.sport_id,
         tournament_id: base.tournament_id,
@@ -3229,9 +3241,12 @@ async function insertDoubleElim(
   const finalAt = slotFor(k, 0)?.scheduled_at; const firstAt = slotFor(1, 0)?.scheduled_at;
   const gap = finalAt && firstAt && k > 1 ? (Date.parse(finalAt) - Date.parse(firstAt)) / (k - 1) : 0;
   const after = (steps: number): string => (finalAt && gap > 0 ? new Date(Date.parse(finalAt) + steps * gap).toISOString() : base.fallbackStartIso);
+  // N-R7-253: when the schedule holds the back draw, the final and the reset
+  // (deScheduleShape), each takes its own court and time in the day hours.
+  const deSlot = (round: number, matchNo: number, bracket: 'back' | 'final' | 'reset') => slotFor(scheduleRound(k, bracket, round), bracket === 'back' ? matchNo : 0);
   const shell = (round: number, matchNo: number, bracket: 'back' | 'final' | 'reset', stage: Stage, next: { id: string; slot: 'A' | 'B' } | null) => ({
     sport_id: base.sport_id, tournament_id: base.tournament_id, team_a_id: null, team_b_id: null, team_a_name: 'TBD', team_b_name: 'TBD',
-    scheduled_at: after(bracket === 'back' ? round : bracket === 'final' ? 2 * (k - 1) + 1 : 2 * (k - 1) + 2), ground_label: null, venue: base.venue, city_id: base.city_id, status: 'scheduled', score_summary: {},
+    scheduled_at: deSlot(round, matchNo, bracket)?.scheduled_at ?? after(bracket === 'back' ? round : bracket === 'final' ? 2 * (k - 1) + 1 : 2 * (k - 1) + 2), ground_label: deSlot(round, matchNo, bracket)?.ground_label ?? null, venue: base.venue, city_id: base.city_id, status: 'scheduled', score_summary: {},
     created_by: base.created_by, round, match_no: matchNo, next_match_id: next?.id ?? null, next_slot: next?.slot ?? null, is_ranked: true, bracket,
     ...(base.stageDefaults ? base.stageDefaults(stage) : (base.fixtureDefaults ?? {})),
   });
@@ -4406,7 +4421,7 @@ async function upsertDayWindows(tournamentId: string, rows: any): Promise<void> 
 
 // Fixture shape of a single-elim bracket (round 1 carries the real round-1
 // matchups; later rounds are TBD). Mirrors insertSingleElim's round numbering.
-function bracketShape(round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>, thirdPlace = false, maxRounds: number | null = null): FixtureShape[] {
+export function bracketShape(round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>, thirdPlace = false, maxRounds: number | null = null): FixtureShape[] {
   const bracketSize = round1.length * 2;
   // Stage 9 · T7: a qualifying draw stops after its rounds (no third place).
   const roundsCount = Math.min(Math.max(1, Math.round(Math.log2(bracketSize))), maxRounds ?? Infinity);
@@ -4417,6 +4432,9 @@ function bracketShape(round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>,
     for (let m = 0; m < matchesInRound; m++) {
       const a = r === 1 ? round1[m].a : null;
       const b = r === 1 ? round1[m].b : null;
+      // N-R7-252 (Step 2 B10, SPP2-VOL-008): a bye is decided at the draw — it
+      // takes no court time, so the real round-1 matches start first.
+      if (r === 1 && !!a?.id !== !!b?.id) continue;
       // BUILD 4.12: with a third-place match the final is scheduled second in
       // its round (it's played last), the third-place match first — see
       // finalSlotKey / thirdPlaceSlotKey.
@@ -4654,7 +4672,7 @@ export async function generateFixtures(req: Request, res: Response) {
       const seeded = seededRound1(teams, nextPow2(teams.length));
       const seedNoOf = new Map(teams.map((x, i) => [x.id, i + 1]));
       const round1 = separateClubs ? separateClubsInRound1(seeded, clubOf, undefined, (tid) => seedNoOf.get(tid)) : seeded; // BUILD 4.13; N-R7-S4: higher seeds swap within their pot
-      const shape = bracketShape(round1, thirdPlace, qualRounds);
+      const shape = [...bracketShape(round1, thirdPlace, qualRounds), ...(doubleElim ? deScheduleShape(Math.max(1, Math.round(Math.log2(round1.length * 2)))) : [])]; // N-R7-253
       const sched = buildSchedule(shape, schedCfg);
       if (!sched.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' }); }
       const slotFor = (r: number, m: number): SlotAssign | undefined => sched.assignments.get(keyOf(r, m));
@@ -4852,6 +4870,7 @@ export async function generateFixtures(req: Request, res: Response) {
       const gkShape: FixtureShape[] = [
         ...matchRows.map((r) => ({ round: r.round, match_no: r.match_no, team_a_id: r.team_a_id, team_b_id: r.team_b_id })),
         ...bracketShape(koRound1, thirdPlace),
+        ...(doubleElim ? deScheduleShape(Math.max(1, Math.round(Math.log2(koRound1.length * 2)))) : []), // N-R7-253
       ];
       const schedGK = buildSchedule(gkShape, schedCfg);
       if (!schedGK.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: schedGK.error, code: 'SCHEDULE_CAPACITY' }); }

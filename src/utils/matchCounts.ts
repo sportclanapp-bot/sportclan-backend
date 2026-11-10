@@ -96,6 +96,29 @@ export function countsForUser(match: CountableMatch | null | undefined, userId: 
   return countsTowardRecord(match, participantCount);
 }
 
+/**
+ * N-R7-S131 (Step 2 B11, SP-BKB-074): of a person's participations, the match ids whose stats are
+ * THEIRS for the per-sport career figures. A result since Audit #56 lists whose record it changed
+ * (attributed_user_ids: only players who agreed to the match, nobody for a walkover); a participant
+ * left off that list played no part on the record, so the match's points are not theirs either.
+ * A result without the list (older) keeps counting as before (N-R7-S10: casual stats still show).
+ * The list may come alone (score_summary->attributed_user_ids) or inside a full score_summary.
+ */
+export function onRecordMatchIds(
+  parts: Array<{ match_id: string; match?: { voided_at?: string | null; score_summary?: unknown; attributed_user_ids?: unknown } | null }>,
+  userId: string,
+): string[] {
+  return parts
+    .filter((p) => {
+      const m = p.match;
+      if (!m) return true; // the query's !inner join already kept only completed, unvoided matches
+      if (m.voided_at != null) return false;
+      const who = m.attributed_user_ids ?? (m.score_summary as { attributed_user_ids?: unknown } | null | undefined)?.attributed_user_ids;
+      return !Array.isArray(who) || who.includes(userId);
+    })
+    .map((p) => p.match_id);
+}
+
 /** Minimum real participants for a casual match to count. Exported so tests and
  *  callers assert against the rule rather than re-typing the literal. */
 export const MIN_CASUAL_PARTICIPANTS = 2;

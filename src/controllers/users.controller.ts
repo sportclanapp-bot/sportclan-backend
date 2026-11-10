@@ -26,7 +26,7 @@ import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
 import { istDate, istDay } from '../utils/appTime';
 import { COIN_RULES } from '../utils/coinRules';
-import { isByeMatch } from '../utils/matchCounts';
+import { isByeMatch, onRecordMatchIds } from '../utils/matchCounts';
 import { isRangeError, parsePagination } from '../utils/pagination';
 import { shiftForVoided } from '../utils/ratingHistoryShift'; // N-R7-S115
 import { notifyUsers, notifyUser } from '../utils/notify';
@@ -1661,7 +1661,7 @@ export async function getSportProfile(req: Request, res: Response) {
   // Oct 2026: every match (an unpaged read stopped at 1000).
   const partsP = allRows(() => supabase
     .from('match_participants')
-    .select('match_id, match:matches!inner(id, voided_at, sport_id, status)')
+    .select('match_id, match:matches!inner(id, voided_at, sport_id, status, attributed_user_ids:score_summary->attributed_user_ids)')
     .eq('user_id', id)
     .is('match.voided_at', null)
     .eq('match.sport_id', sportId)
@@ -1762,7 +1762,10 @@ export async function getSportProfile(req: Request, res: Response) {
     // participant in, with no exclusion of any kind — so a voided match, and
     // indeed a still-live one, contributed to a lifetime stat.
     const { data: parts } = await partsP;
-    const matchIds = (parts ?? []).map((mp: any) => mp.match_id);
+    // N-R7-S131 (Step 2 B11, SP-BKB-074): a match whose result leaves this person off its list of
+    // whose record it changed (attributed_user_ids — they never said In) is not theirs: its points
+    // made a basketball profile read 46 for the 23 on the record (matches_played 1).
+    const matchIds = onRecordMatchIds((parts ?? []) as any[], id);
 
     if (slug === 'cricket') {
       // Use innings_stats table for accurate per-innings aggregates

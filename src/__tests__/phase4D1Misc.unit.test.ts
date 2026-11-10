@@ -148,7 +148,7 @@ describe('stats and money', () => {
     const sp = fnBody('controllers/users.controller.ts', 'getSportProfile');
     // Oct 2026: every match, in chunks (it read the first 500).
     expect(sp).toMatch(/selectAllIn\(matchIds, \(c, f, to\) => supabase\s*\.from\('innings_stats'\)[\s\S]{0,300}\.eq\('user_id', id\)\s*\.in\('match_id', c\)/);
-    expect(sp).toContain("match:matches!inner(id, voided_at, sport_id, status, attributed_user_ids:score_summary->attributed_user_ids)");
+    expect(sp).toContain("match:matches!inner(id, voided_at, sport_id, status, attributed_user_ids:score_summary->attributed_user_ids, walkover:score_summary->walkover)");
   });
   test('SC-434a (76633b5): kudos coins go through awardCoins (ledgered, idempotent), not read-add-write', () => {
     const k = code('controllers/kudos.controller.ts');

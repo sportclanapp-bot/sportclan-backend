@@ -26,10 +26,15 @@ test('an older result (no list) still counts, as before (N-R7-S10); a voided one
   expect(onRecordMatchIds(parts, ME)).toEqual(['old', 'oldNull']);
 });
 
+test('a walkover (its list empty on purpose) still counts in the racket W-L, as before', () => {
+  const parts = [part('wo', { attributed_user_ids: [], walkover: true }), part('woFull', { score_summary: { attributed_user_ids: [], walkover: true } })];
+  expect(onRecordMatchIds(parts, ME)).toEqual(['wo', 'woFull']);
+});
+
 test('getSportProfile builds every sport\'s stats from those matches', () => {
   const src = fs.readFileSync(path.join(__dirname, '../controllers/users.controller.ts'), 'utf8');
   const parts = src.slice(src.indexOf('const partsP = allRows(() => supabase'), src.indexOf('cityP.catch('));
-  expect(parts).toContain('attributed_user_ids:score_summary->attributed_user_ids');
+  expect(parts).toContain('attributed_user_ids:score_summary->attributed_user_ids, walkover:score_summary->walkover');
   const stats = src.slice(src.indexOf('const { data: parts } = await partsP;'), src.indexOf("if (slug === 'cricket')"));
   expect(stats).toContain('const matchIds = onRecordMatchIds((parts ?? []) as any[], id);');
 });

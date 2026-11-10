@@ -1661,7 +1661,7 @@ export async function getSportProfile(req: Request, res: Response) {
   // Oct 2026: every match (an unpaged read stopped at 1000).
   const partsP = allRows(() => supabase
     .from('match_participants')
-    .select('match_id, match:matches!inner(id, voided_at, sport_id, status, attributed_user_ids:score_summary->attributed_user_ids)')
+    .select('match_id, match:matches!inner(id, voided_at, sport_id, status, attributed_user_ids:score_summary->attributed_user_ids, walkover:score_summary->walkover)')
     .eq('user_id', id)
     .is('match.voided_at', null)
     .eq('match.sport_id', sportId)

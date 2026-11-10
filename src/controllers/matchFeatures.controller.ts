@@ -9,7 +9,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { sanitizeError } from '../utils/response';
 import { calculateDLSTarget, dlsInputProblem } from '../utils/dls';
-import { aggregatePlayers, isGuestId, recomputeSummary, type CricketPlayerLine } from './scoring.controller';
+import { aggregatePlayers, isGuestId, recomputeSummary, unstartChessIfNoPlay, type CricketPlayerLine } from './scoring.controller';
 import { isTerminalMatchStatus } from '../utils/validation';
 import { canOfficiateMatch } from '../utils/tournamentAuth';
 import { checkLease } from '../utils/scoringLease';
@@ -652,6 +652,8 @@ export async function deleteMatchEvent(req: Request, res: Response) {
     // B06-F2: deleting the last one leaves a zero score, not the old one.
     const summary = await recomputeSummary(id, { emptyMeansZero: true });
     await recordScoreAfter(removed.auditId, summary);
+    // N-R7-S129: chess — undoing the '▶ Start clock' note with no move left puts the game back to scheduled.
+    await unstartChessIfNoPlay(id);
 
     return res.json({ success: true, score_summary: summary });
   } catch {

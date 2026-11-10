@@ -103,6 +103,8 @@ export function describeEvent(type: string | null | undefined, p: P | null | und
     // N-R7-92 (SPP1-TTN-017): a note kind the way the pad says it ('warmup' read 'deleted: warmup').
     case 'note': {
       if (!x.kind) return 'note';
+      // N-R7-S129 (SIDE-X7b-KICKOFF): chess's '▶ Start clock' note (N-R7-268) is a clock start, not football's kickoff.
+      if (x.kind === 'kickoff' && ctx.sport === 'chess') return 'clock start';
       if (NOTE_WORDS[String(x.kind)]) return NOTE_WORDS[String(x.kind)];
       // N-R7-S120 (SPP2-VOL-089): a misconduct note (and volleyball's line-up / libero / Super Point notes) read
       // 'undid: violation' — now in the timeline's own words, without its emoji.

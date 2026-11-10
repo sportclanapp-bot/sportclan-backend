@@ -856,6 +856,27 @@ export async function promoteToLive(matchId: string, match: { status?: string | 
   }
 }
 
+/**
+ * N-R7-S129 (Step 2 B10, SIDE-X7b-UNDOSTART): chess only. The pad's '▶ Start clock' note makes the game
+ * live (N-R7-268); when Undo takes that start away and nothing that starts play is left (no move, no
+ * result), the pad is back to READY — so the game goes back to scheduled, as it was before the start.
+ * Before, it stayed 'live' with 0 events and Match detail read LIVE · In progress beside an idle banner.
+ * Never a finished or voided game; other sports keep their status after an undo.
+ */
+export async function unstartChessIfNoPlay(matchId: string): Promise<boolean> {
+  try {
+    const { data: m } = await supabase.from('matches').select('sport_id, status, voided_at').eq('id', matchId).maybeSingle();
+    if (!m || m.status !== 'live' || m.voided_at) return false;
+    if (normSportSlug((await getSport(m.sport_id as string))?.slug) !== 'chess') return false;
+    const rest = await matchEventsAll<{ event_type: string; payload: unknown }>(matchId, 'event_type, payload');
+    if (rest.some((e) => startsPlayEvent(e.event_type, e.payload))) return false;
+    await supabase.from('matches').update({ status: 'scheduled' }).eq('id', matchId).eq('status', 'live');
+    return true;
+  } catch {
+    return false; // best-effort — the undo itself already succeeded
+  }
+}
+
 // POST /scoring/:matchId/event
 export async function createEvent(req: Request, res: Response) {
   const userId = req.userId;
@@ -2302,6 +2323,7 @@ export async function undoEvent(req: Request, res: Response) {
     } catch {
       // best-effort — the event delete already succeeded
     }
+    await unstartChessIfNoPlay(matchId); // N-R7-S129
     return res.json({ deleted: true });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

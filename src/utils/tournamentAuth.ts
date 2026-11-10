@@ -77,8 +77,13 @@ export async function logAdminAction(
 // role, who may score every fixture of that tournament. They score, toss, set
 // line-ups, complete and abandon like the umpire; voiding stays with the
 // organiser, umpire or an admin ({ scorers: false }).
+//
+// N-R7-S130 (Step 2 Batch 12, SP-HOC-170): the match's RESERVE UMPIRE too (the assistant seat
+// hockey and badminton name on the fixture's officials sheet) — they step in for the umpire, so
+// they open the pad, take over scoring and score like the scorer. Voiding stays with the
+// organiser / umpire ({ scorers: false }); the other assistant seats still don't score.
 export async function canOfficiateMatch(
-  match: { tournament_id?: string | null; created_by?: string | null; umpire_id?: string | null; scorer_id?: string | null },
+  match: { id?: string | null; tournament_id?: string | null; created_by?: string | null; umpire_id?: string | null; scorer_id?: string | null },
   userId: string,
   opts: { scorers?: boolean } = {},
 ): Promise<boolean> {
@@ -87,9 +92,27 @@ export async function canOfficiateMatch(
   if (scorers && match.scorer_id && match.scorer_id === userId) return true;
   if (match.tournament_id) {
     if (await isTournamentOrganiser(match.tournament_id, userId)) return true;
-    return scorers && isTournamentScorer(match.tournament_id, userId);
+    if (scorers && (await isTournamentScorer(match.tournament_id, userId))) return true;
+  } else if (match.created_by && match.created_by === userId) return true;
+  return scorers && isReserveUmpire(match.id, userId);
+}
+
+/** N-R7-S130: the match's reserve umpire (a live match_officials seat). A failed read is a no. */
+export async function isReserveUmpire(matchId: string | null | undefined, userId: string): Promise<boolean> {
+  if (!matchId || !userId) return false;
+  try {
+    const { data } = await supabase
+      .from('match_officials')
+      .select('id')
+      .eq('match_id', matchId)
+      .eq('user_id', userId)
+      .eq('role', 'reserve_umpire')
+      .is('removed_at', null)
+      .limit(1);
+    return Array.isArray(data) && data.length > 0;
+  } catch {
+    return false;
   }
-  return !!match.created_by && match.created_by === userId;
 }
 
 /** Cricket gap 3: a tournament official with the scorer role (scores every fixture); N-R7-105: + the referees. */

@@ -64,7 +64,7 @@ import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
 import { validateSportForCreate } from '../utils/sports';
 import { allRows, selectAll, selectAllIn, IN_CHUNK } from '../utils/selectAll';
-import { backNext, backRoundName, backRounds, loserTarget, scheduleRound, deScheduleShape } from '../utils/doubleElim'; // Stage 11 · PB4; N-R7-253 the back draw on the schedule
+import { backNext, backRoundName, backRounds, loserTarget, scheduleRound, deScheduleShape, backByes } from '../utils/doubleElim'; // Stage 11 · PB4; N-R7-253 the back draw on the schedule; N-R7-259 its byes
 import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, isCount, firstTooLong, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/validation';
 import { rankTeams, rankTeamsDetailed, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, bestNextCount, groupsKnockoutSize, type PointsModel } from '../utils/standings';
 import { placeGroupTiersApart, crossGroupFirstRound } from '../utils/koFirstRound';
@@ -3239,6 +3239,7 @@ async function insertDoubleElim(
   base: BracketBase,
   round1: Array<{ a: TeamSlot | null; b: TeamSlot | null }>,
   slotFor: (round: number, matchNo: number) => { scheduled_at: string; ground_label: string } | undefined,
+  byes?: Map<string, 'bye' | 'empty'>,
 ): Promise<{ byeMatchIds: string[] }> {
   const k = Math.max(1, Math.round(Math.log2(round1.length * 2)));
   // The back draw, the final and the reset follow the main draw: each back round
@@ -3248,7 +3249,18 @@ async function insertDoubleElim(
   const after = (steps: number): string => (finalAt && gap > 0 ? new Date(Date.parse(finalAt) + steps * gap).toISOString() : base.fallbackStartIso);
   // N-R7-253: when the schedule holds the back draw, the final and the reset
   // (deScheduleShape), each takes its own court and time in the day hours.
-  const deSlot = (round: number, matchNo: number, bracket: 'back' | 'final' | 'reset') => slotFor(scheduleRound(k, bracket, round), bracket === 'back' ? matchNo : 0);
+  const deSlotOwn = (round: number, matchNo: number, bracket: 'back' | 'final' | 'reset') => slotFor(scheduleRound(k, bracket, round), bracket === 'back' ? matchNo : 0);
+  // N-R7-259: a back-draw bye (or an empty place) has no slot of its own: it is dated with the first
+  // played back-draw match from its round on, and has no court.
+  const counts0 = backRounds(k);
+  const byeSlotFrom = (round: number): { scheduled_at: string; ground_label: null } | undefined => {
+    for (let r = round; r <= counts0.length; r++) {
+      const ts = Array.from({ length: counts0[r - 1]! }, (_, m) => (byes?.has(`${r}:${m}`) ? undefined : deSlotOwn(r, m, 'back')?.scheduled_at)).filter((x): x is string => !!x).sort();
+      if (ts[0]) return { scheduled_at: ts[0], ground_label: null };
+    }
+    const f = deSlotOwn(0, 0, 'final'); return f ? { scheduled_at: f.scheduled_at, ground_label: null } : undefined;
+  };
+  const deSlot = (round: number, matchNo: number, bracket: 'back' | 'final' | 'reset') => (bracket === 'back' && byes?.has(`${round}:${matchNo}`) ? byeSlotFrom(round) : deSlotOwn(round, matchNo, bracket));
   const shell = (round: number, matchNo: number, bracket: 'back' | 'final' | 'reset', stage: Stage, next: { id: string; slot: 'A' | 'B' } | null) => ({
     sport_id: base.sport_id, tournament_id: base.tournament_id, team_a_id: null, team_b_id: null, team_a_name: 'TBD', team_b_name: 'TBD',
     scheduled_at: deSlot(round, matchNo, bracket)?.scheduled_at ?? after(bracket === 'back' ? round : bracket === 'final' ? 2 * (k - 1) + 1 : 2 * (k - 1) + 2), ground_label: deSlot(round, matchNo, bracket)?.ground_label ?? null, venue: base.venue, city_id: base.city_id, status: 'scheduled', score_summary: {},
@@ -4677,12 +4689,14 @@ export async function generateFixtures(req: Request, res: Response) {
       const seeded = seededRound1(teams, nextPow2(teams.length));
       const seedNoOf = new Map(teams.map((x, i) => [x.id, i + 1]));
       const round1 = separateClubs ? separateClubsInRound1(seeded, clubOf, undefined, (tid) => seedNoOf.get(tid)) : seeded; // BUILD 4.13; N-R7-S4: higher seeds swap within their pot
-      const shape = [...bracketShape(round1, thirdPlace, qualRounds), ...(doubleElim ? deScheduleShape(Math.max(1, Math.round(Math.log2(round1.length * 2)))) : [])]; // N-R7-253
+      // N-R7-259: the back-draw places the main draw's byes leave without a match take no slot.
+      const deByes = doubleElim ? backByes(Math.max(1, Math.round(Math.log2(round1.length * 2))), round1.map((p) => !(p.a?.id && p.b?.id))) : undefined;
+      const shape = [...bracketShape(round1, thirdPlace, qualRounds), ...(doubleElim ? deScheduleShape(Math.max(1, Math.round(Math.log2(round1.length * 2))), deByes) : [])]; // N-R7-253
       const sched = buildSchedule(shape, schedCfg);
       if (!sched.ok) { await releaseFixtureClaim(id); return res.status(400).json({ error: sched.error, code: 'SCHEDULE_CAPACITY' }); }
       const slotFor = (r: number, m: number): SlotAssign | undefined => sched.assignments.get(keyOf(r, m));
       // Stage 11 · PB4: double elimination — a back draw, the final and a reset beside the main draw.
-      const { byeMatchIds } = doubleElim ? await insertDoubleElim(base, round1, slotFor) : await insertSingleElim(base, round1, slotFor, thirdPlace, qualRounds);
+      const { byeMatchIds } = doubleElim ? await insertDoubleElim(base, round1, slotFor, deByes) : await insertSingleElim(base, round1, slotFor, thirdPlace, qualRounds);
       for (const byeId of byeMatchIds) {
         const { data: bm } = await supabase
           .from('matches')

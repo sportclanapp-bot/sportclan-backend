@@ -67,10 +67,41 @@ export function scheduleRound(k: number, bracket: 'back' | 'final' | 'reset', ro
 }
 
 /** N-R7-253 · the slots to schedule for the back draw, the final and the reset (no teams yet). */
-export function deScheduleShape(k: number): Array<{ round: number; match_no: number; team_a_id: null; team_b_id: null }> {
+export function deScheduleShape(k: number, byes?: Map<string, 'bye' | 'empty'>): Array<{ round: number; match_no: number; team_a_id: null; team_b_id: null }> {
   const out: Array<{ round: number; match_no: number; team_a_id: null; team_b_id: null }> = [];
-  backRounds(k).forEach((n, i) => { for (let m = 0; m < n; m++) out.push({ round: scheduleRound(k, 'back', i + 1), match_no: m, team_a_id: null, team_b_id: null }); });
+  // N-R7-259: a back-draw place a main-draw bye leaves without a match is decided without play — no slot.
+  backRounds(k).forEach((n, i) => { for (let m = 0; m < n; m++) if (!byes?.has(`${i + 1}:${m}`)) out.push({ round: scheduleRound(k, 'back', i + 1), match_no: m, team_a_id: null, team_b_id: null }); });
   out.push({ round: scheduleRound(k, 'final', 0), match_no: 0, team_a_id: null, team_b_id: null });
   out.push({ round: scheduleRound(k, 'reset', 0), match_no: 0, team_a_id: null, team_b_id: null });
+  return out;
+}
+
+/**
+ * N-R7-259 (Step 2 B10, SPP2-CRI-015) · the back-draw matches a main-draw bye leaves without a match, known at
+ * the draw: `${round}:${matchNo}` → 'bye' (one team only: it goes through without play) or 'empty' (no team:
+ * not played). `round1Bye[m]`: main round-1 match m is a bye (it has no loser). Every later main-draw match has a loser.
+ */
+export function backByes(k: number, round1Bye: boolean[]): Map<string, 'bye' | 'empty'> {
+  const out = new Map<string, 'bye' | 'empty'>();
+  if (k <= 1) return out;
+  const counts = backRounds(k);
+  const real = new Map<string, number>(); // `${round}:${matchNo}` → teams that can reach it
+  const add = (r: number, m: number, n: number) => real.set(`${r}:${m}`, (real.get(`${r}:${m}`) ?? 0) + n);
+  for (let r = 1; r <= k; r++) {
+    const inRound = Math.pow(2, k - r);
+    for (let m = 0; m < inRound; m++) {
+      const t = loserTarget(k, r, m);
+      if (t.bracket === 'back') add(t.round, t.matchNo, r === 1 && round1Bye[m] ? 0 : 1);
+    }
+  }
+  counts.forEach((n, i) => {
+    const r = i + 1;
+    for (let m = 0; m < n; m++) {
+      const have = real.get(`${r}:${m}`) ?? 0;
+      if (have < 2) out.set(`${r}:${m}`, have === 1 ? 'bye' : 'empty');
+      const nx = backNext(k, r, m);
+      if (nx.bracket === 'back') add(nx.round, nx.matchNo, have > 0 ? 1 : 0);
+    }
+  });
   return out;
 }

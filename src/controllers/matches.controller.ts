@@ -14,7 +14,7 @@ import { plural } from '../utils/plural';
 import { selectAll, IN_CHUNK } from '../utils/selectAll';
 import { joinChat, wasRemovedFromChat } from '../utils/chatMembership';
 import { attachTeamNames } from '../utils/teamNames';
-import { myScheduledMatches, pickNextMatch } from '../utils/nextMatch';
+import { myScheduledMatches, pickNextMatch, myMatchesWithStatus, sortMyLive } from '../utils/nextMatch';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
@@ -1395,6 +1395,26 @@ export async function nextMatch(req: Request, res: Response) {
     const { match, overdue } = pickNextMatch(await myScheduledMatches(userId));
     if (match) await attachTeamNames([match]);
     return res.json({ match, overdue });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/**
+ * N-R7-267 (Step 2 B10, SP-VBL-C15) · GET /matches/my-live: every live, unvoided
+ * match you play in, created or follow — all of them, each with `relation`, the
+ * ones you play in / created first. Home's ticker and the front of its live strip
+ * read it, so your match is never lost among thousands of other live ones.
+ */
+export async function myLiveMatches(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const activeIds = await activeSportIds();
+    const rows = sortMyLive((await myMatchesWithStatus(userId, 'live', { followed: true }))
+      .filter((m) => !activeIds || activeIds.includes(m.sport_id)));
+    await attachTeamNames(rows);
+    return res.json({ matches: rows, total: rows.length });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

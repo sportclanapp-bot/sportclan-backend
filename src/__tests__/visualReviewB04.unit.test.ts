@@ -47,7 +47,9 @@ describe('which matches count as yours', () => {
     expect(s).toMatch(/team_b_id\.in\.\(/);
   });
   it('only scheduled, unvoided matches', () => {
-    expect(s).toMatch(/\.eq\('status', 'scheduled'\)\.is\('voided_at', null\)/);
+    // N-R7-267: one reader for scheduled (here) and live (Home's ticker) matches.
+    expect(s).toMatch(/\.eq\('status', status\)\.is\('voided_at', null\)/);
+    expect(s).toMatch(/myMatchesWithStatus\(userId, 'scheduled'\)/);
   });
   it("the route sits before '/:id'", () => {
     const r = code('routes/matches.routes.ts');

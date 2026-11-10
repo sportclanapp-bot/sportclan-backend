@@ -2803,7 +2803,12 @@ export async function updateFixtures(req: Request, res: Response) {
         .eq('id', fixtureId)
         .eq('tournament_id', id);
       if (!('status' in upd) && !('winner_team_id' in upd)) {
-        query = query.eq('status', 'scheduled');
+        // N-R7-257: a LIVE fixture may move court / time (lights fail mid-set) — only a pure
+        // move (a new time, court or venue; no teams, no clearing the time) keeps its score and status.
+        const pureMove = Object.keys(patch).every((k) => k === 'scheduled_at' || k === 'ground_label' || k === 'venue')
+          && patch.scheduled_at !== null;
+        if (pureMove) query = query.in('status', ['scheduled', 'live']);
+        else query = query.eq('status', 'scheduled');
       }
       const { data, error } = await query.select('*').maybeSingle();
       if (error || !data) {

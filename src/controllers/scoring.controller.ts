@@ -430,13 +430,15 @@ export async function validateScoringEvent(
     const target = rulesOf('basketball', match).targetScore;
     const ss = (match.score_summary ?? {}) as { A?: { score?: number; points?: number }; B?: { score?: number; points?: number } };
     const pts = (x?: { score?: number; points?: number }) => Number(x?.score ?? x?.points ?? 0);
-    if (target && (pts(ss.A) >= target || pts(ss.B) >= target)) {
-      return refuse(409, { error: `A side has reached ${target} — the game is over. End the match.`, code: 'TARGET_REACHED' });
-    }
     // N-R7-S27: 3x3's overtime is won by the first to `overtimeTo` points in it — the game is over there too.
     const otTo = rulesOf('basketball', match).overtimeTo;
     const regulation = Number(rulesOf('basketball', match).periods ?? 4) || 4;
     const periods = Array.isArray((ss as { periods?: unknown }).periods) ? (ss as { periods: Array<{ A?: number; B?: number }> }).periods : [];
+    // N-R7-S132: with an overtime target the first-to target (3x3's 21) ends regular time only — from 20–20 the overtime goes on past 21.
+    const inOvertimeTo = !!otTo && periods.length > regulation;
+    if (target && !inOvertimeTo && (pts(ss.A) >= target || pts(ss.B) >= target)) {
+      return refuse(409, { error: `A side has reached ${target} — the game is over. End the match.`, code: 'TARGET_REACHED' });
+    }
     if (otTo && periods.length > regulation) {
       let otA = 0; let otB = 0;
       for (const p of periods.slice(regulation)) { otA += Number(p?.A ?? 0); otB += Number(p?.B ?? 0); }

@@ -262,7 +262,12 @@ export function teamFoulPossessionOf(r: Partial<MatchRules> | null | undefined):
 /** Stage 15 · BB3: overtime to N points (3x3's 2), or null — the clock decides. */
 export function overtimeToOf(r: Partial<MatchRules> | null | undefined): number | null { return r?.overtimeTo ?? (r && is3x3(r) ? 2 : null); }
 /** Stage 15 · BB1: the time-outs a basketball match plays. */
-export function timeoutRulesOf(r: Partial<MatchRules> | null | undefined): TimeoutRules { return r?.timeouts ?? (r && is3x3(r) ? FIBA_3X3_TIMEOUTS : FIBA_TIMEOUTS); }
+/** N-R7-284 (SIDE-A4c-3): a game to a score with no clock (a pickup to 11) has no allowance unless the organiser sets one: {} = no limit, no count. */
+export function timeoutRulesOf(r: Partial<MatchRules> | null | undefined): TimeoutRules {
+  if (r?.timeouts) return r.timeouts;
+  if (r && r.targetScore != null && r.periodMinutes == null) return {};
+  return r && is3x3(r) ? FIBA_3X3_TIMEOUTS : FIBA_TIMEOUTS;
+}
 /** Stage 15 · BB2: what ejects (3x3: flagrants only). */
 export function ejectRulesOf(r: Partial<MatchRules> | null | undefined): { after: number; counts: 'tech_flagrant' | 'flagrant'; coachC: number; coachB: number } {
   return { after: r?.ejectAfter ?? 2, counts: r?.ejectCounts ?? (r && is3x3(r) ? 'flagrant' : 'tech_flagrant'), coachC: r?.coachEjectC ?? 2, coachB: r?.coachEjectB ?? 3 };

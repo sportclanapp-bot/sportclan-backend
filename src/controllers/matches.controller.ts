@@ -1921,7 +1921,7 @@ export async function getMatch(req: Request, res: Response) {
     // best-effort exactly as before.
     const [
       { data: participants },
-      { count, editsCount },
+      { count, editsCount, removalsCount },
       // Average match-quality rating from match_ratings on read — a handful per match.
       { data: ratings },
       // SC-428: what a VIEWER needs to judge whether a frozen scoreboard is a quiet
@@ -1947,7 +1947,11 @@ export async function getMatch(req: Request, res: Response) {
         supabase.from('match_events').select('id', { count: 'exact', head: true }).eq('match_id', id),
         Promise.resolve(supabase.from('match_event_audit').select('id', { count: 'exact', head: true }).eq('match_id', id).eq('action', 'edit'))
           .then((r) => r, () => ({ count: 0 })),
-      ]).then(([ev, edits]) => ({ count: ev.count, editsCount: (edits as { count?: number | null }).count ?? 0 })),
+        // N-R7-287 (Step 2 B11, SIDE-C6b-3): and how many were REMOVED (undo / an editor's delete):
+        // an Undo then a new score keeps the count, so the viewer kept the old timeline and score.
+        Promise.resolve(supabase.from('match_event_audit').select('id', { count: 'exact', head: true }).eq('match_id', id).in('action', ['undo', 'delete']))
+          .then((r) => r, () => ({ count: 0 })),
+      ]).then(([ev, edits, removed]) => ({ count: ev.count, editsCount: (edits as { count?: number | null }).count ?? 0, removalsCount: (removed as { count?: number | null }).count ?? 0 })),
       supabase.from('match_ratings').select('match_quality, rater_id').eq('match_id', id),
       getMatchLiveStatus(match as { id: string; status?: string | null; created_by?: string | null; umpire_id?: string | null })
         .catch(() => null), // the match payload matters more than the freshness hint
@@ -2089,7 +2093,7 @@ export async function getMatch(req: Request, res: Response) {
     timer.mark('attach');
     res.setHeader('Server-Timing', timer.header());
 
-    return res.json({ match: matchWithRating, participants: participants || [], events_count: count || 0, edits_count: editsCount });
+    return res.json({ match: matchWithRating, participants: participants || [], events_count: count || 0, edits_count: editsCount, removals_count: removalsCount });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

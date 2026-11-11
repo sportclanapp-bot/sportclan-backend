@@ -966,7 +966,17 @@ export async function createEvent(req: Request, res: Response) {
     // B06-F1: every check on the event itself lives in validateScoringEvent, so
     // the signed QR handoff (qrHandoff.controller) runs exactly the same ones.
     const refused = await validateScoringEvent(matchId, match, { event_type, period, clock_seconds, payload }, userId, { clientKey: knownKey });
-    if (refused) return res.status(refused.status).json(refused.body);
+    if (refused) {
+      // N-R7-S142 (SCR-M-F05): a refusal judged against a match that has moved on is wrong for an
+      // action the server ALREADY has — a QR hand-off carried the scorer's goal and the shoot-out
+      // after it, then the scorer's phone re-sent the same goal and was told 'the shoot-out has
+      // started', stopping its queue (its match end never went). Same key → answered as recorded.
+      if (knownKey) {
+        const { data: had } = await supabase.from('match_events').select('*').eq('match_id', matchId).eq('client_key', knownKey).maybeSingle();
+        if (had) return res.json({ event: had, replayed: true });
+      }
+      return res.status(refused.status).json(refused.body);
+    }
     const startsPlay = startsPlayEvent(event_type, payload); // V-3 · N-R7-S15: pre-play events don't start the match
 
     // Catch-all: any scored event means the match is in progress, so promote it

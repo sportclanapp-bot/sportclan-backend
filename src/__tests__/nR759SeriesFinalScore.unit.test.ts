@@ -9,6 +9,6 @@ import path from 'path';
 const s = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'tournaments.controller.ts'), 'utf8');
 test('a series fixture in the bracket scores games won, not the last game’s runs', () => {
   expect(s).toMatch(/const seriesTie = ss\?\.tie\?\.series === true \? ss\.tie : null;/);
-  expect(s).toMatch(/score_a: seriesTie \? Number\(seriesTie\.rubbersA \?\? 0\) : ss\.team_a_score/);
-  expect(s).toMatch(/score_b: seriesTie \? Number\(seriesTie\.rubbersB \?\? 0\) : ss\.team_b_score/);
+  expect(s).toMatch(/score_a: (?:noScore \? null : )?seriesTie \? Number\(seriesTie\.rubbersA \?\? 0\) : ss\.team_a_score/);
+  expect(s).toMatch(/score_b: (?:noScore \? null : )?seriesTie \? Number\(seriesTie\.rubbersB \?\? 0\) : ss\.team_b_score/);
 });

@@ -575,7 +575,8 @@ export function buildOrder(tiebreakerRules?: any[]): Criterion[] {
   // Stage 14 · VB5: points come first unless the order places them itself (FIVB: matches won, then match points).
   // F160: an order that starts with matches won (FIVB's, as saved by the 'FIVB (wins, set ratio)'
   // preset before it listed match points) keeps wins on top: points come straight after them.
-  const lead = tiebreaks[0] === 'wins' || tiebreaks[0] === 'win_ratio' ? 1 : 0;
+  // N-R7-301 (SIDE-B6b-1): not an order that ranks on goal difference (hockey's FIH: points, then wins).
+  const lead = (tiebreaks[0] === 'wins' && !tiebreaks.includes('score_diff')) || tiebreaks[0] === 'win_ratio' ? 1 : 0;
   const order: Criterion[] = tiebreaks.includes('points') ? [...tiebreaks] : [...tiebreaks.slice(0, lead), 'points', ...tiebreaks.slice(lead)];
   return order.filter((v, i) => order.indexOf(v) === i);
 }

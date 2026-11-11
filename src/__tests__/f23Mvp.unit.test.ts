@@ -111,3 +111,14 @@ describe('F-36 · game-and-set sports: Player of the Match is on the winning sid
     expect(await calculateAndSetMVP('m')).toBe('b1');
   });
 });
+
+// N-R7-313 (Step 2 B12, SIDE-C4b-2): hockey, football, basketball and kabaddi are team sports too — a
+// one-person side (a club owner's one-man line-up) was credited every unscored-by goal and named Player
+// of the Match in a 1–1 draw. A goal with no scorer named is nobody's.
+test.each(['hockey', 'football', 'basketball', 'kabaddi'])('%s: a one-person side is not credited unattributed goals/points', async (sport) => {
+  db.sport = sport;
+  db.summary = { winner_side: null };
+  db.parts = [{ user_id: 'ownerA', team_side: 'A' }, { user_id: 'ownerB', team_side: 'B' }];
+  db.events = [{ event_type: 'score', created_by: 'ownerA', payload: { team_side: 'A', kind: 'goal', value: 1 } }, { event_type: 'score', created_by: 'ownerA', payload: { team_side: 'B', kind: 'goal', value: 1 } }];
+  expect(await calculateAndSetMVP('m')).toBeNull();
+});

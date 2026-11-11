@@ -163,7 +163,10 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   // N-R7-S127 (Step 2 B10, SIDE-C5-POTM1): volleyball is a team sport — a side entered by one person
   // (a tournament team's captain) isn't singles, so an unattributed point (a typed score sheet) is
   // nobody's; it credited every point to the captain and named them Player of the Match.
-  if (slug !== 'volleyball') for (const p of participants ?? []) {
+  // N-R7-313 (Step 2 B12, SIDE-C4b-2): the same for every team sport — a club owner's one-man hockey
+  // line-up was credited every goal logged without a scorer and named Player of the Match in a draw.
+  const TEAM_SPORTS = new Set(['volleyball', 'hockey', 'football', 'basketball', 'kabaddi']);
+  if (!TEAM_SPORTS.has(slug)) for (const p of participants ?? []) {
     const side = p.team_side as string;
     onlyPlayerOf.set(side, onlyPlayerOf.has(side) ? null : p.user_id);
   }

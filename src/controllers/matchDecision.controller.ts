@@ -144,7 +144,7 @@ export async function decideMatch(req: Request, res: Response) {
     }
     try {
       const audience = await matchAudienceIds(id, m.team_a_id, m.team_b_id);
-      const said = body.decision === 'replay' ? 'will be replayed from where it stopped' : body.decision === 'stands' ? 'result stands' : `awarded to ${names[(body.winner_side as 'A' | 'B')]}`;
+      const said = body.decision === 'replay' ? 'will be replayed from where it stopped' : body.decision === 'stands' ? 'result stands' : `was awarded to ${names[(body.winner_side as 'A' | 'B')]}`; // N-R7-S133 (SIDE-A4c-2): 'The match was awarded to …'
       await notifyUsers(audience, { type: 'match_decided', title: `${names.A} vs ${names.B}`, body: `The match ${said} — ${reason}`, data: { matchId: id, screen: 'MatchDetail' } }, { actorId: userId });
     } catch { /* best-effort */ }
     return res.json({ match: updated });

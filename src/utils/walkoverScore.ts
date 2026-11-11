@@ -33,6 +33,16 @@ export function walkoverScoreFor(sport: string | null | undefined, rules: MatchR
   return walkoverGoalsOf(sport, rules);
 }
 
+/**
+ * N-R7-S137 (SP-HOC-044): a walkover in a sport and tournament with no walkover score (hockey
+ * without settings.walkoverScore) has no score — the abandoned match's live score in its
+ * score_summary is stale (a semi abandoned at 1–0 and given to the side behind). As the app's
+ * walkoverScoreless (N-R7-321).
+ */
+export function walkoverScoreless(decidedBy: string | null | undefined, sport: string | null | undefined, rules: MatchRules, tournamentSettings?: unknown): boolean {
+  return decidedBy === 'walkover' && walkoverScoreFor(sport, rules, tournamentSettings) == null;
+}
+
 export function withWalkoverScore(
   sport: string | null | undefined,
   rules: MatchRules,

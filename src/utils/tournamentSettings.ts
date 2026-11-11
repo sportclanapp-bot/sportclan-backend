@@ -671,7 +671,19 @@ export const PAIR_AGE_MIN: [number, number] = [1, Number.MAX_SAFE_INTEGER]; // S
 
 const isInt = (x: unknown, lo: number, hi: number) => typeof x === 'number' && Number.isInteger(x) && x >= lo && x <= hi;
 
-export function categoryRefusal(c: unknown): Refusal | null {
+/**
+ * N-R7-S136: where a co-ed event's women rule counts, in the sport's own words
+ * (as the app's womenOnLabel, N-R7-S60): football and hockey play on a pitch,
+ * the court sports (and no sport given) on court.
+ */
+const WOMEN_AREA: Record<string, string> = { football: 'pitch', hockey: 'pitch', cricket: 'ground', tabletennis: 'table', chess: 'board', carrom: 'board' };
+export function womenOnWhere(sport?: string | null): string {
+  const area = WOMEN_AREA[sportKeyOf(sport)];
+  return area ? `on the ${area}` : 'on court';
+}
+const womenOnName = (sport?: string | null) => `Women ${womenOnWhere(sport)}`;
+
+export function categoryRefusal(c: unknown, sport?: string | null): Refusal | null {
   if (c === undefined || c === null) return null;
   if (typeof c !== 'object' || Array.isArray(c)) return refuse('A category must be an object.');
   const o = c as Record<string, unknown>;
@@ -689,8 +701,8 @@ export function categoryRefusal(c: unknown): Refusal | null {
   if (o.pairAgeMin != null && !isInt(o.pairAgeMin, PAIR_AGE_MIN[0], PAIR_AGE_MIN[1])) return refuse('A pair’s combined age is a whole number of years.'); // Stage 9 · T12
   if (o.amateurOnly != null && typeof o.amateurOnly !== 'boolean') return refuse('Amateurs only is on or off.');
   // Stage 14 · VB11: women on court — a whole number, 1 or more (no top); not in a men's or women's event.
-  if (o.minWomen != null && !isInt(o.minWomen, 1, Number.MAX_SAFE_INTEGER)) return refuse('Women on court is a whole number, 1 or more.');
-  if (o.minWomen != null && (o.gender === 'men' || o.gender === 'women')) return refuse('Women on court is for an open or mixed event.');
+  if (o.minWomen != null && !isInt(o.minWomen, 1, Number.MAX_SAFE_INTEGER)) return refuse(`${womenOnName(sport)} is a whole number, 1 or more.`);
+  if (o.minWomen != null && (o.gender === 'men' || o.gender === 'women')) return refuse(`${womenOnName(sport)} is for an open or mixed event.`);
   // Stage 12 · CH10.
   if (o.bornFrom != null && !isIsoDate(o.bornFrom)) return refuse('“Born on or after” is a date (YYYY-MM-DD).');
   if (o.bornTo != null && !isIsoDate(o.bornTo)) return refuse('“Born on or before” is a date (YYYY-MM-DD).');
@@ -712,7 +724,7 @@ export function storedCategory(c: Record<string, any> | null | undefined): Categ
 }
 
 /** "Women’s · Under 19 · Rated up to 1600", or null for open. */
-export function categoryLabel(c: Category | null | undefined): string | null {
+export function categoryLabel(c: Category | null | undefined, sport?: string | null): string | null {
   if (!c) return null;
   const parts: string[] = [];
   if (c.gender) parts.push(c.gender === 'men' ? 'Men’s' : c.gender === 'women' ? 'Women’s' : 'Mixed');
@@ -727,7 +739,7 @@ export function categoryLabel(c: Category | null | undefined): string | null {
   // Stage 9 · T12.
   if (c.pairAgeMin != null) parts.push(`Pairs ${c.pairAgeMin}+ combined${c.ageBasis === 'year' && c.underAge == null && c.minAge == null ? ' (by birth year)' : ''}`);
   if (c.amateurOnly) parts.push('Amateurs only');
-  if (c.minWomen != null) parts.push(`At least ${c.minWomen} ${c.minWomen === 1 ? 'woman' : 'women'} on court`); // Stage 14 · VB11
+  if (c.minWomen != null) parts.push(`At least ${c.minWomen} ${c.minWomen === 1 ? 'woman' : 'women'} ${womenOnWhere(sport)}`); // Stage 14 · VB11; N-R7-S136: the sport's own words
   return parts.length ? parts.join(' · ') : null;
 }
 
@@ -756,12 +768,12 @@ const poss = (n: string) => n + (/s$/i.test(n.trim()) ? '’' : '’s');
  * Stage 14 · VB11 · why a side's starters break the women-on-court rule, or
  * null. A player whose profile doesn't give a gender isn't counted as a woman.
  */
-export function womenOnCourtProblem(c: Category | null | undefined, starters: Array<{ gender?: string | null }>, teamName: string): string | null {
+export function womenOnCourtProblem(c: Category | null | undefined, starters: Array<{ gender?: string | null }>, teamName: string, sport?: string | null): string | null {
   if (!c?.minWomen || starters.length === 0) return null;
   const women = starters.filter((p) => p.gender === 'female').length;
   if (women >= c.minWomen) return null;
   const unknown = starters.filter((p) => p.gender !== 'male' && p.gender !== 'female').length;
-  return `${teamName} have ${women} ${women === 1 ? 'woman' : 'women'} starting — this event needs at least ${c.minWomen} on court.${unknown ? ` ${unknown === 1 ? 'One profile doesn’t' : `${unknown} profiles don’t`} list a gender, so ${unknown === 1 ? 'it isn’t' : 'they aren’t'} counted.` : ''}`;
+  return `${teamName} have ${women} ${women === 1 ? 'woman' : 'women'} starting — this event needs at least ${c.minWomen} ${womenOnWhere(sport)}.${unknown ? ` ${unknown === 1 ? 'One profile doesn’t' : `${unknown} profiles don’t`} list a gender, so ${unknown === 1 ? 'it isn’t' : 'they aren’t'} counted.` : ''}`;
 }
 
 /** Why this team's players don't fit the category (naming one), or null. */
@@ -940,7 +952,7 @@ export function settingsRefusal(sport: string | null | undefined, format: string
     const ko = (o.swiss as { knockout?: unknown }).knockout;
     if (ko != null && ko !== 0 && (typeof ko !== 'number' || !Number.isInteger(ko) || ko < 2)) return refuse('The knockout after the Swiss takes 2 or more from the table.');
   }
-  const catBad = categoryRefusal(o.category);
+  const catBad = categoryRefusal(o.category, sport);
   if (catBad) return catBad;
   if (o.separateClubs != null) {
     if (typeof o.separateClubs !== 'boolean') return refuse('Keeping clubs apart is on or off.');

@@ -348,7 +348,7 @@ export async function teamSheetProblem(
       // Stage 14 follow-up: a gender the captain or organiser marked for this event stands in for a profile that doesn't say.
       const marks = settingsOf(t as { settings?: unknown }).genderMarks ?? {};
       const rows = ((users ?? []) as Array<{ id: string; name?: string | null; username?: string | null; gender?: string | null }>).map((u) => ({ ...u, gender: u.gender === 'male' || u.gender === 'female' ? u.gender : marks[u.id] ?? null }));
-      const why = womenOnCourtProblem(cat, rows, sideName[side]);
+      const why = womenOnCourtProblem(cat, rows, sideName[side], sport); // N-R7-S136: the sport's own words
       if (why) {
         const unknown = rows.filter((u) => !u.gender).map((u) => ({ user_id: u.id, name: u.name || u.username || 'A player', team_side: side }));
         return { error: why, code: 'TOO_FEW_WOMEN', ...(unknown.length ? { unknown } : {}) } as { error: string; code: string };

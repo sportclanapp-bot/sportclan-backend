@@ -69,7 +69,7 @@ import { isValidTournamentFormat, TOURNAMENT_FORMATS, LIMITS, isCount, firstTooL
 import { rankTeams, rankTeamsDetailed, computeStats, pointsFor, bestPlacedAcrossGroups, openKnockoutPlaces, bestNextCount, groupsKnockoutSize, type PointsModel } from '../utils/standings';
 import { placeGroupTiersApart, crossGroupFirstRound } from '../utils/koFirstRound';
 import { getSport, normSportSlug } from '../utils/sportCache';
-import { withWalkoverScore } from '../utils/walkoverScore';
+import { withWalkoverScore, walkoverScoreless } from '../utils/walkoverScore';
 import { DEFAULT_OVERS } from '../utils/cricketRules';
 import { legacyFromRules, rulesOf, stageRules, tournamentRulesRefusal, normalizeRules, STAGE_KEYS, SPORT_SLOT_MINUTES, slotMinutes, type MatchRules, type Stage } from '../utils/matchRules';
 import { lengthKey } from '../utils/matchLength';
@@ -2584,6 +2584,9 @@ export async function getBracket(req: Request, res: Response) {
         const ss: any = m.score_summary ?? {};
         // N-R7-59: a best-of-N cricket series is scored in games won (2–1), not the last game's runs.
         const seriesTie = ss?.tie?.series === true ? ss.tie : null;
+        const decided = decidedFields(m as any);
+        // N-R7-S137 (SP-HOC-044): a walkover with no walkover score sends no score (not the abandoned match's live one).
+        const noScore = walkoverScoreless(decided.decided_by, slug, (m as any).rules ?? {}, (tournament as { settings?: unknown }).settings);
         return {
           id: m.id,
           team_a_id: m.team_a_id,
@@ -2592,8 +2595,8 @@ export async function getBracket(req: Request, res: Response) {
           team_b_name: m.team_b_name,
           // V109 (visual review): the final's card showed no score. Cricket keeps
           // runs, football goals — read the same shapes the result screen does.
-          score_a: seriesTie ? Number(seriesTie.rubbersA ?? 0) : ss.team_a_score ?? ss?.A?.score ?? ss?.A?.runs ?? ss.goals_a ?? null,
-          score_b: seriesTie ? Number(seriesTie.rubbersB ?? 0) : ss.team_b_score ?? ss?.B?.score ?? ss?.B?.runs ?? ss.goals_b ?? null,
+          score_a: noScore ? null : seriesTie ? Number(seriesTie.rubbersA ?? 0) : ss.team_a_score ?? ss?.A?.score ?? ss?.A?.runs ?? ss.goals_a ?? null,
+          score_b: noScore ? null : seriesTie ? Number(seriesTie.rubbersB ?? 0) : ss.team_b_score ?? ss?.B?.score ?? ss?.B?.runs ?? ss.goals_b ?? null,
           winner_team_id: m.winner_team_id,
           status: m.status,
           // V109/SC-428: fetched above but dropped here, so a voided final never

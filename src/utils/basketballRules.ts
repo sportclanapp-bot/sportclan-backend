@@ -177,7 +177,7 @@ export function timeoutsLeft(
   regulation: number,
   /** Seconds left in the period on the clock, when there's a clock; the late limit needs it. */
   secondsLeft: number | null,
-): { left: number | null; why: string | null } {
+): { left: number | null; why: string | null; none?: true } {
   const taken: Array<{ period: number; late: boolean }> = [];
   let p = 1;
   for (const ev of events) {
@@ -189,29 +189,37 @@ export function timeoutsLeft(
   }
   const ot = period > regulation;
   const n = (x: number | null | undefined) => (x == null ? null : x);
-  const candidates: Array<{ left: number; why: string }> = [];
+  // N-R7-279 (SIDE-C5b-2): a limit of 0 is 'none allowed', not 'used all 0' — `none` marks it, `why` names what.
+  const candidates: Array<{ left: number; why: string; none?: true }> = [];
+  const zero = (pool: number, what: string) => (pool === 0 ? { why: what, none: true as const } : null);
   if (rules.perGame != null) {
     // 3x3: one a game; carried into overtime it's the same pool, else overtime has its own.
     const sameP = !ot || rules.carry;
     const pool = sameP ? rules.perGame : rules.perOvertime ?? 0;
     const used = sameP ? taken.length : taken.filter((t) => t.period === period).length;
-    candidates.push({ left: Math.max(0, pool - used), why: pool === 1 ? 'their one time-out' : `all ${pool} time-outs` });
+    candidates.push({ left: Math.max(0, pool - used), ...(zero(pool, sameP ? 'time-outs in this game' : 'time-outs this overtime') ?? { why: pool === 1 ? 'their one time-out' : `all ${pool} time-outs` }) });
   } else if (ot) {
-    if (rules.perOvertime != null) candidates.push({ left: Math.max(0, rules.perOvertime - taken.filter((t) => t.period === period).length), why: rules.perOvertime === 1 ? 'their time-out this overtime' : `all ${rules.perOvertime} time-outs this overtime` });
+    if (rules.perOvertime != null) candidates.push({ left: Math.max(0, rules.perOvertime - taken.filter((t) => t.period === period).length), ...(zero(rules.perOvertime, 'time-outs this overtime') ?? { why: rules.perOvertime === 1 ? 'their time-out this overtime' : `all ${rules.perOvertime} time-outs this overtime` }) });
   } else {
     const halfOf = (q: number) => (q <= Math.ceil(regulation / 2) ? 1 : 2);
     const half = halfOf(period);
     const allowance = half === 1 ? n(rules.firstHalf) : n(rules.secondHalf);
-    if (allowance != null) candidates.push({ left: Math.max(0, allowance - taken.filter((t) => t.period <= regulation && halfOf(t.period) === half).length), why: half === 1 ? `all ${allowance} first-half time-outs` : `all ${allowance} second-half time-outs` });
-    if (rules.perPeriod != null) candidates.push({ left: Math.max(0, rules.perPeriod - taken.filter((t) => t.period === period).length), why: `all ${rules.perPeriod} time-outs this period` });
+    if (allowance != null) candidates.push({ left: Math.max(0, allowance - taken.filter((t) => t.period <= regulation && halfOf(t.period) === half).length), ...(zero(allowance, half === 1 ? 'first-half time-outs' : 'second-half time-outs') ?? { why: half === 1 ? `all ${allowance} first-half time-outs` : `all ${allowance} second-half time-outs` }) });
+    if (rules.perPeriod != null) candidates.push({ left: Math.max(0, rules.perPeriod - taken.filter((t) => t.period === period).length), ...(zero(rules.perPeriod, 'time-outs this period') ?? { why: `all ${rules.perPeriod} time-outs this period` }) });
     // FIBA: at most `lateMax` once the clock shows `lateMinutes` or less in the last regulation period.
     if (period === regulation && rules.lateMinutes != null && rules.lateMax != null && secondsLeft != null && secondsLeft <= rules.lateMinutes * 60) {
-      candidates.push({ left: Math.max(0, rules.lateMax - taken.filter((t) => t.period === period && t.late).length), why: `the ${rules.lateMax} allowed in the last ${plural(rules.lateMinutes, 'minute')}` });
+      candidates.push({ left: Math.max(0, rules.lateMax - taken.filter((t) => t.period === period && t.late).length), ...(zero(rules.lateMax, `time-outs in the last ${plural(rules.lateMinutes, 'minute')}`) ?? { why: `the ${rules.lateMax} allowed in the last ${plural(rules.lateMinutes, 'minute')}` }) });
     }
   }
   if (!candidates.length) return { left: null, why: null };
   const min = candidates.reduce((a, b) => (b.left < a.left ? b : a));
-  return { left: min.left, why: min.left === 0 ? min.why : null };
+  return { left: min.left, why: min.left === 0 ? min.why : null, ...(min.left === 0 && min.none ? { none: true as const } : {}) };
+}
+
+/** The toast for a refused time-out: 'Hawks have used all 2 first-half time-outs.' or, for a limit of 0,
+ *  'Hawks have no first-half time-outs: this match allows none.' (N-R7-279). */
+export function timeoutRefusal(team: string, res: { why: string | null; none?: true }): string {
+  return res.none ? `${team} have no ${res.why}: this match allows none.` : `${team} have used ${res.why}.`;
 }
 
 /** Stage 15 · BB3 · 3x3 overtime: points each side has scored since overtime began (first to N wins). */

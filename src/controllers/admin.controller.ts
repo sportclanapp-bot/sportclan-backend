@@ -620,6 +620,7 @@ export async function adminListUsers(req: Request, res: Response) {
       .from('users')
       .select(ADMIN_USER_FIELDS, { count: 'exact' })
       .order('created_at', { ascending: false })
+      .order('id', { ascending: false }) // N-R7-S140: stable tiebreaker for offset paging (tied sign-up times)
       .range(p.from, p.to);
     if (q) query = query.or(adminUserSearchFilter(q)); // SC-237: injection-safe; N-RWG1-12: '@name' and spaced numbers
     const { data, error, count } = await query;

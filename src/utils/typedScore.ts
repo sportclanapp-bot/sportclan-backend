@@ -289,7 +289,7 @@ export function typedTiePoints(
   for (let i = 0; i < rubbers.length; i++) {
     const rubber = spec.rubbers[i];
     if (!rubber) return { problem: `This tie has ${plural(spec.rubbers.length, 'match', 'matches')}.`, points, winner: null };
-    if (tieOutcome(spec, results).finished) return { problem: `The tie was decided before ${rubber.label}.`, points, winner: null };
+    if (tieOutcome(spec, results).finished) return { problem: spec.series ? `${rubber.label} isn’t played — the series was already won.` /* N-R7-S135: a series says so, as typedSeriesPoints */ : `The tie was decided before ${rubber.label}.`, points, winner: null };
     const own = { ...(rules ?? {}), ...((rubber.rules ?? {}) as Partial<MatchRules>), tie: null, rubbers: null, players: rubber.players === 2 ? 2 : null } as Partial<MatchRules>; // Stage 11 · PB3: a match's own rules
     const m = typedMatchPoints(sport, own, rubbers[i]);
     if (m.problem) return { problem: `${rubber.label}: ${m.problem}`, points, winner: null };

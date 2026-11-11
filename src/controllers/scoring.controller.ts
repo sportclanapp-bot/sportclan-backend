@@ -10,7 +10,7 @@ import { supabase } from '../utils/supabase';
 import { DB_UNAVAILABLE, DB_UNAVAILABLE_STATUS } from '../utils/dbUnavailable';
 import { pendingRankedOpponent } from '../utils/singles';
 import { tennisReplayEvents, type TennisScore } from '../utils/tennisCore';
-import { scorePush, quarterPush } from '../utils/scorePush';
+import { scorePush, quarterPush, matchStartPush } from '../utils/scorePush';
 import { sanitizeError } from '../utils/response';
 import { normalizeClientKey } from '../utils/idempotency';
 import { notifyUsers } from '../utils/notify';
@@ -44,6 +44,7 @@ async function fanoutScoreUpdate(
   title: string,
   body: string,
   actorId?: string,
+  type: 'score_update' | 'match_start' = 'score_update',
 ): Promise<void> {
   try {
     // Participants + anyone who followed the match (SC-A1) — deduped.
@@ -57,7 +58,7 @@ async function fanoutScoreUpdate(
     ]));
     if (userIds.length === 0) return;
     await notifyUsers(userIds, {
-      type: 'score_update',
+      type,
       title,
       body,
       data: { matchId, screen: 'MatchDetail' },
@@ -65,6 +66,30 @@ async function fanoutScoreUpdate(
   } catch (err) {
     // SC-112: best-effort fanout, but log the failure so it isn't invisible.
     console.error('[fanout-score-update] failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * N-R7-S134 (Step 2 B11, SP-BKB-C32): a scheduled match that has just gone live (its first play) tells its
+ * players and followers once — 'match_start', behind the same Match updates switch as the result. Sent
+ * once per match: a start already notified (a second first-play racing this one) sends nothing.
+ */
+export async function fanoutMatchStart(matchId: string, actorId?: string): Promise<void> {
+  try {
+    const [{ data: sent }, { data: m }] = await Promise.all([
+      supabase.from('notifications').select('id').eq('type', 'match_start').eq('data->>matchId', matchId).limit(1),
+      supabase.from('matches').select('sport_id, team_a_name, team_b_name').eq('id', matchId).maybeSingle(),
+    ]);
+    if ((sent as unknown[] | null)?.length || !m) return;
+    const slug = normSportSlug((await getSport((m as { sport_id: string }).sport_id))?.slug);
+    const { title, body } = matchStartPush({
+      slug,
+      teamAName: (m as { team_a_name?: string | null }).team_a_name || 'Team A',
+      teamBName: (m as { team_b_name?: string | null }).team_b_name || 'Team B',
+    });
+    await fanoutScoreUpdate(matchId, title, body, actorId, 'match_start');
+  } catch (err) {
+    console.error('[fanout-match-start] failed:', err instanceof Error ? err.message : err);
   }
 }
 
@@ -952,6 +977,8 @@ export async function createEvent(req: Request, res: Response) {
     // result with a bad reason or the wrong player, a guest in a ranked match,
     // one player batting and bowling) used to start the match anyway.
     if (startsPlay) await promoteToLive(matchId, match);
+    // N-R7-S134 (SP-BKB-C32): the match has just started — its players and followers hear it once.
+    if (startsPlay && match.status === 'scheduled') inBackground(fanoutMatchStart(matchId, userId), 'fanoutMatchStart');
 
     // SC-113: atomic, race-safe insert. record_match_event serializes per-match
     // (advisory lock) and dedupes a rapid/concurrent IDENTICAL submit (double-tap

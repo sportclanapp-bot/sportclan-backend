@@ -21,6 +21,7 @@
  * moments, and a match has a handful.
  */
 import { REGULATION_QUARTERS, periodLabelOf } from './basketballRules';
+import { sportTerms } from './sportTerms';
 
 type SideLine = { score?: number; points?: number; games?: number; sets?: number[]; goals?: number } | undefined;
 
@@ -116,4 +117,15 @@ export function quarterPush(args: {
     title: `End of ${periodLabelOf(args.quarter, args.regulation ?? REGULATION_QUARTERS)}`, // A1: Q1–Q4, then OT1, OT2 … (3.30: H1/H2, P1…)
     body: `${args.teamAName} ${pts(args.summary.A)}–${pts(args.summary.B)} ${args.teamBName}`,
   };
+}
+
+/**
+ * N-R7-S134 (Step 2 B11, SP-BKB-C32): the push when a match starts — its first play makes it live —
+ * in the sport's own words: '🏀 Tip-off', '⚽ Kick-off', '🏑 Push-back', else '<icon> Match started'.
+ * Players and followers got the result (and basketball's quarters) but nothing when it began.
+ */
+export function matchStartPush(args: { slug: string | null | undefined; teamAName: string; teamBName: string }): { title: string; body: string } {
+  const terms = sportTerms(args.slug);
+  const title = terms.start === 'Start' ? `${terms.icon} Match started` : `${terms.icon} ${terms.start}`;
+  return { title, body: `${args.teamAName} v ${args.teamBName} is under way — follow it live.` };
 }

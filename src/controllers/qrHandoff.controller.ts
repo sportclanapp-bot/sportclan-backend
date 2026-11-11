@@ -12,7 +12,8 @@ import {
 import { checkAndRecordDiscrepancy, checkResultBeforeRecording, recordUnsentPlayForFinalMatch } from '../utils/discrepancy';
 import { invokeController } from '../utils/invokeController';
 import { completeMatch } from './matches.controller';
-import { authorizeScorer, recordEventIdempotent, recomputeSummary, validateScoringEvent, promoteToLive, startsPlayEvent } from './scoring.controller';
+import { inBackground } from '../utils/background';
+import { authorizeScorer, recordEventIdempotent, recomputeSummary, validateScoringEvent, promoteToLive, startsPlayEvent, fanoutMatchStart } from './scoring.controller';
 import { isTerminalMatchStatus } from '../utils/validation';
 import { isSportInactive } from '../utils/sports';
 import { getSport, normSportSlug } from '../utils/sportCache';
@@ -194,7 +195,11 @@ export async function uploadHandoff(req: Request, res: Response) {
         });
       }
     }
-    if (eventOps.some((op) => startsPlayEvent(op.e.event_type, op.e.payload))) await promoteToLive(id!, scorerMatch); // N-R7-S15
+    if (eventOps.some((op) => startsPlayEvent(op.e.event_type, op.e.payload))) {
+      await promoteToLive(id!, scorerMatch); // N-R7-S15
+      // N-R7-S134 (SP-BKB-C32): a first play carried by the code starts the match — say so once.
+      if (scorerMatch.status === 'scheduled') inBackground(fanoutMatchStart(id!, p.u), 'fanoutMatchStart');
+    }
 
     for (const op of eventOps) {
       const rec = await recordEventIdempotent({

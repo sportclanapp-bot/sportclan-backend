@@ -12,7 +12,7 @@ const ctx = (sport: string, extra: object = {}) => ({ sport, teamA: 'Lions', tea
 test('the new lines', () => {
   expect(sportCommentary('score', { team_side: 'A', kind: 'goal', penalty: true, player_name: 'Ravi' }, ctx('football'))).toBe('⚽ GOAL! Lions — Ravi (penalty)');
   expect(sportCommentary('assist', { team_side: 'A', kind: 'assist', player_name: 'Amit' }, ctx('football'))).toBe('🅰️ Assist — Amit (Lions)');
-  expect(sportCommentary('sub', { team_side: 'B', kind: 'sub', player_name: 'Kiran', off_name: 'Dev' }, ctx('football'))).toBe('🔁 Tigers: Kiran on for Dev');
+  expect(sportCommentary('sub', { team_side: 'B', kind: 'sub', player_name: 'Kiran', off_name: 'Dev' }, ctx('football'))).toBe('🔁 Substitution — Tigers: Kiran on for Dev');
   expect(sportCommentary('sub', { team_side: 'B', kind: 'sub', off_name: 'Dev' }, ctx('football'))).toBe('🔁 Substitution — Tigers: Dev off');
   expect(sportCommentary('card', { team_side: 'A', kind: 'red', second_yellow: true, player_name: 'Ravi' }, ctx('football'))).toBe('🟨🟥 Second yellow, sent off — Ravi (Lions)');
   expect(sportCommentary('note', { kind: 'clock_pause' }, ctx('football'))).toBe('⏸ Clock stopped');

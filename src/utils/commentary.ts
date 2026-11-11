@@ -107,7 +107,8 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
   if ((goalSport || ctx.sport === 'basketball' || ctx.sport === 'volleyball') && eventType === 'sub') {
     const off = typeof p.off_name === 'string' && p.off_name.trim() ? p.off_name.trim() : null;
     const icon = p.injury === true ? '🩹 Injury sub' : '🔁';
-    if (off && player) return p.injury === true ? `${icon} — ${team}: ${player} on for ${off}` : `${icon} ${team}: ${player} on for ${off}`;
+    // N-R7-S139 (SIDE-C6b-2): one pattern for every sub row: '<icon> <label> — <team>: …'.
+    if (off && player) return `${p.injury === true ? icon : '🔁 Substitution'} — ${team}: ${player} on for ${off}`;
     return `${p.injury === true ? icon : '🔁 Substitution'} — ${team}${off ? `: ${off} off` : player ? `: ${player} on` : ''}`;
   }
   // Stage 14 · VB1 / VB7 / VB12 · volleyball's court: a set's line-up, the libero, a Super Point, a positional fault, a Super Serve.

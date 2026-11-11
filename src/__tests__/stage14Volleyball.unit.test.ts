@@ -90,9 +90,9 @@ describe('the timeline', () => {
     expect(say('score', { team_side: 'A', kind: 'point', value: 1, how: 'error' })).toBe('Point to Kings — Hawks error');
   });
   it('VB2: volleyball and basketball subs, and an injury substitution', () => {
-    expect(say('sub', { team_side: 'A', player_name: 'Sub', off_name: 'Ravi' })).toBe('🔁 Kings: Sub on for Ravi');
+    expect(say('sub', { team_side: 'A', player_name: 'Sub', off_name: 'Ravi' })).toBe('🔁 Substitution — Kings: Sub on for Ravi');
     expect(say('sub', { team_side: 'A', player_name: 'Sub', off_name: 'Ravi', injury: true })).toBe('🩹 Injury sub — Kings: Sub on for Ravi');
-    expect(sportCommentary('sub', { team_side: 'B', player_name: 'Neha', off_name: 'Om' }, { ...(ctx as object), sport: 'basketball' } as never)).toBe('🔁 Hawks: Neha on for Om');
+    expect(sportCommentary('sub', { team_side: 'B', player_name: 'Neha', off_name: 'Om' }, { ...(ctx as object), sport: 'basketball' } as never)).toBe('🔁 Substitution — Hawks: Neha on for Om');
     expect(sportCommentary('note', { team_side: 'B', kind: 'stat', stat: 'block', player_name: 'Neha' }, { ...(ctx as object), sport: 'basketball' } as never)).toBe('🏀 Block — Neha (Hawks)');
   });
 });

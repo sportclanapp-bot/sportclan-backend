@@ -177,7 +177,7 @@ export function computedAwards(
     const best = Math.max(...playedTeams.map(pts));
     const winners = playedTeams.filter((t) => pts(t) === best);
     if (winners.length < playedTeams.length) {
-      out.push({ key: 'fair_play', title: 'Fair play', winners: winners.map((t) => ({ user_id: null, name: teamNames.get(t) ?? 'Team', team_name: null })), value: best === 0 ? 'no cards' : `${plural(best, 'fair-play point')}` });
+      out.push({ key: 'fair_play', title: 'Fair play', winners: winners.map((t) => ({ user_id: null, name: teamNames.get(t) ?? 'Team', team_name: null })), value: best === 0 ? 'no cards' : plural(best, 'fair-play point').replace(/^-/, '−') }); // N-R7-S138: the minus sign, as the table writes it
     }
   }
   return out;

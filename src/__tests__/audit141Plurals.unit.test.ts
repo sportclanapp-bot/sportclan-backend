@@ -6,7 +6,7 @@ import { buildSchedule } from '../utils/scheduleFixtures';
 
 test.each([-1, -2])('fair play at %i', (n) => {
   const out = computedAwards('football', [], new Map([['t1', n], ['t2', n - 5]]), ['t1', 't2'], new Map([['t1', 'Lions'], ['t2', 'Tigers']]));
-  expect(out.find((a) => a.key === 'fair_play')?.value).toBe(n === -1 ? '-1 fair-play point' : '-2 fair-play points');
+  expect(out.find((a) => a.key === 'fair_play')?.value).toBe(n === -1 ? '−1 fair-play point' : '−2 fair-play points'); // N-R7-S138: minus sign
 });
 
 test.each([1, 2])('the schedule that can’t fit, at %i', (n) => {

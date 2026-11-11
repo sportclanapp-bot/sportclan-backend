@@ -360,6 +360,7 @@ export function periodWord(sport: string, i: number, regulation: number): string
 }
 export function typedPeriodPoints(
   sport: string | null | undefined, rules: Partial<MatchRules> | null | undefined, periods: unknown,
+  opts: { knockout?: boolean } = {},
 ): { problem: string | null; events: TypedPeriodEvent[]; winner: TypedSide | null; draw: boolean; text: string } {
   const k = String(sport ?? '').toLowerCase().replace(/[-_\s]/g, '');
   const no = (problem: string) => ({ problem, events: [], winner: null, draw: false, text: '' });
@@ -385,7 +386,8 @@ export function typedPeriodPoints(
   if (k === 'hockey' && ps.length > regulation) return no('Hockey has no overtime — a level match is a draw, or a knockout goes to a shoot-out.');
   const level = a === b;
   if (level && k === 'basketball') return no('A basketball game can’t end level — add the overtime.');
-  if (level && r.drawAllowed === false) return no(`This match can’t end level — a level knockout goes to ${k === 'hockey' ? 'a shoot-out' : 'penalties'}: score ${k === 'hockey' ? 'it' : 'them'} on the pad.`); // F182: hockey's word
+  // N-R7-299 (SIDE-C2b-1): a knockout fixture can't end level either, whatever its rules' drawAllowed says.
+  if (level && (r.drawAllowed === false || opts.knockout === true)) return no(`This match can’t end level — a level knockout goes to ${k === 'hockey' ? 'a shoot-out' : 'penalties'}: score ${k === 'hockey' ? 'it' : 'them'} on the pad.`); // F182: hockey's word
   const events: TypedPeriodEvent[] = [];
   ps.forEach((p, i) => {
     if (i > 0) events.push({ event_type: 'period_change', payload: { kind: k === 'basketball' ? 'quarter' : regulation === 2 ? 'halftime' : 'period', typed: true } });

@@ -2415,7 +2415,7 @@ export async function typedScore(req: Request, res: Response) {
       const prules = rulesOf(slug, m as never) as MatchRules;
       const pspec = tieSpecOf(slug, prules);
       const body = (req.body ?? {}) as { periods?: unknown; games?: unknown };
-      const got = pspec?.series ? typedSeriesPoints(slug, pspec, body.games) : typedPeriodPoints(slug, prules, body.periods);
+      const got = pspec?.series ? typedSeriesPoints(slug, pspec, body.games) : typedPeriodPoints(slug, prules, body.periods, { knockout: await isKnockoutBracketMatch({ ...(m as { tournament_id: string | null; round: number | null; group_label: string | null }), id }) }); // N-R7-299 (SIDE-C2b-1): a knockout fixture can't end level
       if (got.problem) return res.status(400).json({ error: got.problem, code: 'BAD_TYPED_SCORE' });
       const base = Date.now();
       const rows = [

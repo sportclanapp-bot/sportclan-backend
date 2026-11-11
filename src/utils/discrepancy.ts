@@ -9,7 +9,26 @@ import { supabase } from './supabase';
 import { isTerminalMatchStatus } from './validation';
 import { checkResultAgainstPlay, resultWouldContradictPlay, sideFromSummary, sideOfTeam, type Side } from './resultCheck';
 import { notifyUsers } from './notify';
+import { matchEventsAll } from './matchEventsAll';
+import { gameShootout } from './shootoutRules';
 import { tournamentOrganiserIds } from './tournamentAuth';
+
+/**
+ * N-R7-S141 (SCR-M-F05): who a played shoot-out / penalties settled the game for. Only the
+ * kicks after the last back-out (shootout_cancel) or series game end count; a typed tally
+ * (note { kind: 'shootout' }) counts too, else the result's own shoot-out once the match is
+ * completed (summary.shootout, written by completeMatch). Null when there's none, or level.
+ */
+export async function shootoutSideOf(matchId: string, summary?: unknown): Promise<'A' | 'B' | null> {
+  const notes = (await matchEventsAll(matchId, 'event_type, payload', (q) => q.eq('event_type', 'note'))) as Array<{ event_type: string; payload?: { kind?: unknown } }>;
+  let last = -1;
+  (notes ?? []).forEach((e, i) => { const k = e.payload?.kind; if (k === 'shootout_cancel' || k === 'game_end') last = i; });
+  const so = gameShootout((notes ?? []).slice(last + 1));
+  if (so) return so.winner;
+  const typed = (summary as { shootout?: { A?: unknown; B?: unknown } } | null | undefined)?.shootout;
+  const a = Number(typed?.A); const b = Number(typed?.B);
+  return typed && Number.isFinite(a) && Number.isFinite(b) && a !== b ? (a > b ? 'A' : 'B') : null;
+}
 
 export type DetectedBy = 'result_op' | 'events' | 'complete';
 
@@ -57,6 +76,7 @@ export async function checkAndRecordDiscrepancy(
     hasRecordedResult: isTerminalMatchStatus(m.status),
     derivedSummary: m.score_summary,
     eventCount: count ?? 0,
+    shootoutSide: sideFromSummary(m.score_summary) === 'draw' ? await shootoutSideOf(matchId, m.score_summary) : null, // N-R7-S141
   });
 
   if (!verdict.disagrees) {
@@ -183,6 +203,8 @@ export async function recordUnsentPlayForFinalMatch(
 export async function checkResultBeforeRecording(
   matchId: string,
   claimedWinnerTeamId: string | null,
+  /** N-R7-S141: the shoot-out the result itself carries (a typed tally, no kicks sent). completeMatch still checks it. */
+  claimedShootout?: { A: number; B: number } | null,
 ): Promise<{ disagrees: boolean; recordedSide: Side | null; derivedSide: Side | null }> {
   const { data: match } = await supabase
     .from('matches')
@@ -203,6 +225,7 @@ export async function checkResultBeforeRecording(
     claimedWinnerTeamId,
     currentSummary: m.score_summary,
     eventCount: count ?? 0,
+    shootoutSide: sideFromSummary(m.score_summary) === 'draw' ? await shootoutSideOf(matchId, claimedShootout ? { shootout: claimedShootout } : null) : null, // N-R7-S141
   });
   if (!verdict.disagrees) {
     return { disagrees: false, recordedSide: verdict.recordedSide, derivedSide: verdict.derivedSide };

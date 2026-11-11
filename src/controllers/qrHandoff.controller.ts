@@ -337,7 +337,7 @@ async function applyResultOp(
      * outcome its own events contradict, with the argument raised after the fact.
      * "Never silently overwritten" has to mean the write does not happen.
      */
-    const pre = await checkResultBeforeRecording(matchId, op.r.w);
+    const pre = await checkResultBeforeRecording(matchId, op.r.w, op.r.c?.so ?? null); // N-R7-S141
     if (pre.disagrees) {
       return {
         status: 'disagrees',

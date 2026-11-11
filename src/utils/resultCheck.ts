@@ -35,6 +35,15 @@ export function sideFromSummary(summary: unknown): Side | null {
   return a > b ? 'A' : 'B';
 }
 
+/**
+ * N-R7-S141 (Step 2 B12, SCR-M-F05): goals level, then a shoot-out (hockey) or penalties
+ * (football) — the play says the shoot-out's winner won, not a draw. The summary's goals
+ * never carry the kicks, so a 1–1 + 3–0 shoot-out hand-off was refused as RESULT_DISPUTED.
+ */
+export function withShootout(side: Side | null, shootoutSide: 'A' | 'B' | null | undefined): Side | null {
+  return side === 'draw' && (shootoutSide === 'A' || shootoutSide === 'B') ? shootoutSide : side;
+}
+
 function num(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
@@ -82,11 +91,13 @@ export function checkResultAgainstPlay(args: {
   hasRecordedResult: boolean;
   derivedSummary: unknown;
   eventCount: number;
+  /** N-R7-S141: the side a played (or typed) shoot-out / penalties settled a level game for. */
+  shootoutSide?: 'A' | 'B' | null;
 }): DiscrepancyVerdict {
   const recordedSide = args.hasRecordedResult
     ? sideOfTeam({ team_a_id: args.teamAId, team_b_id: args.teamBId }, args.recordedWinnerTeamId)
     : null;
-  const derivedSide = sideFromSummary(args.derivedSummary);
+  const derivedSide = withShootout(sideFromSummary(args.derivedSummary), args.shootoutSide);
 
   if (!args.isTerminal(args.matchStatus)) return { disagrees: false, recordedSide, derivedSide, skipped: 'not_final' };
   if (args.eventCount === 0) return { disagrees: false, recordedSide, derivedSide, skipped: 'no_events' };
@@ -121,12 +132,14 @@ export function resultWouldContradictPlay(args: {
   claimedWinnerTeamId: string | null;
   currentSummary: unknown;
   eventCount: number;
+  /** N-R7-S141: the side a played (or typed) shoot-out / penalties settled a level game for. */
+  shootoutSide?: 'A' | 'B' | null;
 }): DiscrepancyVerdict {
   const recordedSide = sideOfTeam(
     { team_a_id: args.teamAId, team_b_id: args.teamBId },
     args.claimedWinnerTeamId,
   );
-  const derivedSide = sideFromSummary(args.currentSummary);
+  const derivedSide = withShootout(sideFromSummary(args.currentSummary), args.shootoutSide);
 
   if (args.eventCount === 0) return { disagrees: false, recordedSide, derivedSide, skipped: 'no_events' };
   if (derivedSide === null) return { disagrees: false, recordedSide, derivedSide, skipped: 'no_events' };

@@ -127,5 +127,5 @@ export function quarterPush(args: {
 export function matchStartPush(args: { slug: string | null | undefined; teamAName: string; teamBName: string }): { title: string; body: string } {
   const terms = sportTerms(args.slug);
   const title = terms.start === 'Start' ? `${terms.icon} Match started` : `${terms.icon} ${terms.start}`;
-  return { title, body: `${args.teamAName} v ${args.teamBName} is under way — follow it live.` };
+  return { title, body: `${args.teamAName} vs ${args.teamBName} is under way — follow it live.` };
 }

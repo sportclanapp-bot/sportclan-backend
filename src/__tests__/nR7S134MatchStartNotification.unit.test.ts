@@ -37,7 +37,7 @@ beforeEach(() => { (notifyUsers as jest.Mock).mockClear(); });
 
 test('the start push in the sport’s words', () => {
   expect(typeof words).toBe('function');
-  expect(words!({ slug: 'basketball', teamAName: 'Kings', teamBName: 'Hawks' })).toEqual({ title: '🏀 Tip-off', body: 'Kings v Hawks is under way — follow it live.' });
+  expect(words!({ slug: 'basketball', teamAName: 'Kings', teamBName: 'Hawks' })).toEqual({ title: '🏀 Tip-off', body: 'Kings vs Hawks is under way — follow it live.' });
   expect(words!({ slug: 'football', teamAName: 'A', teamBName: 'B' }).title).toBe('⚽ Kick-off');
   expect(words!({ slug: 'badminton', teamAName: 'A', teamBName: 'B' }).title).toBe('🏸 Match started');
 });

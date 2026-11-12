@@ -245,9 +245,10 @@ export async function calculateAndSetMVP(matchId: string): Promise<string | null
   const winnersOnly = winnerSide != null && MVP_FROM_WINNING_SIDE.has(slug);
   // N-R7-349 (SIDE-C2b-1): a drawn game-and-set match (a level timed pickleball 9–9) has no
   // Player of the Match, as a drawn chess game has none: neither side won, so nobody is named.
-  const ss = (match.score_summary ?? {}) as { result?: unknown; timed_level?: unknown };
+  const ss = (match.score_summary ?? {}) as { result?: unknown; timed_level?: unknown; walkover?: unknown };
   const drawn = winnerSide == null && !match.winner_team_id && (ss.result === 'Draw' || ss.timed_level === true);
-  const noMvp = drawn && MVP_FROM_WINNING_SIDE.has(slug);
+  // N-R7-357 (SIDE-C3c-2): a walkover (a no-show, nothing played) names nobody, in every sport.
+  const noMvp = (drawn && MVP_FROM_WINNING_SIDE.has(slug)) || ss.walkover === true;
   for (const [uid, score] of scores) {
     if (score <= 0) continue; // no contribution → never MVP
     if (noMvp) continue;

@@ -222,7 +222,8 @@ export function sportBoards(
       wins,
       ...playerBoards,
       topTeams(teams, 'games', k === 'volleyball' ? 'Sets won' : 'Games won', word[0]!, word[1]!, teamNames, (t) => t.games, (t) => `${t.games}–${t.gamesLost}`, false, (a, b) => a.gamesLost - b.gamesLost),
-      topTeams(teams, 'points_diff', 'Points difference', 'point', 'points', teamNames, (t) => t.pf - t.pa, (t) => `${t.pf}–${t.pa}`, true),
+      // N-R7-S149 (SIDE-C4b-3): results typed with a winner only have no points — no board of '0–0' rows (as tennis).
+      ((pd) => (teams.some((t) => t.pf + t.pa > 0) ? pd : { ...pd, rows: [] }))(topTeams(teams, 'points_diff', 'Points difference', 'point', 'points', teamNames, (t) => t.pf - t.pa, (t) => `${t.pf}–${t.pa}`, true)),
     ];
   }
   if (k === 'tennis') {

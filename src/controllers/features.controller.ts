@@ -146,7 +146,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const orderIndex = new Map<string, number>();
     let running = 0;
     // Stage 8 · F8: fair play (when the order uses it) and the organiser's draws of lots.
-    const extraFor = await rankExtrasFor(tournament as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string; team_a_id?: string | null; team_b_id?: string | null }>);
+    const extraFor = await rankExtrasFor(tournament as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string; team_a_id?: string | null; team_b_id?: string | null }>, id);
     const level: Array<{ group: string | null; team_ids: string[] }> = [];
     // A draw of lots matters only once a group has played out: a group with a
     // match still to play (or a team that never played) isn't reported level.

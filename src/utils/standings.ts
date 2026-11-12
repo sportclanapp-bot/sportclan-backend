@@ -442,6 +442,12 @@ export type RankExtra = {
   matches?: GMatch[]; pts?: PointsModel;
   /** Stage 12 · CH1: each entry's rating, for the average rating of opponents (absent = unrated). */
   ratings?: Map<string, number>;
+  /**
+   * N-R7-338 (SIDE-C1b-1): each entry's seed. Teams still level after every
+   * tie-break and any draw of lots are placed by seed (unseeded last), then by
+   * team id, so a box (or group) nobody has played in yet reads in seed order.
+   */
+  seeds?: Map<string, number>;
 };
 
 type ChessCriterion = 'buchholz' | 'sonneborn_berger' | 'buchholz_cut1' | 'buchholz_median' | 'wins_black' | 'games_black' | 'progressive' | 'aro' | 'koya';
@@ -706,7 +712,8 @@ export function rankTeamsDetailed(
     if (level >= order.length) {
       // Stage 8 · F8: a draw of lots the organiser recorded, then the team id.
       if (!ids.every((id) => lotIndex.has(id))) levelClusters.push(ids.slice().sort((x, y) => (x < y ? -1 : x > y ? 1 : 0)));
-      const placed = ids.slice().sort((x, y) => (lotIndex.get(x) ?? Infinity) - (lotIndex.get(y) ?? Infinity) || (x < y ? -1 : x > y ? 1 : 0));
+      const seedOf = (id: string) => extra.seeds?.get(id) ?? Infinity; // N-R7-338: seed before team id
+      const placed = ids.slice().sort((x, y) => (lotIndex.get(x) ?? Infinity) - (lotIndex.get(y) ?? Infinity) || (seedOf(x) === seedOf(y) ? 0 : seedOf(x) < seedOf(y) ? -1 : 1) || (x < y ? -1 : x > y ? 1 : 0));
       if (ids.every((id) => lotIndex.has(id))) lotClusters.push(placed); // ordered by the draw, shown as such
       return placed; // team_id terminator
     }

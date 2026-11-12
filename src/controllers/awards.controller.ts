@@ -95,7 +95,7 @@ export async function placingsFor(t: { id: string; format: string; status: strin
     const tin = tableInputs(t.settings, rows.map((r) => r.team_id),
       matches.filter((m) => !m.voided_at && (m.status === 'completed' || m.status === 'abandoned')), rows.filter((r) => r.status === 'withdrawn').map((r) => r.team_id));
     const slug = (await getSport(String(t.sport_id)))?.slug ?? null;
-    const order = rankTeams(tin.teamIds, tin.matches as never[], ((t.tiebreaker_rules ?? []) as never[]), pointsFor(slug, t.settings), (await rankExtrasFor(t, tin.matches as Array<{ id: string }>))('')); // Stage 8 · F8
+    const order = rankTeams(tin.teamIds, tin.matches as never[], ((t.tiebreaker_rules ?? []) as never[]), pointsFor(slug, t.settings), (await rankExtrasFor(t, tin.matches as Array<{ id: string }>, t.id))('')); // Stage 8 · F8
     const goneSet = new Set(rows.filter((r) => r.status === 'withdrawn').map((r) => r.team_id));
     base = order.filter((id) => !goneSet.has(id)).slice(0, 4).map((id, i) => ({ place: (i + 1) as 1 | 2 | 3 | 4, title: TITLES[(i + 1) as 1 | 2 | 3 | 4], team_id: id, name: nameOf.get(id) ?? 'Team' }));
   }

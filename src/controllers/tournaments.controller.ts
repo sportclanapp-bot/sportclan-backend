@@ -3473,7 +3473,7 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
     // Badminton gap 6: a withdrawn player's results deleted (BWF GCR), when the tournament says so.
     const tin = tableInputs((t as any)?.settings, teamIds, (matches ?? []) as any[], await withdrawnTeamIds(tournamentId));
     // Stage 8 · F8: fair play and a draw of lots decide a dead heat at the top too.
-    const extraFor = await rankExtrasFor((t ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>);
+    const extraFor = await rankExtrasFor((t ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>, tournamentId);
     const detail = rankTeamsDetailed(
       tin.teamIds, tin.matches, ((t as any)?.tiebreaker_rules ?? []) as any[], await tournamentPoints(t as any), extraFor(''),
     );
@@ -3592,7 +3592,7 @@ export async function crownLeagueChampion(tournamentId: string): Promise<void> {
   const counts = (matches ?? []).some((x: any) => x.status === 'completed' || (x.status === 'abandoned' && x.winner_team_id));
   if (!counts) return;
   const tin = tableInputs((trow as any)?.settings, teamIds as string[], (matches ?? []) as any[], await withdrawnTeamIds(tournamentId)); // gap 6
-  const detail = rankTeamsDetailed(tin.teamIds, tin.matches, tiebreakerRules, pts, (await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>))('')); // Stage 8 · F8
+  const detail = rankTeamsDetailed(tin.teamIds, tin.matches, tiebreakerRules, pts, (await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>, tournamentId))('')); // Stage 8 · F8
   const championId = detail.order.find((id) => !goneIds.has(id));
   if (!championId) return;
   // N-R7-S143 (SIDE-A1-1): the top place still level on every tie-break waits for the organiser's
@@ -3806,7 +3806,7 @@ async function swissSeedKnockout(tournamentId: string): Promise<void> {
   const trow = ctx.t as { settings?: unknown; tiebreaker_rules?: unknown; match_rules?: unknown; entry_kind?: string | null };
   // Audit #58/#54: ranked on the table's teams (withdrawn players' games count); a withdrawn player isn't seeded.
   const tin = tableInputs(trow.settings, ctx.scoreIds, ctx.ms as any[], await withdrawnTeamIds(tournamentId));
-  const ordered = rankTeams(tin.teamIds, tin.matches, ((trow.tiebreaker_rules ?? []) as any[]), ctx.pts, (await rankExtrasFor(trow as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>))(''))
+  const ordered = rankTeams(tin.teamIds, tin.matches, ((trow.tiebreaker_rules ?? []) as any[]), ctx.pts, (await rankExtrasFor(trow as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>, tournamentId))(''))
     .filter((id) => ctx.ids.includes(id));
   const top = ordered.slice(0, Math.min(ctx.sw.knockout ?? 0, ordered.length));
   if (top.length < 2) { await crownLeagueChampion(tournamentId); return; }
@@ -4231,7 +4231,7 @@ export async function maybeSeedKnockout(tournamentId: string): Promise<void> {
   // ranks[r] = every team that finished position r (0-based) in its group.
   const ranks: Array<Array<{ id: string; name: string }>> = [];
   // Stage 8 · F8: fair play (when the order uses it) and each group's draw of lots.
-  const extraFor = await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tableMatches as Array<{ id: string; team_a_id?: string | null; team_b_id?: string | null }>);
+  const extraFor = await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tableMatches as Array<{ id: string; team_a_id?: string | null; team_b_id?: string | null }>, tournamentId);
   // N-R7-S1 (SCR-T-S03): a group whose qualifying places are still level on every
   // tie-break waits for the organiser's draw of lots (setLots seeds it then) —
   // the team-id order the table shows "until lots are drawn" isn't a result.
@@ -5237,7 +5237,7 @@ export async function boxTables(tournamentId: string, t: { settings?: unknown; t
     .from('matches').select('id, team_a_id, team_b_id, winner_team_id, status, score_summary, overs, group_label')
     .eq('tournament_id', tournamentId).eq('round', round).in('status', ['completed', 'abandoned']).is('voided_at', null));
   const pts = await tournamentPoints(t as any);
-  const extraFor = await rankExtrasFor(t as { settings?: unknown; tiebreaker_rules?: unknown }, matches as Array<{ id: string }>);
+  const extraFor = await rankExtrasFor(t as { settings?: unknown; tiebreaker_rules?: unknown }, matches as Array<{ id: string }>, tournamentId);
   const labels = Array.from(new Set(entries.map((e) => e.group_label!))).sort((a, b) => Number(a) - Number(b));
   return labels.map((g) => {
     const ids = entries.filter((e) => e.group_label === g).map((e) => e.team_id);

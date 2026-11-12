@@ -5,7 +5,7 @@
  * one-table tournament). `extraFor(groupLabel)` hands rankTeams its part.
  */
 import { supabase } from './supabase';
-import { selectAllIn } from './selectAll';
+import { allRows, selectAllIn } from './selectAll';
 import { fairPlayPoints, type CardEvent } from './fairPlay';
 import { settingsOf, tiebreakToken } from './tournamentSettings';
 import type { RankExtra } from './standings';
@@ -20,6 +20,8 @@ export const usesRatings = (rules: unknown): boolean =>
 export async function rankExtrasFor(
   t: { settings?: unknown; tiebreaker_rules?: unknown; sport_id?: unknown },
   matches: Array<{ id: string; team_a_id?: string | null; team_b_id?: string | null }>,
+  /** N-R7-338 (SIDE-C1b-1): with the tournament's id, its entries' seeds place teams level on everything. */
+  tournamentId?: string | null,
 ): Promise<(group?: string | null) => RankExtra> {
   let fairPlay: Map<string, number> | undefined;
   if (usesFairPlay(t.tiebreaker_rules) && matches.length) {
@@ -41,6 +43,17 @@ export async function rankExtrasFor(
       if (rs.length) ratings.set(id, rs.reduce((a, b) => a + b, 0) / rs.length);
     }
   }
+  // N-R7-338 (SIDE-C1b-1): the seeds, the last word before the team id (a box nobody has played in yet reads in seed order).
+  let seeds: Map<string, number> | undefined;
+  if (tournamentId) {
+    try {
+      const rows = await allRows<{ team_id: string; seed: number | null }>(() => supabase
+        .from('tournament_entries').select('id, team_id, seed').eq('tournament_id', tournamentId).not('seed', 'is', null));
+      const m = new Map<string, number>();
+      for (const r of rows ?? []) if (r?.team_id && Number.isFinite(Number(r.seed))) m.set(r.team_id, Number(r.seed));
+      if (m.size) seeds = m;
+    } catch { /* no seeds: the team id decides, as before */ }
+  }
   const lots = settingsOf(t as { settings?: unknown }).lots ?? {};
-  return (group) => ({ ...(fairPlay ? { fairPlay } : {}), ...(ratings ? { ratings } : {}), ...(lots[group ?? ''] ? { lots: lots[group ?? ''] } : {}) });
+  return (group) => ({ ...(fairPlay ? { fairPlay } : {}), ...(ratings ? { ratings } : {}), ...(seeds ? { seeds } : {}), ...(lots[group ?? ''] ? { lots: lots[group ?? ''] } : {}) });
 }

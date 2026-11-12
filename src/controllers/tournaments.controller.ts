@@ -2489,7 +2489,10 @@ export async function getBracket(req: Request, res: Response) {
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
     const slug = normSportSlug((await getSport(String((tournament as { sport_id?: string }).sport_id)))?.slug); // N-R7-S64
 
-    const { data: matchesAll, error } = await supabase
+    // N-R7-S146 (Step 2 B13, SCR-T-103): every fixture — a 48-team round robin has 1128 and an unpaged read
+    // stopped at 1000, so its list said '950 left' (128 never shown). Read 1000 at a time, in a stable order.
+    let error: unknown = null;
+    const matchesAll = await selectAll<any>((from, to) => supabase
       .from('matches')
       // SC-428: voided_at travels so a voided fixture renders as Voided in the
       // fixtures list and the bracket, rather than as live or completed.
@@ -2500,8 +2503,10 @@ export async function getBracket(req: Request, res: Response) {
       .eq('tournament_id', id)
       .order('round', { ascending: true })
       .order('match_no', { ascending: true })
-      .order('scheduled_at', { ascending: true });
-    if (error) return res.status(500).json({ error: sanitizeError(error) });
+      .order('scheduled_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to)).catch((e: unknown) => { error = e; return null; });
+    if (error || !matchesAll) return res.status(500).json({ error: sanitizeError(error as never) });
     // N-R7-S124: a replaced fixture (voided, its corrected copy in its place) isn't drawn — the copy is.
     // (read from this same query: replaced_by is set only on the voided original)
     const matches = (matchesAll ?? []).filter((m: any) => !m.replaced_by);

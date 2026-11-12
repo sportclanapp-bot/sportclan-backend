@@ -24,7 +24,7 @@ import { tiedOnDlsTarget } from '../utils/matchResult';
 import { bestOfFor } from '../utils/matchLength';
 import { carromReplay, carromPieces, CARROM_MAX_PIECES, CARROM_QUEEN_MAX, pointCarromReplay, pointCoinValue, type PointCoin } from '../utils/carromCore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
-import { gameEndSuperOver, superOverWinner, allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber, cricketSeries, cricketGameEvents, cricketGameOf, sideTotals, wicketRuns, outBatterOf, wicketShapeProblem } from '../utils/cricketRules';
+import { gameEndSuperOver, superOverWinner, allOutBySide, allowedOnFreeHit, bowlerQuotaDone, extraPenaltyOf, freeHitNext, isBallOfOver, isDismissal, penaltyRunsOf, mainEvents, superOversOf, superOverNumber, cricketSeries, cricketGameEvents, cricketGameOf, sideTotals, wicketRuns, lineupFromPlay, outBatterOf, wicketShapeProblem } from '../utils/cricketRules';
 import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { FOUL_KINDS, canStartNextPeriodOf } from '../utils/basketballRules';
 import { gameShootout, shootoutKicksOf, shootoutProblem } from '../utils/shootoutRules'; // Stage 15 follow-up
@@ -1873,7 +1873,7 @@ export async function recomputeSummary(
     // A6: a side is all out one short of its line-up (shared cricketRules); a
     // side with no line-up at 10, as before.
     const { data: lineup } = await supabase.from('match_participants').select('team_side').eq('match_id', matchId);
-    const allOut = allOutBySide(lineup ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands); // BUILD 3.2
+    const allOut = allOutBySide(lineupFromPlay(lineup, mainEvents(crEvents)), rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands); // BUILD 3.2 · N-R7-S145: batters added mid-match count
     // Cricket gap 9: the match's innings are its own events; super overs are kept apart.
     for (const e of mainEvents(crEvents)) {
       const p: any = e.payload || {};
@@ -2103,7 +2103,7 @@ export async function recomputeSummary(
     // Stage 15 follow-up: the series — games won, each game's result, the game in play.
     if (crSeries && crSpec) {
       const { data: lineup2 } = await supabase.from('match_participants').select('team_side').eq('match_id', matchId);
-      const out2 = allOutBySide(lineup2 ?? [], rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands);
+      const out2 = allOutBySide(lineupFromPlay(lineup2, mainEvents(events)), rulesOf('cricket', match).players, rulesOf('cricket', match).lastManStands);
       summary.tie = { win: 'first', rubbersA: crSeries.wonA, rubbersB: crSeries.wonB, unitsA: crSeries.wonA, unitsB: crSeries.wonB, decided: crSeries.decided, settled: crSeries.settled, series: true }; // N-INV1-R2-1: settled
       summary.rubbers = crSeries.ends.map((x) => {
         const g = mainEvents(cricketGameEvents(events, x.game));

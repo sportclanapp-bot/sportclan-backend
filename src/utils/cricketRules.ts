@@ -71,6 +71,30 @@ export function allOutBySide(
   return { A: allOutWickets(count('A')) + extra, B: allOutWickets(count('B')) + extra };
 }
 
+/**
+ * SIDE-C3b-1 (N-R7-S145): the line-up a side really used. Players added to the
+ * line-up mid-match may not be in the stored rows yet; a side that sent more
+ * batters in than its rows say has at least that many players, so its all-out
+ * count (and the wickets it can lose) never falls below what was recorded.
+ */
+export function lineupFromPlay(
+  lineup: Array<{ team_side?: string | null }> | null | undefined,
+  events: ReadonlyArray<{ event_type: string; payload?: unknown }>,
+): Array<{ team_side?: string | null }> {
+  const rows: Array<{ team_side?: string | null }> = [...(lineup ?? [])];
+  for (const s of ['A', 'B'] as const) {
+    const ids = new Set<string>();
+    for (const e of events) {
+      if (e.event_type !== 'ball' && e.event_type !== 'extra' && e.event_type !== 'wicket') continue;
+      const p = (e.payload ?? {}) as Record<string, unknown>;
+      if ((p.team_side === 'B' ? 'B' : 'A') !== s) continue;
+      for (const k of ['batsman_id', 'non_striker_id']) if (p[k]) ids.add(String(p[k]));
+    }
+    for (let have = rows.filter((r) => r.team_side === s).length; have < ids.size; have++) rows.push({ team_side: s });
+  }
+  return rows;
+}
+
 /** The cricket format of a match from its stored `format` ("T20", "box", "pair"). */
 export function cricketFormatOf(format: string | null | undefined): CricketFormat {
   const f = String(format ?? '').trim().toLowerCase();

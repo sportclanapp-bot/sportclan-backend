@@ -2631,7 +2631,10 @@ export async function getBracket(req: Request, res: Response) {
     // Stage 9 · T7: wild cards, qualifiers and lucky losers, by team (the draw shows "WC", "Q", "LL").
     const { data: tagged } = await supabase.from('tournament_entries').select('team_id, entry_tag').eq('tournament_id', id).not('entry_tag', 'is', null);
     const tags = Object.fromEntries(((tagged ?? []) as Array<{ team_id: string; entry_tag: string }>).map((e) => [e.team_id, e.entry_tag]));
-    return res.json({ tournament: { id: tournament.id, name: tournament.name, format: tournament.format, qualifying: !!settingsOf(tournament as { settings?: unknown }).qualifying, ...(de ? { double_elim: true } : {}) }, rounds, tags });
+    // N-R7-376 (SIDE-C7-1): who withdrew — the app leaves a withdrawn semi-finalist who lost on a walkover off the podium.
+    const { data: wd } = await supabase.from('tournament_entries').select('team_id').eq('tournament_id', id).eq('status', 'withdrawn');
+    const withdrawn = ((wd ?? []) as Array<{ team_id: string | null }>).map((e) => e.team_id).filter((x): x is string => !!x);
+    return res.json({ tournament: { id: tournament.id, name: tournament.name, format: tournament.format, qualifying: !!settingsOf(tournament as { settings?: unknown }).qualifying, ...(de ? { double_elim: true } : {}) }, rounds, tags, withdrawn });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -22,7 +22,7 @@ import { plural } from '../utils/plural';
 import { detectProfanity } from '../utils/profanity';
 
 export type Placing = { place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string; players: Array<{ id: string; name: string }> };
-type M = { id: string; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null; winner_team_id: string | null; status: string; round: number | null; group_label: string | null; third_place?: boolean | null; voided_at: string | null; score_summary?: unknown; overs?: number | null; bracket?: string | null };
+type M = { id: string; team_a_id: string | null; team_b_id: string | null; team_a_name: string | null; team_b_name: string | null; winner_team_id: string | null; status: string; round: number | null; group_label: string | null; third_place?: boolean | null; voided_at: string | null; score_summary?: unknown; overs?: number | null; bracket?: string | null; result_type?: string | null };
 
 const TITLES = { 1: 'Winner', 2: 'Runner-up', 3: 'Third', 4: 'Fourth' } as const;
 
@@ -31,7 +31,7 @@ const decided = <T extends { status: string; winner_team_id: string | null; void
   !!m.winner_team_id && !m.voided_at && (m.status === 'completed' || m.status === 'abandoned');
 
 /** Pure: the knockout's placings from its matches (final, third-place match or semi-finals). */
-export function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string }> {
+export function knockoutPlacings(matches: M[], gone: Set<string> = new Set()): Array<{ place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string }> {
   const ko = matches.filter((m) => !m.voided_at && !m.group_label && (m.round ?? 0) >= 1);
   // Stage 11 · PB4: a double elimination — the deciding final (the reset if it was played), and third the back draw's final loser.
   if (ko.some((m) => m.bracket)) {
@@ -72,6 +72,9 @@ export function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; ti
     // Two bronzes: both semi-final losers.
     for (const sf of main.filter((m) => m.round === lastRound - 1 && decided(m))) {
       const l = loserOf(sf);
+      // N-R7-376 (SIDE-C7-1): a semi-finalist who withdrew and lost the semi on a walkover never played it — no bronze.
+      const wo = sf.result_type === 'walkover' || (sf.score_summary as { walkover?: boolean } | null | undefined)?.walkover === true;
+      if (l && wo && gone.has(l)) continue;
       if (l) out.push({ place: 3, title: 'Semi-finalist', team_id: l, name: nameOf(sf, l) });
     }
   }
@@ -80,13 +83,16 @@ export function knockoutPlacings(matches: M[]): Array<{ place: 1 | 2 | 3 | 4; ti
 
 export async function placingsFor(t: { id: string; format: string; status: string; sport_id: string | null; tiebreaker_rules?: unknown; settings?: unknown }): Promise<Placing[]> {
   const ms = await allRows(() => supabase.from('matches')
-    .select('id, team_a_id, team_b_id, team_a_name, team_b_name, winner_team_id, status, round, group_label, third_place, voided_at, score_summary, overs, bracket')
+    .select('id, team_a_id, team_b_id, team_a_name, team_b_name, winner_team_id, status, round, group_label, third_place, voided_at, score_summary, overs, bracket, result_type')
     .eq('tournament_id', t.id));
   const matches = (ms ?? []) as M[];
   let base: Array<{ place: 1 | 2 | 3 | 4; title: string; team_id: string; name: string }> = [];
   // N-R7-88: a qualifying draw crowns nobody (its last-round winners are the qualifiers) — no winner or runner-up.
   if (settingsOf(t).qualifying) return [];
-  if (t.format === 'knockout' || t.format === 'groups_knockout') base = knockoutPlacings(matches);
+  if (t.format === 'knockout' || t.format === 'groups_knockout') {
+    const { data: wd } = await supabase.from('tournament_entries').select('team_id').eq('tournament_id', t.id).eq('status', 'withdrawn');
+    base = knockoutPlacings(matches, new Set(((wd ?? []) as Array<{ team_id: string }>).map((r) => r.team_id)));
+  }
   else if (t.status === 'completed') {
     const ents = await allRows(() => supabase.from('tournament_entries').select('team_id, status, team:teams!team_id(id, name)').eq('tournament_id', t.id).in('status', ['approved', 'withdrawn']));
     const rows = (ents ?? []) as Array<{ team_id: string; status: string; team: { name?: string } | Array<{ name?: string }> | null }>;

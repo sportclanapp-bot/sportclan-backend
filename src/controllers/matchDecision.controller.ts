@@ -21,7 +21,7 @@ import { isUuid } from '../utils/uuid';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { rulesOf } from '../utils/matchRules';
-import { withWalkoverScore } from '../utils/walkoverScore';
+import { withWalkoverScore, withoutWalkover } from '../utils/walkoverScore';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { advanceTournamentWinner, tournamentSettingsOf } from './tournaments.controller';
 import { notifyUsers, matchAudienceIds } from '../utils/notify';
@@ -75,7 +75,9 @@ export async function decideMatch(req: Request, res: Response) {
     if (!reason) return res.status(400).json({ error: 'Say why, in a few words.', code: 'REASON_REQUIRED' });
     if (reason.length > REASON_MAX) return res.status(400).json({ error: `A reason is up to ${REASON_MAX} characters.`, code: 'REASON_TOO_LONG' });
     const now = new Date().toISOString();
-    const ss = { ...((m.score_summary ?? {}) as Record<string, any>) };
+    // N-R7-S151 (SIDE-X1b-1): an abandoned knockout match given as a walkover (football 3–0) is
+    // decided from the score it stopped at: a replay carries on from it, a result stands on it.
+    const ss = m.status === 'abandoned' ? withoutWalkover((m.score_summary ?? {}) as Record<string, any>) : { ...((m.score_summary ?? {}) as Record<string, any>) };
     const slug = normSportSlug((await getSport(String(m.sport_id)))?.slug);
     const names = { A: m.team_a_name ?? 'Team A', B: m.team_b_name ?? 'Team B' };
     const bracket = await isKnockoutBracketMatch(m as never);

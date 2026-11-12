@@ -54,6 +54,9 @@ export function withWalkoverScore(
   const goals = walkoverScoreFor(sport, rules, tournamentSettings);
   if (goals == null || !winnerSide) return ss;
   const loser = winnerSide === 'A' ? 'B' : 'A';
+  // N-R7-S151 (SIDE-X1b-1): the score it stopped at is kept, so a walkover taken back
+  // (an abandoned knockout replayed or its result standing) carries on from it.
+  if (!ss.walkover_played) ss.walkover_played = { A: ss.A ?? null, B: ss.B ?? null };
   ss[winnerSide] = { ...(ss[winnerSide] ?? {}), score: goals };
   ss[loser] = { ...(ss[loser] ?? {}), score: 0 };
   ss.walkover_score = { [winnerSide]: goals, [loser]: 0 };
@@ -66,5 +69,31 @@ export function withWalkoverScore(
     ss[loser] = { ...ss[loser], sets: Array.from({ length: goals }, () => 0) };
     ss.walkover_sets = true;
   }
+  return ss;
+}
+
+/**
+ * N-R7-S151 (SIDE-X1b-1): a walkover taken back. An abandoned knockout match given to one side
+ * (football 3–0) and then replayed ('Replay the rest') or left to stand went on showing the
+ * walkover's 3–0: the replay is played on from the score it stopped at (0–0), as its page says.
+ * The score before the walkover comes back (walkover_played; an older row without it falls back to
+ * a goal sport's own goals count), with the walkover marks taken off.
+ */
+export function withoutWalkover(summary: Record<string, any> | null | undefined): Record<string, any> {
+  const ss = { ...(summary ?? {}) };
+  if (ss.walkover !== true && !ss.walkover_score && !ss.walkover_played) return ss;
+  const was = ss.walkover_played as { A?: unknown; B?: unknown } | undefined;
+  const wo = ss.walkover_score as Record<string, unknown> | undefined;
+  for (const k of ['A', 'B'] as const) {
+    if (was && typeof was === 'object' && k in was) {
+      if (was[k] == null) delete ss[k]; else ss[k] = was[k];
+    } else if (wo && ss[k] && typeof ss[k] === 'object') {
+      const side = { ...ss[k] };
+      if (typeof side.goals === 'number') side.score = side.goals; else delete side.score;
+      if (ss.walkover_sets) delete side.sets;
+      ss[k] = side;
+    }
+  }
+  for (const key of ['walkover', 'walkover_score', 'walkover_sets', 'walkover_played', 'walkover_reason']) delete ss[key];
   return ss;
 }

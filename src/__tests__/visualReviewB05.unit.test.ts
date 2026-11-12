@@ -33,7 +33,8 @@ describe('V027/V098 · team rows say how big the team is', () => {
     const t = code('controllers/teams.controller.ts');
     // N-RWG1-16: "My teams" adds the viewer's membership to the same select.
     expect(t).toMatch(/select\(`\*, city:cities!city_id\(id, name\), members:team_members\(count\)\$\{myTeams/);
-    expect(t).toMatch(/t\.member_count = Array\.isArray\(members\) \? \(members\[0\]\?\.count \?\? 0\) : null;/);
+    // N-R7-S147: less the members whose account is deleted.
+    expect(t).toMatch(/t\.member_count = Array\.isArray\(members\) \? liveCount\(members\[0\]\?\.count, t\.id, gone\) : null;/);
     expect(t).toMatch(/t\.city_name = t\.city\?\.name \?\? null;/);
   });
   it('team search results carry it too', () => {

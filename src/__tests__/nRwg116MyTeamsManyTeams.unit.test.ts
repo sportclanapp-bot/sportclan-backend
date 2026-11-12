@@ -42,6 +42,8 @@ beforeEach(() => {
   mockNext = (q) => {
     // The gateway refuses a URL with a few hundred ids in it.
     if (q.some((c) => c.startsWith('in:') && (JSON.parse(c.slice(3))[1] as unknown[]).length > IN_CHUNK)) return { error: { message: 'URI too long' } };
+    // N-R7-S147: no member of these teams has a deleted account.
+    if (q[0] === 'from:team_members' && q.some((c) => c.startsWith('not:'))) return { data: [] };
     if (q[0] === 'from:team_members') return { data: q.some((c) => c.startsWith('in:')) ? [{ team_id: 't0' }, { team_id: 't1' }] : MANY };
     if (q[0] === 'from:teams') {
       return {

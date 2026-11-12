@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
+import { deletedMemberCounts, liveCount } from '../utils/teamMemberCount';
 import { clientHas } from '../utils/tournamentEvents';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds } from '../utils/blocks';
@@ -154,9 +155,11 @@ async function searchTeams(res: Response, q: string, sportId: string | undefined
   const { data, error } = await noTest(query, hide);
   if (error) return res.status(500).json({ error: error.message });
   // B05 (V027): the roster size, so same-named teams can be told apart.
+  // N-R7-S147: a deleted account is not counted.
+  const gone = await deletedMemberCounts((data || []).map((t: any) => t.id));
   const rows = (data || []).map(({ members, ...t }: any) => ({
     ...t,
-    member_count: Array.isArray(members) ? (members[0]?.count ?? 0) : null,
+    member_count: Array.isArray(members) ? liveCount(members[0]?.count, t.id, gone) : null,
   }));
   return res.json({ data: rows, has_more: rows.length === p.limit });
 }

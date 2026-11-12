@@ -1,5 +1,6 @@
 import { inBackground } from '../utils/background';
 import { deleteMatching, deleteWithReason } from '../utils/softDelete';
+import { deletedMemberCounts, liveCount } from '../utils/teamMemberCount';
 import { TEAM_DISBANDED, liveTeams, softDisbandTeam, teamGone } from '../utils/teamVisibility';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { escapeLike } from '../utils/likeSearch';
@@ -236,9 +237,13 @@ export async function listTeams(req: Request, res: Response) {
     // SC-359: a browse list handed out every team's join code. Strip per row —
     // the viewer keeps the codes for teams they're actually in.
     const rows = data || [];
-    const myIds = await myTeamIds(userId, rows.map((t: any) => t.id));
+    const [myIds, gone] = await Promise.all([
+      myTeamIds(userId, rows.map((t: any) => t.id)),
+      // N-R7-S147: a deleted account is not counted (its row is kept, the list hides it).
+      deletedMemberCounts(rows.map((t: any) => t.id)),
+    ]);
     const safe = rows.map(({ members, me, ...t }: any) => {
-      t.member_count = Array.isArray(members) ? (members[0]?.count ?? 0) : null;
+      t.member_count = Array.isArray(members) ? liveCount(members[0]?.count, t.id, gone) : null;
       t.city_name = t.city?.name ?? null;
       const row = stripJoinCode(t, myIds.has(t.id));
       // V056 (visual review): "My teams" rows carry the viewer's role.
@@ -312,7 +317,10 @@ export async function getTeam(req: Request, res: Response) {
     // only ever right because the 50-member cap happens to sit under PostgREST's
     // default page size. That is a coincidence, not a count — one raised cap or
     // one added page and the number silently under-reports. Ask the database.
-    const realMemberCount = memberTotal ?? (members || []).length;
+    // N-R7-S147: less the deleted accounts, which the member list leaves out.
+    const realMemberCount = memberTotal != null
+      ? liveCount(memberTotal, id, await deletedMemberCounts([id]))
+      : (members || []).length;
     (team as { member_count?: number }).member_count = realMemberCount;
     // Oct 2026: no cap — no max_members (older apps then show the plain count), never full.
     (team as { is_full?: boolean }).is_full = false;

@@ -3474,10 +3474,12 @@ export async function championOf(tournamentId: string): Promise<{ id: string; na
     const tin = tableInputs((t as any)?.settings, teamIds, (matches ?? []) as any[], await withdrawnTeamIds(tournamentId));
     // Stage 8 · F8: fair play and a draw of lots decide a dead heat at the top too.
     const extraFor = await rankExtrasFor((t ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>);
-    const leader = rankTeams(
+    const detail = rankTeamsDetailed(
       tin.teamIds, tin.matches, ((t as any)?.tiebreaker_rules ?? []) as any[], await tournamentPoints(t as any), extraFor(''),
-    ).find((id) => !gone.has(id));
+    );
+    const leader = detail.order.find((id) => !gone.has(id));
     if (!leader) return null;
+    if (topStillLevel(detail.level, leader, gone)) return null; // N-R7-S143: no champion until the lots are drawn
     const e = (entries ?? []).find((x) => x.team_id === leader);
     return { id: leader, name: ((e?.team as any)?.name as string) ?? null };
   }
@@ -3554,7 +3556,12 @@ async function withdrawnTeamIds(tournamentId: string): Promise<string[]> {
   return ((data ?? []) as Array<{ team_id: string }>).map((e) => e.team_id);
 }
 
-async function crownLeagueChampion(tournamentId: string): Promise<void> {
+/** N-R7-S143: the leader is in a cluster still level on every tie-break (no draw of lots yet) with another team still in. */
+export function topStillLevel(level: string[][], leader: string, gone: Set<string>): boolean {
+  return level.some((cl) => cl.includes(leader) && cl.filter((id) => !gone.has(id)).length > 1);
+}
+
+export async function crownLeagueChampion(tournamentId: string): Promise<void> {
   if (await hasUnplayedFixtures(tournamentId)) return;
   // Audit #53: the table's teams (approved AND withdrawn — a withdrawn team's
   // played games still count for its opponents); never crown a withdrawn team.
@@ -3585,9 +3592,13 @@ async function crownLeagueChampion(tournamentId: string): Promise<void> {
   const counts = (matches ?? []).some((x: any) => x.status === 'completed' || (x.status === 'abandoned' && x.winner_team_id));
   if (!counts) return;
   const tin = tableInputs((trow as any)?.settings, teamIds as string[], (matches ?? []) as any[], await withdrawnTeamIds(tournamentId)); // gap 6
-  const ordered = rankTeams(tin.teamIds, tin.matches, tiebreakerRules, pts, (await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>))('')); // Stage 8 · F8
-  const championId = ordered.find((id) => !goneIds.has(id));
+  const detail = rankTeamsDetailed(tin.teamIds, tin.matches, tiebreakerRules, pts, (await rankExtrasFor((trow ?? {}) as { settings?: unknown; tiebreaker_rules?: unknown }, tin.matches as Array<{ id: string }>))('')); // Stage 8 · F8
+  const championId = detail.order.find((id) => !goneIds.has(id));
   if (!championId) return;
+  // N-R7-S143 (SIDE-A1-1): the top place still level on every tie-break waits for the organiser's
+  // draw of lots — the team-id order the table shows "until lots are drawn" isn't a result. The
+  // league stays live; recording the lots (setLots) crowns it.
+  if (topStillLevel(detail.level, championId, goneIds)) return;
 
   const { data: crowned } = await supabase
     .from('tournaments')
@@ -3856,7 +3867,7 @@ async function swissKnockoutRedrawOnWithdraw(tournamentId: string, teamId: strin
  * one (a CAS on settings.swiss.paired, so two results landing together pair it
  * once), or — after the last round — crown the standings leader.
  */
-async function swissAfterResult(tournamentId: string): Promise<void> {
+export async function swissAfterResult(tournamentId: string): Promise<void> {
   if (await hasUnplayedFixtures(tournamentId)) return;
   const ctx = await swissContext(tournamentId);
   if (!ctx) return;

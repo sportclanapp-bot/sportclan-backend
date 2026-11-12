@@ -12,7 +12,7 @@ import { isUuid } from '../utils/uuid';
 import { allRows } from '../utils/selectAll';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { settingsOf, storedSettings } from '../utils/tournamentSettings';
-import { maybeSeedKnockout } from './tournaments.controller';
+import { maybeSeedKnockout, crownLeagueChampion, championOf, swissAfterResult } from './tournaments.controller';
 
 export async function setLots(req: Request, res: Response) {
   const userId = req.userId;
@@ -20,7 +20,7 @@ export async function setLots(req: Request, res: Response) {
   try {
     const id = String(req.params.id);
     if (!isUuid(id)) return res.status(404).json({ error: 'Tournament not found' });
-    const { data: t } = await supabase.from('tournaments').select('id, settings, format').eq('id', id).maybeSingle();
+    const { data: t } = await supabase.from('tournaments').select('id, settings, format, status, champion_team_id').eq('id', id).maybeSingle();
     if (!t) return res.status(404).json({ error: 'Tournament not found' });
     if (!(await isTournamentOrganiser(id, userId))) return res.status(403).json({ error: 'Only the organiser can record a draw of lots.' });
     const body = (req.body ?? {}) as { group?: unknown; order?: unknown };
@@ -42,6 +42,17 @@ export async function setLots(req: Request, res: Response) {
     if (error) return res.status(500).json({ error: 'Couldn’t save the draw of lots.' });
     // N-R7-S1 (SCR-T-S03): a knockout waiting on this group's order is seeded now.
     if ((t as { format?: string }).format === 'groups_knockout') await maybeSeedKnockout(id).catch(() => undefined);
+    // N-R7-S143 (SIDE-A1-1): a league / round robin / Swiss (no knockout) level at the top waits for the
+    // lots to crown its champion; a finished one takes the order the lots now give.
+    const tt = t as { format?: string; status?: string; champion_team_id?: string | null };
+    const swissKo = tt.format === 'swiss' && !!settingsOf(t as { settings?: unknown }).swiss?.koDrawn;
+    if (tt.format === 'league' || tt.format === 'round_robin' || (tt.format === 'swiss' && !swissKo)) {
+      if (tt.status === 'upcoming' || tt.status === 'live') await (tt.format === 'swiss' ? swissAfterResult(id) : crownLeagueChampion(id)).catch(() => undefined);
+      else if (tt.status === 'completed') {
+        const champ = await championOf(id).catch(() => undefined);
+        if (champ !== undefined && (champ?.id ?? null) !== (tt.champion_team_id ?? null)) await supabase.from('tournaments').update({ champion_team_id: champ?.id ?? null }).eq('id', id);
+      }
+    }
     return res.json({ lots: next.lots ?? {} });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

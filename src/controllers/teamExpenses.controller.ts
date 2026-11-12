@@ -275,6 +275,15 @@ function validateExpenseFields(body: Record<string, any>, partial: boolean): str
 
 export const EXPENSE_NOTE_MAX = 280;
 
+// N-R7-S144: adds with the same team, person, title and amount run one at a time.
+const addsInFlight = new Map<string, Promise<unknown>>();
+function oneAddAtATime<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const run = (addsInFlight.get(key) ?? Promise.resolve()).catch(() => undefined).then(fn);
+  addsInFlight.set(key, run);
+  run.finally(() => { if (addsInFlight.get(key) === run) addsInFlight.delete(key); }).catch(() => undefined);
+  return run;
+}
+
 export async function addExpense(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -310,6 +319,11 @@ export async function addExpense(req: Request, res: Response) {
     // dedupe on the natural key within a short window: the same person filing
     // the same title+amount on the same team seconds apart is one expense being
     // submitted twice, not two ground bookings.
+    // N-R7-S144: two identical adds IN FLIGHT at once (a timed-out request retried
+    // while the first is still running) both passed this check before either row
+    // existed, and the ledger counted the money twice. Same-key adds now run one
+    // after another, so the second one finds the first row.
+    return await oneAddAtATime(`${id}|${userId}|${cleanTitle}|${cleanAmount}`, async () => {
     const since = new Date(Date.now() - 15_000).toISOString();
     const { data: dupe } = await supabase
       .from('team_expenses')
@@ -362,6 +376,7 @@ export async function addExpense(req: Request, res: Response) {
       changes: { split_among: { from: null, to: (data as { split_among?: string[] }).split_among ?? [] } },
     });
     return res.json({ expense: data });
+    });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

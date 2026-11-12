@@ -165,6 +165,23 @@ describe('SC-360 · validation', () => {
     expect(dq).toContain('"title","Ground"');
     expect(dq).toContain('gte:["created_at"');
   });
+  it('N-R7-S144: two identical adds in flight at once (a retry while the first is still running) make ONE row; the second gets it back deduplicated', async () => {
+    const base = mockNext;
+    let rows = 0;
+    const isIns = (q: Q) => q[0] === 'from:team_expenses' && q.some((c) => c.startsWith('insert:'));
+    mockNext = (q) => {
+      if (isIns(q)) { rows++; return { data: { id: EXP, title: 'Ground', amount: 100 } }; }
+      if (q[0] === 'from:team_expenses' && q.includes('maybeSingle')) return { data: rows ? { id: EXP } : null };
+      return base(q);
+    };
+    const [a, b] = await Promise.all([
+      call(addExpense, { params: { id: TEAM }, body: { title: 'Ground', amount: 100 } }),
+      call(addExpense, { params: { id: TEAM }, body: { title: 'Ground', amount: 100 } }),
+    ]);
+    expect(rows).toBe(1);
+    expect([a.body.deduplicated, b.body.deduplicated].filter(Boolean)).toHaveLength(1);
+    mockNext = base;
+  });
 });
 
 describe('SC-360 · money is summed in paise', () => {

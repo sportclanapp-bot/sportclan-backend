@@ -47,10 +47,15 @@ export async function rankExtrasFor(
   let seeds: Map<string, number> | undefined;
   if (tournamentId) {
     try {
-      const rows = await allRows<{ team_id: string; seed: number | null }>(() => supabase
-        .from('tournament_entries').select('id, team_id, seed').eq('tournament_id', tournamentId).not('seed', 'is', null));
+      const rows = await allRows<{ team_id: string; seed: number | null; entered_at?: string | null }>(() => supabase
+        .from('tournament_entries').select('id, team_id, seed, entered_at').eq('tournament_id', tournamentId));
       const m = new Map<string, number>();
-      for (const r of rows ?? []) if (r?.team_id && Number.isFinite(Number(r.seed))) m.set(r.team_id, Number(r.seed));
+      for (const r of rows ?? []) if (r?.team_id && r.seed != null && Number.isFinite(Number(r.seed))) m.set(r.team_id, Number(r.seed));
+      // N-R7-348 (SIDE-C2b-1): unseeded entries follow the seeded ones in entry order
+      // (P01 entered before P02), not in team-id order; no entry time → team id, as before.
+      const unseeded = (rows ?? []).filter((r) => r?.team_id && !m.has(r.team_id) && r.entered_at)
+        .sort((a, b) => String(a.entered_at).localeCompare(String(b.entered_at)) || (a.team_id < b.team_id ? -1 : a.team_id > b.team_id ? 1 : 0));
+      unseeded.forEach((r, i) => { if (!m.has(r.team_id)) m.set(r.team_id, 1e9 + i); });
       if (m.size) seeds = m;
     } catch { /* no seeds: the team id decides, as before */ }
   }

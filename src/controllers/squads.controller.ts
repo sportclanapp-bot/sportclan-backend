@@ -172,7 +172,10 @@ export async function setSquad(req: Request, res: Response) {
     const uids = clean.map((c) => c.user_id).filter((x): x is string => !!x);
     if (uids.length) {
       const nm = await names(uids);
-      const missing = uids.find((u) => !nm.has(u));
+      // N-R7-S150 (SIDE-A5b-1): an account deleted after the squad was saved stays in it (N-R7-64 names it
+      // Deleted User); only a deleted or unknown account newly sent is refused, so the squad can be saved again.
+      const savedIds = new Set((await savedRows(tid, teamId)).map((r) => r.user_id).filter((x): x is string => !!x));
+      const missing = uids.find((u) => !nm.has(u) && !savedIds.has(u));
       if (missing) return res.status(404).json({ error: 'That player isn’t on SportClan.', code: 'PLAYER_NOT_FOUND' });
       const others = await selectAllIn(uids, (c, f, to) => supabase.from('tournament_squads').select('id, team_id, user_id').eq('tournament_id', tid).is('removed_at', null).in('user_id', c).order('id').range(f, to));
       const clash = ((others ?? []) as Array<{ team_id: string; user_id: string }>).find((o) => o.team_id !== teamId);

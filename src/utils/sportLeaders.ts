@@ -32,7 +32,7 @@ export interface SportLeaderMatch {
   result_type?: string | null;
   score_summary?: {
     A?: { score?: unknown; value?: unknown; sets?: unknown }; B?: { score?: unknown; value?: unknown; sets?: unknown };
-    players?: Record<string, Record<string, unknown>> | null; rubbers?: unknown; walkover?: unknown;
+    players?: Record<string, Record<string, unknown>> | null; rubbers?: unknown; walkover?: unknown; chess_tiebreak?: unknown;
     /** Stage 9 · T11: tennis — each set's tiebreak, and the serve stats per side. */
     set_tiebreaks?: Array<{ A: number; B: number } | null> | null;
     /** Stage 16 · HK2: set pieces per team (hockey PCs, strokes; football penalties). */
@@ -100,7 +100,10 @@ function teamTallies(matches: SportLeaderMatch[]): TTally[] {
       if (!id) continue;
       const me = t(id); const other = side === 'A' ? 'B' : 'A';
       me.played += 1;
-      if (m.winner_team_id === id) me.won += 1;
+      // N-R7-S148 (FMT-CHS-DE-06): a chess game drawn on the board and settled by a tie-break (Armageddon)
+      // is a draw in the record; its winner_team_id only moves the bracket on.
+      if (m.score_summary?.chess_tiebreak) me.drawn += 1;
+      else if (m.winner_team_id === id) me.won += 1;
       else if (m.winner_team_id) me.lost += 1;
       else me.drawn += 1;
       // N-SPP1-TTN-5 (launch test plan): a team tie's games and points count, as in its table (99–63) — it

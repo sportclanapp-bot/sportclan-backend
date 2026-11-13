@@ -610,7 +610,8 @@ export async function submitFeedback(req: Request, res: Response) {
   const { error } = await supabase.from('feedback').insert({
     user_id: userId,
     category: FEEDBACK_CATEGORIES.includes(category) ? category : 'general',
-    message: message.trim().slice(0, 1000),
+    // N-R7-417 (SCR-B-257): 1000 characters, as the app counts them (an emoji is one; `slice` cut by UTF-16 units and could split one).
+    message: Array.from(message.trim()).slice(0, 1000).join(''),
     rating: rating ?? null,
     email: cleanEmail,
   });

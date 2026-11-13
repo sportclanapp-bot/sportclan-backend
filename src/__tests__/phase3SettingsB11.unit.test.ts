@@ -131,6 +131,13 @@ describe('F2 · Feedback: bad bodies are 400s, not 500s', () => {
     await send({ message: 'x', category: 'bug' });
     expect(mockInsert.category).toBe('bug');
   });
+  test('N-R7-417 (SCR-B-257): the cap is 1000 characters as typed — an emoji is one, never split', async () => {
+    await send({ message: '👍'.repeat(1001) });
+    expect(Array.from(mockInsert.message)).toHaveLength(1000);
+    expect(mockInsert.message).toBe('👍'.repeat(1000));
+    await send({ message: 'बहुत अच्छा ऐप 👍 but crash on scoring' });
+    expect(mockInsert.message).toBe('बहुत अच्छा ऐप 👍 but crash on scoring');
+  });
 });
 
 describe('F3 · the profile link is erased at deletion and at the purge', () => {

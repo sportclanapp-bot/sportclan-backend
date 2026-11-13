@@ -141,10 +141,14 @@ export function startTimeLabel(sport: string | null | undefined): string {
   return s === 'Kick-off' || s === 'Tip-off' ? `${s} time` : 'Start time';
 }
 
-/** "before kick-off", "before tip-off", "before the push-back", "before the start". */
+/**
+ * "before kick-off", "before tip-off", "before the start" — the same word as startTimeLabel.
+ * N-R7-418 (SIDE-C7-3): hockey's time field reads 'Start time' but its reminder said 'before the
+ * push-back'; both now say start.
+ */
 export function beforeStart(sport: string | null | undefined): string {
   const s = sportTerms(sport).start;
-  return s === 'Kick-off' || s === 'Tip-off' ? `before ${s.toLowerCase()}` : `before the ${s.toLowerCase()}`;
+  return s === 'Kick-off' || s === 'Tip-off' ? `before ${s.toLowerCase()}` : 'before the start';
 }
 
 /**

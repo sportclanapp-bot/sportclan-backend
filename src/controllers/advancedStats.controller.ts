@@ -256,8 +256,15 @@ export async function getAdvancedStats(req: Request, res: Response) {
       .map((r) => ({ ...r, played: r.w + r.l + r.d, winRate: Math.round((r.w / (r.w + r.l + r.d)) * 100) }))
       .sort((a, b) => b.played - a.played);
     const qualified = h2hList.filter((r) => r.played >= 2);
-    const bestMatchup = qualified.slice().sort((a, b) => b.winRate - a.winRate || b.played - a.played)[0] ?? null;
-    const worstMatchup = qualified.slice().sort((a, b) => a.winRate - b.winRate || b.played - a.played)[0] ?? null;
+    type Matchup = (typeof qualified)[number];
+    let bestMatchup: Matchup | null = qualified.slice().sort((a, b) => b.winRate - a.winRate || b.played - a.played)[0] ?? null;
+    let worstMatchup: Matchup | null = qualified.slice().sort((a, b) => a.winRate - b.winRate || b.played - a.played)[0] ?? null;
+    // N-R7-S152: one opponent (or all at the same win rate) is named once, not as both Best and
+    // Toughest: Best at 50% or more, Toughest below.
+    if (bestMatchup && worstMatchup && worstMatchup.winRate >= bestMatchup.winRate) {
+      if (bestMatchup.winRate >= 50) worstMatchup = null;
+      else bestMatchup = null;
+    }
 
     // ── #3 Splits: win-rate by time-of-day / day-of-week / format / city ──
     const cityIds = Array.from(new Set(matches.map((m) => m.city_id).filter(Boolean) as string[]));

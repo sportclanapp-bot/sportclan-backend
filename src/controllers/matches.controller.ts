@@ -771,7 +771,8 @@ export async function matchHistory(req: Request, res: Response) {
         .from('matches')
         .select('*')
         .in('id', ids.slice(i, i + 200))
-        .in('status', ['completed', 'abandoned']);
+        // N-R7-S158 (REG-091): and a match voided while live (still 'live', with voided_at)
+        .or('status.in.(completed,abandoned),voided_at.not.is.null');
       if (error) return res.status(500).json({ error: sanitizeError(error) });
       rows.push(...(data ?? []));
     }

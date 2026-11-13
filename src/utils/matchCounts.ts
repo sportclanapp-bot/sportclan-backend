@@ -91,6 +91,11 @@ export function countsTowardRecord(
  * older result goes by the rule above, which is what the Profile counted before then.
  */
 export function countsForUser(match: CountableMatch | null | undefined, userId: string | null | undefined, participantCount: number): boolean {
+  // N-R7-S159 (SIDE-C8-1): an organiser's decision ('result stands', 'awarded') or a walkover
+  // completes a match without changing anyone's record (matchVoid.recordDeltas), so it is not
+  // on the record here either ('on the record' is the Profile's count).
+  const ss = (match?.score_summary ?? null) as { walkover?: unknown; decision?: { kind?: unknown } } | null;
+  if (ss && (ss.walkover === true || ss.decision?.kind === 'stands' || ss.decision?.kind === 'awarded')) return false;
   const who = (match?.score_summary as { attributed_user_ids?: unknown } | null | undefined)?.attributed_user_ids;
   if (userId && Array.isArray(who)) return countsTowardRecord(match, 2) && who.includes(userId);
   return countsTowardRecord(match, participantCount);

@@ -1541,12 +1541,36 @@ export async function searchMentions(req: Request, res: Response) {
   if (await hideTestFor(req.userId)) mentionQ = excludeTest(mentionQ); // B03 (V245, D3)
   // Audit #29: read more than shown, then honour "who can find you" and "who can
   // tag you" (nobody → never; followers → only to people who follow them).
-  const { data: raw, error } = await excludeIds(mentionQ, 'id', blocked)
-    .limit(50);
+  // N-R7-439 (SIDE-A12-1): the 50 rows above come back in no order, so typing a
+  // full handle ('@p3b14_u1') could list five longer look-alikes and never the
+  // person themselves. Read the exact handle on its own (`_` is a LIKE wildcard,
+  // so it is escaped) and rank: exact handle, handle starts with, name starts
+  // with, then the rest.
+  const handle = safe.replace(/^@/, '');
+  let exactQ = excludeDeleted(supabase
+    .from('users')
+    .select('id, name, username, profile_picture_url, discoverability, tag_privacy')
+    .ilike('username', handle.replace(/_/g, '\\_')));
+  if (await hideTestFor(req.userId)) exactQ = excludeTest(exactQ);
+  const [{ data: raw, error }, { data: exactRaw }] = await Promise.all([
+    excludeIds(mentionQ, 'id', blocked).limit(50),
+    handle ? excludeIds(exactQ, 'id', blocked).limit(5) : Promise.resolve({ data: [] as unknown[] }),
+  ]);
 
   if (error) return res.status(500).json({ error: sanitizeError(error) });
   type Cand = { id: string; name: string; username: string; profile_picture_url: string | null; discoverability?: string | null; tag_privacy?: string | null };
-  const rows = (raw ?? []) as Cand[];
+  const lower = handle.toLowerCase();
+  const rank = (u: Cand) => {
+    const un = (u.username ?? '').toLowerCase();
+    const nm = (u.name ?? '').toLowerCase();
+    return un === lower ? 0 : un.startsWith(lower) ? 1 : nm.startsWith(lower) ? 2 : 3;
+  };
+  const seenIds = new Set<string>();
+  const rows = ([...((exactRaw ?? []) as Cand[]), ...((raw ?? []) as Cand[])])
+    .filter((u) => !seenIds.has(u.id) && !!seenIds.add(u.id))
+    .map((u, i) => ({ u, i }))
+    .sort((a, b) => rank(a.u) - rank(b.u) || a.i - b.i)
+    .map(({ u }) => u);
   const restricted = rows.filter((u) => u.id !== req.userId && (u.discoverability === 'followers' || u.tag_privacy === 'followers')).map((u) => u.id);
   const iFollow = new Set<string>();
   if (restricted.length && req.userId) {

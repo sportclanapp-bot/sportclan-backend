@@ -196,25 +196,38 @@ export async function applyRecordDeltas(
   sign: 1 | -1,
 ): Promise<void> {
   for (const d of deltas) {
-    const { data: prof } = await supabase
-      .from('user_sport_profiles')
-      .select('user_id, rating, matches_played, wins, losses, draws')
-      .eq('user_id', d.user_id)
-      .eq('sport_id', sportId)
-      .maybeSingle();
-    if (!prof) continue; // nothing was ever materialised for this player
+    // N-R7-S160 (SIDE-B13-1): read-modify-write lost updates — three wins voided in the
+    // same few ms each read the same record and wrote it back one lower, so two stayed on
+    // the Profile for good. The write now only lands on the row it read (every counter
+    // and the rating still equal); if another write got there first, read again and redo.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const { data: prof } = await supabase
+        .from('user_sport_profiles')
+        .select('user_id, rating, matches_played, wins, losses, draws')
+        .eq('user_id', d.user_id)
+        .eq('sport_id', sportId)
+        .maybeSingle();
+      if (!prof) break; // nothing was ever materialised for this player
 
-    const clamp0 = (n: number) => (n < 0 ? 0 : n);
-    await supabase
-      .from('user_sport_profiles')
-      .update({
-        matches_played: clamp0(prof.matches_played + sign * d.matches_played),
-        wins: clamp0(prof.wins + sign * d.wins),
-        losses: clamp0(prof.losses + sign * d.losses),
-        draws: clamp0(prof.draws + sign * d.draws),
-        rating: Math.max(100, Math.round((prof.rating + sign * d.rating) * 100) / 100),
-      })
-      .eq('user_id', d.user_id)
-      .eq('sport_id', sportId);
+      const clamp0 = (n: number) => (n < 0 ? 0 : n);
+      const { data: wrote, error } = await supabase
+        .from('user_sport_profiles')
+        .update({
+          matches_played: clamp0(prof.matches_played + sign * d.matches_played),
+          wins: clamp0(prof.wins + sign * d.wins),
+          losses: clamp0(prof.losses + sign * d.losses),
+          draws: clamp0(prof.draws + sign * d.draws),
+          rating: Math.max(100, Math.round((Number(prof.rating) + sign * d.rating) * 100) / 100),
+        })
+        .eq('user_id', d.user_id)
+        .eq('sport_id', sportId)
+        .eq('matches_played', prof.matches_played)
+        .eq('wins', prof.wins)
+        .eq('losses', prof.losses)
+        .eq('draws', prof.draws)
+        .eq('rating', prof.rating)
+        .select('user_id');
+      if (error || (wrote ?? []).length > 0) break;
+    }
   }
 }

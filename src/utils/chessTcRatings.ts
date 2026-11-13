@@ -80,19 +80,26 @@ export async function applyChessTcDeltas(matchId: string, sign: 1 | -1): Promise
   const { data: hist } = await supabase
     .from('chess_rating_history').select('user_id, time_control, result, delta').eq('match_id', matchId);
   for (const h of (hist ?? []) as Array<{ user_id: string; time_control: TimeControl; result: string; delta: number }>) {
-    const { data: l } = await supabase
-      .from('user_chess_ratings').select('rating, matches_played, wins, losses, draws')
-      .eq('user_id', h.user_id).eq('time_control', h.time_control).maybeSingle();
-    if (!l) continue;
-    const c = (n: number) => (n < 0 ? 0 : n);
-    const row = l as Omit<Line, 'user_id'>;
-    await supabase.from('user_chess_ratings').update({
-      rating: Math.max(100, Math.round((Number(row.rating) + sign * Number(h.delta)) * 100) / 100),
-      matches_played: c(row.matches_played + sign),
-      wins: c(row.wins + (h.result === 'win' ? sign : 0)),
-      losses: c(row.losses + (h.result === 'loss' ? sign : 0)),
-      draws: c(row.draws + (h.result === 'draw' ? sign : 0)),
-      updated_at: new Date().toISOString(),
-    }).eq('user_id', h.user_id).eq('time_control', h.time_control);
+    // N-R7-S160: the write lands only on the row it read; a write that got there first → read again.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const { data: l } = await supabase
+        .from('user_chess_ratings').select('rating, matches_played, wins, losses, draws')
+        .eq('user_id', h.user_id).eq('time_control', h.time_control).maybeSingle();
+      if (!l) break;
+      const c = (n: number) => (n < 0 ? 0 : n);
+      const row = l as Omit<Line, 'user_id'>;
+      const { data: wrote, error } = await supabase.from('user_chess_ratings').update({
+        rating: Math.max(100, Math.round((Number(row.rating) + sign * Number(h.delta)) * 100) / 100),
+        matches_played: c(row.matches_played + sign),
+        wins: c(row.wins + (h.result === 'win' ? sign : 0)),
+        losses: c(row.losses + (h.result === 'loss' ? sign : 0)),
+        draws: c(row.draws + (h.result === 'draw' ? sign : 0)),
+        updated_at: new Date().toISOString(),
+      }).eq('user_id', h.user_id).eq('time_control', h.time_control)
+        .eq('rating', row.rating).eq('matches_played', row.matches_played)
+        .eq('wins', row.wins).eq('losses', row.losses).eq('draws', row.draws)
+        .select('user_id');
+      if (error || (wrote ?? []).length > 0) break;
+    }
   }
 }

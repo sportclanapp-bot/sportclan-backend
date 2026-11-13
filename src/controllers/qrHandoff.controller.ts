@@ -235,21 +235,44 @@ export async function uploadHandoff(req: Request, res: Response) {
     let resultOutcome: ResultOutcome | undefined;
     for (const op of resultOps) {
       resultOutcome = await applyResultOp(id!, p.u, p.d, op);
-      if (resultOutcome.status === 'uploaded') applied += 1; else alreadyHad += 1;
-      // A disagreement stops the payload here. The rest of this code's promise is
-      // that nothing is silently overwritten, and carrying on to write a
-      // `qr_handoffs` row would mark the whole thing done.
-      if (resultOutcome.status === 'disagrees') break;
+      if (resultOutcome.status === 'uploaded') applied += 1;
+      else if (resultOutcome.status !== 'refused') alreadyHad += 1;
+      // A disagreement (or a refusal) stops the payload here. The rest of this
+      // code's promise is that nothing is silently overwritten, and carrying on to
+      // write a `qr_handoffs` row would mark the whole thing done.
+      if (resultOutcome.status === 'disagrees' || resultOutcome.status === 'refused') break;
     }
 
-    await supabase.from('qr_handoffs').insert({
-      nonce: p.n, match_id: id, scorer_id: p.u, device_id: p.d,
-      uploaded_by: uploaderId, op_count: ops.length, applied_count: applied,
-      issued_at: new Date(p.t).toISOString(),
-    });
+    // N-R7-S156: the ledger row means "this code is done". A result that was
+    // disputed or refused is NOT done: writing the row anyway answered the retry
+    // (after the line-up was set, or an organiser decided) 'already_uploaded' and
+    // the result was lost. The events above are idempotent by client key, so a
+    // retry re-sends them harmlessly.
+    const unfinished = resultOutcome?.status === 'disagrees' || resultOutcome?.status === 'refused';
+    if (!unfinished) {
+      await supabase.from('qr_handoffs').insert({
+        nonce: p.n, match_id: id, scorer_id: p.u, device_id: p.d,
+        uploaded_by: uploaderId, op_count: ops.length, applied_count: applied,
+        issued_at: new Date(p.t).toISOString(),
+      });
+    }
     await supabase.from('device_signing_keys')
       .update({ last_used_at: new Date().toISOString() })
       .eq('user_id', p.u).eq('device_id', p.d).is('revoked_at', null);
+
+    // N-R7-S155: an ordinary refusal (no line-up, a side not confirmed …) is not a
+    // disagreement about the score. Passed on as what it is, so the hub says
+    // "not accepted" with the reason instead of "needs a decision".
+    if (resultOutcome?.status === 'refused') {
+      return res.status(resultOutcome.httpStatus ?? 400).json({
+        status: 'result_refused',
+        code: resultOutcome.code ?? 'RESULT_REFUSED',
+        error: resultOutcome.message,
+        applied,
+        already_had: alreadyHad,
+        total: ops.length,
+      });
+    }
 
     if (resultOutcome?.status === 'disagrees') {
       return res.status(409).json({
@@ -280,8 +303,10 @@ export async function uploadHandoff(req: Request, res: Response) {
 
 
 interface ResultOutcome {
-  status: 'uploaded' | 'already' | 'disagrees';
+  status: 'uploaded' | 'already' | 'disagrees' | 'refused';
   message?: string;
+  httpStatus?: number;
+  code?: string;
   recordedSide?: string | null;
   derivedSide?: string | null;
 }
@@ -347,7 +372,7 @@ async function applyResultOp(
       };
     }
 
-    const done = await invokeController<{ error?: string }>(completeMatch, {
+    const done = await invokeController<{ error?: string; code?: string }>(completeMatch, {
       userId: scorerId,
       params: { id: matchId },
       headers: { 'x-device-id': deviceId },
@@ -361,7 +386,13 @@ async function applyResultOp(
       },
     });
     if (done.status >= 400) {
-      return { status: 'disagrees', message: done.body?.error ?? 'The server would not accept this result.' };
+      // N-R7-S155: the completion's own refusal, not a dispute (that was decided above).
+      return {
+        status: 'refused',
+        message: done.body?.error ?? 'The server would not accept this result.',
+        httpStatus: done.status >= 500 ? 500 : done.status,
+        code: done.body?.code,
+      };
     }
   }
 

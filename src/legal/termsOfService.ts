@@ -19,7 +19,7 @@ export const TERMS_OF_SERVICE: { title: string; effectiveDate: string; sections:
     {
       label: 'Your account',
       paragraphs: [
-        'You’re responsible for what happens on your account. Keep your phone number current — it’s how we sign you in.',
+        'You’re responsible for what happens on your account. Keep your phone number current — you can always sign in with a code sent to it. If you also set an email and password, keep that email current too.',
         'You must be at least 13 to use SportClan. If you’re under 18, get a parent’s OK.',
       ],
     },

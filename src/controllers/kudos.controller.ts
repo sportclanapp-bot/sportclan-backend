@@ -40,7 +40,7 @@ export async function sendKudos(req: Request, res: Response) {
   // farmed coins.
   const { data: match } = await supabase
     .from('matches')
-    .select('id, status, voided_at, created_by, tournament_id, team_a_id, team_b_id')
+    .select('id, status, voided_at, created_by, tournament_id, team_a_id, team_b_id, is_ranked')
     .eq('id', matchId)
     .maybeSingle();
   if (!match || match.status !== 'completed' || match.voided_at) {
@@ -128,7 +128,10 @@ export async function sendKudos(req: Request, res: Response) {
       .eq('to_user_id', toUserId)
       .neq('id', inserted.id)
       .gte('created_at', since);
-    if (!recent) {
+    // N-R7-444 (SIDE-B19-1, X2-S12): kudos coins only on a RANKED match, like
+    // win coins (SC-283) — a friendly between two accounts of one person minted
+    // coins. Kudos on a friendly still count; they just don't pay.
+    if (!recent && (match as { is_ranked?: boolean }).is_ranked === true) {
       const { awardCoins } = await import('../utils/coins');
       await awardCoins(toUserId, `kudos_${inserted.id}`, KUDOS_COINS, 'Received kudos');
       paid = true;

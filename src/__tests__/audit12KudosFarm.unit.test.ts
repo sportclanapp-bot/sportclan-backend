@@ -17,7 +17,7 @@ jest.mock('../utils/blocks', () => ({ ...jest.requireActual('../utils/blocks'), 
 import { sendKudos } from '../controllers/kudos.controller';
 
 const MAIN = 'u-main'; const ALT = 'u-alt';
-const m = (id: string, status = 'completed') => ({ id, status, voided_at: null, created_by: MAIN, tournament_id: null, team_a_id: null, team_b_id: null });
+const m = (id: string, status = 'completed', is_ranked = true) => ({ id, status, voided_at: null, created_by: MAIN, tournament_id: null, team_a_id: null, team_b_id: null, is_ranked });
 const parts = (mid: string) => [{ match_id: mid, user_id: MAIN, team_side: 'A' }, { match_id: mid, user_id: ALT, team_side: 'B' }];
 const call = async (body: object, userId = ALT) => {
   const r: any = { statusCode: 200, body: null };

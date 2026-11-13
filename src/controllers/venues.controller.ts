@@ -173,11 +173,32 @@ export async function venueCityFor(matchCityId: unknown, userId: string): Promis
 
 // Shared helper used by createMatch to increment use_count on an existing
 // venue name or insert a new row. Best-effort — never throws.
+// N-R7-S157 (Step 2 B14 RW-G5-165): two adds of the same venue at the same moment (a double tap on
+// Save venue) both found nothing and both inserted, so the venue was listed twice. Adds of one name
+// and city now take turns on this server: the second one finds the venue the first one made.
+const venueTurns = new Map<string, Promise<unknown>>();
 export async function upsertVenue(
   name: string,
   cityId: string | null,
   createdBy: string,
   opts: { countUse?: boolean; found?: { existing: boolean } } = {},
+): Promise<any | null> {
+  const key = `${name.trim().toLowerCase()}|${cityId ?? ''}`;
+  const before = venueTurns.get(key) ?? Promise.resolve();
+  const turn = before.catch(() => undefined).then(() => upsertVenueNow(name, cityId, createdBy, opts));
+  venueTurns.set(key, turn);
+  try {
+    return await turn;
+  } finally {
+    if (venueTurns.get(key) === turn) venueTurns.delete(key);
+  }
+}
+
+async function upsertVenueNow(
+  name: string,
+  cityId: string | null,
+  createdBy: string,
+  opts: { countUse?: boolean; found?: { existing: boolean } },
 ): Promise<any | null> {
   // Decision 7: use_count is the venue's rank in the directory, and it counts
   // matches created there. A repeat "Add venue" with a name that exists

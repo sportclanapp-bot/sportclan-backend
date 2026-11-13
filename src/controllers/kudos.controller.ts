@@ -120,18 +120,28 @@ export async function sendKudos(req: Request, res: Response) {
   // person (more kudos still count, they just don't pay again).
   let paid = false;
   try {
-    const since = new Date(Date.now() - KUDOS_COIN_WINDOW_MS).toISOString();
-    const { count: recent } = await supabase
-      .from('kudos')
-      .select('id', { count: 'exact', head: true })
-      .eq('from_user_id', senderId)
-      .eq('to_user_id', toUserId)
-      .neq('id', inserted.id)
-      .gte('created_at', since);
     // N-R7-444 (SIDE-B19-1, X2-S12): kudos coins only on a RANKED match, like
     // win coins (SC-283) — a friendly between two accounts of one person minted
-    // coins. Kudos on a friendly still count; they just don't pay.
-    if (!recent && (match as { is_ranked?: boolean }).is_ranked === true) {
+    // coins. Kudos on a friendly still count; they just don't pay, and they
+    // don't use up the week's paid kudos either (only ranked ones in the window do).
+    const ranked = (match as { is_ranked?: boolean }).is_ranked === true;
+    let recent = 0;
+    if (ranked) {
+      const since = new Date(Date.now() - KUDOS_COIN_WINDOW_MS).toISOString();
+      const { data: recentRows } = await supabase
+        .from('kudos')
+        .select('id, match_id')
+        .eq('from_user_id', senderId)
+        .eq('to_user_id', toUserId)
+        .neq('id', inserted.id)
+        .gte('created_at', since);
+      const mids = [...new Set(((recentRows ?? []) as Array<{ match_id: string }>).map((r) => r.match_id))];
+      if (mids.length) {
+        const { data: rankedRows } = await supabase.from('matches').select('id').in('id', mids).eq('is_ranked', true);
+        recent = (rankedRows ?? []).length;
+      }
+    }
+    if (ranked && !recent) {
       const { awardCoins } = await import('../utils/coins');
       await awardCoins(toUserId, `kudos_${inserted.id}`, KUDOS_COINS, 'Received kudos');
       paid = true;

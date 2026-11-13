@@ -45,6 +45,13 @@ describe('N-R7-444: kudos coins only on a ranked match', () => {
     expect(db.t('kudos')).toHaveLength(1);
   });
 
+  it('a friendly kudos first doesn’t use up the week: a ranked one after it still pays', async () => {
+    await call({ toUserId: MAIN, matchId: 'casual' });
+    const r = await call({ toUserId: MAIN, matchId: 'ranked' });
+    expect(r.body.coins).toBe(2);
+    expect(coins).toHaveLength(1);
+  });
+
   it('a ranked match still pays', async () => {
     const r = await call({ toUserId: MAIN, matchId: 'ranked' });
     expect(r.body.coins).toBe(2);

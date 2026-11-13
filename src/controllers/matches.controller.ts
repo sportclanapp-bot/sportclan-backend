@@ -868,8 +868,23 @@ export async function listOpenMatches(req: Request, res: Response) {
     if (joinedIds.size > 0 && joinedIds.size <= 200) countQ = countQ.not('id', 'in', `(${[...joinedIds].join(',')})`);
     const [{ data, error }, { count: totalOpen }] = await Promise.all([query, countQ]);
     if (error) return res.status(500).json({ error: sanitizeError(error) });
-    const matches = (data ?? []).filter((m) => !joinedIds.has(m.id as string)).slice(0, 100);
-    const total = Math.max(totalOpen ?? 0, matches.length);
+    // N-R7-S161 (SIDE-A10-1): a match you couldn't join because of a block (its creator or a
+    // player in it blocked you, or you them — POST /join refuses it) is not offered either.
+    const blocked = await blockedUserIds(userId);
+    const blockedMatchIds = new Set<string>();
+    if (blocked.size > 0) {
+      const ids = (data ?? []).map((m) => m.id as string);
+      for (const m of data ?? []) if (blocked.has(m.created_by as string)) blockedMatchIds.add(m.id as string);
+      if (ids.length > 0) {
+        const { data: bp } = await supabase
+          .from('match_participants').select('match_id').in('match_id', ids).in('user_id', [...blocked]);
+        for (const r of bp ?? []) blockedMatchIds.add(r.match_id as string);
+      }
+    }
+    const matches = (data ?? [])
+      .filter((m) => !joinedIds.has(m.id as string) && !blockedMatchIds.has(m.id as string))
+      .slice(0, 100);
+    const total = Math.max((totalOpen ?? 0) - blockedMatchIds.size, matches.length);
 
     // SC-273: relevance ranking. A deterministic, EXPLAINABLE weighted sort —
     // not AI/ML. We reorder the open matches by how relevant each is to THIS

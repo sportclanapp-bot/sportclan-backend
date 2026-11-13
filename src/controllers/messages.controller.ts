@@ -304,10 +304,15 @@ export async function listChats(req: Request, res: Response) {
       // Unread (B09-F11): the Home dot's predicate, so the two never disagree.
       const { data: unreadRows } = await unreadQuery([chat.id], userId, blocked, UNREAD_SCAN_CAP);
 
+      // N-R7-440 (SIDE-C11-2): New group's SUGGESTED offered someone who blocked
+      // you (either way) as a 'Recent chat'. Mark them so the app can leave them out;
+      // the DM thread itself stays in the list.
+      const marked = ((participants || []) as Array<Record<string, any>>)
+        .map((p) => (blocked.has(p.user_id) ? { ...p, blocked: true } : p));
       return {
         chat: {
           ...chat,
-          participants: participants || [],
+          participants: marked,
           lastMessage: lastMsg,
         },
         unread: (unreadRows ?? []) as Array<{ sender_id: string }>,

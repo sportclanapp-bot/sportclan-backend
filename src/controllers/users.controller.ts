@@ -7,7 +7,7 @@ import { deleteMatching } from '../utils/softDelete';
 import { orIlikeContains } from '../utils/likeSearch';
 import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
 import { bumpCounter } from '../utils/otpStore';
-import { hideTestFor, excludeTest } from '../utils/testContent';
+import { hideTestFor, excludeTest, excludeTestEmbed } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { racketStats, tennisServeStats, type RacketMatch } from '../utils/racketStats';
 import { isAdminUser } from '../middleware/admin.middleware';
@@ -160,18 +160,21 @@ async function runSmartNotifications(userId: string): Promise<void> {
  * them — so a profile could say 5 followers over a list of 4. Only follows whose
  * other side is a live account count now, matching the lists.
  */
-function countLiveFollows(side: 'following_id' | 'follower_id', id: string, other: 'follower_id' | 'following_id') {
-  return supabase
+function countLiveFollows(side: 'following_id' | 'follower_id', id: string, other: 'follower_id' | 'following_id', hideTest = false) {
+  const q = supabase
     .from('follow_relationships')
     .select(`id, u:${other}!inner(id)`, { count: 'exact', head: true })
     .eq(side, id)
     .is('u.deleted_at', null);
+  // N-R7-S153 (X2-207): a real viewer's counts leave out test accounts, as the lists do.
+  return hideTest ? excludeTestEmbed(q, 'u') : q;
 }
-/** [followers, following] — live accounts only (N-RWG4-6). */
-export async function followCounts(userId: string): Promise<readonly [number, number]> {
+/** [followers, following] — live accounts only (N-RWG4-6); for a real viewer, no test accounts (N-R7-S153). */
+export async function followCounts(userId: string, viewerId: string | null | undefined = userId): Promise<readonly [number, number]> {
+  const hide = await hideTestFor(viewerId);
   const [f1, f2] = await Promise.all([
-    countLiveFollows('following_id', userId, 'follower_id'),
-    countLiveFollows('follower_id', userId, 'following_id'),
+    countLiveFollows('following_id', userId, 'follower_id', hide),
+    countLiveFollows('follower_id', userId, 'following_id', hide),
   ]);
   return [f1.count ?? 0, f2.count ?? 0] as const;
 }
@@ -371,10 +374,11 @@ export async function getUserById(req: Request, res: Response) {
   // self-assign a service type in Edit Profile without being premium. Removed.
 
   // Counts (followers/following) — best-effort, never fail the request.
+  const hideTestFollows = await hideTestFor(req.userId); // N-R7-S153
   const [followersRes, followingRes, giftsRes] = await Promise.all([
     // N-RWG4-6: deleted accounts are not counted (the lists already hide them).
-    countLiveFollows('following_id', id, 'follower_id'),
-    countLiveFollows('follower_id', id, 'following_id'),
+    countLiveFollows('following_id', id, 'follower_id', hideTestFollows),
+    countLiveFollows('follower_id', id, 'following_id', hideTestFollows),
     // Aggregate gifts received grouped by gift type for the profile display.
     // Oct 2026 sweep: it grouped the newest 100, so the counts stopped there.
     selectAll<{ gift_id: string; gift_emoji: string; gift_name: string }>((from, to) => supabase.from('gift_transactions')
@@ -1064,6 +1068,7 @@ export async function getFollowers(req: Request, res: Response) {
     .select('follower_id, users:follower_id!inner (id, name, username, profile_picture_url, bio)')
     .eq('following_id', id);
   if (q) base = base.or(orIlikeContains(['name', 'username'], q.replace(/^@/, '')), { referencedTable: 'users' });
+  if (await hideTestFor(req.userId)) base = excludeTestEmbed(base, 'users'); // N-R7-S153 (X2-207): no test accounts for a real viewer
   const { data, error } = await excludeIds(excludeDeletedEmbed(base
     .order('created_at', { ascending: false })
     .range(p.from, p.to), 'users'), 'follower_id', blocked);
@@ -1090,6 +1095,7 @@ export async function getFollowing(req: Request, res: Response) {
     .select('following_id, users:following_id!inner (id, name, username, profile_picture_url, bio)')
     .eq('follower_id', id);
   if (q) base = base.or(orIlikeContains(['name', 'username'], q.replace(/^@/, '')), { referencedTable: 'users' });
+  if (await hideTestFor(req.userId)) base = excludeTestEmbed(base, 'users'); // N-R7-S153 (X2-207): no test accounts for a real viewer
   const { data, error } = await excludeIds(excludeDeletedEmbed(base
     .order('created_at', { ascending: false })
     .range(pg.from, pg.to), 'users'), 'following_id', blocked);

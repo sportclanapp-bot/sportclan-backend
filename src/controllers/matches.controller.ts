@@ -1435,9 +1435,14 @@ export async function listMatches(req: Request, res: Response) {
     const resolvedSportId = await resolveSportId(sport_id);
     if (sport_id && !resolvedSportId) return res.status(400).json({ error: 'Unknown sport', code: 'BAD_SPORT' });
     const p = parsePagination(req.query as Record<string, unknown>);
+    // B03 test fixtures are hidden from a real viewer's discovery lists, not from history scopes.
+    const hideTestRows = !mine && !team_id && !tournament_id && (await hideTestFor(userId));
+    // N-R7-S154 (SIDE-A4-1): …and so is an unflagged match against a TEST team (its name would show
+    // in Sport hub). The two embeds keep only a test team; a match whose embed is empty is kept.
+    const TEST_SIDES = ', xta:teams!team_a_id(id), xtb:teams!team_b_id(id)';
     let query = supabase
       .from('matches')
-      .select('*', { count: 'exact' })
+      .select(`*${hideTestRows ? TEST_SIDES : ''}`, { count: 'exact' })
       .range(p.from, p.to);
     // SC-443 (M5) · results are ordered by when they FINISHED.
     //
@@ -1489,7 +1494,6 @@ export async function listMatches(req: Request, res: Response) {
       const [a, b] = await Promise.all([side('team_a_id', 'team_a_name'), side('team_b_id', 'team_b_name')]);
       renamedIds = [...new Set([...a, ...b].map((m) => m.id))];
     }
-    const hideTestRows = !mine && !team_id && !tournament_id && (await hideTestFor(userId));
     const activeIds = await activeSportIds();
     // The filters, for the list and for its voided count alike.
     const scope = <Q extends { eq: Function; or: Function; in: Function }>(qb: Q): Q => {
@@ -1504,7 +1508,7 @@ export async function listMatches(req: Request, res: Response) {
         x = x.or(renamedIds.length ? `${byName},id.in.(${renamedIds.join(',')})` : byName);
       }
       if (activeIds) x = x.in('sport_id', activeIds);
-      if (hideTestRows) x = excludeTest(x);
+      if (hideTestRows) x = excludeTest(x).eq('xta.is_test_seed', true).is('xta', null).eq('xtb.is_test_seed', true).is('xtb', null); // N-R7-S154
       return x as Q;
     };
     query = scope(query);
@@ -1537,11 +1541,11 @@ export async function listMatches(req: Request, res: Response) {
     const [{ data, error, count }, voided] = await Promise.all([
       query,
       wantVoidedCount
-        ? scope(supabase.from('matches').select('id', { count: 'exact', head: true })).not('voided_at', 'is', null)
+        ? scope(supabase.from('matches').select(`id${hideTestRows ? TEST_SIDES : ''}`, { count: 'exact', head: true })).not('voided_at', 'is', null)
         : Promise.resolve({ count: null as number | null }),
     ]);
     if (error && !isRangeError(error)) return res.status(500).json({ error: sanitizeError(error) });
-    const matches = data || [];
+    const matches = (data || []).map((m: any) => { if (hideTestRows) { delete m.xta; delete m.xtb; } return m; }); // N-R7-S154: the filter embeds are not sent
     // Independent (different fields) — together, not one after the other.
     await Promise.all([
       attachChessElo(matches), // chess cards show both players' real ELO

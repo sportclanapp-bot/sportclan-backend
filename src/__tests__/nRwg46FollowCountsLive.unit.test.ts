@@ -7,6 +7,8 @@
  */
 const users: Record<string, { deleted_at: string | null }> = {};
 let follows: Array<{ id: string; follower_id: string; following_id: string }> = [];
+// N-R7-S153: followCounts asks hideTestFor; a test-account viewer here (no test filter).
+jest.mock('../utils/testContent', () => ({ ...jest.requireActual('../utils/testContent'), hideTestFor: jest.fn(async () => false) }));
 jest.mock('../utils/supabase', () => {
   const from = (table: string) => {
     let join: string | null = null;

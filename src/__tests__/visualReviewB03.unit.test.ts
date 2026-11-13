@@ -68,7 +68,7 @@ describe('every public discovery read applies it', () => {
     ['controllers/community.controller.ts', /if \(hideTest\) cq = excludeTestEmbed\(cq, 'author'\);/], // comments
     ['controllers/community.controller.ts', /if \(await hideTestFor\(req\.userId\)\) mentionQ = excludeTest\(mentionQ\);/],
     // Oct 2026 sweep: the list's filters live in one scope() (list and voided count alike).
-    ['controllers/matches.controller.ts', /const hideTestRows = !mine && !team_id && !tournament_id && \(await hideTestFor\(userId\)\);[\s\S]*if \(hideTestRows\) x = excludeTest\(x\);/],
+    ['controllers/matches.controller.ts', /const hideTestRows = !mine && !team_id && !tournament_id && \(await hideTestFor\(userId\)\);[\s\S]*if \(hideTestRows\) x = excludeTest\(x\)/], // N-R7-S154 chains the test-team filter after it
     ['controllers/matches.controller.ts', /const hideTest = await hideTestFor\(userId\);\s*if \(hideTest\) query = excludeTest\(query\);/], // open matches (and its count)
     // N-RWG1-14: the browse branch also keeps to public teams.
     ['controllers/teams.controller.ts', /else \{[\s\S]*?if \(await hideTestFor\(userId\)\) query = excludeTest\(query\);/],

@@ -213,6 +213,6 @@ describe('K1-50e (34c2985) · SC-64 a racing second join is a 409, not a 500', (
     };
     const r = await call(joinTeamByCode, { body: { join_code: 'abc123' } });
     expect(r.statusCode).toBe(409);
-    expect(r.body).toEqual({ error: 'Already a member of this team' });
+    expect(r.body).toEqual({ error: 'Already a member of this team', team_id: X });
   });
 });

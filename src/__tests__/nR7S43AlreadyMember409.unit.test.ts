@@ -31,5 +31,5 @@ test('open team, already a member: 409 Already a member of this team', async () 
   const r: any = { statusCode: 200, body: null }; r.status = jest.fn((c: number) => { r.statusCode = c; return r; }); r.json = jest.fn((b: unknown) => { r.body = b; return r; });
   await joinTeamByCode({ userId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', body: { join_code: 'ABC123' }, params: {}, query: {}, headers: {} } as any, r);
   expect(r.statusCode).toBe(409);
-  expect(r.body).toEqual({ error: 'Already a member of this team' });
+  expect(r.body).toEqual({ error: 'Already a member of this team', team_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' });
 });

@@ -705,7 +705,8 @@ async function createJoinRequest(
 ): Promise<{ status: number; body: any }> {
   const { data: existing } = await supabase
     .from('team_members').select('id').eq('team_id', teamId).eq('user_id', userId).maybeSingle();
-  if (existing) return { status: 409, body: { error: 'Already a member of this team' } };
+  // N-R7-409 (SIDE-C6-4): the team id comes back so the app can offer 'Open team'.
+  if (existing) return { status: 409, body: { error: 'Already a member of this team', team_id: teamId } };
 
   // SC-359: a removed user can't request either, and there's no point queueing a
   // request for a team that's already full.
@@ -807,7 +808,7 @@ async function joinOpenTeam(team: { id: string; name: string }, userId: string):
       .eq('team_id', team.id)
       .eq('user_id', userId)
       .maybeSingle();
-    if (existing) return reply(409, { error: 'Already a member of this team' }); // N-R7-S43: the same 409 as every other path
+    if (existing) return reply(409, { error: 'Already a member of this team', team_id: team.id }); // N-R7-S43 / N-R7-409: + team id for 'Open team'
 
     // SC-359: removed-user + capacity gates, shared by every join path.
     const gate = await joinGate(team.id, userId);
@@ -836,7 +837,7 @@ async function joinOpenTeam(team: { id: string; name: string }, userId: string):
     // SC-44 backstop only scrubs the 5xx *message*; it can't know a 500 here was
     // really an idempotent already-member condition, so we special-case it.)
     if ((error as { code?: string } | null)?.code === '23505') {
-      return reply(409, { error: 'Already a member of this team' });
+      return reply(409, { error: 'Already a member of this team', team_id: team.id });
     }
     if (error) return reply(500, { error: sanitizeError(error) });
     // B02 (V022, D7): joining puts you in your team's tournament chats.

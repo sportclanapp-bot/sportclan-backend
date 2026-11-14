@@ -85,6 +85,7 @@ import { possessive } from '../utils/possessive';
 import { OFFICIATING_TYPES } from '../constants/accountTypes';
 import { isOlderApp, updateRequired } from '../utils/clientVersion';
 import { undoReplacement } from './matchReplace.controller';
+import { voidRefusal } from '../utils/voidWords';
 
 // POST /matches — create. FREE for all (Change #6).
 /**
@@ -4704,7 +4705,7 @@ export async function voidMatch(req: Request, res: Response) {
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (!(await canVoidMatch(match, userId))) {
-      return res.status(403).json({ error: 'Only an organiser, the umpire or an admin can void a match.' });
+      return res.status(403).json({ error: voidRefusal(match, 'void') });
     }
     // Idempotent: voiding an already-voided match is a no-op success, so a retry
     // can never double-subtract somebody's record.
@@ -4827,7 +4828,7 @@ export async function unvoidMatch(req: Request, res: Response) {
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (!(await canVoidMatch(match, userId))) {
-      return res.status(403).json({ error: 'Only an organiser, the umpire or an admin can restore a match.' });
+      return res.status(403).json({ error: voidRefusal(match, 'restore') });
     }
     if (!match.voided_at) {
       return res.json({ success: true, already_active: true, match });

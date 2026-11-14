@@ -80,3 +80,16 @@ describe('re-report after a handled report', () => {
     expect(open()).toHaveLength(2);
   });
 });
+
+describe('N-R7-462 (RW-D3-212): a double tap sends two reports together', () => {
+  test('two reports by the same person on the same target in flight at once → ONE open row; the second gets it back', async () => {
+    const [a, b] = await Promise.all([report('u1'), report('u1')]);
+    expect(open()).toHaveLength(1);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 201]);
+    expect((a.statusCode === 200 ? a : b).body).toMatchObject({ alreadyReported: true, data: { id: 'r1' } });
+  });
+  test('two different reporters at once → two rows (not held behind each other\'s key)', async () => {
+    await Promise.all([report('u1'), report('u2')]);
+    expect(open()).toHaveLength(2);
+  });
+});

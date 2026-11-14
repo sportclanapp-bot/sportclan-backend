@@ -1331,6 +1331,15 @@ export async function reactToComment(req: Request, res: Response) {
 }
 
 // ─── REPORT ─────────────────────────────────────────────────────────────────
+// N-R7-462: report check + insert run one at a time per (reporter, target).
+const reportsInFlight = new Map<string, Promise<unknown>>();
+function oneReportAtATime<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const run = (reportsInFlight.get(key) ?? Promise.resolve()).catch(() => undefined).then(fn);
+  reportsInFlight.set(key, run);
+  run.finally(() => { if (reportsInFlight.get(key) === run) reportsInFlight.delete(key); }).catch(() => undefined);
+  return run;
+}
+
 export async function reportContent(req: Request, res: Response) {
   const userId = req.userId!;
   // The app sends { target_type, target_id, reason }; older callers may send
@@ -1442,32 +1451,37 @@ export async function reportContent(req: Request, res: Response) {
   // restored), a fresh report opens a new row — a restored post can be flagged
   // again. It used to match handled reports too, so a re-report never reached
   // the queue.
-  const { data: existingReport } = await supabase
-    .from('content_reports')
-    .select('*')
-    .eq('reporter_id', userId)
-    .eq('target_type', resolvedType)
-    .eq('target_id', resolvedId)
-    .eq('resolved', false)
-    .limit(1)
-    .maybeSingle();
-  if (existingReport) {
-    return res.status(200).json({ data: existingReport, alreadyReported: true });
-  }
+  // N-R7-462 (RW-D3-212): two reports by the same person on the same target
+  // arriving together (a double tap, 1 ms apart) both passed the open-report
+  // check before either row existed → two OPEN rows. The check and the insert
+  // now run one at a time per (reporter, target), so the second sees the first.
+  const out = await oneReportAtATime(`${userId}|${resolvedType}|${resolvedId}`, async () => {
+    const { data: existingReport } = await supabase
+      .from('content_reports')
+      .select('*')
+      .eq('reporter_id', userId)
+      .eq('target_type', resolvedType)
+      .eq('target_id', resolvedId)
+      .eq('resolved', false)
+      .limit(1)
+      .maybeSingle();
+    if (existingReport) return { status: 200, body: { data: existingReport, alreadyReported: true } };
 
-  const { data, error } = await supabase
-    .from('content_reports')
-    .insert({
-      target_type: resolvedType,
-      target_id: resolvedId,
-      reporter_id: userId,
-      reason,
-    })
-    .select()
-    .single();
+    const { data, error } = await supabase
+      .from('content_reports')
+      .insert({
+        target_type: resolvedType,
+        target_id: resolvedId,
+        reporter_id: userId,
+        reason,
+      })
+      .select()
+      .single();
 
-  if (error) return res.status(500).json({ error: sanitizeError(error) });
-  return res.status(201).json({ data });
+    if (error) return { status: 500, body: { error: sanitizeError(error) } };
+    return { status: 201, body: { data } };
+  });
+  return res.status(out.status).json(out.body);
 }
 
 // ─── MY POST COUNT THIS MONTH ───────────────────────────────────────────────

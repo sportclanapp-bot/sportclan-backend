@@ -1707,6 +1707,9 @@ export async function updateEntry(req: Request, res: Response) {
 }
 
 // PATCH /tournaments/:id — creator only
+/** N-R7-S162: what an organiser is told when another organiser saved first. */
+export const TOURNAMENT_CHANGED_WORDS = 'Another organiser changed this tournament since you opened it. Your changes weren’t saved.';
+
 export async function updateTournament(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1714,10 +1717,19 @@ export async function updateTournament(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules, sport_metadata, num_groups, group_size, qualifiers_per_group, max_teams, registration_deadline, parent_id, is_parent, event_label, entry_kind, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names')
+      .select('created_by, status, name, start_date, end_date, venue, format, fixtures_generated, sport_id, settings, tiebreaker_rules, sport_metadata, num_groups, group_size, qualifiers_per_group, max_teams, registration_deadline, parent_id, is_parent, event_label, entry_kind, daily_start_time, daily_end_time, match_duration_minutes, buffer_minutes, ground_count, ground_names, updated_at')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+    // N-R7-S162 (Step 2 B15, SIDE-X2-1 / RW-G6-083): two organisers editing at once — the later save
+    // silently replaced the earlier one. An app that says when it opened the form (expected_updated_at)
+    // is told the tournament changed since; it may then save again without it (its choice). Older apps
+    // send nothing and keep last-save-wins.
+    const expectedUpdatedAt = typeof req.body?.expected_updated_at === 'string' ? req.body.expected_updated_at : null;
+    const storedUpdatedAt = (tournament as { updated_at?: string | null }).updated_at ?? null;
+    if (expectedUpdatedAt && storedUpdatedAt && expectedUpdatedAt !== storedUpdatedAt && Date.parse(expectedUpdatedAt) !== Date.parse(storedUpdatedAt)) {
+      return res.status(409).json({ error: TOURNAMENT_CHANGED_WORDS, code: 'TOURNAMENT_CHANGED' });
+    }
     // Auth split: cancelling or force-completing a tournament is a CARVE-OUT
     // (creator OR admin, logged) — a co-organiser can't nuke the cup. Every other
     // edit (details/schedule/venue/window) is operational → any organiser
@@ -2061,13 +2073,17 @@ export async function updateTournament(req: Request, res: Response) {
       if (crownedChampion) update.champion_team_id = crownedChampion.id;
     }
     update.updated_at = new Date().toISOString();
-    const { data, error } = await supabase
-      .from('tournaments')
-      .update(update)
-      .eq('id', id)
-      .select('*')
-      .single();
+    // N-R7-S162: with expected_updated_at the write only lands on the row this organiser read (a save
+    // in between makes it miss: 409, never a silent overwrite).
+    let write = supabase.from('tournaments').update(update).eq('id', id);
+    if (expectedUpdatedAt && storedUpdatedAt) write = write.eq('updated_at', storedUpdatedAt);
+    const { data, error } = await write.select('*').maybeSingle();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    if (!data) {
+      return expectedUpdatedAt
+        ? res.status(409).json({ error: TOURNAMENT_CHANGED_WORDS, code: 'TOURNAMENT_CHANGED' })
+        : res.status(404).json({ error: 'Tournament not found' });
+    }
     if (crownedChampion) {
       inBackground(notifyTournamentChampion(id, crownedChampion.id, crownedChampion.name, tournament.name ?? null), 'notifyTournamentChampion'); // audit #99
     }

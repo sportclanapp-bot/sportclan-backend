@@ -401,6 +401,11 @@ export async function matchFollowerIds(matchId: string): Promise<string[]> {
   return Array.from(new Set((data ?? []).map((f: { user_id: string }) => f.user_id).filter(Boolean)));
 }
 
+/** N-R7-471 (RW-G3-027): a match's audience plus its creator (once) — a void / restore by someone else reaches them too. */
+export function withMatchCreator(audience: string[], createdBy: string | null | undefined): string[] {
+  return createdBy && !audience.includes(createdBy) ? [...audience, createdBy] : audience;
+}
+
 export async function matchAudienceIds(
   matchId: string,
   teamAId: string | null | undefined,

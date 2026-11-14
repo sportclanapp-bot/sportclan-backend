@@ -28,7 +28,7 @@ import { istDay, istWhen } from '../utils/appTime';
 import { supabase } from '../utils/supabase';
 import { DB_UNAVAILABLE, DB_UNAVAILABLE_STATUS } from '../utils/dbUnavailable';
 import { calculateElo } from '../utils/ratingEngine';
-import { notifyUser, notifyUsers, matchAudienceIds, matchFollowerIds } from '../utils/notify';
+import { notifyUser, notifyUsers, matchAudienceIds, matchFollowerIds, withMatchCreator } from '../utils/notify';
 import { isTournamentOrganiser, canOfficiateMatch, canDefault, tournamentOrganiserIds } from '../utils/tournamentAuth';
 import { familyLookupIds } from '../utils/tournamentEvents';
 import { blockedUserIds } from '../utils/blocks';
@@ -4791,7 +4791,7 @@ export async function voidMatch(req: Request, res: Response) {
     // are told — not left to notice. Best-effort and fire-and-forget: a
     // notification failure must never undo a completed void.
     try {
-      const audience = await matchAudienceIds(id, match.team_a_id, match.team_b_id);
+      const audience = withMatchCreator(await matchAudienceIds(id, match.team_a_id, match.team_b_id), match.created_by); // N-R7-471: the creator hears too
       const others = audience.filter((u) => u !== userId);
       if (others.length > 0) {
         // V216 (visual review B13): "Reason: S5 teardown" read like a system
@@ -4882,7 +4882,7 @@ export async function unvoidMatch(req: Request, res: Response) {
     // the restore. Telling people a match stopped counting and never telling
     // them it counts again is the worse half of a promise.
     try {
-      const audience = await matchAudienceIds(id, match.team_a_id, match.team_b_id);
+      const audience = withMatchCreator(await matchAudienceIds(id, match.team_a_id, match.team_b_id), match.created_by); // N-R7-471: the creator hears too
       const others = audience.filter((u) => u !== userId);
       if (others.length > 0) {
         void notifyUsers(others, {

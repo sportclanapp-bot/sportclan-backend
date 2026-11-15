@@ -21,7 +21,7 @@ import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '..
 import { dlsWinner, deriveResultText, chasingSide, tiedOnDlsTarget } from '../utils/matchResult';
 import { ABANDON_REASON_MAX, abandonReasonOf, ballWho, silentOnTimeline, timelineLine, wicketWords } from '../utils/commentary';
 export { ballWho, wicketWords }; // moved to utils/commentary (audit batch 4); still exported here for old importers
-import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease, isStale, STALE_AFTER_MS } from '../utils/scoringLease';
+import { checkLease, claimLease, heartbeatLease, releaseLease, takeOverLease, getLease } from '../utils/scoringLease';
 import { deviceIdOf } from '../utils/deviceHeader';
 import { getMatchLiveStatus } from '../utils/liveStatus';
 import { istDay, istWhen } from '../utils/appTime';
@@ -64,7 +64,7 @@ import { isSinglesSport, winnerSideOf, challengeText, pendingRankedOpponent, isS
 import { isBlockedBetween } from '../utils/blocks';
 import { reconcileWinCoins } from '../utils/winCoins';
 import { stepTimer } from '../utils/stepTimer';
-import { leaseRefusal } from '../utils/leaseCore';
+import { leaseRefusal, leaseView } from '../utils/leaseCore';
 import { allSports, getSport, normSportSlug } from '../utils/sportCache';
 import { bestOfFor, formatForBestOf, isAcceptableMatchLength } from '../utils/matchLength';
 import { armageddonWinner, chessTiebreakText } from '../utils/chessRules';
@@ -4915,13 +4915,7 @@ async function leaseWithHolder(lease: Awaited<ReturnType<typeof getLease>>) {
   if (!lease) return null;
   const { data: u } = await supabase
     .from('users').select('id, name, username').eq('id', lease.user_id).maybeSingle();
-  return {
-    ...lease,
-    holder: (u as { id: string; name?: string; username?: string } | null) ?? null,
-    stale: isStale(lease),
-    stale_after_ms: STALE_AFTER_MS,
-    server_time: new Date().toISOString(),
-  };
+  return leaseView(lease, (u as { id: string; name?: string; username?: string } | null) ?? null); // N-R7-536
 }
 
 /**

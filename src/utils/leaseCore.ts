@@ -225,3 +225,23 @@ export function makeLease<T extends LeaseRow>(table: string, idColumn: string) {
 
   return { get, check, claim, heartbeat, release, takeOver };
 }
+
+/**
+ * N-R7-536 (SIDE-X11x-1): the lease as sent to phones. A 9-s-old heartbeat read '1m ago' on a phone that
+ * parsed the database's stamp ('…T17:09:43.37+05:30') itself. The stamps go out as plain ISO ('…Z', 3 digits)
+ * and the heartbeat's age comes worked out on this clock (heartbeat_age_ms).
+ */
+export function leaseView<T extends LeaseRow, H>(lease: T, holder: H, now = Date.now()) {
+  const iso = (t: string | null | undefined) => (t && Number.isFinite(Date.parse(t)) ? new Date(t).toISOString() : t ?? null);
+  return {
+    ...lease,
+    claimed_at: iso(lease.claimed_at),
+    heartbeat_at: iso(lease.heartbeat_at),
+    taken_over_at: iso(lease.taken_over_at),
+    holder,
+    stale: isStale(lease, now),
+    stale_after_ms: STALE_AFTER_MS,
+    heartbeat_age_ms: Math.max(0, now - Date.parse(lease.heartbeat_at)),
+    server_time: new Date(now).toISOString(),
+  };
+}

@@ -221,7 +221,7 @@ describe('F7 · events list: bad limit or since is not a 500', () => {
 describe('F11 · your own other phone is not "someone else"', () => {
   test('LEASE_LOST names the caller\'s own other phone', () => {
     expect(leaseRefusal({ code: 'LEASE_LOST', lease: { user_id: SCORER } }, SCORER).error).toBe('Your other phone is scoring this match.');
-    expect(leaseRefusal({ code: 'LEASE_LOST', lease: { user_id: 'someone' } }, SCORER).error).toBe('Someone else took over scoring this match.');
+    expect(leaseRefusal({ code: 'LEASE_LOST', lease: { user_id: 'someone' } }, SCORER).error).toBe('Someone else is scoring this match.'); // N-R7-S163
   });
   test('every caller passes the user, and the claim 409 says it too', () => {
     const m = src('controllers/matches.controller.ts');

@@ -85,7 +85,10 @@ export function leaseRefusal(
       error: 'This match is being scored on a phone, and this request did not say which device it came from. Update SportClan and score from the app, or take over scoring there.',
       code: 'DEVICE_REQUIRED',
     }
-    : { error: 'Someone else took over scoring this match.', code: 'LEASE_LOST' };
+    // N-R7-S163 (REG-014): a refused WRITE may come from a phone that never held the lease (a typed score
+    // on Match detail): 'took over' was untrue there. 'is scoring' is true for every caller; the heartbeat
+    // (holder only) keeps 'took over'.
+    : { error: 'Someone else is scoring this match.', code: 'LEASE_LOST' };
 }
 
 /**

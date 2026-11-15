@@ -115,8 +115,16 @@ export async function sendGift(req: Request, res: Response) {
   if (!sender) return res.status(404).json({ error: 'Sender not found' });
   // SC-434: sending a gift needed Premium. It now needs only coins, which is the
   // point of coins.
+  const clientKey = normalizeClientKey(idempotency_key);
   if (sender.coin_balance < gift.cost) {
-    return res.status(400).json(notEnoughCoins(gift, sender.coin_balance));
+    // N-R7-S165 (RW-G4-135): a retry of a send that already went through (the reply
+    // was lost) finds the balance AFTER its own deduct, so it was refused 'Not enough
+    // coins' instead of answering 'already sent'. A keyed send whose gift row exists
+    // goes on to send_gift, which answers 'duplicate' without charging again.
+    const prior = clientKey
+      ? (await supabase.from('gift_transactions').select('id').eq('sender_id', senderId).eq('client_key', clientKey).maybeSingle()).data
+      : null;
+    if (!prior) return res.status(400).json(notEnoughCoins(gift, sender.coin_balance));
   }
 
   // Check receiver exists — and is a live account (Phase 3 B10-F16): a stale
@@ -142,7 +150,7 @@ export async function sendGift(req: Request, res: Response) {
     p_cost: gift.cost,
     p_message: note,
     // SC-179: coerce a non-UUID key to null so a malformed key can't 500 send_gift.
-    p_client_key: normalizeClientKey(idempotency_key),
+    p_client_key: clientKey,
   });
   if (rpc.error && rpc.error.code === 'PGRST202') {
     // ── Pre-migration fallback (current behaviour): deduct → insert (+refund) → ledger.

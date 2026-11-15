@@ -1486,6 +1486,9 @@ export async function listMatches(req: Request, res: Response) {
       : status === 'scheduled'
         ? query.order('scheduled_at', { ascending: true, nullsFirst: false })
         : query.order('scheduled_at', { ascending: false, nullsFirst: false });
+    // N-R7-S166 (SCR-M-048): rows with the same kick-off (or finish) time came back in any order, so they
+    // swapped across page edges: some sent twice, others never. id makes every page edge fall in one place.
+    query = query.order('id', { ascending: true });
     // Oct 2026 sweep: a results screen searched team names (and counted voided
     // matches) over the one page it had loaded. `q` narrows on the server — a
     // stored side name, or a registered team's name — and `voided=hide` /

@@ -2006,6 +2006,9 @@ export async function getMatch(req: Request, res: Response) {
     timer.mark('reads');
 
     const matchWithRating: any = { ...match };
+    // N-R7-509 (SIDE-C7x-2): the sport's slug beside its id (cached per process), so a phone whose
+    // GET /sports failed still knows the sport — a live football match was drawn as cricket.
+    matchWithRating.sport_slug = await sportSlugOf(match.sport_id).catch(() => null);
     if (liveStatus) matchWithRating.live_status = liveStatus;
     if (scoringLease.ok) matchWithRating.scoring_lease = scoringLease.v;
     if (ratings && ratings.length > 0) {

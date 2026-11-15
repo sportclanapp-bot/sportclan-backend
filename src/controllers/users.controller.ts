@@ -2243,12 +2243,17 @@ export async function checkIn(req: Request, res: Response) {
       .eq('id', userId)
       .maybeSingle();
     let streak = u?.checkin_streak ?? 0;
+    const yesterday = istDay(new Date(Date.now() - 86400000));
+    const last = u?.last_checkin_date ?? null;
 
     if (awarded) {
-      const yesterday = istDay(new Date(Date.now() - 86400000));
-      const last = u?.last_checkin_date ?? null;
       streak = last === yesterday ? streak + 1 : 1;
       await supabase.from('users').update({ checkin_streak: streak, last_checkin_date: today }).eq('id', userId);
+    } else if (last !== today) {
+      // N-R7-S164 (SCR-B-085): two check-ins at once — this one lost the award to a
+      // request that hasn't written today's streak yet, so the row still holds
+      // yesterday's. Answer the streak that request is writing (same rule), not the old one.
+      streak = last === yesterday ? streak + 1 : 1;
     }
 
     return res.json({

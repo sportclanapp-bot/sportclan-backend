@@ -684,8 +684,25 @@ export async function updateTeam(req: Request, res: Response) {
     if (join_policy !== undefined) allowed.join_policy = join_policy;
     if (shortName.value !== undefined) allowed.short_name = shortName.value;
     allowed.updated_at = new Date().toISOString();
+    // N-R7-S167 (SIDE-C2-2): fixtures keep a copy of the side's name (team_a_name / team_b_name,
+    // written when they are drawn), so read the old name to carry a rename onto them.
+    const { data: before } = allowed.name !== undefined
+      ? await supabase.from('teams').select('name').eq('id', id).maybeSingle()
+      : { data: null };
     const { data, error } = await supabase.from('teams').update(allowed).eq('id', id).select('*').single();
     if (error) return res.status(500).json({ error: sanitizeError(error) });
+    const oldName = (before as { name?: string | null } | null)?.name;
+    if (allowed.name !== undefined && oldName && oldName !== allowed.name) {
+      // Only rows of this team that still show its old name: a 'TBD' or free-text label stays.
+      try {
+        const ra = await supabase.from('matches').update({ team_a_name: allowed.name }).eq('team_a_id', id).eq('team_a_name', oldName);
+        const rb = await supabase.from('matches').update({ team_b_name: allowed.name }).eq('team_b_id', id).eq('team_b_name', oldName);
+        const err = ra.error ?? rb.error;
+        if (err) console.warn('[teams] rename: match names not updated', err.message);
+      } catch (e) {
+        console.warn('[teams] rename: match names not updated', (e as Error)?.message);
+      }
+    }
     return res.json({ team: data });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });

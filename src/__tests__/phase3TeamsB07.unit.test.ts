@@ -74,7 +74,8 @@ describe('F13 · a team name is a trimmed, non-empty string', () => {
     mockLog = [];
     mockNext = () => ({ data: { id: TEAM } });
     await call(updateTeam, { params: { id: TEAM }, body: { name: '  Pune XI  ' } });
-    expect(mockLog.find((q) => q[0] === 'from:teams')!.join()).toContain('"name":"Pune XI"');
+    // N-R7-S167: a rename first reads the old name (to carry it onto the fixtures), so look at the write.
+    expect(mockLog.find((q) => q[0] === 'from:teams' && q.some((c) => c.startsWith('update:')))!.join()).toContain('"name":"Pune XI"');
   });
 });
 

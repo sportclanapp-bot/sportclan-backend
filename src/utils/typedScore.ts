@@ -374,7 +374,7 @@ export function typedPeriodPoints(
     if (!Number.isInteger(o.a) || !Number.isInteger(o.b) || (o.a as number) < 0 || (o.b as number) < 0) return no(`${periodWord(k, i, regulation)}: each side scored a whole number, 0 or more.`);
     ps.push({ a: o.a as number, b: o.b as number });
   }
-  if (ps.length < regulation) return no(`Give all ${regulation} ${regulation === 4 ? 'quarters' : regulation === 2 ? 'halves' : 'periods'} (0-0 for one without a score).`);
+  if (ps.length < regulation) return no(`Give ${regulation === 2 ? 'both' : `all ${regulation}`} ${regulation === 4 ? 'quarters' : regulation === 2 ? 'halves' : 'periods'} (0-0 for one without a score).`);
   // Overtime / extra time only after regulation ended level, and each overtime only while still level (basketball).
   let a = 0; let b = 0;
   for (const [i, p] of ps.entries()) {

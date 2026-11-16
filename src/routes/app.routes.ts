@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { clientVersionOf, compareVersions } from '../utils/clientVersion';
+import { clientVersionOf, compareVersions, versionNumber } from '../utils/clientVersion';
 
 const router = Router();
 
@@ -37,8 +37,9 @@ export function appVersionBody(env: NodeJS.ProcessEnv = process.env, opts: { cli
   const olderApp = !!opts.clientVersion && compareVersions(opts.clientVersion, FIRST_APP_WITH_STORE_LIVE) < 0;
   if (storeUrl === null && olderApp && opts.baseUrl) storeUrl = `${opts.baseUrl}${GET_UPDATE_PATH}`;
   return {
-    latestVersion: env.APP_LATEST_VERSION || '1.0.0',
-    minVersion: env.APP_MIN_VERSION || '1.0.0',
+    // N-R7-585 (REG-106): APP_LATEST_VERSION='v2.99.0' is sent as 2.99.0 (an app adds its own 'v').
+    latestVersion: versionNumber(env.APP_LATEST_VERSION) || '1.0.0',
+    minVersion: versionNumber(env.APP_MIN_VERSION) || '1.0.0',
     forceUpdate: env.APP_FORCE_UPDATE === 'true',
     storeUrl,
     storeLive,

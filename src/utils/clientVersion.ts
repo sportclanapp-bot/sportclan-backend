@@ -25,6 +25,14 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+/**
+ * N-R7-585 (REG-106): a version as a plain dotted number: "v2.99.0" -> "2.99.0",
+ * " 2.15.0-b3" -> "2.15.0". Blank / no digits -> null.
+ */
+export function versionNumber(v: string | null | undefined): string | null {
+  return String(v ?? '').trim().match(/\d+(?:\.\d+)*/)?.[0] ?? null;
+}
+
 export function clientVersionOf(req: Pick<Request, 'headers'>): string | null {
   const v = req.headers?.['x-client-version'];
   const s = Array.isArray(v) ? v[0] : v;

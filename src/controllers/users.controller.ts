@@ -1365,11 +1365,18 @@ export async function getActivityHeatmap(req: Request, res: Response) {
   // player's recent days fell off the 84-day grid).
   let data: any[];
   try {
+    // N-R7-S169 (Step 2 B17, SIDE-A1-2): it read EVERY participation with the whole score_summary
+    // (1.8 s for a player with 15k matches). The database now keeps only completed, unvoided matches
+    // touched in the window (completed_at / updated_at / scheduled_at ≥ since: a superset of the day
+    // picked below, which still checks each row), and only score_summary's winner_side.
     data = await allRows(() => supabase
       .from('match_participants')
       // SC-415: completed_at is the day the match was really played.
-      .select('team_side, match:matches(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, tournament_id, score_summary, updated_at, voided_at)')
-      .eq('user_id', id));
+      .select('team_side, match:matches!inner(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, tournament_id, winner_side:score_summary->>winner_side, updated_at, voided_at)')
+      .eq('user_id', id)
+      .eq('match.status', 'completed')
+      .is('match.voided_at', null)
+      .or(`completed_at.gte.${sinceIso},updated_at.gte.${sinceIso},scheduled_at.gte.${sinceIso}`, { referencedTable: 'match' }));
   } catch (error) {
     return res.status(500).json({ error: (error as { message?: string })?.message ?? 'Internal server error' });
   }
@@ -1403,7 +1410,7 @@ export async function getActivityHeatmap(req: Request, res: Response) {
     // count the win on the profile). Use both so a real pickup WIN counts as a win,
     // not a grey 'played' that disagrees with the participation card.
     const mySideTeamId = row.team_side === 'A' ? match.team_a_id : match.team_b_id;
-    const winnerSide = (match.score_summary as { winner_side?: 'A' | 'B' } | null)?.winner_side ?? null;
+    const winnerSide = match.winner_side ?? (match.score_summary as { winner_side?: 'A' | 'B' } | null)?.winner_side ?? null; // N-R7-S169: selected alone
     const iWon =
       (match.winner_team_id && match.winner_team_id === mySideTeamId) ||
       (winnerSide != null && winnerSide === row.team_side);

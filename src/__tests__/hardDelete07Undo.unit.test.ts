@@ -105,7 +105,9 @@ describe('who reads the log', () => {
       fs.readdirSync(path.join(src, d)).filter((f) => f.endsWith('.ts')).map((f) => fs.readFileSync(path.join(src, d, f), 'utf8'))).join('\n');
     // N-RWD3-2 (Round 2): getMatch counts the edits (head: true — a number, no rows read).
     // N-R7-287 (Step 2 B11): and the undos/deletes (removals_count, head: true too).
-    expect((all.match(/from\('match_event_audit'\)\s*\.select/g) ?? []).length).toBe(3);
+    // N-R7-S170 (Step 2 FINAL): the viewer's live status reads the newest change's time (one row, created_at only).
+    expect((all.match(/from\('match_event_audit'\)\s*\.select/g) ?? []).length).toBe(4);
+    expect(code('utils/liveStatus.ts')).toMatch(/from\('match_event_audit'\)\s*\.select\('created_at'\)[\s\S]{0,120}\.limit\(1\)/);
     expect(code('controllers/matches.controller.ts')).toContain("from('match_event_audit').select('id', { count: 'exact', head: true }).eq('match_id', id).in('action', ['undo', 'delete'])");
     expect(code('controllers/matches.controller.ts')).toContain("from('match_event_audit').select('id', { count: 'exact', head: true }).eq('match_id', id).eq('action', 'edit')");
     expect(code('controllers/matchFeatures.controller.ts')).toMatch(/function getScoringEditLog[\s\S]*?from\('match_event_audit'\)\s*\.select/);

@@ -8,7 +8,8 @@
  *
  * TWO SIGNALS, and neither is sufficient alone:
  *
- *   lastEventAt        — when the server last RECEIVED a scoring event. Says the
+ *   lastEventAt        — when the server last RECEIVED a scoring event, or a
+ *                        scorer last undid / edited one (N-R7-S170). Says the
  *                        scoreboard has not moved. Does not say why.
  *   scorerLastActiveAt — the scorer's presence heartbeat (SC-344, `last_active_at`,
  *                        refreshed on app foreground and on a short interval).
@@ -101,6 +102,21 @@ export async function getMatchLiveStatus(match: {
       .limit(1);
     lastEventAt = (data?.[0] as { created_at?: string } | undefined)?.created_at ?? null;
   } catch { /* leave null */ }
+
+  // N-R7-S170: an undo (or edit) is the scorer working the pad too. The undo
+  // deletes its event row, so after undoing every point there was no event left
+  // and the viewer read 'No scoring for a while' seconds later. The scoring edit
+  // log keeps the time of each change; the newer of the two is the last activity.
+  try {
+    const { data } = await supabase
+      .from('match_event_audit')
+      .select('created_at')
+      .eq('match_id', match.id)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const changedAt = (data?.[0] as { created_at?: string } | undefined)?.created_at ?? null;
+    if (changedAt && (!lastEventAt || Date.parse(changedAt) > Date.parse(lastEventAt))) lastEventAt = changedAt;
+  } catch { /* keep the event time */ }
 
   const scorerIds = [match.created_by, match.umpire_id].filter(Boolean) as string[];
   if (scorerIds.length > 0) {

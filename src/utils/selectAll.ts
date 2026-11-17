@@ -51,3 +51,27 @@ export async function selectAllIn<T>(
 export function allRows<T = any>(build: () => any, order = 'id'): Promise<T[]> {
   return selectAll<T>((from, to) => build().order(order, { ascending: true }).range(from, to));
 }
+
+/**
+ * N-R7-S169 · every row of a query, the pages read at the same time: one count first
+ * (`build()` with `{ count: 'exact', head: true }` semantics via `count()`), then every
+ * 1000-row page in parallel. For reads that are many pages long (a player's 15k matches
+ * took 16 pages one after another). Same rows, same order as allRows; no cap.
+ */
+export async function allRowsParallel<T = any>(build: () => any, count: () => PromiseLike<{ count: number | null; error: unknown }>, order = 'id'): Promise<T[]> {
+  const { count: n, error } = await count();
+  if (error) throw error;
+  if (n == null) return allRows<T>(build, order); // no count: one page after another, as before
+  const pages = Math.max(1, Math.ceil(n / SELECT_ALL_PAGE));
+  const got = await Promise.all(Array.from({ length: pages }, (_, i) =>
+    Promise.resolve(build().order(order, { ascending: true }).range(i * SELECT_ALL_PAGE, (i + 1) * SELECT_ALL_PAGE - 1)).then((r: { data: T[] | null; error: unknown }) => {
+      if (r.error) throw r.error;
+      return r.data ?? [];
+    })));
+  const out = got.flat();
+  // rows added between the count and the reads: read on from where the pages stopped
+  if (got[got.length - 1].length === SELECT_ALL_PAGE) {
+    out.push(...(await selectAll<T>((from, to) => build().order(order, { ascending: true }).range(pages * SELECT_ALL_PAGE + from, pages * SELECT_ALL_PAGE + to))));
+  }
+  return out;
+}

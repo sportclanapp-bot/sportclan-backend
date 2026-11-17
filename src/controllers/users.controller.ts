@@ -5,7 +5,7 @@ import { matchNamesForNotice } from '../utils/matchNames';
 import { inDisplayOrder, orderedSportIds, profileSportIds } from '../utils/userSports';
 import { deleteMatching } from '../utils/softDelete';
 import { orIlikeContains } from '../utils/likeSearch';
-import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
+import { allRows, allRowsParallel, selectAll, selectAllIn } from '../utils/selectAll';
 import { bumpCounter } from '../utils/otpStore';
 import { hideTestFor, excludeTest, excludeTestEmbed } from '../utils/testContent';
 import { Request, Response } from 'express';
@@ -1369,14 +1369,18 @@ export async function getActivityHeatmap(req: Request, res: Response) {
     // (1.8 s for a player with 15k matches). The database now keeps only completed, unvoided matches
     // touched in the window (completed_at / updated_at / scheduled_at ≥ since: a superset of the day
     // picked below, which still checks each row), and only score_summary's winner_side.
-    data = await allRows(() => supabase
-      .from('match_participants')
-      // SC-415: completed_at is the day the match was really played.
-      .select('team_side, match:matches!inner(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, tournament_id, winner_side:score_summary->>winner_side, updated_at, voided_at)')
+    // The pages are read at the same time after one count (16 pages one after another for 15k).
+    const inWindow = (q: any) => q
       .eq('user_id', id)
       .eq('match.status', 'completed')
       .is('match.voided_at', null)
-      .or(`completed_at.gte.${sinceIso},updated_at.gte.${sinceIso},scheduled_at.gte.${sinceIso}`, { referencedTable: 'match' }));
+      .or(`completed_at.gte.${sinceIso},updated_at.gte.${sinceIso},scheduled_at.gte.${sinceIso}`, { referencedTable: 'match' });
+    data = await allRowsParallel(
+      // SC-415: completed_at is the day the match was really played.
+      () => inWindow(supabase.from('match_participants')
+        .select('team_side, match:matches!inner(id, scheduled_at, completed_at, status, winner_team_id, team_a_id, team_b_id, team_a_name, team_b_name, tournament_id, winner_side:score_summary->>winner_side, updated_at, voided_at)')),
+      () => inWindow(supabase.from('match_participants').select('id, match:matches!inner(id)', { count: 'exact', head: true })),
+    );
   } catch (error) {
     return res.status(500).json({ error: (error as { message?: string })?.message ?? 'Internal server error' });
   }

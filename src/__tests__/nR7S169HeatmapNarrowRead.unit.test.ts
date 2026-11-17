@@ -43,7 +43,7 @@ beforeEach(() => { mockLog = []; mockNext = () => ({ data: null, error: null });
 describe('N-R7-S169 · the heatmap reads only what it shows', () => {
   test('the database filters: completed, not voided, in the window; no whole score_summary', async () => {
     await getActivityHeatmap({ params: { id: ME }, userId: ME } as any, res());
-    const q = mockLog.find((x) => x[0] === 'from:match_participants')!.join(' ');
+    const q = mockLog.find((x) => x[0] === 'from:match_participants' && x.join(' ').includes('team_side'))!.join(' ');
     expect(q).toContain('matches!inner(');
     expect(q).toContain('winner_side:score_summary->>winner_side');
     expect(q).not.toMatch(/[ ,(]score_summary[,)]/);
@@ -58,5 +58,23 @@ describe('N-R7-S169 · the heatmap reads only what it shows', () => {
     await getActivityHeatmap({ params: { id: ME }, userId: ME } as any, r);
     const cells = (r.body.heatmap as Array<{ matches: number; wins: number }>).filter((c) => c.matches > 0);
     expect(cells).toEqual([expect.objectContaining({ matches: 1, wins: 1 })]);
+  });
+  test('many pages: one count, then every page at once (no cap), same rows', async () => {
+    const now = new Date().toISOString();
+    const row = { team_side: 'A', match: { id: 'm', status: 'completed', winner_team_id: null, team_a_id: null, team_b_id: null, winner_side: 'A', scheduled_at: null, voided_at: null, completed_at: now, updated_at: now } };
+    mockNext = (x) => {
+      if (x[0] !== 'from:match_participants') return { data: null };
+      if (x.join(' ').includes('"head":true')) return { count: 2500 };
+      const r = x.find((s) => s.startsWith('range:'))!; const [from, to] = JSON.parse(r.slice(6));
+      return { data: Array.from({ length: Math.max(0, Math.min(to, 2499) - from + 1) }, () => row) };
+    };
+    const r = res();
+    await getActivityHeatmap({ params: { id: ME }, userId: ME } as any, r);
+    const ranges = mockLog.filter((x) => x[0] === 'from:match_participants').flatMap((x) => x.filter((s) => s.startsWith('range:')));
+    expect(ranges).toEqual(['range:[0,999]', 'range:[1000,1999]', 'range:[2000,2999]']);
+    // one count first, and all three pages asked before any answer was read (Promise.all)
+    expect(mockLog.filter((x) => x[0] === 'from:match_participants')[0].join(' ')).toContain('"head":true');
+    const cells = (r.body.heatmap as Array<{ matches: number; wins: number }>).filter((c) => c.matches > 0);
+    expect(cells.reduce((a, c) => a + c.matches, 0)).toBe(2500);
   });
 });

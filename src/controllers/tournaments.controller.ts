@@ -3318,7 +3318,9 @@ async function insertDoubleElim(
     const loserId = t.bracket === 'final' ? finalId : back[`${t.round}:${t.matchNo}`];
     return {
       loser_next_match_id: loserId ?? null, loser_next_slot: loserId ? t.slot : null,
-      ...(r === roundsCount ? { next_match_id: finalId, next_slot: 'A' } : {}),
+      // N-R7-S171: the main draw's last match isn't the final (the Final and the Reset are): it plays the
+      // rounds before the final, as the back-draw final does, not the final stage's rules.
+      ...(r === roundsCount ? { next_match_id: finalId, next_slot: 'A', ...(base.stageDefaults ? base.stageDefaults('qf') : {}) } : {}),
     };
   });
 }

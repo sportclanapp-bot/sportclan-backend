@@ -100,9 +100,15 @@ export async function myScheduledMatches(userId: string): Promise<any[]> {
 const RANK: Record<MyMatchRelation, number> = { plays: 0, created: 1, follows: 2 };
 /**
  * N-R7-267 · the order Home shows your live matches in: the ones you play in or
- * created before the ones you follow, then the latest start first (undated last).
+ * created before the ones you follow, then the latest activity first (N-R7-S172; start
+ * time when there is none; undated last).
  */
-export function sortMyLive<T extends { relation: MyMatchRelation; scheduled_at?: string | null; id: string }>(rows: T[]): T[] {
-  const t = (r: T) => (r.scheduled_at ? new Date(r.scheduled_at).getTime() : Number.NEGATIVE_INFINITY);
+export function sortMyLive<T extends { relation: MyMatchRelation; scheduled_at?: string | null; updated_at?: string | null; id: string }>(rows: T[]): T[] {
+  // N-R7-S172 (SIDE-C9b-1): the latest scoring activity first (updated_at, bumped by every scoring
+  // event), not the start time: a match scheduled yesterday and scored a minute ago led nothing.
+  const t = (r: T) => {
+    const at = r.updated_at ?? r.scheduled_at;
+    return at ? new Date(at).getTime() : Number.NEGATIVE_INFINITY;
+  };
   return [...rows].sort((a, b) => RANK[a.relation] - RANK[b.relation] || t(b) - t(a) || a.id.localeCompare(b.id));
 }

@@ -2061,6 +2061,12 @@ export async function recomputeSummary(
         }
         continue;
       }
+      // N-R7-690 (SP-CHS-026): a result's Undo restarts the clock where the result stopped the side to move.
+      if (e.event_type === 'note' && (e.payload as any)?.kind === 'clock_resume' && (e.payload as any)?.after === 'result') {
+        const clk = (e as any).clock_seconds;
+        if (typeof clk === 'number' && clk >= 0) { if (chessMoveCount % 2 === 0) chessClockWhite = clk; else chessClockBlack = clk; }
+        continue;
+      }
       if (e.event_type !== 'result') continue;
       const pr = (e.payload || {}) as any;
       const w = pr.winner;

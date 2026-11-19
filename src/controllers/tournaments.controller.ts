@@ -98,6 +98,7 @@ import { swissFirstRound, type SwissRound } from '../utils/swiss';
 import { dutchFirstRound, dutchRound, dutchHistory } from '../utils/swissDutch';
 import { balanceColours, bergerRounds, seededGroupFixtures } from '../utils/groupOrder';
 import { declineStaleByeRequests } from '../utils/swissByeRequests';
+import { writeAbandonNotes } from '../utils/abandonNote';
 import { BOX_DEFAULT, boxesOf, boxLabel, challengeProblem, ladderAfter, nextBoxOrder, reachOf } from '../utils/ladderBox';
 import {
   SHARED_KEYS, EVENT_KEYS, eventsListRefusal, eventName, entryKindRefusal, eventLabelRefusal, refreshParentStatus, refreshParentOf,
@@ -2167,18 +2168,26 @@ export async function updateTournament(req: Request, res: Response) {
 // every registered (pending/approved) team — the same recipient model as the
 // entry approve/reject notifications. Ungated by design (see PREF_CATEGORY /
 // SC-233): a cancellation is a critical one-time status change, always delivered.
-async function cancelTournamentSideEffects(
+export async function cancelTournamentSideEffects(
   tournamentId: string,
   tournamentName: string | null,
   actorId: string,
 ): Promise<void> {
   const now = new Date().toISOString();
   // (a) Abandon live/scheduled matches. Idempotent: a re-run finds none left.
+  // N-R7-S173: the live ones get the abandon line in their log (as the pad's Abandon writes), so a
+  // later 'Replay the rest' stops the clock at it.
+  const live = await allRows(() => supabase
+    .from('matches')
+    .select('id')
+    .eq('tournament_id', tournamentId)
+    .eq('status', 'live'));
   await supabase
     .from('matches')
     .update({ status: 'abandoned', updated_at: now })
     .eq('tournament_id', tournamentId)
     .in('status', ['scheduled', 'live']);
+  if ((live ?? []).length) await writeAbandonNotes((live as Array<{ id: string }>).map((m) => ({ match_id: m.id })), actorId);
 
   // (b) Notify the captain of every still-registered team.
   const entries = await allRows(() => supabase
@@ -4168,6 +4177,7 @@ export async function walkoverOnWithdraw(tournamentId: string, teamId: string): 
     if (opponentWithdrawn) {
       // No one to advance — abandon the match, leave the next slot empty.
       await supabase.from('matches').update({ status: 'abandoned', updated_at: now }).eq('id', mt.id);
+      if (mt.status === 'live') await writeAbandonNotes([{ match_id: mt.id }], null); // N-R7-S173
       continue;
     }
     // Walkover: opponent wins the forfeited match and advances. BUILD 3.21: a
@@ -4179,6 +4189,12 @@ export async function walkoverOnWithdraw(tournamentId: string, teamId: string): 
       .from('matches')
       .update({ status: 'abandoned', winner_team_id: opponentId, score_summary: ss, updated_at: now })
       .eq('id', mt.id);
+    // N-R7-S173: a live match given away gets the abandon line with who goes through (as the pad's
+    // walkover writes); it can still be decided 'Replay the rest' (N-R7-S151), and the clock stops at it.
+    if (mt.status === 'live') {
+      const { data: members } = await supabase.from('team_members').select('user_id').eq('team_id', opponentId);
+      await writeAbandonNotes([{ match_id: mt.id, walkover_side: opponentId === mt.team_a_id ? 'A' : 'B', walkover_one: (members ?? []).length === 1 }], null);
+    }
     await advanceTournamentWinner(mt.id);
   }
 }

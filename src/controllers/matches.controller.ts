@@ -12,6 +12,7 @@ import { sportTerms } from '../utils/sportTerms';
 import { sportSlugOf } from '../utils/sportSlug';
 import { plural } from '../utils/plural';
 import { selectAll, IN_CHUNK } from '../utils/selectAll';
+import { writeAbandonNotes } from '../utils/abandonNote';
 import { joinChat, wasRemovedFromChat } from '../utils/chatMembership';
 import { attachTeamNames } from '../utils/teamNames';
 import { myScheduledMatches, pickNextMatch, myMatchesWithStatus, sortMyLive } from '../utils/nextMatch';
@@ -1617,7 +1618,7 @@ export function discoveryCutoffIso(now: number = Date.now()): string {
  * one update with up to 1,000 ids in its address could be refused as a whole,
  * and then nothing was ever swept. Returns how many were changed.
  */
-async function abandonInChunks(ids: string[]): Promise<number> {
+async function abandonInChunks(ids: string[], opts: { note?: boolean } = {}): Promise<number> {
   let n = 0;
   for (let i = 0; i < ids.length; i += IN_CHUNK) {
     const { data } = await supabase
@@ -1626,6 +1627,8 @@ async function abandonInChunks(ids: string[]): Promise<number> {
       .in('id', ids.slice(i, i + IN_CHUNK))
       .select('id');
     n += (data ?? []).length;
+    // N-R7-S173: a live match the sweep abandons gets the abandon line, as the pad's Abandon writes.
+    if (opts.note && data?.length) await writeAbandonNotes((data as Array<{ id: string }>).map((r) => ({ match_id: r.id })), null);
   }
   return n;
 }
@@ -1734,7 +1737,7 @@ export async function sweepStaleLiveMatches(deps: {
     if (outcome && (await complete(row.id, outcome).catch(() => false))) { completed += 1; continue; }
     if (!row.tournament_id) abandon.push(row.id);
   }
-  return { abandoned: abandon.length ? await abandonInChunks(abandon) : 0, completed };
+  return { abandoned: abandon.length ? await abandonInChunks(abandon, { note: true }) : 0, completed };
 }
 
 /**

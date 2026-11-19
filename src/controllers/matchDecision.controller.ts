@@ -27,6 +27,7 @@ import { advanceTournamentWinner, tournamentSettingsOf } from './tournaments.con
 import { notifyUsers, matchAudienceIds } from '../utils/notify';
 import { plural } from '../utils/plural';
 import { sportTerms } from '../utils/sportTerms';
+import { writeAbandonNotes } from '../utils/abandonNote';
 
 export const REASON_MAX = 200;
 const COLS = 'id, sport_id, tournament_id, created_by, status, round, group_label, next_match_id, next_slot, winner_team_id, bracket, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules, score_summary, voided_at';
@@ -141,6 +142,10 @@ export async function decideMatch(req: Request, res: Response) {
     }
     const { data: updated, error } = await supabase.from('matches').update({ ...update, updated_at: now }).eq('id', id).select('*').single();
     if (error) return res.status(500).json({ error: 'Couldn’t save the decision.' });
+    // N-R7-S174 (SIDE-B18-1): a LIVE match sent to 'Replay the rest' stopped here as if abandoned, with no
+    // abandon line in its log — the app's clock (N-R7-706/708) stops only at that line, so the replay counted
+    // the time it stood. The line, with the decision's reason, as the pad's Abandon writes it.
+    if (body.decision === 'replay' && m.status === 'live') await writeAbandonNotes([{ match_id: id, reason }], userId);
     if (m.tournament_id && body.decision !== 'replay') {
       try { await advanceTournamentWinner(id); } catch { /* the table still reads it */ }
     }

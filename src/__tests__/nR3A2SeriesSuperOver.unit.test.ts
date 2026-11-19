@@ -28,9 +28,10 @@ const match = { id: 'm1', status: 'live', sport_id: 's', tournament_id: null, te
 const note = (payload: object) => ({ event_type: 'note', payload: { kind: 'game_end', game: 3, ...payload } });
 
 test('the server takes a typed super over, and refuses a level or contradicting one', async () => {
-  expect(await validateScoringEvent('m1', match as never, note({ winner: 'A', super_over_runs: { A: 5, B: 3 } }) as never)).toBeNull();
-  expect((await validateScoringEvent('m1', match as never, note({ winner: 'A', super_over_runs: { A: 4, B: 4 } }) as never))?.body.code).toBe('BAD_NOTE');
-  expect((await validateScoringEvent('m1', match as never, note({ winner: 'B', super_over_runs: { A: 5, B: 3 } }) as never))?.body.code).toBe('BAD_NOTE');
+  // N-R7-S175: the game end names the game in play (no game has ended in this mock: game 1).
+  expect(await validateScoringEvent('m1', match as never, note({ game: 1, winner: 'A', super_over_runs: { A: 5, B: 3 } }) as never)).toBeNull();
+  expect((await validateScoringEvent('m1', match as never, note({ game: 1, winner: 'A', super_over_runs: { A: 4, B: 4 } }) as never))?.body.code).toBe('BAD_NOTE');
+  expect((await validateScoringEvent('m1', match as never, note({ game: 1, winner: 'B', super_over_runs: { A: 5, B: 3 } }) as never))?.body.code).toBe('BAD_NOTE');
 });
 test('the series keeps the runs, and the game row has them', () => {
   const s = cricketSeries([note({ game: 1, winner: 'A', super_over_runs: { A: 5, B: 3 } })] as never, 5);

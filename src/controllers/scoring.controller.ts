@@ -564,6 +564,29 @@ export async function validateScoringEvent(
   if (event_type === 'foul' && payload && payload.kind != null && !FOUL_KINDS.some((k) => k.key === payload.kind)) {
     return refuse(400, { error: 'That isn’t a kind of foul.', code: 'BAD_FOUL' });
   }
+  // N-R7-S175 (SIDE-C26x-1): a series is played game by game — a game's end that names its game
+  // names the game in play (the games ended so far + 1), and an event tagged with a game can't name
+  // a later one. A game 3 end with game 1 still in play was stored; only a decided series refused
+  // (that refusal still answers first). A QR hand-over's ops are checked against the score before
+  // them (no per-op state checks), so it is left out, as the period check.
+  if (!opts.batch && payload && payload.game != null && match.sport_id) {
+    const slugGm = normSportSlug((await getSport(match.sport_id))?.slug);
+    const specGm = tieSpecOf(slugGm, rulesOf(slugGm, match));
+    const tGm = (match.score_summary as { tie?: { decided?: unknown } } | null)?.tie;
+    if (specGm?.series && tGm?.decided !== 'A' && tGm?.decided !== 'B') {
+      const g = payload.game;
+      if (!(typeof g === 'number' && Number.isInteger(g) && g >= 1)) return refuse(400, { error: 'A series game is numbered 1, 2, 3…', code: 'BAD_GAME' });
+      const notesGm = ((await matchEventsAll(match.id, 'event_type, payload', (q) => q.eq('event_type', 'note'))) ?? []) as Array<{ payload?: { kind?: unknown } }>; // audit #38
+      const inPlay = notesGm.filter((n) => n.payload?.kind === 'game_end').length + 1;
+      const games = specGm.rubbers.length;
+      if (event_type === 'note' && payload.kind === 'game_end' && (g !== inPlay || inPlay > games)) {
+        return refuse(409, { error: inPlay > games ? 'Every game of the series is played — end the match.' : `Game ${inPlay} is the game in play — end it first.`, code: 'NOT_GAME_IN_PLAY' });
+      }
+      if (g > inPlay || g > games) {
+        return refuse(409, { error: g > games ? `The series has ${games} games.` : `Game ${g} hasn’t started — game ${inPlay} is in play.`, code: 'NOT_GAME_IN_PLAY' });
+      }
+    }
+  }
   // Stage 15 · BB6 / BB9: a series game's end, the possession arrow.
   if (event_type === 'note' && payload && (payload.kind === 'game_end' || payload.kind === 'arrow' || payload.kind === 'arrow_flip')) {
     const slug = match.sport_id ? normSportSlug((await getSport(match.sport_id))?.slug) : '';

@@ -32,7 +32,7 @@ describe.each(['football', 'hockey', 'basketball'])('%s series', (slug) => {
     expect(r?.body).toEqual({ error: 'The series is decided — end the match.', code: 'SERIES_DECIDED' });
   });
   test('not decided: a level game is still refused as level', async () => {
-    const r = await validateScoringEvent('m1', match(slug, null) as never, { ...gameEnd, payload: { ...gameEnd.payload } });
+    const r = await validateScoringEvent('m1', match(slug, null) as never, { ...gameEnd, payload: { ...gameEnd.payload, game: 1 } }); // N-R7-S175: the game in play (no game ended in this mock)
     expect(r?.body?.code).toBe('GAME_LEVEL');
   });
 });

@@ -1884,6 +1884,7 @@ export async function recomputeSummary(
   let chessMoveCount = 0;
   let chessLastPly = 0;
   let chessClockWhite: number | null = null; // seconds remaining after White's last move
+  const chessBonus = { A: 0, B: 0 }; // N-R7-S177: arbiter time added since each side's last stored clock
   let chessClockBlack: number | null = null;
 
   let cricketFirstBat: 'A' | 'B' | null = null;
@@ -2081,13 +2082,23 @@ export async function recomputeSummary(
         if (typeof clk === 'number') {
           if (side === 'A') chessClockWhite = clk;
           else chessClockBlack = clk;
+          chessBonus[side] = 0; // N-R7-S177: the clock this move left already has any time the arbiter added
         }
+        continue;
+      }
+      // N-R7-S177 (RW-G6-240@B8): the arbiter adds time — to the side named (add_time), or to the opponent of the
+      // side that made an illegal move or a wrong draw claim (as the app's chess ruleset counts it).
+      if (e.event_type === 'note' && ['add_time', 'illegal_move', 'wrong_claim'].includes((e.payload as any)?.kind)) {
+        const np: any = e.payload;
+        const named: 'A' | 'B' = np.side === 'B' ? 'B' : 'A';
+        const to: 'A' | 'B' = np.kind === 'add_time' ? named : named === 'A' ? 'B' : 'A';
+        chessBonus[to] += Number(np.seconds ?? 0) || 0;
         continue;
       }
       // N-R7-690 (SP-CHS-026): a result's Undo restarts the clock where the result stopped the side to move.
       if (e.event_type === 'note' && (e.payload as any)?.kind === 'clock_resume' && (e.payload as any)?.after === 'result') {
         const clk = (e as any).clock_seconds;
-        if (typeof clk === 'number' && clk >= 0) { if (chessMoveCount % 2 === 0) chessClockWhite = clk; else chessClockBlack = clk; }
+        if (typeof clk === 'number' && clk >= 0) { if (chessMoveCount % 2 === 0) chessClockWhite = clk; else chessClockBlack = clk; chessBonus[chessMoveCount % 2 === 0 ? 'A' : 'B'] = 0; } // N-R7-S177
         continue;
       }
       if (e.event_type !== 'result') continue;
@@ -2103,7 +2114,7 @@ export async function recomputeSummary(
       // N-R7-138 (OBS-A2-1): the result carries the clock of the side to move when it was recorded:
       // that clock stops there (a resignation mid-turn), not back at its last move.
       const atResult = (e as any).clock_seconds;
-      if (typeof atResult === 'number' && atResult >= 0) { if (chessMoveCount % 2 === 0) chessClockWhite = atResult; else chessClockBlack = atResult; }
+      if (typeof atResult === 'number' && atResult >= 0) { if (chessMoveCount % 2 === 0) chessClockWhite = atResult; else chessClockBlack = atResult; chessBonus[chessMoveCount % 2 === 0 ? 'A' : 'B'] = 0; } // N-R7-S177
       // Capture the winner the scorer credited on THIS result event (the last
       // decisive result wins, matching the score above). A draw carries no
       // winning player. player_id may be a guest:<id> — that's fine, it rides
@@ -2150,6 +2161,11 @@ export async function recomputeSummary(
     } else if (slug === 'cricket') { delete summary.tie; delete summary.rubbers; delete summary.rubber; delete summary.series_first; }
   }
   if (slug === 'chess' && !tieSummary) { // Stage 12 · CH5: a team match's summary is its tie's
+    // N-R7-S177: the arbiter's time added since a side's last stored clock (a side yet to move: its start time).
+    const chessInitial = (() => { const mm = /(\d+)\s*\+/.exec(String((match as any).format ?? '')); return mm ? parseInt(mm[1]!, 10) * 60 : null; })();
+    const withBonus = (clk: number | null, add: number) => (add > 0 ? (clk ?? chessInitial) === null ? clk : (clk ?? (chessInitial as number)) + add : clk);
+    chessClockWhite = withBonus(chessClockWhite, chessBonus.A);
+    chessClockBlack = withBonus(chessClockBlack, chessBonus.B);
     // N-R7-132 (SP-CHS-S01): lost on time — the loser's clock ran out (0:00), not its last stored time.
     if (chessReason === 'timeout' && chessWinner === 'A') chessClockBlack = 0;
     if (chessReason === 'timeout' && chessWinner === 'B') chessClockWhite = 0;

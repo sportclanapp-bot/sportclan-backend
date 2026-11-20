@@ -52,7 +52,7 @@ import { deleteWithReason } from '../utils/softDelete';
 import { resolveSportId } from '../utils/sportId';
 import { parsePagination, pageMeta, isRangeError } from '../utils/pagination';
 import { sanitizeError } from '../utils/response';
-import { validateSportForCreate, activeSportIds } from '../utils/sports';
+import { validateSportForCreate, activeSportIds, isSportInactive } from '../utils/sports';
 import { isTerminalMatchStatus, LIMITS, isCount, normaliseVenue, VENUE_TOO_LONG } from '../utils/validation';
 import { calculateAndSetMVP } from './matchFeatures.controller';
 import { advanceTournamentWinner, recrownAfterVoidChange, tournamentSettingsOf } from './tournaments.controller';
@@ -3348,6 +3348,12 @@ export async function completeMatch(req: Request, res: Response) {
     // decision — a plain tournament scorer could give one through the API though the app keeps it from them.
     if (!system && walkoverIn === true && !retired && !defaulted && !!match.tournament_id && !(await canDefault(match, userId))) {
       return res.status(403).json({ error: 'Only the referee, the umpire or the organiser can give a walkover.', code: 'NOT_REFEREE_WALKOVER' });
+    }
+    // N-R7-S176 (Step 2 FINAL, REG-014): a deactivated sport (kabaddi, athletics) takes no result at all —
+    // live scoring and a typed score refuse it (SC-335, audit #14), and so does completing it (typed result,
+    // walkover, retirement, default). The sweep's own completions (system) still end a leftover match.
+    if (!system && (await isSportInactive(match.sport_id as string))) {
+      return res.status(400).json({ error: 'This sport is not available', code: 'SPORT_INACTIVE' });
     }
     // N-R7-S108 (Step 2, SPP1-CRM-056): in a team tie a retirement is the player's in the rubber in
     // play — that rubber goes to the other side and the tie goes on (ICF). Recorded as a 'retire' note

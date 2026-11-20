@@ -28,6 +28,7 @@ import { notifyUsers, matchAudienceIds } from '../utils/notify';
 import { plural } from '../utils/plural';
 import { sportTerms } from '../utils/sportTerms';
 import { writeAbandonNotes } from '../utils/abandonNote';
+import { isSportInactive } from '../utils/sports';
 
 export const REASON_MAX = 200;
 const COLS = 'id, sport_id, tournament_id, created_by, status, round, group_label, next_match_id, next_slot, winner_team_id, bracket, team_a_id, team_b_id, team_a_name, team_b_name, format, overs, rules, score_summary, voided_at';
@@ -67,6 +68,8 @@ export async function decideMatch(req: Request, res: Response) {
     if (!m) return res.status(404).json({ error: 'Match not found' });
     const allowed = m.tournament_id ? await isTournamentOrganiser(m.tournament_id, userId) : m.created_by === userId;
     if (!allowed) return res.status(403).json({ error: m.tournament_id ? 'Only the tournament organiser can decide a match.' : 'Only the match’s creator can decide it.' });
+    // N-R7-S176 (REG-014): a deactivated sport's match is not decided (stands / replay / awarded) either.
+    if (await isSportInactive(m.sport_id)) return res.status(400).json({ error: 'This sport is not available', code: 'SPORT_INACTIVE' });
     if (m.voided_at) return res.status(409).json({ error: 'This match is voided.', code: 'MATCH_VOIDED' });
     if (!['scheduled', 'live', 'abandoned'].includes(m.status)) {
       return res.status(409).json({ error: 'This match is finished. Void it to take it off the table.', code: 'MATCH_FINISHED' });

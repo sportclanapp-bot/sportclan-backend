@@ -525,6 +525,21 @@ export async function validateScoringEvent(
     }
   }
 
+  // N-R7-S178 (Step 2 FINAL, SPP1-PKB-106): a best-of match (pickleball, badminton, table tennis, volleyball,
+  // tennis, carrom; a team tie too) already decided takes no more points — another phone's queued match point,
+  // sent after this server had the winning one, was stored (a 2nd winning point; the player's points 23 for 22).
+  // As /complete reads it (bestOfState). An action the server already has (its key) is a replay, not a new point.
+  if (event_type === 'score' && match.sport_id) {
+    const slugD = normSportSlug((await getSport(match.sport_id))?.slug);
+    const bo = bestOfState(slugD, (match.score_summary ?? null) as Record<string, any> | null, match);
+    if (bo?.decided) {
+      const had = opts.clientKey
+        ? (await supabase.from('match_events').select('id').eq('match_id', matchId).eq('client_key', opts.clientKey).maybeSingle()).data
+        : null;
+      if (!had) return refuse(409, { error: 'The match is already decided — this point wasn’t counted. End the match.', code: 'MATCH_DECIDED' });
+    }
+  }
+
   // Audit #51: a score event the score can't use was stored anyway — the
   // timeline said GOAL, the score stayed 0–0. In football and hockey a score is
   // a goal or an own goal; in basketball it carries its points (1–3).

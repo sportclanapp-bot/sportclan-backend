@@ -13,6 +13,7 @@ import { rankTeams, pointsFor } from '../utils/standings';
 import { tableInputs } from '../utils/tournamentSettings';
 import { getSport } from '../utils/sportCache';
 import { loadLeaders } from './features.controller';
+import { boxTables } from './tournaments.controller';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { fairPlayPoints, type CardEvent } from '../utils/fairPlay';
 import { settingsOf, settingsRefusal, storedSettings, type PickedAward } from '../utils/tournamentSettings';
@@ -92,6 +93,15 @@ export async function placingsFor(t: { id: string; format: string; status: strin
   if (t.format === 'knockout' || t.format === 'groups_knockout') {
     const { data: wd } = await supabase.from('tournament_entries').select('team_id').eq('tournament_id', t.id).eq('status', 'withdrawn');
     base = knockoutPlacings(matches, new Set(((wd ?? []) as Array<{ team_id: string }>).map((r) => r.team_id)));
+  }
+  else if (t.format === 'box' && t.status === 'completed') {
+    // Q33 (Dipak, 21 Nov 2026: A) · N-FMT-1: a box league's Winner and Runner-up (and third, fourth) come
+    // from Box 1 only, as its champion card — every box ranked together could print a Box 2 player as
+    // 'Winner' and leave Box 1's runner-up out.
+    const box1 = (await boxTables(t.id, t as { settings?: unknown; tiebreaker_rules?: unknown; sport_id?: string }))[0] ?? [];
+    const { data: tms } = box1.length ? await supabase.from('teams').select('id, name').in('id', box1) : { data: [] };
+    const tName = new Map(((tms ?? []) as Array<{ id: string; name: string | null }>).map((x) => [x.id, x.name ?? 'Team']));
+    base = box1.slice(0, 4).map((id, i) => ({ place: (i + 1) as 1 | 2 | 3 | 4, title: TITLES[(i + 1) as 1 | 2 | 3 | 4], team_id: id, name: tName.get(id) ?? 'Team' }));
   }
   else if (t.status === 'completed') {
     const ents = await allRows(() => supabase.from('tournament_entries').select('team_id, status, team:teams!team_id(id, name)').eq('tournament_id', t.id).in('status', ['approved', 'withdrawn']));

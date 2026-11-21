@@ -87,14 +87,32 @@ beforeEach(() => {
 afterAll(() => { process.env = ENV; });
 
 describe('K1-7 (be7c932) · OTP goes through 2Factor.in with TWOFACTOR_API_KEY; a failed send is never a 500', () => {
-  test('K1-7 (be7c932): the key is read from TWOFACTOR_API_KEY and the call goes to 2factor.in (voice when asked)', async () => {
+  test('K1-7 (be7c932): the key is read from TWOFACTOR_API_KEY and the call goes to 2factor.in (voice when asked and OTP_VOICE_ENABLED=true; Q12)', async () => {
     process.env.TWOFACTOR_API_KEY = 'k-2f';
+    process.env.OTP_VOICE_ENABLED = 'true';
     const r = await call(auth.sendOtp, { phone: '9876543210', purpose: 'login', channel: 'voice' });
     expect(r.statusCode).toBe(200);
     expect(get).toHaveBeenCalledTimes(1);
     const url = String(get.mock.calls[0][0]);
     expect(url.startsWith('https://2factor.in/API/V1/k-2f/VOICE/9876543210/')).toBe(true);
     expect(url).not.toMatch(/fast2sms/i);
+  });
+  test('Q12 (SMS only): with OTP_VOICE_ENABLED unset, a voice request is sent as an SMS and answers channel sms', async () => {
+    process.env.TWOFACTOR_API_KEY = 'k-2f';
+    delete process.env.OTP_VOICE_ENABLED;
+    const r = await call(auth.sendOtp, { phone: '9876543210', purpose: 'login', channel: 'voice' });
+    expect(r.statusCode).toBe(200);
+    expect(r.body.channel).toBe('sms');
+    const url = String(get.mock.calls[0][0]);
+    expect(url).toMatch(/\/SMS\/9876543210\//);
+    expect(url).not.toMatch(/VOICE/);
+  });
+  test('Q12: OTP_VOICE_ENABLED set to anything but "true" keeps voice off', async () => {
+    process.env.TWOFACTOR_API_KEY = 'k-2f';
+    process.env.OTP_VOICE_ENABLED = '1';
+    const r = await call(auth.sendOtp, { phone: '9876543210', purpose: 'login', channel: 'voice' });
+    expect(r.body.channel).toBe('sms');
+    expect(String(get.mock.calls[0][0])).not.toMatch(/VOICE/);
   });
   test('K1-7 (be7c932): the provider throwing gives a handled 503 with a message, not a 500', async () => {
     process.env.TWOFACTOR_API_KEY = 'k-2f';

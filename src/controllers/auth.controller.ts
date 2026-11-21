@@ -242,10 +242,14 @@ export async function sendOtp(req: Request, res: Response) {
   if (typeof phone !== 'string') {
     return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.', code: 'INVALID_PHONE' });
   }
-  // SC-399: SMS is the default; voice remains explicitly requestable.
+  // SC-399: SMS is the default.
   // SC-441 (P1): 'whatsapp' is no longer accepted — an old build still asking for
   // it gets SMS rather than an error, so upgrading is not forced.
-  const channel: OtpChannel = rawChannel === 'voice' ? 'voice' : 'sms';
+  // Q12 (Dipak, 21 Nov 2026: SMS only, no "Call me instead"): a voice code is
+  // sent only when OTP_VOICE_ENABLED=true is set on the server (leave it unset).
+  // Otherwise a voice request gets an SMS, like the old 'whatsapp' requests.
+  const voiceOn = process.env.OTP_VOICE_ENABLED === 'true';
+  const channel: OtpChannel = rawChannel === 'voice' && voiceOn ? 'voice' : 'sms';
   if (!(OTP_PURPOSES as readonly unknown[]).includes(purpose)) {
     return res.status(400).json({ error: 'Unknown code purpose.', code: 'INVALID_PURPOSE' });
   }

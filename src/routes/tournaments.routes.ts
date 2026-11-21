@@ -2,6 +2,7 @@ import { redraw } from '../controllers/redraw.controller';
 import { listAnnouncements, postAnnouncement, deleteAnnouncement } from '../controllers/announcements.controller';
 import { getSquad, setSquad, checkSquadPlayer, setSquadLock, getDiscipline } from '../controllers/squads.controller';
 import { setLots } from '../controllers/lots.controller';
+import { createDecider } from '../controllers/decider.controller';
 import { getSwiss, setSwissBye, swapSwissPairing, publishSwissRound, myByeRequests, askSwissBye, withdrawSwissBye, decideSwissBye } from '../controllers/swiss.controller';
 import { getBoardPrizes } from '../controllers/boardPrizes.controller';
 import { Router } from 'express';
@@ -108,6 +109,8 @@ router.get('/:id/awards', authenticateToken, getAwards);
 router.put('/:id/awards', authenticateToken, setAwards);
 // Stage 8 · F8: a draw of lots for teams level on every tie-break.
 router.put('/:id/lots', authenticateToken, setLots);
+// Q31: …or a decider match between the two level teams.
+router.post('/:id/decider', authenticateToken, createDecider);
 // Stage 12 · CH2: a Swiss run the FIDE way — byes asked for, checking / swapping, publishing.
 router.get('/:id/swiss', authenticateToken, getSwiss);
 router.put('/:id/swiss/byes', authenticateToken, setSwissBye);

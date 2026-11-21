@@ -1,4 +1,5 @@
 import { voidClosedOn } from '../utils/voidClosedOn';
+import { deciderAfterResult } from './decider.controller';
 import { hubHolderElsewhere, hubRefusal } from '../utils/hubReadOnly';
 import { inBackground } from '../utils/background';
 import { matchNamesForNotice } from '../utils/matchNames';
@@ -4424,6 +4425,9 @@ export async function completeMatch(req: Request, res: Response) {
       } catch (advErr) {
         console.error('bracket advancement failed:', advErr instanceof Error ? advErr.message : advErr);
       }
+    } else if (match.team_a_id && match.team_b_id && !match.is_ranked) {
+      // Q31: a tournament's decider match (two teams level on every tie-break) puts its winner first in the draw of lots.
+      await deciderAfterResult(id);
     }
     timer.mark('tournament');
 

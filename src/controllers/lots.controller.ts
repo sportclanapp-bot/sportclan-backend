@@ -37,24 +37,33 @@ export async function setLots(req: Request, res: Response) {
     const cur = settingsOf(t as { settings?: unknown });
     const lots = { ...(cur.lots ?? {}) };
     if (order.length) lots[group] = order as string[]; else delete lots[group];
-    const next = storedSettings({ lots: Object.keys(lots).length ? lots : null }, cur);
+    // Q31: a draw recorded by hand takes over from that group's decider match (its result no longer writes the order).
+    const deciders = (cur.deciders ?? []).map((d) => (d.group === group && !d.closed ? { ...d, closed: true } : d));
+    const next = storedSettings({ lots: Object.keys(lots).length ? lots : null, ...(cur.deciders?.length ? { deciders } : {}) }, cur);
     const { error } = await supabase.from('tournaments').update({ settings: next }).eq('id', id);
     if (error) return res.status(500).json({ error: 'Couldn’t save the draw of lots.' });
-    // N-R7-S1 (SCR-T-S03): a knockout waiting on this group's order is seeded now.
-    if ((t as { format?: string }).format === 'groups_knockout') await maybeSeedKnockout(id).catch(() => undefined);
-    // N-R7-S143 (SIDE-A1-1): a league / round robin / Swiss (no knockout) level at the top waits for the
-    // lots to crown its champion; a finished one takes the order the lots now give.
-    const tt = t as { format?: string; status?: string; champion_team_id?: string | null };
-    const swissKo = tt.format === 'swiss' && !!settingsOf(t as { settings?: unknown }).swiss?.koDrawn;
-    if (tt.format === 'league' || tt.format === 'round_robin' || (tt.format === 'swiss' && !swissKo)) {
-      if (tt.status === 'upcoming' || tt.status === 'live') await (tt.format === 'swiss' ? swissAfterResult(id) : crownLeagueChampion(id)).catch(() => undefined);
-      else if (tt.status === 'completed') {
-        const champ = await championOf(id).catch(() => undefined);
-        if (champ !== undefined && (champ?.id ?? null) !== (tt.champion_team_id ?? null)) await supabase.from('tournaments').update({ champion_team_id: champ?.id ?? null }).eq('id', id);
-      }
-    }
+    await afterLots(id, t as LotsTournament);
     return res.json({ lots: next.lots ?? {} });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+type LotsTournament = { id: string; settings?: unknown; format?: string; status?: string; champion_team_id?: string | null };
+
+/** What follows a new draw-of-lots order (by hand, or Q31's decider match): a knockout waiting on it is seeded, a level league is crowned. */
+export async function afterLots(id: string, t: LotsTournament): Promise<void> {
+  // N-R7-S1 (SCR-T-S03): a knockout waiting on this group's order is seeded now.
+  if ((t as { format?: string }).format === 'groups_knockout') await maybeSeedKnockout(id).catch(() => undefined);
+  // N-R7-S143 (SIDE-A1-1): a league / round robin / Swiss (no knockout) level at the top waits for the
+  // lots to crown its champion; a finished one takes the order the lots now give.
+  const tt = t as { format?: string; status?: string; champion_team_id?: string | null };
+  const swissKo = tt.format === 'swiss' && !!settingsOf(t as { settings?: unknown }).swiss?.koDrawn;
+  if (tt.format === 'league' || tt.format === 'round_robin' || (tt.format === 'swiss' && !swissKo)) {
+    if (tt.status === 'upcoming' || tt.status === 'live') await (tt.format === 'swiss' ? swissAfterResult(id) : crownLeagueChampion(id)).catch(() => undefined);
+    else if (tt.status === 'completed') {
+      const champ = await championOf(id).catch(() => undefined);
+      if (champ !== undefined && (champ?.id ?? null) !== (tt.champion_team_id ?? null)) await supabase.from('tournaments').update({ champion_team_id: champ?.id ?? null }).eq('id', id);
+    }
   }
 }

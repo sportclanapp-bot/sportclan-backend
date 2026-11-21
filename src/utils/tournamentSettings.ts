@@ -499,6 +499,10 @@ export type TournamentSettings = {
   awards?: PickedAward[];
   /** Stage 8 · F8: teams still level after every tie-break, in the order a draw of lots put them (by group label, '' for one table). */
   lots?: Record<string, string[]>;
+  /** Q31 (Dipak chose B): decider matches for two teams level on every tie-break — a match outside the
+   *  tables and brackets (tournament_id null) whose winner goes first in that group's draw-of-lots order.
+   *  `applied` = the winner already written into `lots`; `closed` = a draw by hand took over. */
+  deciders?: Decider[];
   /** Stage 8: groups → knockout — how many best next-placed teams go through besides the top `qualifiers_per_group` (null: as many as fill the byes). */
   bestNext?: number;
   /**
@@ -905,13 +909,15 @@ export function changedDrawKey(current: TournamentSettings, incoming: Record<str
   return null;
 }
 
+export type Decider = { group: string; match_id: string; team_ids: string[]; applied?: string; closed?: boolean };
+
 /** A tournament row's settings, or an empty v1 object. Never throws. */
 export function settingsOf(t: { settings?: unknown } | null | undefined): TournamentSettings {
   const s = t?.settings;
   return (s && typeof s === 'object' && !Array.isArray(s) ? s : { v: 1 }) as TournamentSettings;
 }
 
-const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'bestNext', 'discipline', 'squad', 'waitlist', 'qualifying', 'consolation', 'ladder', 'box', 'directSeeds', 'doubleElim', 'genderMarks']); // Stage 14 follow-up: genderMarks (kept as stored; written by its own endpoint)
+const KNOWN_KEYS = new Set(['v', 'points', 'bestThirds', 'seeding', 'walkoverScore', 'restMinutes', 'entry', 'thirdPlace', 'separateClubs', 'category', 'swiss', 'graceMinutes', 'minPlayers', 'tieFallback', 'withdrawnResults', 'awards', 'lots', 'deciders', 'bestNext', 'discipline', 'squad', 'waitlist', 'qualifying', 'consolation', 'ladder', 'box', 'directSeeds', 'doubleElim', 'genderMarks']); // Stage 14 follow-up: genderMarks (kept as stored; written by its own endpoint)
 
 /** Why a settings object (whole, or a partial edit of one) can't be stored. */
 export function settingsRefusal(sport: string | null | undefined, format: string | null | undefined, s: unknown): Refusal | null {
@@ -1079,6 +1085,9 @@ export function storedSettings(s: Record<string, any> | null | undefined, curren
   if ('lots' in s) {
     if (s.lots && Object.keys(s.lots).length) out.lots = s.lots; else delete out.lots;
   }
+  if ('deciders' in s) { // Q31
+    if (Array.isArray(s.deciders) && s.deciders.length) out.deciders = s.deciders; else delete out.deciders;
+  }
   if ('directSeeds' in s) { // Stage 10 · TT2
     if (s.directSeeds) out.directSeeds = Number(s.directSeeds); else delete out.directSeeds;
   }
@@ -1124,6 +1133,9 @@ function stage8Refusal(format: string | null | undefined, o: Record<string, any>
     for (const v of Object.values(o.lots)) {
       if (!Array.isArray(v) || v.some((x) => typeof x !== 'string') || new Set(v).size !== v.length) return refuse('A draw of lots lists each team once.');
     }
+  }
+  if (o.deciders != null) { // Q31: written by POST /tournaments/:id/decider; kept as it is when the settings come back whole
+    if (!Array.isArray(o.deciders) || o.deciders.some((d: any) => !d || typeof d !== 'object' || typeof d.match_id !== 'string' || typeof d.group !== 'string' || !Array.isArray(d.team_ids))) return refuse('A decider match is a group, its match and its two teams.');
   }
   if (o.waitlist != null && typeof o.waitlist !== 'boolean') return refuse('A waitlist is on or off.'); // Stage 9 · T13
   // Stage 9 · T7 / T8: a qualifying or consolation draw of another event (the server checks it's a sibling).

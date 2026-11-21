@@ -3,6 +3,7 @@ import { BOARD_PREVIEW } from '../utils/sportLeaders';
 import { deleteMatching } from '../utils/softDelete';
 import { allRows, selectAll, selectAllIn } from '../utils/selectAll';
 import { rankExtrasFor } from '../utils/rankExtras';
+import { applyDeciders } from './decider.controller';
 import { sportBoards, type SportLeaderMatch, type Board } from '../utils/sportLeaders';
 import { hideTestFor, excludeTest, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
@@ -38,10 +39,13 @@ export async function getTournamentStandings(req: Request, res: Response) {
     const { id } = req.params;
     const { data: tournament } = await supabase
       .from('tournaments')
-      .select('id, sport_id, format, tiebreaker_rules, qualifiers_per_group, settings, fixtures_generated')
+      .select('id, sport_id, format, tiebreaker_rules, qualifiers_per_group, settings, fixtures_generated, status, champion_team_id')
       .eq('id', id)
       .maybeSingle();
     if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+    // Q31: a finished decider match puts its winner first in the draw of lots (once) before the table is ranked.
+    const decided = await applyDeciders(tournament as any).catch(() => null);
+    if (decided) (tournament as any).settings = decided.settings;
 
     // SC-377: which entries belong in a points table.
     //   · 'pending'  — NOT an entrant yet. Fixtures are generated from approved
@@ -244,7 +248,7 @@ export async function getTournamentStandings(req: Request, res: Response) {
 
     // SC-268: sport slug → the FE picks the secondary standings column
     // (NRR cricket · GD football/hockey · PD basketball · none for rally/carrom).
-    return res.json({ standings: aliased, isCricket, sportSlug: sport?.slug ?? null, level, by_lot: byLot, ...(bestNext ? { best_next: bestNext } : {}) });
+    return res.json({ standings: aliased, isCricket, sportSlug: sport?.slug ?? null, level, by_lot: byLot, deciders: tournament.format === 'ladder' ? [] : decided?.view ?? [], ...(bestNext ? { best_next: bestNext } : {}) });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

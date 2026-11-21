@@ -444,6 +444,28 @@ export async function addTournamentOfficial(req: Request, res: Response) {
   }
 }
 
+/**
+ * Q40 (Dipak, 21 Nov 2026: A) · N-R6-E109: an official removed from a tournament (or stepping down)
+ * comes off the umpire / scorer seat of every fixture not yet finished (scheduled or live) in it and
+ * its events; the organiser names someone else. Finished fixtures keep who officiated them. Only when
+ * no other official role of theirs in the tournament remains. Returns how many seats were cleared.
+ */
+export async function clearRemovedOfficialSeats(rootId: string, officialUserId: string): Promise<number> {
+  const { data: still } = await supabase.from('tournament_officials').select('id')
+    .eq('tournament_id', rootId).eq('user_id', officialUserId).limit(1);
+  if ((still ?? []).length > 0) return 0;
+  const { data: events } = await supabase.from('tournaments').select('id').eq('parent_id', rootId);
+  const family = [rootId, ...((events ?? []) as Array<{ id: string }>).map((e) => e.id)];
+  let cleared = 0;
+  for (const seat of ['umpire_id', 'scorer_id'] as const) {
+    const { data } = await supabase.from('matches').update({ [seat]: null })
+      .in('tournament_id', family).eq(seat, officialUserId).in('status', ['scheduled', 'live'])
+      .select('id');
+    cleared += (data ?? []).length;
+  }
+  return cleared;
+}
+
 export async function removeTournamentOfficial(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -465,7 +487,8 @@ export async function removeTournamentOfficial(req: Request, res: Response) {
     }
 
     await deleteMatching('tournament_officials', (q) => q.eq('id', officialId).eq('tournament_id', id), userId, 'removed by an organiser'); // audit #25
-    return res.json({ success: true });
+    const fixturesCleared = await clearRemovedOfficialSeats(id, official.user_id as string);
+    return res.json({ success: true, fixtures_cleared: fixturesCleared });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });
   }

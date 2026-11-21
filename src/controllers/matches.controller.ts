@@ -30,7 +30,7 @@ import { supabase } from '../utils/supabase';
 import { DB_UNAVAILABLE, DB_UNAVAILABLE_STATUS } from '../utils/dbUnavailable';
 import { calculateElo } from '../utils/ratingEngine';
 import { notifyUser, notifyUsers, matchAudienceIds, matchFollowerIds, withMatchCreator } from '../utils/notify';
-import { isTournamentOrganiser, canOfficiateMatch, canDefault, tournamentOrganiserIds } from '../utils/tournamentAuth';
+import { isTournamentOrganiser, canOfficiateMatch, canDefault, canGiveWalkover, tournamentOrganiserIds } from '../utils/tournamentAuth';
 import { familyLookupIds } from '../utils/tournamentEvents';
 import { blockedUserIds } from '../utils/blocks';
 import { upsertVenue, venueCityFor } from './venues.controller';
@@ -2053,6 +2053,8 @@ export async function getMatch(req: Request, res: Response) {
     // N-R7-S33: who may give a walkover / default here (completeMatch's rule), so the app offers it to them only.
     // (a tournament's referee may give one without officiating the fixture; asked only while it can still be given)
     matchWithRating.can_default = !!userId && (match.status === 'scheduled' || match.status === 'live') && (await canDefault(match as never, userId));
+    // Q41: a walkover is the organiser's or the umpire's only (the app's Walkover button reads this).
+    matchWithRating.can_walkover = !!userId && (match.status === 'scheduled' || match.status === 'live') && (await canGiveWalkover(match as never, userId));
     // Audit #35/#36: Cancel and Void by the same rules cancelMatch and
     // voidMatch enforce, so the app offers them to exactly who may use them —
     // Cancel: the organiser (a tournament fixture) or the creator, before it's
@@ -3338,7 +3340,8 @@ export async function completeMatch(req: Request, res: Response) {
     // the match state via a 400.
     // N-R7-S24: a tournament's chief / deputy referee (or a sector arbiter) gives walkovers and
     // defaults on any fixture (canDefault) — they were stopped here before canDefault was asked.
-    if (!system && !(await canOfficiateMatch(match, userId)) && !((walkoverIn === true || defaulted) && !!match.tournament_id && (await canDefault(match, userId)))) {
+    // Q41: a walkover is no longer theirs — only a default is (below).
+    if (!system && !(await canOfficiateMatch(match, userId)) && !(defaulted && !!match.tournament_id && (await canDefault(match, userId)))) {
       return res.status(403).json({ error: match.tournament_id ? 'Only a tournament organiser or the umpire can complete' : 'Only the creator or umpire can complete' });
     }
     if (defaulted && !(await canDefault(match, userId))) {
@@ -3346,8 +3349,10 @@ export async function completeMatch(req: Request, res: Response) {
     }
     // N-R7-S33: a walkover on a tournament fixture is the referee's, the umpire's or the organiser's
     // decision — a plain tournament scorer could give one through the API though the app keeps it from them.
-    if (!system && walkoverIn === true && !retired && !defaulted && !!match.tournament_id && !(await canDefault(match, userId))) {
-      return res.status(403).json({ error: 'Only the referee, the umpire or the organiser can give a walkover.', code: 'NOT_REFEREE_WALKOVER' });
+    // Q41 (Dipak, 21 Nov 2026: A) · N-R6-E121: the organiser or the umpire gives a walkover; a
+    // referee who doesn't score the fixture no longer does (the rule no screen used is dropped).
+    if (!system && walkoverIn === true && !retired && !defaulted && !!match.tournament_id && !(await canGiveWalkover(match, userId))) {
+      return res.status(403).json({ error: 'Only the umpire or the organiser can give a walkover.', code: 'NOT_REFEREE_WALKOVER' });
     }
     // N-R7-S176 (Step 2 FINAL, REG-014): a deactivated sport (kabaddi, athletics) takes no result at all —
     // live scoring and a typed score refuse it (SC-335, audit #14), and so does completing it (typed result,

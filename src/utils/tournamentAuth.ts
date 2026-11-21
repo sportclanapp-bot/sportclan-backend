@@ -150,6 +150,18 @@ export async function canDefault(
   return (data ?? []).length > 0;
 }
 
+/**
+ * Q41 (Dipak, 21 Nov 2026: A) · N-R6-E121: who may give a WALKOVER on a fixture: the organiser (a
+ * casual match: its creator) or the match's umpire. A tournament's referees who don't score it are
+ * not asked any more (canDefault keeps them for a default / disqualification during play).
+ */
+export async function canGiveWalkover(
+  match: { tournament_id?: string | null; created_by?: string | null; umpire_id?: string | null; scorer_id?: string | null },
+  userId: string,
+): Promise<boolean> {
+  return canOfficiateMatch(match, userId, { scorers: false });
+}
+
 /** Stage 12 · CH2 · a Swiss takes late entries while it has rounds still to pair (they score nothing — or half — for the rounds missed). */
 export function swissTakesLateEntries(t: { format?: string | null; settings?: unknown }): boolean {
   if (t.format !== 'swiss') return false;

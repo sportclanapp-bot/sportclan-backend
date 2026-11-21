@@ -9,7 +9,8 @@ import path from 'path';
 
 const src = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
 test('completeMatch refuses a plain scorer\'s walkover on a tournament fixture', () => {
-  expect(src).toContain("if (!system && walkoverIn === true && !retired && !defaulted && !!match.tournament_id && !(await canDefault(match, userId))) {");
+  // Step 3 Q41: the walkover check is canGiveWalkover now (organiser or umpire; no referee).
+  expect(src).toContain("if (!system && walkoverIn === true && !retired && !defaulted && !!match.tournament_id && !(await canGiveWalkover(match, userId))) {");
   expect(src).toContain("code: 'NOT_REFEREE_WALKOVER'");
 });
 test('the match page carries can_default', () => {

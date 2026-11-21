@@ -1,5 +1,5 @@
 /**
- * F034 (launch test plan, Round 1) · the sign-in limiters (5 codes an hour, 20 sign-in
+ * F034 (launch test plan, Round 1) · the sign-in limiters (5 codes an hour then, 50 since Q13; 20 sign-in
  * tries in 15 minutes from one connection) answered with express-rate-limit's default
  * HTML 'Too many requests, please try again later.' — no code, no wait — so the app
  * showed 'Request failed with status code 429'. They now answer a sentence with the wait.
@@ -28,7 +28,8 @@ it('codes: JSON with a code and the wait in minutes', async () => {
   const r = await hit('otp', 2);
   expect(r.status).toBe(429);
   expect(r.body).toMatchObject({ code: 'OTP_IP_LIMIT' });
-  expect(r.body.error).toMatch(/^Too many codes asked for from this connection\. Try again in (\d+) minutes\.$/);
+  // Q13 (21 Nov 2026): clearer words (was 'Too many codes asked for from this connection.')
+  expect(r.body.error).toMatch(/^Many sign-in codes were asked for on this Wi-Fi or network in the last hour\. Try again in (\d+) minutes\. Or switch to mobile data, or sign in with your email and password\.$/);
   expect(Number(r.retry)).toBeGreaterThan(60);
 });
 it('sign-in tries: JSON with a code and the wait', async () => {

@@ -283,7 +283,7 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   // BUILD 3.45: 15 a game capped at 21 (BAI from July 2026, BWF from 4 Jan 2027).
   // A match stored without rules still plays 21 / 30 — see rulesFromLegacy.
   badminton: { players: null, bestOf: 3, target: 15, cap: 21, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.47: players 2 = doubles; 3.49 rubbers; Stage 11 · PB9 timed
-  tabletennis: { bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.54 rubbers; Stage 11 · PB9 timed
+  tabletennis: { players: null, bestOf: 5, target: 11, cap: null, finalTarget: null, winBy2: true, rubbers: null, penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.54 rubbers; Stage 11 · PB9 timed
   pickleball: { players: null, bestOf: 3, target: 11, cap: null, finalTarget: null, winBy2: true, scoring: 'rally', penaltyLadder: null, tie: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point' }, // BUILD 3.58: side-out; players 2 = doubles; Stage 11 · PB9 timed
   // Stage 14 · VB2 / VB4 / VB7 / VB12: 6 subs a set back to the same spot, 2 liberos, the indoor court change, no PVL extras.
   volleyball: { players: null, bestOf: 5, target: 25, cap: null, finalTarget: 15, winBy2: true, timeoutsPerSet: 2, penaltyLadder: null, allGames: false, timeLimitMinutes: null, timedLevel: 'next_point', maxSubs: 6, subsPer: 'set', reentry: 'same_spot', liberos: 2, sideSwitchEvery: null, decidingSwitchEvery: null, superPoint: false, superPointBefore: 11, superServe: false, minWomen: null, tie: null }, // Stage 15 · BB6: a series // Stage 11 · PB9 timed
@@ -908,6 +908,13 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   if (key === 'badminton' && r.players !== null && r.players !== DOUBLES_PLAYERS) {
     return refuse('Badminton players a side is 2 (doubles), or not set for singles.', 'players');
   }
+  // Q26 (Dipak, 21 Nov 2026): table tennis doubles too (the pad shows who serves to whom).
+  if (key === 'tabletennis' && r.rubbers != null && r.players != null) {
+    return refuse('A team tie mixes singles and doubles rubbers — leave players a side unset.', 'players');
+  }
+  if (key === 'tabletennis' && r.players !== null && r.players !== DOUBLES_PLAYERS) {
+    return refuse('Table tennis players a side is 2 (doubles), or not set for singles.', 'players');
+  }
   // BUILD 3.16 / 3.26: players a side — football 3–11, hockey 4–11 (null = not set).
   const side = SIDE_LIMITS[key];
   if (side && r.players !== null && (!isWhole(r.players) || r.players < side[0])) { // Stage 13 · CR3: no top
@@ -1294,7 +1301,7 @@ export const isBeachVolleyball = (sport: string, rules: { players?: number | nul
  * (singles, other sports) are never refused here.
  */
 /** F071 (launch test plan): the sports whose doubles is two a side (it held only badminton). */
-export const DOUBLES_SPORTS: readonly string[] = ['badminton', 'tennis', 'pickleball', 'carrom']; // N-R7-196: carrom doubles too
+export const DOUBLES_SPORTS: readonly string[] = ['badminton', 'tennis', 'tabletennis', 'pickleball', 'carrom']; // N-R7-196: carrom doubles too · Q26: table tennis
 
 export function doublesLineupProblem(
   sport: string | null | undefined,
@@ -1363,7 +1370,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
   if (RALLY_LIMITS[key]) {
     const std = SPORT_RULES[key] ?? {};
     if (rules.rubbers) parts.push(key === 'tabletennis' && TT_TIES[rules.rubbers] ? `${TT_TIES[rules.rubbers]!.name} · ${rules.rubbers} rubbers` : `team tie · ${rules.rubbers} rubbers`); // BUILD 3.49 / 3.54
-    if (rules.players) parts.push(key === 'badminton' || key === 'pickleball' ? 'doubles' : `${rules.players}-a-side`); // BUILD 3.40 / 3.47 / 3.58
+    if (rules.players) parts.push(key === 'badminton' || key === 'pickleball' || key === 'tabletennis' ? 'doubles' : `${rules.players}-a-side`); // BUILD 3.40 / 3.47 / 3.58
     if (rules.target != null && rules.target !== std.target) parts.push(`${RALLY_LIMITS[key]!.unit ?? 'set'}s to ${rules.target}`); // BUILD 3.44: badminton plays games
     if (rules.cap !== undefined && rules.cap !== std.cap) parts.push(rules.cap == null ? 'no cap' : `cap ${rules.cap}`); // BUILD 3.39
     if (key === 'pickleball' && rules.scoring === 'sideout') parts.push('side-out scoring'); // BUILD 3.58

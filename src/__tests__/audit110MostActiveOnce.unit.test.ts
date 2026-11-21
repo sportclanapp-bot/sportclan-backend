@@ -27,6 +27,7 @@ const mockDeleted = new Set<string>();
 jest.mock('../utils/activeUser', () => ({
   excludeDeleted: jest.fn((q: unknown) => q), excludeDeletedEmbed: jest.fn((q: unknown) => q),
   deletedIdSet: jest.fn(async (ids: string[]) => new Set(ids.filter((i) => mockDeleted.has(i)))),
+  suspendedIdSet: jest.fn(async () => new Set<string>()), // Q19 + Q46
 }));
 // eslint-disable-next-line import/first
 import { getPlayerOfWeek } from '../controllers/features.controller';

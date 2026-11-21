@@ -62,3 +62,22 @@ export async function deletedIdSet(ids: string[]): Promise<Set<string>> {
     .not('deleted_at', 'is', null);
   return new Set((data || []).map((u: { id: string }) => u.id));
 }
+
+/**
+ * Q19 + Q46 (Dipak, 21 Nov 2026): a suspended account is left out of Services,
+ * Rankings and their counts until the suspension is lifted (its past matches and
+ * results stay). The subset of ids that are suspended now, for the in-JS lists.
+ */
+export async function suspendedIdSet(ids: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const out = new Set<string>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const { data } = await supabase
+      .from('users')
+      .select('id')
+      .in('id', ids.slice(i, i + 500))
+      .not('suspended_at', 'is', null);
+    for (const u of data || []) out.add((u as { id: string }).id);
+  }
+  return out;
+}

@@ -40,6 +40,7 @@ async function officialsFor(viewerId: string | undefined, cityId: string | null)
   const rows = await selectAll<any>((from, to) => {
     let q = supabase.from('user_account_types').select(PROVIDER_EMBED)
       .in('account_type', [...OFFICIAL_TYPES]).is('users.deleted_at', null)
+      .is('users.suspended_at', null) // Q19 + Q46: hidden while suspended
       .order('user_id', { ascending: true }).order('account_type', { ascending: true }).range(from, to);
     q = excludeIds(q, 'user_id', blocked);
     if (hide) q = excludeTestEmbed(q, 'users');
@@ -121,6 +122,8 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
     .eq('account_type', type)
     // SC-77: `!inner` above means this drops the PROVIDER row, not just the name.
     .is('users.deleted_at', null)
+    // Q19 + Q46 (Dipak, 21 Nov 2026): a suspended account is not offered (nor counted) until lifted.
+    .is('users.suspended_at', null)
     // SC-434: this used to be `.eq('users.is_premium', true)` — a coach or umpire
     // who had not paid did not appear in the directory at all. Every provider is
     // listed now.
@@ -156,7 +159,8 @@ router.get('/counts', authenticateToken, async (req: Request, res: Response) => 
       .from('user_account_types')
       .select('user_id, users:user_id!inner(id, city_id)', { count: 'exact', head: true })
       .eq('account_type', type)
-      .is('users.deleted_at', null);
+      .is('users.deleted_at', null)
+      .is('users.suspended_at', null); // Q19 + Q46: the count is what the list shows
     q = excludeIds(q, 'user_id', blocked);
     if (hide) q = excludeTestEmbed(q, 'users');
     if (cityId) q = q.eq('users.city_id', cityId);

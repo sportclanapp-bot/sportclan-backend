@@ -20,7 +20,7 @@ import { REMINDER_LEAD_MS, REMINDER_TICK_MS, REMINDER_CATCHUP_MS, matchReminderB
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { countsForUser, countParticipantsByMatch } from '../utils/matchCounts';
 import { plural } from '../utils/plural';
-import { deletedIdSet } from '../utils/activeUser';
+import { deletedIdSet, suspendedIdSet } from '../utils/activeUser';
 import { blockedUserIds, targetUserHidden } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
 import { getSport, normSportSlug } from '../utils/sportCache';
@@ -714,7 +714,7 @@ export async function getPlayerOfWeek(req: Request, res: Response) {
     // N-RWG4-15: per viewer, on every read — their blocks (either way), and
     // accounts deleted since the list was built.
     const ids = [...new Set(candidates.map((c) => c.user_id))];
-    const [blocked, deletedNow] = await Promise.all([blockedUserIds(req.userId), deletedIdSet(ids)]);
+    const [blocked, deletedNow, suspendedNow] = await Promise.all([blockedUserIds(req.userId), deletedIdSet(ids), suspendedIdSet(ids)]); // Q19 + Q46: and suspended
 
     // Top per sport
     // Audit #110: one card per PERSON too — someone top in three sports showed
@@ -724,7 +724,7 @@ export async function getPlayerOfWeek(req: Request, res: Response) {
     const shownPeople = new Set<string>();
     const top: PotwCandidate[] = [];
     for (const c of candidates) {
-      if (blocked.has(c.user_id) || deletedNow.has(c.user_id)) continue;
+      if (blocked.has(c.user_id) || deletedNow.has(c.user_id) || suspendedNow.has(c.user_id)) continue;
       if (seen.has(c.sport_id) || shownPeople.has(c.user_id)) continue;
       seen.add(c.sport_id);
       shownPeople.add(c.user_id);
@@ -766,8 +766,9 @@ async function potwCandidates(hide: boolean): Promise<PotwCandidate[]> {
   // Score = wins×3 + matches_played×1 + rating×0.01
   // B02-F6: deleted accounts go before the per-sport pick too — dropped after
   // it, a sport whose top scorer had deleted their account lost its card.
-  const deletedIds = await deletedIdSet([...new Set(profiles.map((p) => p.user_id as string))]);
-  const scored = profiles.filter((p) => !testIds.has(p.user_id as string) && !deletedIds.has(p.user_id as string)).map((p) => ({
+  const profileIds = [...new Set(profiles.map((p) => p.user_id as string))];
+  const [deletedIds, suspendedIds] = await Promise.all([deletedIdSet(profileIds), suspendedIdSet(profileIds)]); // Q19 + Q46
+  const scored = profiles.filter((p) => !testIds.has(p.user_id as string) && !deletedIds.has(p.user_id as string) && !suspendedIds.has(p.user_id as string)).map((p) => ({
     ...p,
     score: (p.wins ?? 0) * 3 + (p.matches_played ?? 0) * 1 + (p.rating ?? 0) * 0.01,
   }));

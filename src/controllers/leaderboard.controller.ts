@@ -2,7 +2,7 @@ import { selectAll } from '../utils/selectAll';
 import { hideTestFor, testUserIdSet } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
-import { deletedIdSet } from '../utils/activeUser';
+import { deletedIdSet, suspendedIdSet } from '../utils/activeUser';
 import { blockedUserIds } from '../utils/blocks';
 import { resolveSportId } from '../utils/sportId';
 import { isSportInactive } from '../utils/sports';
@@ -103,7 +103,8 @@ export async function getLeaderboard(req: Request, res: Response) {
     // N-R7-S107: the user is always joined, so a soft-deleted account leaves the ALL-TIME
     // ranking in the query (as the monthly one drops it before numbering): no gap in the ranks,
     // a full page, and a total that counts only the players shown.
-    const TU = ', tu:users!user_id!inner(is_test_seed, deleted_at)';
+    // Q19 + Q46: a suspended account is not ranked either, until the suspension is lifted.
+    const TU = ', tu:users!user_id!inner(is_test_seed, deleted_at, suspended_at)';
     // A plain `string` (not a literal) so the typed select parser doesn't try to read TU.
     const withTU = (cols: string): string => cols + TU;
     if (scope === 'city') {
@@ -161,6 +162,9 @@ export async function getLeaderboard(req: Request, res: Response) {
       // SC-78: drop soft-deleted accounts from the ranking entirely.
       const delMonthly = await deletedIdSet(ranked.map((r) => r.user_id));
       if (delMonthly.size > 0) ranked = ranked.filter((r) => !delMonthly.has(r.user_id));
+      // Q19 + Q46: suspended accounts too, before the ranks are numbered.
+      const susMonthly = await suspendedIdSet(ranked.map((r) => r.user_id));
+      if (susMonthly.size > 0) ranked = ranked.filter((r) => !susMonthly.has(r.user_id));
       // B03: the monthly ranking is built here in JS, so test ids drop out here
       // too — before the ranks are numbered.
       if (hideTest) {
@@ -196,6 +200,7 @@ export async function getLeaderboard(req: Request, res: Response) {
       let qb: any = (q as any).eq('sport_id', sportId).gt('matches_played', 0);
       if (hideTest) qb = qb.eq('tu.is_test_seed', false); // B03: needs TU in the select
       qb = qb.is('tu.deleted_at', null); // N-R7-S107: deleted accounts are not ranked (needs TU)
+      qb = qb.is('tu.suspended_at', null); // Q19 + Q46: nor suspended ones (needs TU)
       if (genderCategory) qb = qb.eq('gender_category', genderCategory);
       if (cityUserIds) qb = qb.in('user_id', cityUserIds);
       return qb as T;

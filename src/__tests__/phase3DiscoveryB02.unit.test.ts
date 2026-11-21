@@ -37,6 +37,7 @@ const mockDeleted = new Set<string>();
 jest.mock('../utils/activeUser', () => ({
   excludeDeleted: jest.fn((q: unknown) => q), excludeDeletedEmbed: jest.fn((q: unknown) => q),
   deletedIdSet: jest.fn(async (ids: string[]) => new Set(ids.filter((i) => mockDeleted.has(i)))),
+  suspendedIdSet: jest.fn(async () => new Set<string>()), // Q19 + Q46
 }));
 jest.mock('../utils/sportId', () => ({ resolveSportId: jest.fn(async (s: string) => (s === 'cricket' ? '22222222-2222-4222-8222-222222222222' : undefined)) }));
 jest.mock('../utils/sports', () => ({ isSportInactive: jest.fn(async () => false), activeSportIds: jest.fn(async () => []) }));

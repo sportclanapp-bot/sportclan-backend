@@ -303,6 +303,22 @@ export async function getBannedForMatch(req: Request, res: Response) {
   }
 }
 
+/** F3 / Q66 · more starters (not marked 'sub') on a side than the players a side, or null. */
+function tooManyStarters(
+  incoming: Array<{ user_id: string; team_side: 'A' | 'B'; role?: string | null }>,
+  current: Array<{ user_id: string; team_side: string; role?: string | null }>,
+  sport: string, playersASide: number | null | undefined, sideName: { A: string; B: string },
+): { error: string; code: string } | null {
+  if (!playersASide || !['football', 'hockey', 'basketball', 'volleyball'].includes(sport)) return null;
+  const merged = new Map(current.map((c) => [c.user_id, c]));
+  for (const p of incoming) merged.set(p.user_id, { user_id: p.user_id, team_side: p.team_side, role: p.role ?? null });
+  for (const side of ['A', 'B'] as const) {
+    const starters = [...merged.values()].filter((c) => c.team_side === side && c.role !== 'sub').length;
+    if (starters > playersASide) return { error: `${sideName[side]} have ${starters} starting — it’s ${playersASide} a side. Mark the rest as subs.`, code: 'TOO_MANY_STARTERS' };
+  }
+  return null;
+}
+
 /**
  * F3 · a team sheet's problem, or null: a player not in their team's saved
  * squad, or more starters (not marked 'sub') than the players a side the rules
@@ -315,9 +331,12 @@ export async function teamSheetProblem(
   current: Array<{ user_id: string; team_side: string; role?: string | null }>,
   sport: string, playersASide: number | null | undefined,
 ): Promise<{ error: string; code: string } | null> {
-  if (!match.tournament_id) return null;
   const sideTeam = { A: match.team_a_id ?? null, B: match.team_b_id ?? null };
   const sideName = { A: match.team_a_name ?? 'Team A', B: match.team_b_name ?? 'Team B' };
+  // Q66 (Dipak, 21 Nov 2026: A): a casual match refuses more starters than the players a side too
+  // (same words as a tournament fixture); subs work as before. The squad and women-on-court rules
+  // below stay a tournament's.
+  if (!match.tournament_id) return tooManyStarters(incoming, current, sport, playersASide, sideName);
   for (const side of ['A', 'B'] as const) {
     const team = sideTeam[side];
     if (!team) continue;
@@ -330,14 +349,8 @@ export async function teamSheetProblem(
       return { error: `${nm.get(out.user_id) ?? 'That player'} isn’t in ${possessive(sideName[side])} squad.`, code: 'NOT_IN_SQUAD' };
     }
   }
-  if (playersASide && ['football', 'hockey', 'basketball', 'volleyball'].includes(sport)) {
-    const merged = new Map(current.map((c) => [c.user_id, c]));
-    for (const p of incoming) merged.set(p.user_id, { user_id: p.user_id, team_side: p.team_side, role: p.role ?? null });
-    for (const side of ['A', 'B'] as const) {
-      const starters = [...merged.values()].filter((c) => c.team_side === side && c.role !== 'sub').length;
-      if (starters > playersASide) return { error: `${sideName[side]} have ${starters} starting — it’s ${playersASide} a side. Mark the rest as subs.`, code: 'TOO_MANY_STARTERS' };
-    }
-  }
+  const crowd = tooManyStarters(incoming, current, sport, playersASide, sideName);
+  if (crowd) return crowd;
   // Stage 14 · VB11: a co-ed event's women on court — each side's starters (not marked 'sub'), by their profiles.
   const t = await loadT(match.tournament_id);
   const cat = t ? settingsOf(t as { settings?: unknown }).category : null;

@@ -2567,7 +2567,8 @@ export async function addParticipants(req: Request, res: Response) {
       }
     }
     // Stage 8 · F3: a team with a saved squad plays from it, and starters fit the players a side.
-    if (match.tournament_id) {
+    // Q66: a casual match's starters fit the players a side too (teamSheetProblem says what applies).
+    {
       const { data: cur } = await supabase.from('match_participants').select('user_id, team_side, role').eq('match_id', id);
       const curKept = ((cur ?? []) as Array<{ user_id: string; role?: string | null }>).filter((r) => !replace || staysOnReplace(r));
       const problem = await teamSheetProblem(match as never, participants as never, curKept as never, lineupSlug, rulesOf(lineupSlug, match).players);

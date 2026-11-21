@@ -158,6 +158,7 @@ export async function syncTournamentChatsForTeam(teamId: string): Promise<void> 
  * changes nothing and so syncs nothing.
  */
 export function syncAfterSuccess(res: Response, run: () => Promise<unknown>): void {
+  if (typeof (res as { once?: unknown }).once !== 'function') return; // a bare test stand-in
   res.once('finish', () => {
     if (res.statusCode < 300) void run();
   });

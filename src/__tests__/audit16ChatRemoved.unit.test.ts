@@ -21,7 +21,7 @@ const call = async (userId: string) => {
   return r;
 };
 
-describe('audit #16: a removal from the match chat sticks', () => {
+describe('audit #16 (Step 3 Q38: a match chat follows the match)', () => {
   beforeEach(() => {
     db = fakeDb({
       matches: [{ id: M, chat_id: C, team_a_name: 'A', team_b_name: 'B', created_by: 'admin', umpire_id: null }],
@@ -34,12 +34,13 @@ describe('audit #16: a removal from the match chat sticks', () => {
       ],
     });
   });
-  it('removed by the admin → opening the match chat is refused, still out', async () => {
+  // Step 3 Q38 (Dipak, 21 Nov 2026: A): a match's chat follows the match — nobody removes anyone by
+  // hand (MATCH_CHAT), so a player still in the match is in its chat (an old hand removal is undone).
+  it('Q38: a player still in the match who was once removed by hand is back in its chat', async () => {
     await leaveChat(C, ['kicked'], { removedBy: 'admin' });
     const r = await call('kicked');
-    expect(r.statusCode).toBe(403);
-    expect(r.body.code).toBe('REMOVED_FROM_CHAT');
-    expect(await wasRemovedFromChat(C, 'kicked')).toBe(true);
+    expect(r.statusCode).toBe(200);
+    expect(await wasRemovedFromChat(C, 'kicked')).toBe(false);
   });
   it('someone who left on their own can come back', async () => {
     await leaveChat(C, ['leaver']);

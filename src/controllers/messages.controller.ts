@@ -13,6 +13,7 @@ import { parsePagination, pageMeta } from '../utils/pagination';
 import { isActiveMember, leaveChat, joinChat, softDeleteChat } from '../utils/chatMembership';
 import { pushChatMessage } from '../utils/chatPush';
 import { taggableBy } from '../utils/tagPrivacy';
+import { matchOfChat, MATCH_CHAT, MATCH_LEAVE } from '../utils/matchChat';
 
 // ─── Phase 3 B09 · shared checks ─────────────────────────────────────────────
 /** The app's six reactions (ChatScreens) — nothing else is stored (B09-F10). */
@@ -352,7 +353,9 @@ export async function getChat(req: Request, res: Response) {
     .is('left_at', null)
     .eq('chat_id', id);
   const tournamentId = (chat as { is_group?: boolean }).is_group ? await tournamentOfChat(id) : null;
-  const full = { ...chat, participants: participants || [], tournament_id: tournamentId };
+  // Q38: a match's chat says so too (its members follow the match; the app hides the hand controls).
+  const matchId = (chat as { is_group?: boolean }).is_group && !tournamentId ? await matchOfChat(id) : null;
+  const full = { ...chat, participants: participants || [], tournament_id: tournamentId, match_id: matchId };
   return res.json({ data: full, chat: full });
 }
 
@@ -721,6 +724,7 @@ export async function addMember(req: Request, res: Response) {
   const notGroup = await notAGroup(id);
   if (notGroup) return res.status(notGroup.status).json(notGroup.body);
   if (await tournamentOfChat(id)) return res.status(409).json(TOURNAMENT_CHAT);
+  if (await matchOfChat(id)) return res.status(409).json(MATCH_CHAT); // Q38: a match's chat follows the match
 
   // Check admin
   const { data: participant } = await supabase
@@ -797,6 +801,7 @@ export async function removeMember(req: Request, res: Response) {
   const notGroup = await notAGroup(id);
   if (notGroup) return res.status(notGroup.status).json(notGroup.body);
   if (await tournamentOfChat(id)) return res.status(409).json(TOURNAMENT_CHAT);
+  if (await matchOfChat(id)) return res.status(409).json(MATCH_CHAT); // Q38: a match's chat follows the match
 
   const { data: participant } = await supabase
     .from('chat_participants')
@@ -840,6 +845,7 @@ export async function promoteMember(req: Request, res: Response) {
   const notGroup = await notAGroup(id);
   if (notGroup) return res.status(notGroup.status).json(notGroup.body);
   if (await tournamentOfChat(id)) return res.status(409).json(TOURNAMENT_CHAT);
+  if (await matchOfChat(id)) return res.status(409).json(MATCH_CHAT); // Q38: a match's chat follows the match
 
   const { data: participant } = await supabase
     .from('chat_participants')
@@ -877,6 +883,7 @@ export async function leaveGroup(req: Request, res: Response) {
   // E-127 (Round 6): a tournament's chat holds exactly its organisers and players (D7), so the next
   // sync put a leaver straight back — leaving never stuck. It's refused instead; muting still works.
   if (await tournamentOfChat(id)) return res.status(409).json(TOURNAMENT_LEAVE);
+  if (await matchOfChat(id)) return res.status(409).json(MATCH_LEAVE); // Q38
 
   // SC-301 (SC-243 sibling): if an ADMIN leaves, hand the group to an heir BEFORE
   // removing them — otherwise the group is left admin-less and becomes a
@@ -948,6 +955,7 @@ export async function deleteGroup(req: Request, res: Response) {
   const notGroup = await notAGroup(id);
   if (notGroup) return res.status(notGroup.status).json(notGroup.body);
   if (await tournamentOfChat(id)) return res.status(409).json(TOURNAMENT_CHAT);
+  if (await matchOfChat(id)) return res.status(409).json(MATCH_CHAT); // Q38: a match's chat follows the match
 
   const { data: chat } = await supabase
     .from('chats')

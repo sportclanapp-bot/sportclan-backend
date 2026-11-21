@@ -5,6 +5,8 @@ import { blockedUserIds } from '../utils/blocks';
 import { isUuid } from '../utils/uuid';
 import { excludeDeletedEmbed } from '../utils/activeUser';
 import { sanitizeError } from '../utils/response';
+import { syncMatchChatMembers } from '../utils/matchChat';
+import { syncAfterSuccess } from '../utils/tournamentChat';
 
 // SC-279: match join request/approve — the match mirror of the team pattern
 // (SC-267 / migration 065). Casual OPEN matches only (tournament fixtures are
@@ -157,6 +159,8 @@ export async function listMatchJoinRequests(req: Request, res: Response) {
 
 // PATCH /matches/:id/join-requests/:userId  { status: 'approved' | 'rejected' }
 export async function decideMatchJoinRequest(req: Request, res: Response) {
+  // Q38: an approved player joins the match's chat.
+  if (req.params?.id) syncAfterSuccess(res, () => syncMatchChatMembers(String(req.params.id)));
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {

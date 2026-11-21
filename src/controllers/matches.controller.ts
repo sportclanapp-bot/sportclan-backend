@@ -14,7 +14,8 @@ import { sportSlugOf } from '../utils/sportSlug';
 import { plural } from '../utils/plural';
 import { selectAll, IN_CHUNK } from '../utils/selectAll';
 import { writeAbandonNotes } from '../utils/abandonNote';
-import { joinChat, wasRemovedFromChat } from '../utils/chatMembership';
+import { syncMatchChatMembers } from '../utils/matchChat';
+import { syncAfterSuccess } from '../utils/tournamentChat';
 import { attachTeamNames } from '../utils/teamNames';
 import { myScheduledMatches, pickNextMatch, myMatchesWithStatus, sortMyLive } from '../utils/nextMatch';
 import { hideTestFor, excludeTest } from '../utils/testContent';
@@ -1174,6 +1175,8 @@ export async function setMatchTossHandler(req: Request, res: Response) {
 // Inserts a match_participants row with team_side='A' (simple heuristic —
 // future iterations can balance sides automatically).
 export async function joinOpenMatch(req: Request, res: Response) {
+  // Q38: the match's chat follows its people (line-up, officials), once the change has gone through.
+  if (req.params?.id) syncAfterSuccess(res, () => syncMatchChatMembers(String(req.params.id)));
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
@@ -1306,6 +1309,8 @@ async function notifyMatchParticipation(
 // lineup-added participant (never decremented it) leaving bumps it by 1, an
 // accepted imprecision, not an invariant.
 export async function leaveMatch(req: Request, res: Response) {
+  // Q38: the match's chat follows its people (line-up, officials), once the change has gone through.
+  if (req.params?.id) syncAfterSuccess(res, () => syncMatchChatMembers(String(req.params.id)));
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
@@ -2447,6 +2452,8 @@ export function participantRowRefusal(rows: unknown[]): { error: string; code: s
 }
 
 export async function addParticipants(req: Request, res: Response) {
+  // Q38: the match's chat follows its people (line-up, officials), once the change has gone through.
+  if (req.params?.id) syncAfterSuccess(res, () => syncMatchChatMembers(String(req.params.id)));
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
@@ -2646,6 +2653,8 @@ export async function selfOfficiateMode(match: SelfOfficiateMatch, userId: strin
 // POST /matches/:id/umpire/offer { accept: boolean } — the casual match's creator
 // answers an offer to officiate (audit #5).
 export async function answerUmpireOffer(req: Request, res: Response) {
+  // Q38: the match's chat follows its people (line-up, officials), once the change has gone through.
+  if (req.params?.id) syncAfterSuccess(res, () => syncMatchChatMembers(String(req.params.id)));
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
@@ -2700,6 +2709,8 @@ export async function answerUmpireOffer(req: Request, res: Response) {
 }
 
 export async function selfAssignUmpire(req: Request, res: Response) {
+  // Q38: the match's chat follows its people (line-up, officials), once the change has gone through.
+  if (req.params?.id) syncAfterSuccess(res, () => syncMatchChatMembers(String(req.params.id)));
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
@@ -2841,6 +2852,8 @@ export async function selfAssignUmpire(req: Request, res: Response) {
 // officials are neutral: nobody who plays in it (UMPIRE_IS_PLAYER /
 // SCORER_IS_PLAYER), as for an umpire who picks a match up themselves.
 export async function setMatchOfficials(req: Request, res: Response) {
+  // Q38: the match's chat follows its people (line-up, officials), once the change has gone through.
+  if (req.params?.id) syncAfterSuccess(res, () => syncMatchChatMembers(String(req.params.id)));
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   try {
@@ -3005,7 +3018,7 @@ export async function getMatchChat(req: Request, res: Response) {
     const { id } = req.params;
     const { data: match } = await supabase
       .from('matches')
-      .select('id, chat_id, team_a_name, team_b_name, created_by, umpire_id')
+      .select('id, chat_id, team_a_name, team_b_name, created_by, umpire_id, scorer_id')
       .eq('id', id)
       .maybeSingle();
     if (!match) return res.status(404).json({ error: 'Match not found' });
@@ -3013,7 +3026,7 @@ export async function getMatchChat(req: Request, res: Response) {
     // SC-107: only people actually in this match may access its group chat.
     // Previously ANY authed user was silently inserted into the chat. Gate to
     // the creator, the umpire, or a registered match participant.
-    if (match.created_by !== userId && match.umpire_id !== userId) {
+    if (match.created_by !== userId && match.umpire_id !== userId && (match as { scorer_id?: string | null }).scorer_id !== userId) {
       const { data: participant } = await supabase
         .from('match_participants')
         .select('id')
@@ -3042,17 +3055,9 @@ export async function getMatchChat(req: Request, res: Response) {
       await supabase.from('chat_participants').insert({ chat_id: chatId, user_id: match.created_by, role: 'admin' });
       await supabase.from('matches').update({ chat_id: chatId }).eq('id', id);
     }
-    // Ensure the caller is a participant.
-    const { data: participant } = await supabase
-      .from('chat_participants').select('id').is('left_at', null).eq('chat_id', chatId).eq('user_id', userId).maybeSingle();
-    // Audit #16: someone the chat's admin removed isn't put back by opening it.
-    if (!participant && (await wasRemovedFromChat(chatId as string, userId))) {
-      return res.status(403).json({ error: 'You were removed from this match’s chat.', code: 'REMOVED_FROM_CHAT' });
-    }
-    if (!participant) {
-      // 098: rejoins a member who left (clears left_at) rather than inserting twice.
-      await joinChat(chatId as string, [{ user_id: userId, role: 'member' }]);
-    }
+    // Q38 (Dipak, 21 Nov 2026: A) · N-R6-E131: the chat holds exactly the match's people (the
+    // creator, the umpire and scorer, the line-up) — made so here, and on every change to them.
+    await syncMatchChatMembers(id);
     return res.json({ chat_id: chatId, name: chatName, conversationId: chatId });
   } catch {
     return res.status(500).json({ error: 'Internal server error' });

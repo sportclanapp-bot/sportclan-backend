@@ -101,7 +101,7 @@ describe('7 · a use is a match, not a repeat "Add venue"', () => {
     const path = await import('path');
     const v = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'venues.controller.ts'), 'utf8');
     const m = fs.readFileSync(path.join(__dirname, '..', 'controllers', 'matches.controller.ts'), 'utf8');
-    expect(v).toContain('await upsertVenue(clean, city_id || null, userId, { countUse: false, found });'); // F059: and says whether it was there
+    expect(v).toContain('await upsertVenue(clean, cityId, userId, { countUse: false, found });'); // F059: and says whether it was there
     // F194: with the match's city, or its creator's.
     expect(m).toContain("inBackground(venueCityFor(city_id, userId).then((cityId) => upsertVenue(cleanVenue, cityId, userId, { countUse: true })), 'upsertVenue');"); // audit #99
   });

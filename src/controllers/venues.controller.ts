@@ -116,7 +116,10 @@ export async function createVenue(req: Request, res: Response) {
   // Decision 7: adding a venue that already exists is not a use of it — only
   // a match created there counts (createMatch passes countUse).
   const found = { existing: false };
-  const row = await upsertVenue(clean, city_id || null, userId, { countUse: false, found });
+  // F194 / LIVE_SQL b160 (Step 3): Add venue with the city left empty saved a city-less venue too,
+  // so b160 found new ones. It takes its creator's city, like a venue typed into New match.
+  const cityId = city_id || (await venueCityFor(null, userId));
+  const row = await upsertVenue(clean, cityId, userId, { countUse: false, found });
   if (!row) return res.status(500).json({ error: 'Could not save that venue.' });
   // The same venue may already exist (upsert by name + city). Its details are
   // filled in where empty — never overwritten, since someone else may have

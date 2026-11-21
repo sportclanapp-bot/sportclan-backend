@@ -28,7 +28,7 @@ jest.mock('../utils/supabase', () => {
   return { supabase: { from: jest.fn((t: string) => start(`from:${t}`)), rpc: jest.fn((n: string, a?: unknown) => start(`rpc:${n}:${JSON.stringify(a ?? null)}`)) } };
 });
 // eslint-disable-next-line import/first
-import { venueCityFor, upsertVenue } from '../controllers/venues.controller';
+import { venueCityFor, upsertVenue, createVenue } from '../controllers/venues.controller';
 
 const ME = '11111111-1111-4111-8111-111111111111';
 const PUNE = '55555555-5555-4555-8555-555555555555';
@@ -95,5 +95,22 @@ describe('migration 160 · venues already saved without a city', () => {
   test('removes nothing and touches no other column', () => {
     expect(sql).not.toMatch(/\bDELETE\b|\bDROP\b|\bTRUNCATE\b/i);
     expect(sql.match(/\bSET\b/g)).toHaveLength(1);
+  });
+});
+
+describe('Add venue with no city (LIVE_SQL b160 found these)', () => {
+  test('the venue is saved with its creator’s city', async () => {
+    mockNext = (q) => {
+      if (q[0] === 'from:users') return { data: { city_id: PUNE } };
+      if (q[0].startsWith('rpc:')) return { data: [] };
+      if (q.some((c) => c.startsWith('insert:'))) return { data: { id: V, name: 'Shivaji Park', city_id: PUNE } };
+      return { data: [] };
+    };
+    const r: any = { statusCode: 200 };
+    r.status = (c: number) => { r.statusCode = c; return r; };
+    r.json = (b: unknown) => { r.body = b; return r; };
+    await createVenue({ userId: ME, body: { name: 'Shivaji Park' } } as any, r);
+    const ins = mockLog.find((q) => q.some((c) => c.startsWith('insert:')))!;
+    expect(ins.find((c) => c.startsWith('insert:'))).toContain(`"city_id":"${PUNE}"`);
   });
 });

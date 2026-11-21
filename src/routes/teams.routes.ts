@@ -1,4 +1,4 @@
-import { refuseDisbandedTeam, refuseEntryTeam } from '../utils/teamVisibility';
+import { refuseDisbandedTeam, refuseEntryTeam, refuseClosedTeam } from '../utils/teamVisibility';
 import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
 import {
@@ -36,7 +36,7 @@ router.get('/:id', authenticateToken, getTeam);
 // and withdrawing your own pending join request.
 // SC-275: Team insights (PREMIUM + member-gated inside the handler). Additive.
 router.get('/:id/insights', authenticateToken, refuseDisbandedTeam, getTeamInsights);
-router.post('/:id/members', authenticateToken, refuseDisbandedTeam, refuseEntryTeam, addTeamMember);
+router.post('/:id/members', authenticateToken, refuseDisbandedTeam, refuseEntryTeam, refuseClosedTeam, addTeamMember); // Q39: a closed team takes nobody
 router.delete('/:id/members/:userId', authenticateToken, refuseDisbandedTeam, refuseEntryTeam, removeTeamMember);
 // SC-359 · removed-member (ban) visibility + undo. Managers only.
 router.get('/:id/bans', authenticateToken, refuseDisbandedTeam, listTeamBans);
@@ -44,9 +44,9 @@ router.delete('/:id/bans/:userId', authenticateToken, refuseDisbandedTeam, unban
 router.patch('/:id/members/:userId/role', authenticateToken, refuseDisbandedTeam, refuseEntryTeam, updateMemberRole);
 router.patch('/:id', authenticateToken, refuseDisbandedTeam, refuseEntryTeam, updateTeam);
 router.delete('/:id', authenticateToken, refuseDisbandedTeam, refuseEntryTeam, disbandTeam);
-router.post('/:id/join-requests', authenticateToken, refuseDisbandedTeam, refuseEntryTeam, requestToJoin);
+router.post('/:id/join-requests', authenticateToken, refuseDisbandedTeam, refuseEntryTeam, refuseClosedTeam, requestToJoin);
 router.get('/:id/join-requests', authenticateToken, refuseDisbandedTeam, listJoinRequests);
-router.patch('/:id/join-requests/:userId', authenticateToken, refuseDisbandedTeam, refuseEntryTeam, decideJoinRequest);
+router.patch('/:id/join-requests/:userId', authenticateToken, refuseDisbandedTeam, refuseEntryTeam, refuseClosedTeam, decideJoinRequest);
 router.delete('/:id/join-requests/me', authenticateToken, withdrawJoinRequest);
 router.get('/:id/expenses', authenticateToken, listExpenses);
 router.get('/:id/expenses/summary', authenticateToken, getExpenseSummary);

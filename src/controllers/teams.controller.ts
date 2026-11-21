@@ -1,7 +1,7 @@
 import { inBackground } from '../utils/background';
 import { deleteMatching, deleteWithReason } from '../utils/softDelete';
 import { deletedMemberCounts, liveCount } from '../utils/teamMemberCount';
-import { TEAM_DISBANDED, liveTeams, softDisbandTeam, teamGone } from '../utils/teamVisibility';
+import { TEAM_DISBANDED, TEAM_CLOSED, liveTeams, softDisbandTeam, teamGone, teamIsClosed } from '../utils/teamVisibility';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { escapeLike } from '../utils/likeSearch';
 import { syncTournamentChatsForTeam, syncAfterSuccess } from '../utils/tournamentChat';
@@ -227,6 +227,8 @@ export async function listTeams(req: Request, res: Response) {
       // lists, and tapping it was a dead end (its page refuses non-members, SC-107). Browse lists
       // are public teams only; a member finds their private team under "My teams".
       query = query.eq('is_public', true);
+      // Q39: a closed team (last member left after it played) is not offered in Discover.
+      query = query.is('closed_at', null);
       // B03 (V245, D3): test teams are hidden from a real viewer's browse lists
       // (Sport hub Teams, Discover) — not from "my teams".
       if (await hideTestFor(userId)) query = excludeTest(query);
@@ -534,7 +536,14 @@ export async function removeTeamMember(req: Request, res: Response) {
       }
       const { error: dErr } = await deleteMatching('team_members', (q) => q.eq('team_id', id).eq('user_id', userId), userId, 'left the team (last member)'); // audit #23
       if (dErr) return res.status(500).json({ error: sanitizeError({ message: dErr }) });
-      return res.json({ removed: true, team_empty: true });
+      // Q39 (Dipak, 21 Nov 2026: A) · N-R6-E020: the empty team with history is closed — nobody can
+      // join or ask to, it leaves Discover and search; its page and history stay. Requests still
+      // waiting are answered (rejected): nobody is left to answer them. Best-effort before 166.
+      const closedAt = new Date().toISOString();
+      await supabase.from('teams').update({ closed_at: closedAt }).eq('id', id).is('closed_at', null).then(() => undefined, () => undefined);
+      await supabase.from('team_join_requests').update({ status: 'rejected', decided_at: closedAt })
+        .eq('team_id', id).eq('status', 'pending').then(() => undefined, () => undefined);
+      return res.json({ removed: true, team_empty: true, team_closed: true });
     }
 
     // Audit #23: archived with who removed them (or that they left).
@@ -879,6 +888,8 @@ export async function joinTeamByCode(req: Request, res: Response) {
     if (!team || (team as { kind?: string }).kind === 'entry') return res.status(404).json({ error: 'Invalid team code' });
     // Hard-delete list #6: a disbanded team's invite code joins nobody.
     if ((team as { deleted_at?: string | null }).deleted_at) return res.status(410).json(TEAM_DISBANDED);
+    // Q39: nor a closed one's.
+    if (await teamIsClosed(team.id)) return res.status(409).json(TEAM_CLOSED);
 
     // SC-267: 'approval' policy → the code proves the captain shared it, but a
     // manager still confirms. Route through the request flow instead of joining.

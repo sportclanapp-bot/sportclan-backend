@@ -148,6 +148,7 @@ async function searchTeams(res: Response, q: string, sportId: string | undefined
     // outside it (SC-107) — as in Discover (N-RWG1-14), search finds public teams; a member finds
     // their private team under "My teams".
     .eq('is_public', true)
+    .is('closed_at', null) // Q39: a closed team is not found
     .order('id', { ascending: true }) // SC-303: unique tiebreaker → stable offset paging (no overlap/gaps)
     .range(p.from, p.to);
 

@@ -97,6 +97,25 @@ export async function refuseDisbandedTeam(req: Request, res: Response, next: Nex
 }
 
 /**
+ * Q39 (Dipak, 21 Nov 2026: A) · N-R6-E020: a team whose last member left after it had played is
+ * CLOSED (teams.closed_at, migration 166): nobody can join it or ask to; its page and history stay.
+ */
+export const TEAM_CLOSED = {
+  error: 'This team is closed: its last member left. Its page and match history stay, but nobody can join it.',
+  code: 'TEAM_CLOSED',
+} as const;
+export async function teamIsClosed(id: string): Promise<boolean> {
+  const { data, error } = await supabase.from('teams').select('closed_at').eq('id', id).maybeSingle();
+  if (error) return false; // before migration 166: no team is closed
+  return !!(data as { closed_at?: string | null } | null)?.closed_at;
+}
+export async function refuseClosedTeam(req: Request, res: Response, next: NextFunction) {
+  const id = req.params.id;
+  if (id && (await teamIsClosed(id))) return res.status(409).json(TEAM_CLOSED);
+  return next();
+}
+
+/**
  * N-RWG2-9: undo a moderator's removal. Only a moderator's — a captain's
  * disband was their choice. False when the team isn't one a moderator removed.
  */

@@ -98,6 +98,33 @@ export function withWalkoverScore(
 }
 
 /**
+ * Q52 + Q65 (Dipak, 21 Nov 2026: A / B) · N-R7-S35: a volleyball team that retires (can't go on) is
+ * INCOMPLETE the FIVB way (6.4.3): the other side is given the sets it needs to win, the retiring
+ * side keeps the sets it won — a retirement at 2 sets all reads 3–2, so a league's set-score points
+ * give 2 and 1 (it went 3–0 / 0 points as if straight). An every-set-played match gives the winner
+ * every set left. The rallies stay as played. Not a team tie or series (their games are their own).
+ */
+export function withRetirementSets(
+  sport: string | null | undefined,
+  rules: MatchRules,
+  summary: Record<string, any>,
+  winnerSide: 'A' | 'B',
+): Record<string, any> {
+  if (lengthKey(sport) !== 'volleyball' || tieSpecOf(sport, rules) || summary.tie) return summary;
+  const ss = { ...summary };
+  const loser = winnerSide === 'A' ? 'B' : 'A';
+  const bo = rules.bestOf ?? bestOfFor(sport, null) ?? 5;
+  const lost = Number(ss[loser]?.score ?? 0) || 0;
+  const need = rules.allGames ? bo - lost : winsNeeded(bo);
+  const won = Number(ss[winnerSide]?.score ?? 0) || 0;
+  if (won >= need) return ss;
+  ss[winnerSide] = { ...(ss[winnerSide] ?? {}), score: need };
+  if (ss.team_a_score != null || ss.team_b_score != null) { ss.team_a_score = winnerSide === 'A' ? need : lost; ss.team_b_score = winnerSide === 'B' ? need : lost; }
+  ss.retirement_sets = { [winnerSide]: need - won };
+  return ss;
+}
+
+/**
  * N-R7-S151 (SIDE-X1b-1): a walkover taken back. An abandoned knockout match given to one side
  * (football 3–0) and then replayed ('Replay the rest') or left to stand went on showing the
  * walkover's 3–0: the replay is played on from the score it stopped at (0–0), as its page says.

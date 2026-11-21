@@ -79,7 +79,7 @@ import { timelineBoardIndex } from '../utils/chessTimelineBoard'; // N-R7-S114
 import { hasTrump, trumpsFor } from '../utils/tieTrumps';
 import { CRICKET_OVERS } from '../utils/cricketRules';
 import { allOutBySide, cricketFormatOf, isOfferedOvers, cricketStage, awardAllowed, isBallOfOver, isDismissal, penaltyRunsOf, validSuperOver, superOverWinner, superOverResultText, superOverPlayedText, tieFallbackText, boundariesOf, type SuperOverState, type TieFallback, typedScoreRefusal, typedScoreWinner, typedOversToBalls, type UnfinishedEnd } from '../utils/cricketRules';
-import { withWalkoverScore } from '../utils/walkoverScore';
+import { withRetirementSets, withWalkoverScore } from '../utils/walkoverScore';
 import { shootoutApplies, shootoutKicksOf, shootoutProblem, shootoutWinner, shootoutResultText } from '../utils/shootoutRules';
 
 // U-13: moved to utils/viewerCanPlay (F-24: availability answers use it too).
@@ -4367,6 +4367,7 @@ export async function completeMatch(req: Request, res: Response) {
         const rName = rSide === 'A' ? aName : bName;
         ss.retired = { team_id: (rSide === 'A' ? match.team_a_id : match.team_b_id) ?? null, side: rSide, ...(walkover_reason ? { reason: String(walkover_reason).slice(0, 200) } : {}) };
         ss.result = `${derivedSide === 'A' ? aName : bName} won (${rName} retired)`;
+        Object.assign(ss, withRetirementSets(slug, rulesOf(slug, match), ss, derivedSide)); // Q52 + Q65: volleyball 2–2 → 3–2 (FIVB)
         resultForNotice = ss.result;
       } else if (walkover && derivedSide) {
         ss.walkover = true;

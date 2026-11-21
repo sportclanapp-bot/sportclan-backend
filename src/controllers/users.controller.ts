@@ -1131,6 +1131,14 @@ export async function blockUser(req: Request, res: Response) {
   if (error && (error as { code?: string }).code !== '23505') {
     return res.status(500).json({ error: error.message });
   }
+  // Q21 (Dipak, 21 Nov 2026: A): a play invite from someone blocked is hidden. The Received list
+  // already leaves it out (N-R7-S55); its "sent you a play invite" notification is hidden too, both
+  // ways (hidden_at, the inbox's soft hide: out of the list, the badge and the chips). Best-effort.
+  const now = new Date().toISOString();
+  await Promise.all([[userId, target], [target, userId]].map(([to, from]) => supabase
+    .from('notifications').update({ hidden_at: now })
+    .eq('user_id', to).eq('type', 'invite').eq('data->>sender_id', from).is('hidden_at', null)
+    .then(() => undefined, () => undefined)));
   return res.json({ success: true });
 }
 

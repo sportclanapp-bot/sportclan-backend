@@ -2,6 +2,34 @@ import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { awardCoins } from '../utils/coins';
 import { COIN_RULES } from '../utils/coinRules';
+import crypto from 'crypto';
+import { canonicalisePhone, isValidIndianPhone } from '../utils/phone';
+
+/**
+ * Q18 (Dipak, 21 Nov 2026, chose B): a phone number claims invite coins once, ever — even after
+ * the account is deleted and the number is freed (30 days later) for a brand-new account. Kept by
+ * a hash of the number only (migration 165, referral_phone_claims); the number itself is erased
+ * with the account. Same hash as the migration's backfill.
+ */
+export function referralPhoneHash(canonicalPhone: string): string {
+  return crypto.createHash('sha256').update(`sportclan-referral:${canonicalPhone}`, 'utf8').digest('hex');
+}
+export const REFERRAL_PHONE_USED = {
+  error: 'This phone number has already used an invite code, so it can’t get the invite coins again.',
+  code: 'REFERRAL_PHONE_USED',
+};
+/** 'claimed' when this number had never claimed (and now has); 'used' when it had; 'skip' with no real number or no table yet. */
+async function claimReferralPhone(phone: string | null | undefined, userId: string): Promise<'claimed' | 'used' | 'skip'> {
+  const p = phone ? canonicalisePhone(phone) : null;
+  if (!p || !isValidIndianPhone(p)) return 'skip'; // an email sign-up's placeholder number
+  const { error } = await supabase.from('referral_phone_claims').insert({ phone_hash: referralPhoneHash(p), user_id: userId });
+  if (!error) return 'claimed';
+  if ((error as { code?: string }).code === '23505') return 'used';
+  // Before migration 165 runs (no table): the old rule (once per account) still holds.
+  // eslint-disable-next-line no-console
+  console.error('[referrals] phone claim not recorded:', (error as { message?: string }).message);
+  return 'skip';
+}
 
 // F067 (launch test plan): the shared coin rules the Wallet says.
 const REFERRAL_COINS = COIN_RULES.referral;
@@ -62,7 +90,7 @@ export async function applyReferral(req: Request, res: Response) {
 
   const { data: me } = await supabase
     .from('users')
-    .select('id, referred_by, created_at')
+    .select('id, referred_by, created_at, phone')
     .eq('id', userId)
     .maybeSingle();
   if (!me) return res.status(404).json({ error: 'User not found' });
@@ -86,6 +114,10 @@ export async function applyReferral(req: Request, res: Response) {
   // while paying N referrers. Postgres serialises concurrent UPDATEs on the same
   // row, so exactly one request flips NULL -> referrer and gets a row back; the
   // losers get zero rows and are rejected before any coins move.
+  // Q18: the number's once-ever claim first (atomic on its key), before the account's claim and any coins.
+  const phoneClaim = await claimReferralPhone((me as { phone?: string | null }).phone, userId);
+  if (phoneClaim === 'used') return res.status(403).json(REFERRAL_PHONE_USED);
+
   const { data: claim, error: claimErr } = await supabase
     .from('users')
     .update({ referred_by: referrer.id })

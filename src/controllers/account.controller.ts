@@ -12,6 +12,7 @@ import { denySessions } from '../utils/sessionDeny';
 import { sessionLabel } from '../utils/sessionDevice';
 import { isOlderApp, updateRequired } from '../utils/clientVersion';
 import { handGroupsToHeirsOnDelete } from '../utils/chatHeirsOnDelete';
+import { handTournamentsOnDelete } from '../utils/tournamentHeirsOnDelete';
 
 // POST /account/delete — FINAL delete: immediate PII scrub + login lockout,
 // hard-purged after a 30-day retention window.
@@ -150,6 +151,9 @@ export async function deleteAccount(req: Request, res: Response) {
 
   // N-R6-13 (Round 6): and the groups it was the only admin of get one (the leave rule, SC-301).
   try { await handGroupsToHeirsOnDelete(userId); } catch { /* best-effort, like the captaincy above */ }
+  // Q43 (Dipak chose B): their unfinished tournaments pass to the longest-standing co-organiser; with
+  // none, into the admin queue for the app admin to decide.
+  try { await handTournamentsOnDelete(userId); } catch { /* best-effort */ }
 
   return res.json({
     success: true,

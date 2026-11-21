@@ -157,6 +157,12 @@ export async function getReports(req: Request, res: Response) {
       ? await supabase.from('teams').select('id, name, short_name, logo_url, created_by, deleted_at, deleted_reason').in('id', teamIds)
       : { data: [] as any[] };
     const teamMap = new Map(((teamsRes.data ?? []) as HeldTeam[]).map((t) => [t.id, t]));
+    // Q43: a tournament its organiser left with no co-organiser (the admin decides) — its name and status.
+    const tournamentIds = [...new Set(rows.filter((r) => r.target_type === 'tournament').map((r) => r.target_id))];
+    const tournamentsRes = tournamentIds.length
+      ? await supabase.from('tournaments').select('id, name, status').in('id', tournamentIds)
+      : { data: [] as any[] };
+    const tournamentMap = new Map(((tournamentsRes.data ?? []) as Array<{ id: string; name: string; status: string }>).map((t) => [t.id, t]));
     type Held = { id: string; content: string; author_id: string; deleted_at?: string | null; deleted_by?: string | null; deleted_reason?: string | null };
     const [wallPostsRes, wallCommentsRes] = await Promise.all([
       wallPostIds.length
@@ -261,6 +267,10 @@ export async function getReports(req: Request, res: Response) {
         content_deleted_at = t?.deleted_at ?? null;
         content_removed_by_moderator = t?.deleted_reason === 'moderator';
         if (t) team_logo_url = t.logo_url ?? null;
+      } else if (r.target_type === 'tournament') {
+        const t = tournamentMap.get(r.target_id);
+        content_exists = !!t;
+        content_preview = t ? `${t.name} · ${t.status}` : null;
       }
       return {
         ...r,

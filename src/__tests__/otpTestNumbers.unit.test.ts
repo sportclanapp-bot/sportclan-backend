@@ -33,7 +33,7 @@ import axios from 'axios';
 // eslint-disable-next-line import/first
 import { sendOtp, verifyOtp } from '../controllers/auth.controller';
 // eslint-disable-next-line import/first
-import { otpTestConfig, testCodeFor, maskPhone } from '../utils/otpTestNumbers';
+import { otpTestConfig, testCodeFor, maskPhone, testNumbersAllowed } from '../utils/otpTestNumbers';
 
 const get = (axios as unknown as { get: jest.Mock }).get;
 const res = () => {
@@ -75,6 +75,38 @@ describe('config', () => {
     expect(testCodeFor('+919876500001')).toBe('246810');
     expect(testCodeFor('+919876500009')).toBeNull();
     expect(maskPhone('+919876500001')).toBe('+91 •••••• 0001');
+  });
+});
+
+describe('Q8 + Q45: production switches every test number off (the reviewer number too)', () => {
+  const T = { OTP_TEST_NUMBERS: '9876500001', OTP_TEST_CODE: '246810' };
+  test('production with a live database → off, even with the numbers set', () => {
+    const live = { ...T, NODE_ENV: 'production', SUPABASE_URL: 'https://abcdefgh.supabase.co' } as any;
+    expect(testNumbersAllowed(live)).toBe(false);
+    expect(otpTestConfig(live)).toBeNull();
+    expect(testCodeFor('+919876500001', live)).toBeNull();
+  });
+  test('production with no / a bad database URL → off (fail closed)', () => {
+    expect(testNumbersAllowed({ ...T, NODE_ENV: 'production' } as any)).toBe(false);
+    expect(testNumbersAllowed({ ...T, NODE_ENV: 'production', SUPABASE_URL: 'not a url' } as any)).toBe(false);
+    expect(testNumbersAllowed({ ...T, NODE_ENV: 'production', SUPABASE_URL: 'https://localhost.evil.com' } as any)).toBe(false);
+  });
+  test('production on the local test stack (database on this machine) → on', () => {
+    for (const u of ['http://127.0.0.1:54321', 'http://localhost:54321', 'http://[::1]:54321']) {
+      const env = { ...T, NODE_ENV: 'production', SUPABASE_URL: u } as any;
+      expect(testNumbersAllowed(env)).toBe(true);
+      expect(testCodeFor('+919876500001', env)).toBe('246810');
+    }
+  });
+  test('development / test → on as before', () => {
+    expect(testNumbersAllowed({ ...T, NODE_ENV: 'development', SUPABASE_URL: 'https://x.supabase.co' } as any)).toBe(true);
+    expect(testNumbersAllowed({ ...T } as any)).toBe(true);
+  });
+  test('sendOtp in production on a live database sends a real SMS, no fixed code', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.SUPABASE_URL = 'https://abcdefgh.supabase.co';
+    await send('9876500001');
+    expect(get).toHaveBeenCalled();
   });
 });
 

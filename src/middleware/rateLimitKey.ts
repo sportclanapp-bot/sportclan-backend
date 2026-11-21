@@ -78,3 +78,8 @@ export function rateLimitKey(req: Request): string {
   if (userId) return `u:${userId}`;
   return `ip:${clientIpKey(req)}`;
 }
+
+/** Q13: POST /auth/send-otp, as seen by a limiter mounted on /auth (req.path '/send-otp'). */
+export function isSendOtp(req: Request): boolean {
+  return req.method === 'POST' && req.path.replace(/\/+$/, '') === '/send-otp';
+}

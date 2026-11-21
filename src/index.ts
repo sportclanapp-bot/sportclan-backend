@@ -51,7 +51,7 @@ import adminRoutes from './routes/admin.routes';
 import jobsRoutes from './routes/jobs.routes';
 import { revalidateAlways } from './middleware/revalidate';
 import { authenticateToken } from './middleware/auth.middleware';
-import { clientIpKey, rateLimitKey, refreshUserId } from './middleware/rateLimitKey';
+import { clientIpKey, rateLimitKey, refreshUserId, isSendOtp } from './middleware/rateLimitKey';
 import { rateLimitBypassed } from './middleware/rateLimitBypass';
 
 import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSanitizer';
@@ -159,7 +159,10 @@ const authLimiter = rateLimit({
   // and this is the limiter that actually stops credential stuffing.
   // Audit #9: a refresh or sign-out with a VALID refresh token isn't a login
   // attempt — it is budgeted per user (refreshLimiter) and skips this one.
-  skip: (req) => rateLimitBypassed(req) || !!refreshUserId(req),
+  // Q13 (21 Nov 2026): asking for a code is not a sign-in try. It has its own limiter (sendOtpLimiter,
+  // SEND_OTP_PER_IP_HOUR) plus the per-number limits; counted here as well, the 21st code asked for on a
+  // club's Wi-Fi within 15 minutes was refused as 'Too many sign-in tries', long before the 50 an hour.
+  skip: (req) => rateLimitBypassed(req) || !!refreshUserId(req) || isSendOtp(req),
   standardHeaders: true,
   legacyHeaders: false,
   handler: limitReply('auth'), // F034: a sentence with the wait, not the default HTML

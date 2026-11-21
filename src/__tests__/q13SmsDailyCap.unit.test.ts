@@ -146,3 +146,29 @@ describe('the per-connection send limit', () => {
     expect(r.body.error).toMatch(/^Many sign-in codes were asked for on this Wi-Fi or network in the last hour\. Try again in 4[12] minutes\. Or switch to mobile data, or sign in with your email and password\.$/);
   });
 });
+
+describe('asking for a code is not a sign-in try (found in Step 3: 21 codes in 15 minutes hit AUTH_IP_LIMIT)', () => {
+  const idx = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
+  test('the 20-per-15-minutes sign-in limiter skips POST /auth/send-otp', () => {
+    const lim = idx.slice(idx.indexOf('const authLimiter = rateLimit('), idx.indexOf("handler: limitReply('auth')"));
+    expect(lim).toMatch(/skip: \(req\) => rateLimitBypassed\(req\) \|\| !!refreshUserId\(req\) \|\| isSendOtp\(req\),/);
+    expect(idx.indexOf("app.use('/auth', authLimiter, authRoutes)")).toBeGreaterThan(-1);
+  });
+  test('isSendOtp under the /auth mount: only POST /send-otp', async () => {
+    const express = (await import('express')).default;
+    const http = await import('http');
+    const { isSendOtp } = await import('../middleware/rateLimitKey');
+    const seen: string[] = [];
+    const app = express();
+    app.use('/auth', (req, _r, next) => { seen.push(`${req.method} ${req.originalUrl} ${isSendOtp(req)}`); next(); }, (_q, r) => { r.json({}); });
+    const srv = http.createServer(app).listen(0);
+    const port = (srv.address() as { port: number }).port;
+    for (const [m, u] of [['POST', '/auth/send-otp'], ['POST', '/auth/send-otp/'], ['GET', '/auth/send-otp'], ['POST', '/auth/verify-otp'], ['POST', '/auth/login']]) {
+      await fetch(`http://127.0.0.1:${port}${u}`, { method: m });
+    }
+    srv.close();
+    expect(seen).toEqual([
+      'POST /auth/send-otp true', 'POST /auth/send-otp/ true', 'GET /auth/send-otp false', 'POST /auth/verify-otp false', 'POST /auth/login false',
+    ]);
+  });
+});

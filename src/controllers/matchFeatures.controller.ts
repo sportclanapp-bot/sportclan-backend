@@ -1,4 +1,5 @@
 import { inBackground } from '../utils/background';
+import { hubRefusal } from '../utils/hubReadOnly';
 import { selectAll } from '../utils/selectAll';
 import { isAdminUser } from '../middleware/admin.middleware';
 import { matchEventsAll } from '../utils/matchEventsAll';
@@ -46,6 +47,11 @@ async function loadScorableMatch(
   // check was narrower than the scoring API's own gate.
   if (!(await canOfficiateMatch(match, userId))) {
     return { error: { status: 403, msg: 'Only the scorer, umpire, or tournament organiser can modify this match' } };
+  }
+  // Q32 (Dipak, 21 Nov 2026: A): while the tournament's venue hub runs on another phone, this one only views.
+  {
+    const hub = await hubRefusal((match as { tournament_id?: string | null }).tournament_id, userId, deviceId);
+    if (hub) return { error: { status: 409, msg: hub.error, code: hub.code } };
   }
   // Terminal-status matches stay FROZEN (SC-42/85) — an edit can never change a
   // winner post-completion → no ELO double-apply. Keep exactly as-is.

@@ -15,7 +15,8 @@ import type { Request } from 'express';
 export const DEVICE_HEADER = 'x-device-id';
 
 export function deviceIdOf(req: Request): string | null {
-  const raw = req.header(DEVICE_HEADER);
+  // Q32: asked on more paths now (decide, PATCH); a request object without .header (an internal call) has none.
+  const raw = typeof req.header === 'function' ? req.header(DEVICE_HEADER) : undefined;
   if (!raw) return null;
   const trimmed = String(raw).trim();
   // Bounded: this is echoed back to clients and stored, so a caller does not get

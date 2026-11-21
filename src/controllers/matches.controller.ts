@@ -1,4 +1,5 @@
 import { voidClosedOn } from '../utils/voidClosedOn';
+import { hubHolderElsewhere, hubRefusal } from '../utils/hubReadOnly';
 import { inBackground } from '../utils/background';
 import { matchNamesForNotice } from '../utils/matchNames';
 import { countParticipantsByMatch, countsForUser, isByeMatch } from '../utils/matchCounts';
@@ -2055,6 +2056,12 @@ export async function getMatch(req: Request, res: Response) {
     matchWithRating.can_default = !!userId && (match.status === 'scheduled' || match.status === 'live') && (await canDefault(match as never, userId));
     // Q41: a walkover is the organiser's or the umpire's only (the app's Walkover button reads this).
     matchWithRating.can_walkover = !!userId && (match.status === 'scheduled' || match.status === 'live') && (await canGiveWalkover(match as never, userId));
+    // Q32 (Dipak, 21 Nov 2026: A): the venue hub runs on another phone — this phone views only (the app
+    // hides its scoring and result buttons and says where to record). Null when this phone may record.
+    if (userId && match.tournament_id && (match.status === 'scheduled' || match.status === 'live')) {
+      const holder = await hubHolderElsewhere(match.tournament_id as string, userId, deviceIdOf(req));
+      matchWithRating.hub_elsewhere = holder ? { by: holder.user_id === userId ? 'your other phone' : holder.name ? `${holder.name}’s phone` : 'another phone' } : null;
+    }
     // Audit #35/#36: Cancel and Void by the same rules cancelMatch and
     // voidMatch enforce, so the app offers them to exactly who may use them —
     // Cancel: the organiser (a tournament fixture) or the creator, before it's
@@ -2360,6 +2367,12 @@ export async function updateMatch(req: Request, res: Response) {
     // and re-completed, DOUBLE-applying ELO + matches_played (unbounded inflation),
     // or rewrite a recorded winner without touching the already-applied ratings.
     // Benign display/metadata fields (venue, names, scheduled_at, ...) stay editable.
+    // Q32 (Dipak, 21 Nov 2026: A): a result written here (status, winner, score) is refused while the
+    // tournament's venue hub runs on another phone, like every other result path.
+    if (['status', 'winner_team_id', 'score_summary'].some((k) => k in update)) {
+      const hub = await hubRefusal((match as { tournament_id?: string | null }).tournament_id ?? null, userId, deviceIdOf(req));
+      if (hub) return res.status(409).json(hub);
+    }
     const FROZEN_ON_TERMINAL = ['status', 'winner_team_id', 'score_summary', 'team_a_id', 'team_b_id'];
     if (isTerminalMatchStatus(match.status) && FROZEN_ON_TERMINAL.some((k) => k in update)) {
       return res.status(409).json({ error: 'This match is already finished — its result and status are locked.' });
@@ -3353,6 +3366,12 @@ export async function completeMatch(req: Request, res: Response) {
     // referee who doesn't score the fixture no longer does (the rule no screen used is dropped).
     if (!system && walkoverIn === true && !retired && !defaulted && !!match.tournament_id && !(await canGiveWalkover(match, userId))) {
       return res.status(403).json({ error: 'Only the umpire or the organiser can give a walkover.', code: 'NOT_REFEREE_WALKOVER' });
+    }
+    // Q32 (Dipak, 21 Nov 2026: A) · F119 b: while the tournament's venue hub runs on another phone, this
+    // one only views — a second phone's result is refused in words (it was answered 'already completed').
+    if (!system) {
+      const hub = await hubRefusal(match.tournament_id as string | null, userId, deviceIdOf(req));
+      if (hub) return res.status(409).json(hub);
     }
     // N-R7-S176 (Step 2 FINAL, REG-014): a deactivated sport (kabaddi, athletics) takes no result at all —
     // live scoring and a typed score refuse it (SC-335, audit #14), and so does completing it (typed result,

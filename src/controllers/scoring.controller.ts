@@ -1,4 +1,5 @@
 import { plural } from '../utils/plural';
+import { hubRefusal } from '../utils/hubReadOnly';
 import { inBackground } from '../utils/background';
 import { logThenDeleteEvent, recordScoreAfter } from '../utils/scoringAudit';
 import { Request, Response } from 'express';
@@ -120,6 +121,9 @@ export async function authorizeScorer(matchId: string, userId: string, deviceId?
   if (!(await canOfficiateMatch(match, userId))) {
     return { ok: false as const, status: 403, error: match.tournament_id ? 'Only a tournament organiser, the umpire or a scorer can score' : 'Only the umpire, the scorer or the creator can score' };
   }
+  // Q32 (Dipak, 21 Nov 2026: A): while the tournament's venue hub runs on another phone, this one only views.
+  const hub = await hubRefusal(match.tournament_id, userId, deviceId);
+  if (hub) return { ok: false as const, status: 409, error: hub.error, code: hub.code, match };
   // SC-430: one scorer per match. Authorised is not the same as holding the pad —
   // two officiants scoring the same game do not corrupt anything, they simply BOTH
   // count, which is the quieter and worse failure. 409 so the client's outbox

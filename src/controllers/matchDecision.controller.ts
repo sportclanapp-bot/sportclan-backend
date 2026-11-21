@@ -15,6 +15,8 @@
  * winner advances as with any result. The decision and reason stay on the
  * match (score_summary.decision) for its page and the table's notes.
  */
+import { deviceIdOf } from '../utils/deviceHeader';
+import { hubRefusal } from '../utils/hubReadOnly';
 import { Request, Response } from 'express';
 import { supabase } from '../utils/supabase';
 import { isUuid } from '../utils/uuid';
@@ -68,6 +70,9 @@ export async function decideMatch(req: Request, res: Response) {
     if (!m) return res.status(404).json({ error: 'Match not found' });
     const allowed = m.tournament_id ? await isTournamentOrganiser(m.tournament_id, userId) : m.created_by === userId;
     if (!allowed) return res.status(403).json({ error: m.tournament_id ? 'Only the tournament organiser can decide a match.' : 'Only the match’s creator can decide it.' });
+    // Q32 (Dipak, 21 Nov 2026: A): while the tournament's venue hub runs on another phone, this one only views.
+    const hub = await hubRefusal(m.tournament_id, userId, deviceIdOf(req));
+    if (hub) return res.status(409).json(hub);
     // N-R7-S176 (REG-014): a deactivated sport's match is not decided (stands / replay / awarded) either.
     if (await isSportInactive(m.sport_id)) return res.status(400).json({ error: 'This sport is not available', code: 'SPORT_INACTIVE' });
     if (m.voided_at) return res.status(409).json({ error: 'This match is voided.', code: 'MATCH_VOIDED' });

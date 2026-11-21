@@ -12,3 +12,6 @@ dist/
 
 # Local check server (see .env.local-check) — never committed.
 .env.local-check
+
+# Q9: ids the local integration seed writes (scripts/seed-local-integration.mjs). Local only.
+src/__tests__/.local-fixtures.json

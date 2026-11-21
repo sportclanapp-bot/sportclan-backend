@@ -16,7 +16,7 @@
  *   z19empty.qa — the target (B)
  *   Aarav Ali   — a well-connected account for the read-only count-consistency check
  */
-import { resolveBase, transportFor } from './targetBase';
+import { fixtureId, resolveBase, transportFor } from './targetBase';
 import https from 'https';
 import { useLiveLock } from './liveLock';
 
@@ -24,7 +24,7 @@ import { useLiveLock } from './liveLock';
 useLiveLock('qa-pair');
 
 const BASE = resolveBase(); // audit #150: local unless SC_BASE + SC_LIVE=1
-const AARAV = '5a9eaac3-dea0-4419-906c-911c5af9f38b';
+const AARAV = fixtureId('aarav', '5a9eaac3-dea0-4419-906c-911c5af9f38b'); // Q9: the local twin on the local stack
 
 function call(
   method: string,

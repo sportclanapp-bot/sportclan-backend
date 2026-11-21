@@ -27,3 +27,24 @@ export function resolveBase(env: NodeJS.ProcessEnv = process.env): string {
 export function transportFor(u: URL): typeof import('https') | typeof import('http') {
   return u.protocol === 'http:' ? require('http') : require('https');
 }
+
+/**
+ * Q9 (Dipak, 21 Nov 2026): on the local stack the QA fixtures are made by
+ * `node scripts/seed-local-integration.mjs`, which writes their local ids to
+ * `src/__tests__/.local-fixtures.json`. A fixed live id (Aarav, the inactive
+ * kabaddi / athletics sports) is swapped for its local twin when the base is
+ * local; against live (SC_BASE + SC_LIVE=1) the live id is used as before.
+ */
+export function fixtureId(key: 'aarav' | 'kabaddi' | 'athletics', liveId: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (!isLocalBase(resolveBase(env))) return liveId;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('fs') as typeof import('fs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const file = (require('path') as typeof import('path')).join(__dirname, '.local-fixtures.json');
+  if (!fs.existsSync(file)) {
+    throw new Error('No local fixtures: run `node scripts/seed-local-integration.mjs` first (it seeds the local QA accounts).');
+  }
+  const id = JSON.parse(fs.readFileSync(file, 'utf8'))[key];
+  if (typeof id !== 'string' || !id) throw new Error(`Local fixture "${key}" missing: re-run scripts/seed-local-integration.mjs.`);
+  return id;
+}

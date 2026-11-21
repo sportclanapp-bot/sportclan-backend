@@ -1,4 +1,5 @@
-/** SC-326: integration tests hit the LIVE backend over HTTP. */
+/** SC-326: integration tests talk to a backend over HTTP: the LOCAL one by default (Q9: seed it with
+ *  scripts/seed-local-integration.mjs); live only with SC_BASE + SC_LIVE=1 (src/__tests__/targetBase.ts). */
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',

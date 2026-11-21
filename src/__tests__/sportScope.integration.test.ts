@@ -11,14 +11,14 @@
  *
  * Read-only except the create attempt, which is REJECTED (no row inserted).
  */
-import { resolveBase, transportFor } from './targetBase';
+import { fixtureId, resolveBase, transportFor } from './targetBase';
 import https from 'https';
 
 const BASE = resolveBase(); // audit #150: local unless SC_BASE + SC_LIVE=1
 // Resolved from prod before the deactivation (kept as constants so the ids survive
 // once /sports stops returning them).
-const KABADDI = 'd55be36f-6d36-4f74-9e1f-74e7671c7389';
-const ATHLETICS = '39801a2c-966a-4025-b035-04ac7da013b5';
+const KABADDI = fixtureId('kabaddi', 'd55be36f-6d36-4f74-9e1f-74e7671c7389'); // Q9: the local id on the local stack
+const ATHLETICS = fixtureId('athletics', '39801a2c-966a-4025-b035-04ac7da013b5');
 const CANONICAL_11 = [
   'cricket', 'badminton', 'football', 'tennis', 'table-tennis', 'pickleball',
   'chess', 'carrom', 'volleyball', 'basketball', 'hockey',

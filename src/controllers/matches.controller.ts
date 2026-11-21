@@ -742,14 +742,16 @@ export async function matchHistory(req: Request, res: Response) {
     // the person ever played (6,161 for QA B, ~75 round trips: 31 s on live).
     const fast = await supabase.rpc('match_history_page', { p_user: target, p_offset: offset, p_limit: limit, p_q: q0 ? escapeLike(q0) : null, p_hide_voided: hideVoided });
     if (!fast.error && Array.isArray((fast.data as { page?: unknown } | null)?.page)) {
-      const h = fast.data as { played_count: number; counted_count?: number; officiated_count: number; voided_count: number; total: number; page: Array<{ id: string; side: string | null; role: 'played' | 'officiated' }> };
+      const h = fast.data as { played_count: number; counted_count?: number; officiated_count: number; voided_count: number; total: number; page: Array<{ id: string; side: string | null; role: 'played' | 'officiated'; seat?: string | null }> };
       const page = h.page ?? [];
       const { data: rowsP, error: errP } = page.length
         ? await supabase.from('matches').select('*').in('id', page.map((p) => p.id))
         : { data: [] as any[], error: null };
       if (errP) return res.status(500).json({ error: sanitizeError(errP) });
       const byId = new Map(((rowsP ?? []) as any[]).map((m) => [m.id as string, m]));
-      const matches = page.map((p) => byId.get(p.id) ? { ...byId.get(p.id), my_role: p.role, my_side: p.side ?? null } : null).filter(Boolean) as any[];
+      // Q58 (Dipak, 21 Nov 2026: B): an assistant referee / fourth official (a named seat, migration 168) sees the
+      // match with their seat's badge; officiated_count is the main official's only.
+      const matches = page.map((p) => byId.get(p.id) ? { ...byId.get(p.id), my_role: p.role, my_side: p.side ?? null, my_seat: p.seat ?? null } : null).filter(Boolean) as any[];
       await attachTeamNames(matches);
       return res.json({ matches, played_count: Number(h.played_count) || 0, counted_count: Number(h.counted_count ?? h.played_count) || 0, officiated_count: Number(h.officiated_count) || 0, voided_count: Number(h.voided_count) || 0, total: Number(h.total) || 0, has_more: offset + limit < (Number(h.total) || 0) });
     }

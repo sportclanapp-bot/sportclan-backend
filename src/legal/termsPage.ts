@@ -6,6 +6,7 @@
  * 5-post monthly limit, which the app no longer has.
  */
 import { TERMS_OF_SERVICE } from './termsOfService';
+import { COMPANY_CSS, companyBlockHtml } from './companyDetails';
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -30,6 +31,7 @@ export function termsOfServiceHtml(): string {
   h2 { font-size: 18px; font-weight: 800; color: #1A3A5C; margin: 28px 0 10px; }
   p { font-size: 14px; color: #424242; margin-bottom: 8px; }
   a { color: #1565C0; }
+${COMPANY_CSS}
 </style>
 </head>
 <body>
@@ -43,6 +45,7 @@ export function termsOfServiceHtml(): string {
 ${sections}
 
   <p>How we handle your data: <a href="/privacy-policy.html">Privacy policy</a>.</p>
+${companyBlockHtml()}
 </div>
 </body>
 </html>

@@ -6,6 +6,7 @@
  * Where it is hosted for the Play listing is Dipak's call (Q5); the text is fixed here.
  */
 import { PRIVACY_POLICY } from './privacyPolicy';
+import { COMPANY_CSS, companyBlockHtml } from './companyDetails';
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -29,6 +30,7 @@ export function privacyPolicyHtml(): string {
   .updated { font-size: 12px; color: #757575; margin-bottom: 24px; }
   h2 { font-size: 18px; font-weight: 800; color: #1A3A5C; margin: 28px 0 10px; }
   p { font-size: 14px; color: #424242; margin-bottom: 8px; }
+${COMPANY_CSS}
 </style>
 </head>
 <body>
@@ -40,6 +42,9 @@ export function privacyPolicyHtml(): string {
   <p class="updated">Effective ${esc(PRIVACY_POLICY.effectiveDate)}</p>
 
 ${sections}
+
+  <p><a href="/delete-account.html">How to delete your account</a></p>
+${companyBlockHtml()}
 </div>
 </body>
 </html>

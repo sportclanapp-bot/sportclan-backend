@@ -10,7 +10,7 @@ const p = (name: string, dob: string | null) => ({ name, dob, gender: 'male' });
 test('a pair’s combined age: on the start date, or by birth year', () => {
   const c = { pairAgeMin: 90 };
   expect(categoryProblem(c, [p('Ravi', '1975-01-10'), p('Amit', '1980-05-01')], on)).toBeNull(); // 51 + 46 = 97
-  expect(categoryProblem(c, [p('Ravi', '1985-12-31'), p('Amit', '1990-12-01')], on)).toBe('This event is for pairs 90+ combined, and Ravi and Amit add up to 75.');
+  expect(categoryProblem(c, [p('Ravi', '1985-12-31'), p('Amit', '1990-12-01')], on)).toBe('This event is for pairs 90+ combined, and Ravi and Amit are under it together.');
   expect(categoryProblem({ pairAgeMin: 76, ageBasis: 'year' }, [p('Ravi', '1985-12-31'), p('Amit', '1990-12-01')], on)).toBeNull(); // 41 + 36 by year
   expect(categoryProblem(c, [p('Ravi', null), p('Amit', '1980-05-01')], on)).toMatch(/Ravi’s profile doesn’t list their date of birth/);
   expect(categoryProblem(c, [p('Ravi', '2000-01-01')], on)).toBeNull(); // singles: not a pair

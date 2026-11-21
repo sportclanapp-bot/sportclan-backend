@@ -11,7 +11,7 @@ const kid = (dob: string) => [{ name: 'Aarav', gender: 'male', dob }];
 test('under 15 by birth year: born 2012 plays all year; born 2011 doesn’t, even before their birthday', () => {
   const byYear = { underAge: 15, ageBasis: 'year' as const };
   expect(categoryProblem(byYear, kid('2012-12-31'), ON)).toBeNull();
-  expect(categoryProblem(byYear, kid('2011-12-31'), ON)).toBe('This is an under-15 event by birth year (born 2012 or later), and Aarav turns 15 in 2026.');
+  expect(categoryProblem(byYear, kid('2011-12-31'), ON)).toBe('This is an under-15 event by birth year (born 2012 or later), and Aarav is over the age limit.');
   // on the start date the 2011 child is still 14 — and allowed, as before
   expect(categoryProblem({ underAge: 15 }, kid('2011-12-31'), ON)).toBeNull();
 });
@@ -19,7 +19,7 @@ test('under 15 by birth year: born 2012 plays all year; born 2011 doesn’t, eve
 test('veterans by birth year: 40+ in 2026 = born 1986 or earlier', () => {
   const v = { minAge: 40, ageBasis: 'year' as const };
   expect(categoryProblem(v, [{ name: 'Kiran', gender: 'male', dob: '1986-12-31' }], ON)).toBeNull();
-  expect(categoryProblem(v, [{ name: 'Kiran', gender: 'male', dob: '1987-01-01' }], ON)).toBe('This event is for 40 and over by birth year (born 1986 or earlier), and Kiran turns 39 in 2026.');
+  expect(categoryProblem(v, [{ name: 'Kiran', gender: 'male', dob: '1987-01-01' }], ON)).toBe('This event is for 40 and over by birth year (born 1986 or earlier), and Kiran is under the age limit.');
 });
 
 test('checked, stored only with an age limit, and named', () => {

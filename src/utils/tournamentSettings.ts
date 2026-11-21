@@ -790,8 +790,10 @@ export function categoryProblem(c: Category | null | undefined, players: Categor
     if (c.bornFrom || c.bornTo) {
       const dob = p.dob && isIsoDate(p.dob.slice(0, 10)) ? p.dob.slice(0, 10) : null;
       if (!dob) return `${poss(p.name)} profile doesn’t list their date of birth, and this event has an age limit. Add it to the profile first.`;
-      if (c.bornFrom && dob < c.bornFrom) return `This event is for players born on or after ${dateWords(c.bornFrom)}, and ${p.name} was born on ${dateWords(dob)}.`;
-      if (c.bornTo && dob > c.bornTo) return `This event is for players born on or before ${dateWords(c.bornTo)}, and ${p.name} was born on ${dateWords(dob)}.`;
+      // Q15 (Dipak, 21 Nov 2026, N-R3B-1): the organiser sees the player's name only — never their
+      // birth date (it may be private) or their age; the event's own limit is named instead.
+      if (c.bornFrom && dob < c.bornFrom) return `This event is for players born on or after ${dateWords(c.bornFrom)}, and ${p.name} is over the age limit.`;
+      if (c.bornTo && dob > c.bornTo) return `This event is for players born on or before ${dateWords(c.bornTo)}, and ${p.name} is under the age limit.`;
     }
     if ((c.underAge != null && !c.bornFrom) || (c.minAge != null && !c.bornTo)) {
       // 7.11: by birth year, the age a player turns in the start date's year.
@@ -802,12 +804,12 @@ export function categoryProblem(c: Category | null | undefined, players: Categor
       // N-R7-S123: the start date in day-month-year, as the born-on-or-after refusal names its dates.
       const onWords = dateWords(on.toISOString().slice(0, 10));
       if (c.underAge != null && !c.bornFrom && age >= c.underAge) {
-        return byYear ? `This is an under-${c.underAge} event by birth year (born ${year - c.underAge + 1} or later), and ${p.name} turns ${age} in ${year}.`
-          : `This is an under-${c.underAge} event, and ${p.name} is ${age} on the start date (${onWords}).`;
+        return byYear ? `This is an under-${c.underAge} event by birth year (born ${year - c.underAge + 1} or later), and ${p.name} is over the age limit.`
+          : `This is an under-${c.underAge} event (age on the start date, ${onWords}), and ${p.name} is over the age limit.`;
       }
       if (c.minAge != null && !c.bornTo && age < c.minAge) {
-        return byYear ? `This event is for ${c.minAge} and over by birth year (born ${year - c.minAge} or earlier), and ${p.name} turns ${age} in ${year}.`
-          : `This event is for ${c.minAge} and over, and ${p.name} is ${age} on the start date (${onWords}).`;
+        return byYear ? `This event is for ${c.minAge} and over by birth year (born ${year - c.minAge} or earlier), and ${p.name} is under the age limit.`
+          : `This event is for ${c.minAge} and over (age on the start date, ${onWords}), and ${p.name} is under the age limit.`;
       }
     }
     if (c.maxRating != null && p.rating != null && p.rating > c.maxRating) return `This event is for players rated up to ${c.maxRating}, and ${p.name} is rated ${Math.round(p.rating)}.`;
@@ -829,7 +831,7 @@ export function categoryProblem(c: Category | null | undefined, players: Categor
     const missing = players.find((_, i) => ages[i] == null);
     if (missing) return `${poss(missing.name)} profile doesn’t list their date of birth, and this event is for pairs ${c.pairAgeMin}+ combined. Add it to the profile first.`;
     const sum = (ages[0] as number) + (ages[1] as number);
-    if (sum < c.pairAgeMin) return `This event is for pairs ${c.pairAgeMin}+ combined${byYear ? ' (by birth year)' : ''}, and ${players[0]!.name} and ${players[1]!.name} add up to ${sum}.`;
+    if (sum < c.pairAgeMin) return `This event is for pairs ${c.pairAgeMin}+ combined${byYear ? ' (by birth year)' : ''}, and ${players[0]!.name} and ${players[1]!.name} are under it together.`; // Q15: no ages
   }
   return null;
 }

@@ -601,6 +601,8 @@ async function checkSportIds(incoming: unknown): Promise<{ error: string; code?:
   // Audit #79: no count cap — each id must be a real, active sport (below), so
   // the list can't be longer than the sports there are.
   const ids = Array.from(new Set(incoming.map((x: unknown) => String(x))));
+  // Q16 (Dipak, 21 Nov 2026): at least one sport, the same rule as sign-up.
+  if (ids.length === 0) return { error: 'Pick at least one sport you play.', code: 'SPORT_REQUIRED' };
   let valid: string[] = [];
   if (ids.length > 0) {
     const { data: rows } = await supabase

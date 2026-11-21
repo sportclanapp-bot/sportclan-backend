@@ -7,7 +7,7 @@ import { shootoutKicksOf, shootoutProblem, validShootout } from '../utils/shooto
 import { rulesRefusal, standardRules, timedRulesLabel } from '../utils/matchRules';
 
 test.each([
-  [3, 0, 3, true], [2, 1, 3, true], [4, 3, 3, true], [5, 4, 3, true], [5, 3, 3, false], [6, 4, 3, false],
+  [3, 0, 3, false], [2, 0, 3, true], [2, 1, 3, true], [4, 3, 3, true], [5, 4, 3, true], [5, 3, 3, false], [6, 4, 3, false],
   [5, 3, 5, true], [6, 5, 5, true], [6, 4, 5, false], [3, 3, 5, false], [7, 3, null, true],
 ])('%i–%i with %s each → %s', (a, b, kicks, ok) => {
   expect(validShootout(a, b, kicks)).toBe(ok);

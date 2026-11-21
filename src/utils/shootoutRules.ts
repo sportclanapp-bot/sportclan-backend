@@ -51,6 +51,14 @@ export function shootoutProblem(a: unknown, b: unknown, kicks?: number | null, s
   if (kicks && Math.max(a as number, b as number) > kicks && Math.abs((a as number) - (b as number)) !== 1) {
     return `After ${plural(kicks, hockey ? 'attempt' : 'kick')} each it’s sudden death, so it ends by one goal (e.g. ${kicks + 1}–${kicks}).`;
   }
+  // Q30 (Dipak, 21 Nov 2026: A) · N-R3R3B-2: within the kicks it stops once one side can't be
+  // caught, so a winner on w with the loser on l (w − l ≥ 2) needs 2w − l ≤ kicks + 2: 3–0, 4–1, 5–3
+  // with 5 each, never 4–0 or 5–2 (over at 3–0 / 4–2); 2–0 at most with 3 each.
+  const hi = Math.max(a as number, b as number); const lo = Math.min(a as number, b as number);
+  if (kicks && hi <= kicks && 2 * hi - lo > kicks + 2) {
+    const widest = Math.floor((kicks + 2) / 2);
+    return `${hi}–${lo} can’t happen with ${plural(kicks, hockey ? 'attempt' : 'kick')} each: the ${so} stops once one side can’t catch up (${widest}–0 at most).`;
+  }
   return null;
 }
 

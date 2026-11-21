@@ -15,6 +15,9 @@ export const REMINDER_CATCHUP_MS = 15 * 60 * 1000;
 /** F007: the reminder's words — the minutes left as they are, or that it was due (a catch-up). */
 export function matchReminderBody(names: string | null, scheduledAt: string, now: Date, kickoff: string | null): string {
   const who = names ?? 'Your match';
+  // Q44 (Dipak, 21 Nov 2026): the time says "IST", as the app's match times do,
+  // so a phone in another time zone can't read it as its own clock.
+  if (kickoff && !/\bIST$/.test(kickoff)) kickoff = `${kickoff} IST`;
   const left = Math.round((new Date(scheduledAt).getTime() - now.getTime()) / 60000);
   if (left <= 0) return `⏰ ${who} was due to start${kickoff ? ` at ${kickoff}` : ''} and hasn’t started yet.`;
   return `⏰ ${who} starts ${kickoff ? `at ${kickoff} ` : ''}in ${plural(left, 'minute')}!`;

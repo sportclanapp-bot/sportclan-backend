@@ -18,5 +18,5 @@ test('a moved fixture and a reminder read the same way', () => {
   expect(formatSlotIst('2026-07-15T08:30:00Z', 'Ground 2')).toBe('Wed 15 Jul · 2:00 pm · Ground 2');
   const at = '2026-10-14T15:30:00Z';
   expect(matchReminderBody('Lions vs Tigers', at, new Date(Date.parse(at) - 15 * 60_000), formatTimeIst(at)))
-    .toBe('⏰ Lions vs Tigers starts at 9:00 pm in 15 minutes!');
+    .toBe('⏰ Lions vs Tigers starts at 9:00 pm IST in 15 minutes!'); // Q44: with IST
 });

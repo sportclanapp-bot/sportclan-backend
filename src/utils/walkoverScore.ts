@@ -28,7 +28,9 @@ export function walkoverScoreFor(sport: string | null | undefined, rules: MatchR
     if (spec) return tieNeed(spec);
     if (lengthKey(sport) === 'chess') return 1;
     const bo = rules.bestOf ?? bestOfFor(sport, null);
-    if (bo != null) return winsNeeded(bo);
+    // Q53 (Dipak, 21 Nov 2026: A) · N-R7-S36: where every set is played, the full straight win is all of
+    // them (volleyball 5–0, as a played straight win there) — 3–0 let a no-show off lightly on set difference.
+    if (bo != null) return rules.allGames ? bo : winsNeeded(bo);
   }
   return walkoverGoalsOf(sport, rules);
 }

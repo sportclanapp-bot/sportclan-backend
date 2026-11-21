@@ -819,6 +819,12 @@ export async function removeMember(req: Request, res: Response) {
   if (!(await isActiveMember(id, memberId))) {
     return res.status(404).json({ error: 'Not a member of this group' });
   }
+  // Q36 (Dipak, 21 Nov 2026: A) · N-R6-4: nobody can remove the group's creator (an admin they
+  // promoted could, and then nobody could delete the group); the creator can only leave.
+  const { data: group } = await supabase.from('chats').select('created_by').eq('id', id).maybeSingle();
+  if ((group as { created_by?: string | null } | null)?.created_by === memberId) {
+    return res.status(403).json({ error: 'The group’s creator can’t be removed. They can leave the group themselves.', code: 'CREATOR_NOT_REMOVABLE' });
+  }
 
   // 098: removal is a soft leave — the row stays with left_at set.
   await leaveChat(id, [memberId], { removedBy: userId }); // audit #16: an admin removal sticks

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
+import { getUserHonours } from '../controllers/honours.controller';
 import {
   getMe,
   getUserById,
@@ -71,6 +72,7 @@ router.get('/:id/season-recap', authenticateToken, getSeasonRecap);
 router.get('/:id/insights', authenticateToken, getUserInsights);
 
 router.get('/:id/reviews', authenticateToken, getReviews); // audit #7
+router.get('/:id/honours', authenticateToken, getUserHonours); // Q51
 router.post('/:id/reviews', authenticateToken, submitReview);
 router.delete('/:id/reviews', authenticateToken, deleteReview);
 

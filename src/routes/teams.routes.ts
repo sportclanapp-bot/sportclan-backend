@@ -1,6 +1,7 @@
 import { refuseDisbandedTeam, refuseEntryTeam, refuseClosedTeam } from '../utils/teamVisibility';
 import { Router } from 'express';
 import { guardIdParams } from '../middleware/uuidParams.middleware';
+import { getTeamHonours } from '../controllers/honours.controller';
 import {
   createTeam,
   listTeams,
@@ -30,6 +31,7 @@ router.post('/', authenticateToken, createTeam);
 router.post('/join', authenticateToken, joinTeamByCode);
 router.get('/', authenticateToken, listTeams);
 router.get('/:id', authenticateToken, getTeam);
+router.get('/:id/honours', authenticateToken, getTeamHonours); // Q51: a closed or disbanded team keeps its honours
 // Hard-delete list #6: a disbanded team answers 410 on every route below that
 // carries refuseDisbandedTeam. Left open: the team page (it says whether you
 // were a member), the three expense READS (former members keep the history),

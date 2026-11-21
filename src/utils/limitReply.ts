@@ -9,8 +9,9 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { Options } from 'express-rate-limit';
 
-const WORDS: Record<'otp' | 'auth' | 'account' | 'connection' | 'ipc', { code: string; text: string }> = {
-  otp: { code: 'OTP_IP_LIMIT', text: 'Too many codes asked for from this connection.' },
+const WORDS: Record<'otp' | 'auth' | 'account' | 'connection' | 'ipc', { code: string; text: string; after?: string }> = {
+  // Q13 (21 Nov 2026): clearer words; at a club many people share one Wi-Fi.
+  otp: { code: 'OTP_IP_LIMIT', text: 'Many sign-in codes were asked for on this Wi-Fi or network in the last hour.', after: ' Or switch to mobile data, or sign in with your email and password.' },
   auth: { code: 'AUTH_IP_LIMIT', text: 'Too many sign-in tries from this connection.' },
   // F048 (launch test plan, Round 5): the general request budgets (every request, scoring
   // writes, the per-address ceiling) said the same default HTML, and dozens of screens showed
@@ -29,7 +30,7 @@ export function limitReply(kind: keyof typeof WORDS) {
     const ms = reset instanceof Date ? reset.getTime() - Date.now() : options.windowMs;
     const mins = Math.max(1, Math.ceil(ms / 60_000));
     res.status(options.statusCode).json({
-      error: `${WORDS[kind].text} Try again in ${mins} ${mins === 1 ? 'minute' : 'minutes'}.`,
+      error: `${WORDS[kind].text} Try again in ${mins} ${mins === 1 ? 'minute' : 'minutes'}.${WORDS[kind].after ?? ''}`,
       code: WORDS[kind].code,
       retry_after_seconds: Math.max(1, Math.ceil(ms / 1000)),
     });

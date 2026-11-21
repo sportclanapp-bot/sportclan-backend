@@ -23,8 +23,26 @@ export interface OtpTestConfig {
   code: string;
 }
 
+/**
+ * Q8 + Q45 (Dipak, 21 Nov 2026): no fixed-code way into the live app. In production every test
+ * number is off, the store reviewers' number included (reviewers and QA sign in with email +
+ * password). The only exception is a production-mode server whose database is on this machine
+ * (localhost / 127.0.0.1): the local test stack, which live can never be.
+ */
+export function testNumbersAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  if ((env.NODE_ENV ?? '').trim() !== 'production') return true;
+  const db = (env.SUPABASE_URL ?? '').trim();
+  try {
+    const h = new URL(db).hostname;
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
 /** The allowlist, or null when the feature is off. */
 export function otpTestConfig(env: NodeJS.ProcessEnv = process.env): OtpTestConfig | null {
+  if (!testNumbersAllowed(env)) return null;
   const code = (env.OTP_TEST_CODE ?? '').trim();
   const raw = (env.OTP_TEST_NUMBERS ?? '').trim();
   if (!raw || !/^\d{6}$/.test(code)) return null;

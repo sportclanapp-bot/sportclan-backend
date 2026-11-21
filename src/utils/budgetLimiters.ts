@@ -20,7 +20,7 @@ export const PER_IP_MAX = 200;
 /** Abuse ceiling for AUTHENTICATED traffic from one address, so per-user keying
  *  cannot be farmed by minting many accounts behind one IP. Generous enough that
  *  a full team on one Wi-Fi never reaches it. */
-export const PER_IP_AUTHED_CEILING = 4000;
+export const PER_IP_AUTHED_CEILING = 60000; // Q50 (Dipak, 21 Nov 2026): was 4,000 (~23 viewers on one ground Wi-Fi); ~350 now
 
 /**
  * F001 (launch test plan): the per-address ceiling for signed-in users. It had

@@ -223,9 +223,12 @@ const uploadLimiter = rateLimit({
   store: new RedisRateLimitStore('upl', 'async'),
 });
 
+/** Q13 (Dipak, 21 Nov 2026): 50 an hour per connection (was 5: the 6th person on a club's Wi-Fi was
+ *  refused). The per-number limits in sendOtp and the daily SMS cap (utils/smsDailyCap) still stop abuse. */
+export const SEND_OTP_PER_IP_HOUR = 50;
 const sendOtpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 5,
+  max: SEND_OTP_PER_IP_HOUR,
   skip: rateLimitBypassed,
   standardHeaders: true,
   legacyHeaders: false,

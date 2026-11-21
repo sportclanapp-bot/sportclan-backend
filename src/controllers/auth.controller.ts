@@ -11,6 +11,7 @@ import axios from 'axios';
 import { supabase } from '../utils/supabase';
 import { isValidIndianPhone, canonicalisePhone, phoneVariants } from '../utils/phone';
 import { testCodeFor, maskPhone } from '../utils/otpTestNumbers';
+import { smsCapReached, countSmsSent } from '../utils/smsDailyCap';
 import { checkOtpCode, otpCheckError, verifiedMarker, clearWrongCodes } from '../utils/otpCheck';
 import { deletedNumberState, deletedResponse, holdUntil, releaseNumber } from '../utils/deletedNumber';
 import { resolveSportId } from '../utils/sportId';
@@ -375,7 +376,15 @@ export async function sendOtp(req: Request, res: Response) {
     console.info(`[otp-test] ${maskPhone(p)} purpose=${purpose}: test code stored, no SMS sent`);
     return res.json({ success: true, message: 'OTP sent', channel: usedChannel });
   }
+  // Q13: a ceiling on the SMS the whole server sends in an IST day (utils/smsDailyCap).
+  if (await smsCapReached()) {
+    return res.status(503).json({
+      error: 'We can’t send sign-in codes just now. Please try again later, or sign in with your email and password.',
+      code: 'SMS_DAILY_CAP',
+    });
+  }
   const sent = await sendOtpViaChannel(p, code, channel);
+  if (sent) await countSmsSent();
   if (!sent) {
     return res.status(503).json({
       error: 'We could not send a code to that number. Please try again.',

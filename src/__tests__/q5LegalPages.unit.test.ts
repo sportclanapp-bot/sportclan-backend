@@ -48,3 +48,8 @@ it('the delete page is served before the static files, like the policy', () => {
 it.each(Object.entries(pages))('%s: the line under the title is white on the dark header (it was dark grey, unreadable)', (_n, h) => {
   expect(h).toMatch(/\.header p \{[^}]*color: #fff;/);
 });
+it('Q18 follow-up: privacy page and delete page say a one-way hash of the number is kept only for invite coins', () => {
+  const line = 'A one-way hash of the number (it cannot be turned back into the number) is kept only to stop the same number claiming invite coins twice.';
+  expect(text(pages.privacy)).toContain(line);
+  expect(text(pages.delete)).toContain(line);
+});

@@ -25,7 +25,7 @@ export const DELETE_ACCOUNT_PAGE: { title: string; sections: { label: string; pa
       label: 'What happens',
       paragraphs: [
         'Your account is deleted straight away. Your name, photo, bio, email, gender and date of birth are erased, your profile disappears from search and lists, and you are signed out everywhere.',
-        'Your phone number is held for 30 days so nobody can sign back in to the account. After that it is erased, and the number can be used for a brand-new account with no link to this one.',
+        'Your phone number is held for 30 days so nobody can sign back in to the account. After that it is erased, and the number can be used for a brand-new account with no link to this one. A one-way hash of the number (it cannot be turned back into the number) is kept only to stop the same number claiming invite coins twice.',
       ],
     },
     {

@@ -54,7 +54,7 @@ export const PRIVACY_POLICY: { title: string; effectiveDate: string; sections: P
       paragraphs: [
         'Change your details any time in Profile → Edit profile.',
         'Settings → Export my data gives you a file with everything we hold about you, straight away.',
-        'Settings → Delete account deletes your account straight away. Your name, photo, bio, email, gender and date of birth are erased and you are signed out everywhere. Your posts, messages and match scores stay, shown as “Deleted User”, so other people’s chats and results don’t change. Your phone number is held for 30 days so nobody can sign back in to the account; after that it is erased and can be used for a brand-new account.',
+        'Settings → Delete account deletes your account straight away. Your name, photo, bio, email, gender and date of birth are erased and you are signed out everywhere. Your posts, messages and match scores stay, shown as “Deleted User”, so other people’s chats and results don’t change. Your phone number is held for 30 days so nobody can sign back in to the account; after that it is erased and can be used for a brand-new account. A one-way hash of the number (it cannot be turned back into the number) is kept only to stop the same number claiming invite coins twice.',
       ],
     },
     {

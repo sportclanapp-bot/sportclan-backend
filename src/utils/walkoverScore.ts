@@ -34,6 +34,31 @@ export function walkoverScoreFor(sport: string | null | undefined, rules: MatchR
 }
 
 /**
+ * Q29 (Dipak, 21 Nov 2026: A) · N-R3C2-7: an AWARDED match with no score typed takes the sport's
+ * official forfeit score — the tournament's walkover score first (walkoverScoreFor), else the
+ * rulebook's: football 3–0 (its rules), hockey 5–0 (FIH), basketball 20–0 (FIBA Art. 20),
+ * volleyball straight sets at 25–0 (FIVB 6.4), chess 1–0 (FIDE). Cricket, tennis, badminton,
+ * table tennis, pickleball and carrom have no official forfeit score: null, the organiser types one.
+ * Returned as the settings withWalkoverScore reads.
+ */
+const OFFICIAL_FORFEIT: Record<string, number | 'straight'> = { hockey: 5, basketball: 20, volleyball: 'straight' };
+
+export function awardForfeitSettings(sport: string | null | undefined, rules: MatchRules, tournamentSettings?: unknown): Record<string, unknown> | null {
+  const base = tournamentSettings && typeof tournamentSettings === 'object' ? (tournamentSettings as Record<string, unknown>) : {};
+  if (walkoverScoreFor(sport, rules, tournamentSettings) != null) return base;
+  const official = OFFICIAL_FORFEIT[lengthKey(sport)];
+  if (official == null) return null;
+  const set = { ...base, walkoverScore: official };
+  return walkoverScoreFor(sport, rules, set) != null ? set : null;
+}
+
+/** Q29: the forfeit score an award takes with no score typed (5 for hockey's 5–0), or null: ask for one. */
+export function awardForfeitScore(sport: string | null | undefined, rules: MatchRules, tournamentSettings?: unknown): number | null {
+  const set = awardForfeitSettings(sport, rules, tournamentSettings);
+  return set ? walkoverScoreFor(sport, rules, set) : null;
+}
+
+/**
  * N-R7-S137 (SP-HOC-044): a walkover in a sport and tournament with no walkover score (hockey
  * without settings.walkoverScore) has no score — the abandoned match's live score in its
  * score_summary is stale (a semi abandoned at 1–0 and given to the side behind). As the app's

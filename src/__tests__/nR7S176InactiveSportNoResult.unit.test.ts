@@ -58,7 +58,8 @@ test('/decide (stands / awarded) refuses a deactivated sport, and writes nothing
 test('an active sport is not refused by this check', async () => {
   inactive = false;
   db = fakeDb({ matches: [row('abandoned')], match_events: [] });
-  const r = await call(decideMatch, { decision: 'awarded', reason: 'No show', winner_side: 'A' });
+  // Q29: kabaddi has no official forfeit score, so the award carries a typed one.
+  const r = await call(decideMatch, { decision: 'awarded', reason: 'No show', winner_side: 'A', score: { A: 1, B: 0 } });
   expect([r.statusCode, r.body?.code]).toEqual([200, undefined]);
   expect(db.t('matches')[0]!.status).toBe('completed');
 });

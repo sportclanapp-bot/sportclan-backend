@@ -23,7 +23,8 @@ import { isUuid } from '../utils/uuid';
 import { isTournamentOrganiser } from '../utils/tournamentAuth';
 import { getSport, normSportSlug } from '../utils/sportCache';
 import { rulesOf } from '../utils/matchRules';
-import { withWalkoverScore, withoutWalkover } from '../utils/walkoverScore';
+import { awardForfeitSettings, withWalkoverScore, withoutWalkover } from '../utils/walkoverScore';
+import { sportName } from '../utils/displayNames';
 import { isKnockoutBracketMatch } from '../utils/knockout';
 import { advanceTournamentWinner, tournamentSettingsOf } from './tournaments.controller';
 import { notifyUsers, matchAudienceIds } from '../utils/notify';
@@ -129,8 +130,16 @@ export async function decideMatch(req: Request, res: Response) {
         if ((side === 'A' ? a <= b : b <= a)) return res.status(400).json({ error: 'The side it’s awarded to must have the higher score.', code: 'BAD_SCORE' });
         summary = { ...ss, A: { ...(ss.A ?? {}), score: a }, B: { ...(ss.B ?? {}), score: b }, team_a_score: a, team_b_score: b };
       } else {
-        // The sport's walkover score (football 3–0 by its rules or the tournament's), when it has one.
-        summary = withWalkoverScore(slug, rulesOf(slug, m as never), ss, side, await tournamentSettingsOf(m.tournament_id ?? null));
+        // Q29 (Dipak, 21 Nov 2026: A) · N-R3C2-7: the sport's official forfeit score (the tournament's
+        // walkover score, else football 3–0, hockey 5–0, basketball 20–0, volleyball straight sets);
+        // a sport with none (cricket, tennis…) is asked for a score — the live one stayed, so the
+        // side it went to could show as losing.
+        const rules = rulesOf(slug, m as never);
+        const forfeit = awardForfeitSettings(slug, rules, await tournamentSettingsOf(m.tournament_id ?? null));
+        if (!forfeit) return res.status(400).json({ error: `${sportName(slug)} has no official forfeit score. Type the score it’s awarded at.`, code: 'SCORE_REQUIRED' });
+        summary = withWalkoverScore(slug, rules, ss, side, forfeit);
+        const wo = summary.walkover_score as Record<string, number> | undefined;
+        if (wo) { summary.team_a_score = wo.A; summary.team_b_score = wo.B; }
       }
       const fin = scoreNow(summary);
       summary.decision = { kind: 'awarded', reason, by: userId, at: now };

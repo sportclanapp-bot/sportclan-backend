@@ -144,6 +144,13 @@ function scoresOf(m: GMatch): { a: number; b: number } {
     const sum = (x: unknown[]) => x.reduce((n: number, v) => n + (Number.isFinite(Number(v)) ? Number(v) : 0), 0);
     return { a: sum(ss.A.sets), b: sum(ss.B.sets) };
   }
+  // Q54 (Dipak, 21 Nov 2026: A) · N-R7-S37: a set sport's best-of-N series (volleyball; its games are
+  // keyed G1, G2… as tieCore's seriesSpec makes them) counts every set inside the games (7–5), so set
+  // difference works as in a normal league — it counted the games (2–1).
+  const games = Array.isArray(ss.rubbers) ? ss.rubbers as any[] : [];
+  if (ss.tie && ss.tie.series !== true && ss.walkover !== true && games.length && games.every((g) => /^G\d+$/.test(String(g?.key ?? '')) && Number.isFinite(Number(g?.A)) && Number.isFinite(Number(g?.B)))) {
+    return { a: games.reduce((n: number, g) => n + Number(g.A), 0), b: games.reduce((n: number, g) => n + Number(g.B), 0) };
+  }
   return {
     a: parseScoreNum(ss.team_a_score ?? ss?.A?.score),
     b: parseScoreNum(ss.team_b_score ?? ss?.B?.score),

@@ -77,6 +77,13 @@ export interface TennisOpts {
 }
 export type TennisGameScoring = 'ad' | 'noad' | 'semiad';
 type Opts = Required<TennisOpts>;
+/**
+ * Q25 (Dipak, 21 Nov 2026): where a set's tiebreak comes when none is set — at games-all, except a
+ * pro set to 9 (one set of 9 games), whose tiebreak comes at 8-all (AITA), so it ends 9–8, not 10–9.
+ */
+export function defaultTiebreakAt(setsToWin: number, gamesPerSet: number): number {
+  return setsToWin === 1 && gamesPerSet === 9 ? 8 : gamesPerSet;
+}
 function optsOf(o: number | TennisOpts | undefined): Opts {
   const x: TennisOpts = typeof o === 'number' ? { setsToWin: o } : o ?? { setsToWin: TENNIS_SETS_TO_WIN };
   return { setsToWin: x.setsToWin, gamesPerSet: x.gamesPerSet ?? GAMES_PER_SET, tiebreak: x.tiebreak ?? true, tiebreakTo: x.tiebreakTo ?? TIEBREAK_TO, matchTiebreak: x.matchTiebreak ?? false, scoring: x.scoring ?? 'ad', tiebreakAt: x.tiebreakAt ?? null, finalSetTiebreakTo: x.finalSetTiebreakTo ?? null };
@@ -141,7 +148,7 @@ export function tennisPoint(s: TennisScore, side: TennisSide, options: number | 
       return winSet({ ...s, games }, side, setsToWin, undefined, matchTiebreak);
     }
     // Stage 9 · T2: at games-all — or earlier (Fast4: first to 4, tiebreak at 3-3).
-    const at = tiebreakAt ?? gamesPerSet;
+    const at = tiebreakAt ?? defaultTiebreakAt(setsToWin, gamesPerSet); // Q25: a pro set to 9 at 8-all
     const tiebreak = tiebreaks && games.A === at && games.B === at;
     return { ...s, points: { A: 0, B: 0 }, games, tiebreak };
   }

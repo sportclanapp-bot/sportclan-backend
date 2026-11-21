@@ -1413,6 +1413,8 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     if (rules.adScoring === 'noad' || rules.adScoring === 'semiad') parts.push(rules.adScoring === 'noad' ? 'no-ad' : 'semi-ad'); // BUILD 3.63
     // Stage 9 · T2.
     if (rules.tiebreakAt != null && rules.tiebreakAt !== (rules.gamesPerSet ?? 6) && rules.tiebreak !== false) parts.push(`tiebreak at ${rules.tiebreakAt}–${rules.tiebreakAt}`);
+    // Q25 (Dipak, 21 Nov 2026): a pro set to 9's tiebreak comes at 8-all — said, as it isn't games-all.
+    else if (rules.tiebreakAt == null && rules.tiebreak !== false && rules.bestOf === 1 && rules.gamesPerSet === 9) parts.push('tiebreak at 8–8');
     // N-SPP1-TEN-1: one set is the final set — its tiebreak is that one.
     if (rules.finalSetTiebreakTo != null && rules.tiebreak !== false) parts.push(rules.bestOf === 1 ? `${rules.finalSetTiebreakTo}-point tiebreak` : `final-set tiebreak to ${rules.finalSetTiebreakTo}`);
     if (rules.noLet === true) parts.push('no lets');

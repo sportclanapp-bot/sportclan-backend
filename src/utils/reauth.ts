@@ -11,7 +11,16 @@ import { supabase } from './supabase';
 import { checkOtpCode, otpCheckError } from './otpCheck';
 import { canonicalisePhone, isValidIndianPhone } from './phone';
 import { clientIpKey } from '../middleware/rateLimitKey';
-import { deleteOtp } from './otpStore';
+import { bumpCounter, clearCounter, deleteOtp, readCounter } from './otpStore';
+
+/**
+ * Q14 (Dipak, 21 Nov 2026, N-R3A-1): like sign-in, 10 wrong passwords lock the password way of
+ * Confirm it's you for 15 minutes (a stolen 15-minute token could guess the password here with no
+ * limit). Counted per account; a right password clears it. The texted code keeps its own limit.
+ */
+export const REAUTH_PASSWORD_FAILS = 10;
+export const REAUTH_LOCK_SECONDS = 15 * 60;
+const failKey = (userId: string) => `rapw:${userId}`;
 
 export type ReauthRefusal = { status: number; body: { error: string; code: string; methods?: string[] } };
 
@@ -27,7 +36,17 @@ export async function reauthRefusal(req: Request, userId: string): Promise<Reaut
   // a judgement call in BATCH1_FOR_DIPAK.md.
   if (methods.length === 0) return null;
   if (typeof password === 'string' && password) {
-    if (u.password_hash && (await bcrypt.compare(password, u.password_hash))) return null;
+    const locked = { status: 429, body: {
+      error: realPhone
+        ? 'Too many wrong passwords. Try again in 15 minutes, or use a code we text to your current number.'
+        : 'Too many wrong passwords. Try again in 15 minutes.',
+      code: 'REAUTH_LOCKED', methods } };
+    if ((await readCounter(failKey(userId)).catch(() => 0)) >= REAUTH_PASSWORD_FAILS) return locked;
+    if (u.password_hash && (await bcrypt.compare(password, u.password_hash))) {
+      await clearCounter(failKey(userId)).catch(() => undefined);
+      return null;
+    }
+    await bumpCounter(failKey(userId), REAUTH_LOCK_SECONDS).catch(() => 0); // the 11th try is refused, as at sign-in
     return { status: 403, body: { error: 'That password isn’t right.', code: 'REAUTH_WRONG', methods } }; // 403, not 401: the app signs out on a 401
   }
   if (typeof code === 'string' && code && realPhone && u.phone) {

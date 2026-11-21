@@ -25,7 +25,7 @@ export function privacyPolicyHtml(): string {
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #F5F7FA; color: #212121; line-height: 1.7; }
   .header { background: linear-gradient(135deg, #0A1628, #1A3A5C, #1565C0); color: #fff; padding: 40px 20px; text-align: center; }
   .header h1 { font-size: 28px; font-weight: 800; margin-bottom: 6px; }
-  .header p { font-size: 13px; opacity: 0.6; }
+  .header p { font-size: 13px; color: #fff; opacity: 0.75; }
   .container { max-width: 720px; margin: 0 auto; padding: 24px 20px 60px; }
   .updated { font-size: 12px; color: #757575; margin-bottom: 24px; }
   h2 { font-size: 18px; font-weight: 800; color: #1A3A5C; margin: 28px 0 10px; }

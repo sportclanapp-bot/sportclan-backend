@@ -45,3 +45,6 @@ it('the delete page is served before the static files, like the policy', () => {
   expect(idx).toMatch(/app\.get\('\/delete-account\.html', \(_req, res\) => \{ res\.type\('html'\)\.send\(deleteAccountHtml\(\)\); \}\);/);
   expect(idx.indexOf("app.get('/delete-account.html'")).toBeLessThan(idx.indexOf('express.static'));
 });
+it.each(Object.entries(pages))('%s: the line under the title is white on the dark header (it was dark grey, unreadable)', (_n, h) => {
+  expect(h).toMatch(/\.header p \{[^}]*color: #fff;/);
+});

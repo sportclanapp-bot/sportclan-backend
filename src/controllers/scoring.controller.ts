@@ -801,6 +801,12 @@ export async function validateScoringEvent(
     if (match.is_ranked && ids.some((v: unknown) => isGuestId(v as string))) {
       return refuse(400, { error: 'Ranked matches require registered players, not guests.' });
     }
+    // Q55 (Dipak, 21 Nov 2026): a typed-in name ("Add a player…") is for casual
+    // matches. A tournament match keeps its teams' registered players only, so
+    // its leaders boards and player stats stay to real accounts.
+    if (match.tournament_id && ids.some((v: unknown) => isGuestId(v as string))) {
+      return refuse(400, { error: 'A tournament match counts the team’s registered players only. Add the player to the team first, or skip the name.', code: 'GUEST_IN_TOURNAMENT' });
+    }
     for (const k of ['player_name', 'batsman_name', 'bowler_name'] as const) {
       if (payload[k] != null) {
         const clean = sanitizePlayerName(payload[k]);

@@ -29,6 +29,23 @@ const toProvider = ({ city, sports, ...u }: any) => ({
 });
 
 /**
+ * Q37 (Dipak, 21 Nov 2026: A, N-R6-E003): "Who can find you" means the same in Services as in
+ * search (search.controller applyDiscoverability): No one → not listed (nor counted) for anybody
+ * but themselves; Followers → only for the people who follow them. A PostgREST `or` on the
+ * embedded user, so the list's and the counts' totals stay true.
+ */
+async function findableFilter(viewerId: string | undefined): Promise<string> {
+  const parts = ['discoverability.is.null', 'discoverability.eq.everyone'];
+  if (!viewerId) return parts.join(',');
+  const follows = await selectAll<{ following_id: string }>((from, to) => supabase.from('follow_relationships')
+    .select('following_id').eq('follower_id', viewerId).order('following_id', { ascending: true }).range(from, to));
+  const ids = [...new Set(follows.map((f) => f.following_id))];
+  if (ids.length > 0) parts.push(`and(discoverability.eq.followers,id.in.(${ids.join(',')}))`);
+  parts.push(`id.eq.${viewerId}`);
+  return parts.join(',');
+}
+
+/**
  * Profile & Settings tidy-up · every official (account type umpire or official)
  * the viewer may see, once each, with the Services cards they belong in — the
  * same filters as the type lists (not deleted, not blocked, no test accounts for a
@@ -37,12 +54,14 @@ const toProvider = ({ city, sports, ...u }: any) => ({
 async function officialsFor(viewerId: string | undefined, cityId: string | null) {
   const blocked = await blockedUserIds(viewerId);
   const hide = await hideTestFor(viewerId);
+  const findable = await findableFilter(viewerId); // Q37
   const rows = await selectAll<any>((from, to) => {
     let q = supabase.from('user_account_types').select(PROVIDER_EMBED)
       .in('account_type', [...OFFICIAL_TYPES]).is('users.deleted_at', null)
       .is('users.suspended_at', null) // Q19 + Q46: hidden while suspended
       .order('user_id', { ascending: true }).order('account_type', { ascending: true }).range(from, to);
     q = excludeIds(q, 'user_id', blocked);
+    q = q.or(findable, { referencedTable: 'users' }); // Q37
     if (hide) q = excludeTestEmbed(q, 'users');
     if (cityId) q = q.eq('users.city_id', cityId);
     return q;
@@ -131,6 +150,8 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
     .range(p.from, p.to);
   // Either direction: they blocked you, or you blocked them (SC-81/82).
   q = excludeIds(q, 'user_id', blocked);
+  // Q37: "Who can find you" — No one is not listed, Followers only for their followers.
+  q = q.or(await findableFilter(req.userId), { referencedTable: 'users' });
   // B03 (V090/V245, D3): seeded "Seed test account #…" providers are hidden from
   // real viewers — in the query, so `count` stays the true total.
   if (await hideTestFor(req.userId)) q = excludeTestEmbed(q, 'users');
@@ -153,6 +174,7 @@ router.get('/counts', authenticateToken, async (req: Request, res: Response) => 
   const blocked = await blockedUserIds(req.userId);
   const hide = await hideTestFor(req.userId);
   const cityId = cityOf(req.query.city_id);
+  const findable = await findableFilter(req.userId); // Q37: counts as the lists
   const types = [...SERVICE_TYPES];
   const results = await Promise.all(types.map(async (type) => {
     let q = supabase
@@ -162,6 +184,7 @@ router.get('/counts', authenticateToken, async (req: Request, res: Response) => 
       .is('users.deleted_at', null)
       .is('users.suspended_at', null); // Q19 + Q46: the count is what the list shows
     q = excludeIds(q, 'user_id', blocked);
+    q = q.or(findable, { referencedTable: 'users' }); // Q37
     if (hide) q = excludeTestEmbed(q, 'users');
     if (cityId) q = q.eq('users.city_id', cityId);
     const { count, error } = await q;

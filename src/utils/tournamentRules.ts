@@ -10,9 +10,10 @@
  */
 import { isUuid } from './uuid';
 import { LIMITS } from './validation';
+import { detectProfanity } from './profanity';
 import type { TournamentStatus } from './tournamentStatus';
 
-export type Refusal = { error: string; code?: string };
+export type Refusal = { error: string; code?: string; detected_words?: string[] };
 
 /** The four statuses the column allows (utils/tournamentStatus, migration 004). */
 export const TOURNAMENT_STATUSES: readonly TournamentStatus[] = ['upcoming', 'live', 'completed', 'cancelled'];
@@ -63,7 +64,16 @@ export function tournamentNameRefusal(name: unknown): Refusal | null {
   if (name.trim().length > LIMITS.tournamentNameMax) {
     return { error: `name must be ${LIMITS.tournamentNameMax} characters or fewer`, code: 'INVALID_NAME' };
   }
-  return null;
+  return nameProfanityRefusal(name);
+}
+
+/**
+ * Q59 (Dipak, 21 Nov 2026, N-R7-S88): tournament and event names get the same bad-word check as
+ * posts and team names, with the same answer (the app words PROFANITY_DETECTED as 'Please remove: …').
+ */
+export function nameProfanityRefusal(name: string): Refusal | null {
+  const detected = detectProfanity(name.trim());
+  return detected.length > 0 ? { error: 'PROFANITY_DETECTED', code: 'PROFANITY_DETECTED', detected_words: detected } : null;
 }
 
 const present = (v: unknown) => v !== undefined && v !== null && v !== '';

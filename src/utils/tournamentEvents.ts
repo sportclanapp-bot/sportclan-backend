@@ -18,6 +18,7 @@
 import type { Request } from 'express';
 import { supabase } from './supabase';
 import { LIMITS } from './validation';
+import { detectProfanity } from './profanity';
 import { sportKeyOf } from './tournamentSettings';
 import type { TournamentStatus } from './tournamentStatus';
 
@@ -59,7 +60,7 @@ export function entryKindsFor(sport: string | null | undefined): EntryKind[] {
   }
 }
 
-export type Refusal = { error: string; code: string };
+export type Refusal = { error: string; code: string; detected_words?: string[] };
 
 export function entryKindRefusal(sport: string | null | undefined, kind: unknown): Refusal | null {
   if (kind === undefined || kind === null) return null;
@@ -75,6 +76,9 @@ export function entryKindRefusal(sport: string | null | undefined, kind: unknown
 export function eventLabelRefusal(label: unknown): Refusal | null {
   if (typeof label !== 'string' || label.trim().length < 1) return { error: 'Give each event a name, like Men’s singles.', code: 'BAD_EVENT_LABEL' };
   if (label.trim().length > EVENT_LABEL_MAX) return { error: `An event’s name is up to ${EVENT_LABEL_MAX} characters.`, code: 'BAD_EVENT_LABEL' };
+  // Q59: an event's name gets the posts' bad-word check (add events, create with events, rename).
+  const detected = detectProfanity(label.trim());
+  if (detected.length > 0) return { error: 'PROFANITY_DETECTED', code: 'PROFANITY_DETECTED', detected_words: detected };
   return null;
 }
 

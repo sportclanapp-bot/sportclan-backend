@@ -360,3 +360,57 @@ describe('the rules, on their own', () => {
     expect(clientHas({ headers: {} }, 'events')).toBe(false);
   });
 });
+
+// Q59 (Dipak, 21 Nov 2026, N-R7-S88 / GF2-065): event and tournament names get the posts' bad-word
+// check, on create AND edit, with the same answer (the app shows 'Please remove: …').
+describe('Q59: no bad words in tournament or event names', () => {
+  const BAD = { error: 'PROFANITY_DETECTED', code: 'PROFANITY_DETECTED', detected_words: ['chutiya'] };
+  const PARENT_ROW = { id: P, name: 'P3 Sunday Open', status: 'upcoming', is_parent: true, created_by: 'me', venue: 'Old Hall', start_date: '2026-11-07', format: 'knockout', sport_id: 'bd', sport_metadata: { _chat_id: 'c' } };
+  const EVENT_ROW = { id: E1, name: 'P3 Sunday Open · MS', status: 'upcoming', parent_id: P, event_label: 'MS', created_by: 'me', venue: 'Old Hall', start_date: '2026-11-07', format: 'knockout', entry_kind: 'singles' };
+  const SINGLE_ROW = { id: E2, name: 'P3 Club Cup', status: 'upcoming', created_by: 'me', venue: 'Old Hall', start_date: '2026-11-07', format: 'knockout' };
+  const db = (row: object) => {
+    mockLog = [];
+    mockNext = (q) => {
+      if (q[0] === 'from:tournaments' && has(q, 'insert:')) { const rows = arg(q, 'insert'); return { data: Array.isArray(rows) ? rows.map((x: any) => ({ ...x, id: E2 })) : { ...rows, id: P } }; }
+      if (q[0] === 'from:tournaments' && has(q, 'update:')) return { data: { ...row, ...arg(q, 'update')[0] } };
+      if (q[0] === 'from:tournaments' && arg(q, 'eq')[0] === 'parent_id') return { data: [] };
+      if (q[0] === 'from:tournaments' && arg(q, 'eq')[1] === P && (row as any).id !== P) return { data: PARENT_ROW };
+      if (q[0] === 'from:tournaments') return { data: row };
+      if (q[0] === 'from:chats') return { data: { id: 'chat-1' } };
+      return { data: [], count: 0 };
+    };
+  };
+  test('create: a tournament name with a listed word is refused, nothing written', async () => {
+    db({});
+    const r = await run(createTournament, { body: { ...OPEN, name: 'P3 chutiya cup', format: 'knockout', max_teams: 8 } });
+    expect([r.statusCode, r.body]).toEqual([400, BAD]);
+    expect(inserts('tournaments')).toHaveLength(0);
+  });
+  test('create with events: an event name with a listed word is refused, nothing written', async () => {
+    db({});
+    const r = await run(createTournament, { body: { ...OPEN, events: [EVENTS[0], { ...EVENTS[1], label: 'P3 chutiya open' }] } });
+    expect([r.statusCode, r.body]).toEqual([400, BAD]);
+    expect(inserts('tournaments')).toHaveLength(0);
+  });
+  test('add events (the GF2-065 case): refused, nothing written', async () => {
+    db(PARENT_ROW);
+    const r = await run(addEvents, { params: { id: P }, body: { events: [{ label: 'P3 chutiya open', entry_kind: 'singles', max_teams: 16 }] } });
+    expect([r.statusCode, r.body]).toEqual([400, BAD]);
+    expect(inserts('tournaments')).toHaveLength(0);
+  });
+  test('edit: renaming a tournament, or an event, to a listed word is refused, nothing saved', async () => {
+    db(SINGLE_ROW);
+    const t = await run(updateTournament, { params: { id: E2 }, body: { name: 'Madarchod league' } });
+    expect([t.statusCode, t.body.error, t.body.detected_words]).toEqual([400, 'PROFANITY_DETECTED', ['madarchod']]);
+    db(EVENT_ROW);
+    const e = await run(updateTournament, { params: { id: E1 }, body: { event_label: 'chutiya singles' } });
+    expect([e.statusCode, e.body]).toEqual([400, BAD]);
+    expect(updates('tournaments')).toHaveLength(0);
+  });
+  test('clean names (and names that only contain a listed word inside another word) still save', async () => {
+    db(SINGLE_ROW);
+    expect((await run(updateTournament, { params: { id: E2 }, body: { name: 'Kshitij Scunthorpe Classic' } })).statusCode).toBe(200);
+    db(PARENT_ROW);
+    expect((await run(addEvents, { params: { id: P }, body: { events: [{ label: 'Boys U-15 class', entry_kind: 'singles', max_teams: 16 }] } })).statusCode).toBe(200);
+  });
+});

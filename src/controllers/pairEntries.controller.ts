@@ -242,6 +242,11 @@ export async function addPlayersEntry(req: Request, res: Response) {
     if (!(await isTournamentOrganiser(t.id, userId))) return res.status(403).json({ error: 'Only the organiser can add players.' });
     const ids = Array.isArray(req.body?.user_ids) ? (req.body.user_ids as unknown[]).filter((x): x is string => typeof x === 'string' && isUuid(x)) : [];
     if (ids.length === 0) return res.status(400).json({ error: 'Pick the players.', code: 'BAD_PLAYERS' });
+    // Q47 (Dipak, 21 Nov 2026, GF2-149): the server follows the rule the "Add a player" search shows —
+    // nobody who blocked the organiser (or whom the organiser blocked) is added; they can still enter themselves.
+    for (const id of ids) {
+      if (id !== userId && (await isBlockedBetween(userId, id))) return res.status(403).json({ error: 'You can’t add this player.', code: 'BLOCKED' });
+    }
     const bad = await playersRefusal(t, ids, { asOrganiser: true });
     if (bad) return res.status(bad.status).json(bad.body);
     const made = await makeEntry(t, ids, 'approved', userId);

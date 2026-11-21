@@ -130,7 +130,7 @@ describe('doubles: invite a partner, who accepts', () => {
     db.t('tournaments').find((x) => x.id === XD)!.settings = { v: 1, category: { gender: 'mixed', minAge: 18 } };
     const kid = await run(createPairInvite, RAVI, { id: XD }, { invitee_id: NEHA });
     expect(kid.body.code).toBe('CATEGORY');
-    expect(kid.body.error).toMatch(/Neha is 11/);
+    expect(kid.body.error).toMatch(/Neha is under the age limit/);
   });
   test('decline tells the inviter; only the invitee answers; the inviter cancels', async () => {
     const inv = (await run(createPairInvite, RAVI, { id: XD }, { invitee_id: PRIYA })).body.invite;
@@ -245,5 +245,30 @@ describe('gap 6 · after a retirement: the player’s other entries', () => {
     expect(r.body.this_entry).toEqual({ entry_id: entriesOf(MS)[0].id });
     expect(r.body.others).toEqual([expect.objectContaining({ tournament_id: XD, entry_id: entriesOf(XD)[0].id, team_name: 'Ravi K / Priya' })]);
     expect((await run(relatedEntries, RAVI, { id: MS, teamId: msTeam })).statusCode).toBe(403);
+  });
+});
+
+// Q47 (Dipak, 21 Nov 2026, GF2-149): the organiser's direct add follows the "Add a player" search —
+// a player who blocked the organiser (or whom the organiser blocked) is refused; they can still enter themselves.
+describe('Q47: the organiser can’t add a player either of them blocked', () => {
+  test('the player blocked the organiser → 403 BLOCKED, nothing entered, no notice', async () => {
+    mockBlocked.add(`${AMIT}|${ORG}`);
+    const r = await run(addPlayersEntry, ORG, { id: XD }, { user_ids: [AMIT, PRIYA] });
+    expect([r.statusCode, r.body]).toEqual([403, { error: 'You can’t add this player.', code: 'BLOCKED' }]);
+    expect(db.t('tournament_entries').filter((e: any) => e.tournament_id === XD)).toHaveLength(0);
+    expect(notified).toHaveLength(0);
+  });
+  test('the organiser blocked the player → refused the same way (singles too)', async () => {
+    mockBlocked.add(`${ORG}|${RAVI}`);
+    expect((await run(addPlayersEntry, ORG, { id: MS }, { user_ids: [RAVI] })).body.code).toBe('BLOCKED');
+  });
+  test('the blocked player can still enter themselves', async () => {
+    mockBlocked.add(`${RAVI}|${ORG}`);
+    const r = await run(enterSelf, RAVI, { id: MS });
+    expect(r.statusCode).toBe(200);
+  });
+  test('no block → added as before', async () => {
+    mockBlocked.add(`${AMIT}|${RAVI}`); // a block between two other people doesn't matter
+    expect((await run(addPlayersEntry, ORG, { id: MS }, { user_ids: [RAVI] })).statusCode).toBe(200);
   });
 });

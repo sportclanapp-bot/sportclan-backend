@@ -66,7 +66,7 @@ describe('N-R7-S129 · undoing the start puts a chess game back to scheduled', (
     }
   });
   test('other sports, finished and voided games untouched', async () => {
-    slug = 'football'; expect(await unstartChessIfNoPlay('m1')).toBe(false);
+    slug = 'badminton'; expect(await unstartChessIfNoPlay('m1')).toBe(false);
     slug = 'chess'; match = { sport_id: 's', status: 'completed', voided_at: null }; expect(await unstartChessIfNoPlay('m1')).toBe(false);
     match = { sport_id: 's', status: 'live', voided_at: '2026-11-10' }; expect(await unstartChessIfNoPlay('m1')).toBe(false);
     expect(updates).toEqual([]);

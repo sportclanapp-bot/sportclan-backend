@@ -938,11 +938,15 @@ export async function promoteToLive(matchId: string, match: { status?: string | 
  * Before, it stayed 'live' with 0 events and Match detail read LIVE · In progress beside an idle banner.
  * Never a finished or voided game; other sports keep their status after an undo.
  */
+// N-R7-S181 (Step 3 final pass, SIDE-A5r6-1, SP-BKB-134): the kick-off sports' '⏱ KICK-OFF / PUSH-BACK / TIP-OFF ·
+// start the clock' is the same kind of start as chess's '▶ Start clock' — undoing it (nothing else that starts
+// play left) put the pad back to READY while the server stayed 'live' with 0 events ('BASKETBALL · LIVE').
+const UNSTART_ON_UNDO = new Set(['chess', 'football', 'hockey', 'basketball']);
 export async function unstartChessIfNoPlay(matchId: string): Promise<boolean> {
   try {
     const { data: m } = await supabase.from('matches').select('sport_id, status, voided_at').eq('id', matchId).maybeSingle();
     if (!m || m.status !== 'live' || m.voided_at) return false;
-    if (normSportSlug((await getSport(m.sport_id as string))?.slug) !== 'chess') return false;
+    if (!UNSTART_ON_UNDO.has(normSportSlug((await getSport(m.sport_id as string))?.slug))) return false;
     const rest = await matchEventsAll<{ event_type: string; payload: unknown }>(matchId, 'event_type, payload');
     if (rest.some((e) => startsPlayEvent(e.event_type, e.payload))) return false;
     await supabase.from('matches').update({ status: 'scheduled' }).eq('id', matchId).eq('status', 'live');

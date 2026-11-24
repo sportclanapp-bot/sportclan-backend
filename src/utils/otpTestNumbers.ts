@@ -26,11 +26,13 @@ export interface OtpTestConfig {
 /**
  * Q8 + Q45 (Dipak, 21 Nov 2026): no fixed-code way into the live app. In production every test
  * number is off, the store reviewers' number included (reviewers and QA sign in with email +
- * password). The only exception is a production-mode server whose database is on this machine
- * (localhost / 127.0.0.1): the local test stack, which live can never be.
+ * password). Exceptions: a production-mode server whose database is on this machine
+ * (localhost / 127.0.0.1: the local test stack, which live can never be), and the tester-period
+ * switch below (OTP_TEST_NUMBERS_TESTER_PERIOD=true, off by default).
  */
 export function testNumbersAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
   if ((env.NODE_ENV ?? '').trim() !== 'production') return true;
+  if (testerPeriodOn(env)) return true;
   const db = (env.SUPABASE_URL ?? '').trim();
   try {
     const h = new URL(db).hostname;
@@ -38,6 +40,24 @@ export function testNumbersAllowed(env: NodeJS.ProcessEnv = process.env): boolea
   } catch {
     return false;
   }
+}
+
+/**
+ * Tester period (Dipak, 24 Nov 2026): human testers use the live app before launch, and real SMS
+ * can't go out yet (DLT registration needs the company). While Render has
+ * OTP_TEST_NUMBERS_TESTER_PERIOD=true (exactly), a production server still accepts the listed
+ * OTP_TEST_NUMBERS with OTP_TEST_CODE, and nothing else changes (the any-number '123456' bypass
+ * stays dead in production). Unset / anything else = the launch behaviour above (Q8 + Q45: off).
+ * REMOVE THIS VAR ON RENDER AT LAUNCH. A warning is logged once while it is on in production.
+ */
+let testerWarned = false;
+export function testerPeriodOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  const on = (env.OTP_TEST_NUMBERS_TESTER_PERIOD ?? '').trim() === 'true';
+  if (on && !testerWarned && (env.NODE_ENV ?? '').trim() === 'production') {
+    testerWarned = true;
+    console.warn('[otp-test-numbers] OTP_TEST_NUMBERS_TESTER_PERIOD=true: listed test numbers sign in with the fixed code on this production server. Remove it at launch.');
+  }
+  return on;
 }
 
 /** The allowlist, or null when the feature is off. */

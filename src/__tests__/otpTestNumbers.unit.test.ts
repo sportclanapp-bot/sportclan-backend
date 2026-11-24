@@ -33,7 +33,7 @@ import axios from 'axios';
 // eslint-disable-next-line import/first
 import { sendOtp, verifyOtp } from '../controllers/auth.controller';
 // eslint-disable-next-line import/first
-import { otpTestConfig, testCodeFor, maskPhone, testNumbersAllowed } from '../utils/otpTestNumbers';
+import { otpTestConfig, testCodeFor, maskPhone, testNumbersAllowed, testerPeriodOn } from '../utils/otpTestNumbers';
 
 const get = (axios as unknown as { get: jest.Mock }).get;
 const res = () => {
@@ -56,6 +56,7 @@ beforeEach(() => {
   mockLiveOwner = true;
   process.env = { ...ENV, TWOFACTOR_API_KEY: 'k-test', OTP_TEST_NUMBERS: '9876500001, +91 98765 00002', OTP_TEST_CODE: '246810' };
   delete process.env.ALLOW_TEST_OTP;
+  delete process.env.OTP_TEST_NUMBERS_TESTER_PERIOD;
 });
 afterAll(() => { process.env = ENV; });
 
@@ -177,5 +178,43 @@ describe('the four flows and the rate limits', () => {
     const idx = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
     expect(idx.indexOf("app.use('/auth/send-otp', sendOtpLimiter)")).toBeGreaterThan(-1);
     expect(idx.indexOf("app.use('/auth/send-otp', sendOtpLimiter)")).toBeLessThan(idx.indexOf("app.use('/auth', authLimiter, authRoutes)"));
+  });
+});
+
+describe('tester period (Dipak, 24 Nov 2026): OTP_TEST_NUMBERS_TESTER_PERIOD keeps the listed numbers on in production', () => {
+  const live = { OTP_TEST_NUMBERS: '9876500001', OTP_TEST_CODE: '246810', NODE_ENV: 'production', SUPABASE_URL: 'https://abcdefgh.supabase.co' };
+  test('exactly "true" → the listed numbers get the fixed code on a live production server', () => {
+    const env = { ...live, OTP_TEST_NUMBERS_TESTER_PERIOD: 'true' } as any;
+    expect(testerPeriodOn(env)).toBe(true);
+    expect(testNumbersAllowed(env)).toBe(true);
+    expect(testCodeFor('+919876500001', env)).toBe('246810');
+    expect(testCodeFor('+919876500009', env)).toBeNull();
+  });
+  test('unset or anything else → the launch behaviour (off)', () => {
+    for (const v of [undefined, '', 'false', '1', 'yes', 'TRUE ', 'on']) {
+      const env = { ...live, ...(v === undefined ? {} : { OTP_TEST_NUMBERS_TESTER_PERIOD: v }) } as any;
+      if (v === 'TRUE ') { expect(testerPeriodOn(env)).toBe(false); continue; }
+      expect(testNumbersAllowed(env)).toBe(false);
+      expect(testCodeFor('+919876500001', env)).toBeNull();
+    }
+  });
+  test('sendOtp in production with the switch on: a listed number gets no SMS and the fixed code verifies', async () => {
+    Object.assign(process.env, live, { OTP_TEST_NUMBERS_TESTER_PERIOD: 'true' });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const r = await send('9876500001');
+    expect(r.statusCode).toBe(200);
+    expect(get).not.toHaveBeenCalled();
+    const v = res();
+    await verifyOtp({ body: { phone: '9876500001', code: '246810', purpose: 'login' } } as any, v);
+    expect(v.statusCode).toBe(200);
+    warn.mockRestore();
+  });
+  test("the any-number '123456' bypass stays dead in production even with the switch on", async () => {
+    Object.assign(process.env, live, { OTP_TEST_NUMBERS_TESTER_PERIOD: 'true', ALLOW_TEST_OTP: 'true' });
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    await send('9876500077');
+    const v = res();
+    await verifyOtp({ body: { phone: '9876500077', code: '123456', purpose: 'login' } } as any, v);
+    expect(v.statusCode).not.toBe(200);
   });
 });

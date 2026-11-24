@@ -1989,7 +1989,7 @@ export async function getMatch(req: Request, res: Response) {
           .then((r) => r, () => ({ count: 0 })),
       ]).then(([ev, edits, removed]) => ({ count: ev.count, editsCount: (edits as { count?: number | null }).count ?? 0, removalsCount: (removed as { count?: number | null }).count ?? 0 })),
       supabase.from('match_ratings').select('match_quality, rater_id').eq('match_id', id),
-      getMatchLiveStatus(match as { id: string; status?: string | null; created_by?: string | null; umpire_id?: string | null })
+      getMatchLiveStatus(match as { id: string; status?: string | null; created_by?: string | null; umpire_id?: string | null; scorer_id?: string | null })
         .catch(() => null), // the match payload matters more than the freshness hint
       getLease(id).then((l) => leaseWithHolder(l)).then((v) => ({ ok: true as const, v }), () => ({ ok: false as const })),
       Promise.all([

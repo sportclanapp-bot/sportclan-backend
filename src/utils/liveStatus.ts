@@ -88,6 +88,7 @@ export async function getMatchLiveStatus(match: {
   status?: string | null;
   created_by?: string | null;
   umpire_id?: string | null;
+  scorer_id?: string | null;
 }): Promise<MatchLiveStatus> {
   const nowIso = new Date().toISOString();
   let lastEventAt: string | null = null;
@@ -118,7 +119,16 @@ export async function getMatchLiveStatus(match: {
     if (changedAt && (!lastEventAt || Date.parse(changedAt) > Date.parse(lastEventAt))) lastEventAt = changedAt;
   } catch { /* keep the event time */ }
 
-  const scorerIds = [match.created_by, match.umpire_id].filter(Boolean) as string[];
+  // N-R7-S199 (Step 3 final pass, SIDE-X12-1, X1-S14): whose presence says 'the scorer is around' — the phone holding
+  // the scoring lease if there is one, else the named scorer (or the creator when none is named) and the umpire. It read
+  // only [creator, umpire], so with a named scorer whose phone dropped, the creator watching kept it 'quiet' ('No scoring
+  // for 10m') and viewers never got 'Scorer may be offline'.
+  let holder: string | null = null;
+  try {
+    const { data } = await supabase.from('match_scoring_leases').select('user_id').eq('match_id', match.id).maybeSingle();
+    holder = (data as { user_id?: string | null } | null)?.user_id ?? null;
+  } catch { /* no lease read: fall back to the named people */ }
+  const scorerIds = (holder ? [holder] : [match.scorer_id ?? match.created_by, match.umpire_id]).filter(Boolean) as string[];
   if (scorerIds.length > 0) {
     try {
       const { data } = await supabase

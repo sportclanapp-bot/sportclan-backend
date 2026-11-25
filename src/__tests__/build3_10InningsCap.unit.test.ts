@@ -19,7 +19,7 @@ test('the clock: from the side’s first delivery; warns 5 minutes out; over at 
   const log = [ev('A', 0), ev('A', 20), ev('B', 50)];
   expect(inningsClock(log, 'A', null, t0 + 60 * 60000)).toBeNull();
   expect(inningsClock([], 'A', 45, t0)).toBeNull();
-  expect(inningsClock(log, 'A', 45, t0 + 39 * 60000)).toEqual({ elapsed: 39, cap: 45, warn: false, over: false });
+  expect(inningsClock(log, 'A', 45, t0 + 39 * 60000)).toEqual({ elapsed: 39, cap: 45, warn: false, over: false, paused: false, reason: null });
   expect(inningsClock(log, 'A', 45, t0 + 40 * 60000)).toMatchObject({ warn: true, over: false });
   expect(inningsClock(log, 'A', 45, t0 + 45 * 60000)).toMatchObject({ warn: true, over: true });
   expect(inningsClock(log, 'B', 45, t0 + 60 * 60000)).toMatchObject({ elapsed: 10, over: false });

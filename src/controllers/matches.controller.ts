@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { voidClosedOn } from '../utils/voidClosedOn';
 import { deciderAfterResult } from './decider.controller';
 import { hubHolderElsewhere, hubRefusal } from '../utils/hubReadOnly';
@@ -1834,6 +1835,122 @@ export async function sweepUnplayedScheduledMatches(): Promise<{ abandoned: numb
 }
 
 
+/** The commentary lines of a match's events, newest first (GET /commentary and GET /timeline share it). */
+async function commentaryLines(match: Record<string, any>, events: Array<{ id: string; event_type: string; period: number | null; clock_seconds: number | null; payload: any; created_at: string }>): Promise<any[]> {
+  // The sport by its slug: this compared the sport's UUID with 'cric', which
+  // is never true, so a cricket timeline never got its over.ball labels.
+  const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
+  const isCricket = slug === 'cricket';
+  const teamA = match.team_a_name ?? 'Team A';
+  const teamB = match.team_b_name ?? 'Team B';
+  let periods = 1;
+  let moves = 0;
+  // N-SPP1-CHS-2 / CHS-3: a team chess match on clocks — each board's own moves, and its White.
+  const chessSpec = slug === 'chess' ? tieSpecOf('chess', rulesOf('chess', match)) : null;
+  const movesByBoard = new Map<string, number>();
+  // N-R7-S114 (SPP1-CHS-133): a board result sent without its board (results entered one after
+  // another, from an older pad or the API) belongs to the board in play — the first one not yet
+  // decided, as the app's tie split reads it — so its timeline line can name the board.
+  const decidedBoards = new Set<string>();
+  const legalBallsBySide: Record<'A' | 'B', number> = { A: 0, B: 0 };
+  const enriched: Array<any> = [];
+  for (const ev of events ?? []) {
+    const p: any = ev.payload ?? {};
+    // Stage 10 · TT3: a result typed from the score sheet says so once, not point by point.
+    if (ev.event_type === 'score' && p.typed === true) continue;
+    if (silentOnTimeline(ev.event_type as string, p)) continue; // audit #111
+
+    // For cricket, compute the over.ball label from a running legal-ball
+    // count. Wides and no-balls don't advance the legal count.
+    // Per innings (it ran one count across both), deliveries only, and byes /
+    // leg-byes are legal balls — the same rule as the scorecard.
+    let overBallLabel: string | null = null;
+    if (isCricket && (ev.event_type === 'ball' || ev.event_type === 'extra' || ev.event_type === 'wicket')) {
+      const side: 'A' | 'B' = p.team_side === 'B' ? 'B' : 'A';
+      const isLegal = isBallOfOver(ev.event_type, p);
+      if (isLegal) legalBallsBySide[side] += 1;
+      const legalBalls = legalBallsBySide[side];
+      const displayBalls = isLegal ? legalBalls : legalBalls + 1;
+      const overNum = Math.floor((displayBalls - 1) / 6);
+      const ballInOver = ((displayBalls - 1) % 6) + 1;
+      overBallLabel = `${overNum}.${ballInOver}`;
+    }
+
+    let commentary = ev.event_type as string;
+    let isWicket = false;
+    let isBoundary = false;
+    if (ev.event_type === 'period_change') periods += 1;
+    if (ev.event_type === 'move') moves += 1;
+    const boardIdx = timelineBoardIndex(chessSpec, ev.event_type as string, p, decidedBoards);
+    if (boardIdx >= 0 && ev.event_type === 'move') movesByBoard.set(p.board, (movesByBoard.get(p.board) ?? 0) + 1);
+    const boardCtx = boardIdx >= 0 ? { board: chessSpec!.rubbers[boardIdx]!.label, boardWhiteTeam: boardWhite(chessSpec!, boardIdx), move: movesByBoard.get(p.board) ?? 0 } : {};
+    // Audit batch 4 (#111 / #112 / #136): every line from one place (utils/commentary) — cricket too, and
+    // plain words for anything else; it printed `note {…}` raw.
+    const line = timelineLine(ev.event_type as string, p, {
+      sport: slug, teamA, teamB, period: periods - 1, move: moves, clockSeconds: (ev as any).clock_seconds ?? null,
+      regulation: rulesOf(slug, match).periods ?? null, // BUILD 3.17: the match's own periods
+      periodMinutes: rulesOf(slug, match).periodMinutes ?? null, // BUILD 3.22: the timeline minute
+      extraMinutes: (rulesOf(slug, match) as { extraTimeMinutes?: number | null }).extraTimeMinutes ?? null, // F186
+      threeByThree: slug === 'basketball' && rulesOf(slug, match).pointSet === '12', // Stage 15 follow-up
+      ...boardCtx,
+    });
+    commentary = line.text;
+    isWicket = line.isWicket;
+    isBoundary = line.isBoundary;
+
+    enriched.push({
+      id: ev.id,
+      over_ball: overBallLabel,
+      event_type: ev.event_type,
+      // The app's CommentaryLine reads `text` (and falls back to `payload`).
+      // We were only sending `commentary`, so the timeline never saw the
+      // computed string and recomputed it from a missing payload — every
+      // ball rendered as "Dot ball". Send `text` (the rich string) and the
+      // raw `payload` so both the primary path and the fallback are correct.
+      // `commentary` is kept for backwards-compatibility with any other reader.
+      commentary,
+      text: commentary,
+      payload: p,
+      timestamp: ev.created_at,
+      is_wicket: isWicket,
+      is_boundary: isBoundary,
+    });
+  }
+
+  // Stage 10 · TT1b: a team tie's toss (who names A, B, C) opens its timeline.
+  // N-R7-96: with no toss recorded the line says who is A, B anyway (the first-named side).
+  const toss = tieTossOf((match as { tie_toss?: unknown }).tie_toss);
+  const tossSpec = tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null);
+  const tossLine = tieTossTimelineLine(tossSpec, toss, { A: teamA, B: teamB });
+  if (tossLine) {
+    enriched.unshift({ id: `tie-toss-${match.id}`, over_ball: null, event_type: 'note', commentary: tossLine, text: tossLine, payload: { kind: 'tie_toss' }, timestamp: toss?.at ?? null, is_wicket: false, is_boundary: false });
+  }
+
+  // Stage 11 follow-up: the trump picks, once the tie has started (before that a
+  // side's pick is hidden from the other side, like its order).
+  const trumpSpec = tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null);
+  const picks = trumpSpec?.trump ? await trumpsFor(match.id as string) : null;
+  const trumpLine = trumpSpec && picks && ((picks.A && picks.B) || (match as { status?: string }).status !== 'scheduled')
+    ? tieTrumpText(trumpSpec, picks, { A: teamA, B: teamB }) : null;
+  if (trumpLine) enriched.splice(tossLine ? 1 : 0, 0, { id: `tie-trumps-${match.id}`, over_ball: null, event_type: 'note', commentary: trumpLine, text: trumpLine, payload: { kind: 'tie_trumps' }, timestamp: null, is_wicket: false, is_boundary: false });
+  // 2.14: a trump match's result where it happened — "Trump won: Delhi ×2 · tie now 1–2", and with
+  // PBL's rule on, "Trump lost: Pune −1 · tie now −1–1".
+  if (trumpSpec?.trump && picks && events?.length) {
+    const roll = rollupTieSpec(slug, rulesOf(slug, match as never) as MatchRules, { ...trumpSpec, trumps: picks }, events as never, (p: any) => (p?.team_side === 'B' ? 'B' : 'A'));
+    roll.ends.forEach((at, i) => {
+      const lines = tieTrumpResultLines({ ...trumpSpec, trumps: picks }, roll.finished.slice(0, i + 1), { A: teamA, B: teamB });
+      const ev = events![at];
+      if (!lines.length || !ev) return;
+      const pos = enriched.findIndex((x) => x.id === ev.id);
+      enriched.splice(pos < 0 ? enriched.length : pos + 1, 0, ...lines.map((line, k) => ({ id: `tie-trump-${i}-${k}-${match.id}`, over_ball: null, event_type: 'note', commentary: line, text: line, payload: { kind: 'tie_trump_result' }, timestamp: ev.created_at, is_wicket: false, is_boundary: false })));
+    });
+  }
+
+  // Newest first.
+  enriched.reverse();
+  return enriched;
+}
+
 // GET /matches/:id/commentary — returns match_events formatted into
 // human-readable commentary lines. Cheap — reads only the events table.
 export async function getCommentary(req: Request, res: Response) {
@@ -1861,117 +1978,7 @@ export async function getCommentary(req: Request, res: Response) {
       return res.status(500).json({ error: sanitizeError(error as never) });
     }
 
-    // The sport by its slug: this compared the sport's UUID with 'cric', which
-    // is never true, so a cricket timeline never got its over.ball labels.
-    const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
-    const isCricket = slug === 'cricket';
-    const teamA = match.team_a_name ?? 'Team A';
-    const teamB = match.team_b_name ?? 'Team B';
-    let periods = 1;
-    let moves = 0;
-    // N-SPP1-CHS-2 / CHS-3: a team chess match on clocks — each board's own moves, and its White.
-    const chessSpec = slug === 'chess' ? tieSpecOf('chess', rulesOf('chess', match)) : null;
-    const movesByBoard = new Map<string, number>();
-    // N-R7-S114 (SPP1-CHS-133): a board result sent without its board (results entered one after
-    // another, from an older pad or the API) belongs to the board in play — the first one not yet
-    // decided, as the app's tie split reads it — so its timeline line can name the board.
-    const decidedBoards = new Set<string>();
-    const legalBallsBySide: Record<'A' | 'B', number> = { A: 0, B: 0 };
-    const enriched: Array<any> = [];
-    for (const ev of events ?? []) {
-      const p: any = ev.payload ?? {};
-      // Stage 10 · TT3: a result typed from the score sheet says so once, not point by point.
-      if (ev.event_type === 'score' && p.typed === true) continue;
-      if (silentOnTimeline(ev.event_type as string, p)) continue; // audit #111
-
-      // For cricket, compute the over.ball label from a running legal-ball
-      // count. Wides and no-balls don't advance the legal count.
-      // Per innings (it ran one count across both), deliveries only, and byes /
-      // leg-byes are legal balls — the same rule as the scorecard.
-      let overBallLabel: string | null = null;
-      if (isCricket && (ev.event_type === 'ball' || ev.event_type === 'extra' || ev.event_type === 'wicket')) {
-        const side: 'A' | 'B' = p.team_side === 'B' ? 'B' : 'A';
-        const isLegal = isBallOfOver(ev.event_type, p);
-        if (isLegal) legalBallsBySide[side] += 1;
-        const legalBalls = legalBallsBySide[side];
-        const displayBalls = isLegal ? legalBalls : legalBalls + 1;
-        const overNum = Math.floor((displayBalls - 1) / 6);
-        const ballInOver = ((displayBalls - 1) % 6) + 1;
-        overBallLabel = `${overNum}.${ballInOver}`;
-      }
-
-      let commentary = ev.event_type as string;
-      let isWicket = false;
-      let isBoundary = false;
-      if (ev.event_type === 'period_change') periods += 1;
-      if (ev.event_type === 'move') moves += 1;
-      const boardIdx = timelineBoardIndex(chessSpec, ev.event_type as string, p, decidedBoards);
-      if (boardIdx >= 0 && ev.event_type === 'move') movesByBoard.set(p.board, (movesByBoard.get(p.board) ?? 0) + 1);
-      const boardCtx = boardIdx >= 0 ? { board: chessSpec!.rubbers[boardIdx]!.label, boardWhiteTeam: boardWhite(chessSpec!, boardIdx), move: movesByBoard.get(p.board) ?? 0 } : {};
-      // Audit batch 4 (#111 / #112 / #136): every line from one place (utils/commentary) — cricket too, and
-      // plain words for anything else; it printed `note {…}` raw.
-      const line = timelineLine(ev.event_type as string, p, {
-        sport: slug, teamA, teamB, period: periods - 1, move: moves, clockSeconds: (ev as any).clock_seconds ?? null,
-        regulation: rulesOf(slug, match).periods ?? null, // BUILD 3.17: the match's own periods
-        periodMinutes: rulesOf(slug, match).periodMinutes ?? null, // BUILD 3.22: the timeline minute
-        extraMinutes: (rulesOf(slug, match) as { extraTimeMinutes?: number | null }).extraTimeMinutes ?? null, // F186
-        threeByThree: slug === 'basketball' && rulesOf(slug, match).pointSet === '12', // Stage 15 follow-up
-        ...boardCtx,
-      });
-      commentary = line.text;
-      isWicket = line.isWicket;
-      isBoundary = line.isBoundary;
-
-      enriched.push({
-        id: ev.id,
-        over_ball: overBallLabel,
-        event_type: ev.event_type,
-        // The app's CommentaryLine reads `text` (and falls back to `payload`).
-        // We were only sending `commentary`, so the timeline never saw the
-        // computed string and recomputed it from a missing payload — every
-        // ball rendered as "Dot ball". Send `text` (the rich string) and the
-        // raw `payload` so both the primary path and the fallback are correct.
-        // `commentary` is kept for backwards-compatibility with any other reader.
-        commentary,
-        text: commentary,
-        payload: p,
-        timestamp: ev.created_at,
-        is_wicket: isWicket,
-        is_boundary: isBoundary,
-      });
-    }
-
-    // Stage 10 · TT1b: a team tie's toss (who names A, B, C) opens its timeline.
-    // N-R7-96: with no toss recorded the line says who is A, B anyway (the first-named side).
-    const toss = tieTossOf((match as { tie_toss?: unknown }).tie_toss);
-    const tossSpec = tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null);
-    const tossLine = tieTossTimelineLine(tossSpec, toss, { A: teamA, B: teamB });
-    if (tossLine) {
-      enriched.unshift({ id: `tie-toss-${match.id}`, over_ball: null, event_type: 'note', commentary: tossLine, text: tossLine, payload: { kind: 'tie_toss' }, timestamp: toss?.at ?? null, is_wicket: false, is_boundary: false });
-    }
-
-    // Stage 11 follow-up: the trump picks, once the tie has started (before that a
-    // side's pick is hidden from the other side, like its order).
-    const trumpSpec = tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null);
-    const picks = trumpSpec?.trump ? await trumpsFor(match.id as string) : null;
-    const trumpLine = trumpSpec && picks && ((picks.A && picks.B) || (match as { status?: string }).status !== 'scheduled')
-      ? tieTrumpText(trumpSpec, picks, { A: teamA, B: teamB }) : null;
-    if (trumpLine) enriched.splice(tossLine ? 1 : 0, 0, { id: `tie-trumps-${match.id}`, over_ball: null, event_type: 'note', commentary: trumpLine, text: trumpLine, payload: { kind: 'tie_trumps' }, timestamp: null, is_wicket: false, is_boundary: false });
-    // 2.14: a trump match's result where it happened — "Trump won: Delhi ×2 · tie now 1–2", and with
-    // PBL's rule on, "Trump lost: Pune −1 · tie now −1–1".
-    if (trumpSpec?.trump && picks && events?.length) {
-      const roll = rollupTieSpec(slug, rulesOf(slug, match as never) as MatchRules, { ...trumpSpec, trumps: picks }, events as never, (p: any) => (p?.team_side === 'B' ? 'B' : 'A'));
-      roll.ends.forEach((at, i) => {
-        const lines = tieTrumpResultLines({ ...trumpSpec, trumps: picks }, roll.finished.slice(0, i + 1), { A: teamA, B: teamB });
-        const ev = events![at];
-        if (!lines.length || !ev) return;
-        const pos = enriched.findIndex((x) => x.id === ev.id);
-        enriched.splice(pos < 0 ? enriched.length : pos + 1, 0, ...lines.map((line, k) => ({ id: `tie-trump-${i}-${k}-${match.id}`, over_ball: null, event_type: 'note', commentary: line, text: line, payload: { kind: 'tie_trump_result' }, timestamp: ev.created_at, is_wicket: false, is_boundary: false })));
-      });
-    }
-
-    // Return newest-first.
-    enriched.reverse();
+    const enriched = await commentaryLines(match, events);
     return res.json({
       commentary: enriched,
       match: {
@@ -1981,6 +1988,45 @@ export async function getCommentary(req: Request, res: Response) {
         team_b_name: match.team_b_name,
       },
     });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/** Item 15: what a phone's copy of a timeline hashes to (its events and its lines, exactly as sent). */
+export function timelineVersion(events: unknown[], lines: unknown[]): string {
+  return crypto.createHash('sha1').update(JSON.stringify(events)).update(JSON.stringify(lines)).digest('hex').slice(0, 16);
+}
+
+/**
+ * Item 15 (25 Nov 2026) · GET /matches/:id/timeline — a match's events and commentary in one call (it was two,
+ * each the whole list, at every score). `?events=<m>&lines=<n>&have=<v>`: a phone that holds the first m events
+ * and the oldest n lines, with the version it was given, gets only what came after. Anything that changed what
+ * it holds (an edit, an undo, a late offline event, a new team name, a toss) makes the version differ: then everything.
+ */
+export async function getTimeline(req: Request, res: Response) {
+  if (!req.userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const [{ data: match, error: mErr }, read] = await Promise.all([
+      supabase.from('matches').select('id, sport_id, team_a_name, team_b_name, format, overs, rules, tie_toss, status').eq('id', id).maybeSingle(),
+      selectAll<any>((f, to) => supabase.from('match_events').select('*').eq('match_id', id)
+        .order('created_at', { ascending: true }).order('id', { ascending: true }).range(f, to))
+        .then((rows) => ({ rows, error: null as unknown }), (error) => ({ rows: [] as any[], error: error as unknown })),
+    ]);
+    if (mErr) return res.status(DB_UNAVAILABLE_STATUS).json(DB_UNAVAILABLE);
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (read.error) return res.status(500).json({ error: sanitizeError(read.error as never) });
+    const events = read.rows;
+    const lines = await commentaryLines(match, events);
+    const v = timelineVersion(events, lines);
+    const int = (x: unknown) => (typeof x === 'string' && /^\d{1,7}$/.test(x) ? parseInt(x, 10) : null);
+    const m = int(req.query.events); const n = int(req.query.lines);
+    const held = m !== null && n !== null && typeof req.query.have === 'string' && m <= events.length && n <= lines.length
+      && timelineVersion(events.slice(0, m), lines.slice(lines.length - n)) === req.query.have;
+    return res.json(held
+      ? { partial: true, v, events: events.slice(m!), commentary: lines.slice(0, lines.length - n!) }
+      : { partial: false, v, events, commentary: lines });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }

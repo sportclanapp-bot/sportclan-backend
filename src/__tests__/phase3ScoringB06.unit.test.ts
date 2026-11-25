@@ -206,7 +206,7 @@ describe('F7 · events list: bad limit or since is not a 500', () => {
     expect(limitOf()).toBe('range:[0,20]');
     mockLog = [];
     await list({ limit: '5000' });
-    expect(limitOf()).toBe('range:[0,1000]');
+    expect(limitOf()).toBe('range:[0,999]'); // 25 Nov 2026: 999 + the one extra row (PostgREST sends at most 1000)
     mockLog = [];
     await list({ limit: '20', offset: '40' });
     expect(limitOf()).toBe('range:[40,60]');

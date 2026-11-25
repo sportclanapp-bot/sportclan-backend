@@ -43,6 +43,8 @@ export function appVersionBody(env: NodeJS.ProcessEnv = process.env, opts: { cli
     forceUpdate: env.APP_FORCE_UPDATE === 'true',
     storeUrl,
     storeLive,
+    // Item 34: set once scripts/small-images-backfill has run (older photos have a small copy too).
+    ...(env.SMALL_IMAGES_ALL === '1' ? { smallImages: true } : {}),
   };
 }
 

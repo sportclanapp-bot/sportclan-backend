@@ -1188,7 +1188,10 @@ export async function listEvents(req: Request, res: Response) {
     // replayed it as the whole match — a 50-over game has more. Pages now have
     // a stable order (created_at, then id: an offline batch shares one
     // timestamp), an offset, and has_more.
-    const size = n >= 1 ? Math.min(n, 1000) : 500;
+    // 25 Nov 2026 (found with item 15): 999, not 1000 — PostgREST sends at most 1000 rows, so a page of 1000
+    // never got its one extra row: has_more said false and a match past 1000 events lost the rest (the pads
+    // replayed 1000 of 1224).
+    const size = n >= 1 ? Math.min(n, 999) : 500;
     let query = supabase
       .from('match_events')
       .select('*')

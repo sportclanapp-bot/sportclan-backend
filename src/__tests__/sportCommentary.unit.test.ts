@@ -53,7 +53,7 @@ test('other sports keep their own lines', () => {
 
 test('the endpoint uses it, knows cricket by its slug, and counts balls per innings', () => {
   const mc = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
-  const fn = mc.slice(mc.indexOf('export async function getCommentary'), mc.indexOf('// GET /matches/:id\n'));
+  const fn = mc.slice(mc.indexOf('async function commentaryLines'), mc.indexOf('// GET /matches/:id\n'));
   expect(fn).toContain("const isCricket = slug === 'cricket';");
   expect(fn).not.toContain(".includes('cric')");
   expect(fn).toContain('legalBallsBySide[side] += 1;');

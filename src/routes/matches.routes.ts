@@ -34,6 +34,7 @@ import {
   rateMatchHandler,
   setMatchTossHandler,
   getCommentary,
+  getTimeline,
   matchHistory,
   nextMatch,
   homeMatches, // item 26
@@ -74,6 +75,7 @@ router.get('/my-live', authenticateToken, myLiveMatches); // N-R7-267
 router.get('/history', authenticateToken, matchHistory);
 router.get('/nearby', authenticateToken, getNearbyMatches);
 router.get('/:id/commentary', authenticateToken, getCommentary);
+router.get('/:id/timeline', authenticateToken, getTimeline); // item 15: events + commentary, only what's new
 // The scoring edit log — read-only, organiser / scorer / umpire / admin only.
 router.get('/:id/edit-log', authenticateToken, getScoringEditLog);
 router.get('/:id', authenticateToken, getMatch);

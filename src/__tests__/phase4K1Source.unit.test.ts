@@ -10,7 +10,8 @@ const read = (rel: string) => fs.readFileSync(path.join(__dirname, '..', rel), '
 const code = (rel: string) => read(rel).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/.*$/gm, '');
 const fnBody = (rel: string, name: string) => {
   const s = code(rel);
-  const i = s.indexOf(`export async function ${name}(`);
+  const e = s.indexOf(`export async function ${name}(`);
+  const i = e >= 0 ? e : s.indexOf(`\nasync function ${name}(`); // a helper that isn’t exported too
   if (i < 0) throw new Error(`${name} not found`);
   const j = s.indexOf('\nexport ', i + 10);
   return s.slice(i, j < 0 ? undefined : j);
@@ -61,7 +62,7 @@ describe('K1-15 (76e0fa6) · users.name, never the non-existent full_name', () =
 
 describe('K1-25 (0498465) · the timeline gets the computed line as `text`, plus the raw payload', () => {
   it('K1-25 (0498465): getCommentary emits text: commentary and payload alongside commentary', () => {
-    const f = fnBody('controllers/matches.controller.ts', 'getCommentary');
+    const f = fnBody('controllers/matches.controller.ts', 'commentaryLines'); // item 15 (25 Nov 2026): shared with the timeline
     expect(f).toMatch(/\n\s*commentary,\n\s*text: commentary,\n\s*payload: p,/);
   });
 });

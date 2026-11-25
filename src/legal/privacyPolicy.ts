@@ -23,7 +23,7 @@ export const PRIVACY_POLICY: { title: string; effectiveDate: string; sections: P
         'Your phone number (to sign you in with a code), name, username, date of birth, and anything else you choose to add: email, password, gender, city, bio, link, photo and your sports.',
         'What you do in SportClan: matches you play or score, teams and tournaments, posts, comments, messages, follows, gifts and coins.',
         'When and from which device you sign in (device model and app version), so you can see and end your sign-ins in Settings → Active sessions.',
-        'Crash reports with basic device details (model, Android version), so we can fix bugs.',
+        'Crash reports with the device model and operating system version (Android or iOS), so we can fix bugs.',
       ],
     },
     {
@@ -46,7 +46,7 @@ export const PRIVACY_POLICY: { title: string; effectiveDate: string; sections: P
     {
       label: 'Who processes it for us',
       paragraphs: [
-        'Render (runs our server), Supabase (stores the database), Cloudflare R2 (stores photos), Sentry (crash reports), Expo and Firebase (push notifications) and 2Factor (sends sign-in codes by SMS). They process data only to provide these services to SportClan.',
+        'Render (runs our server), Supabase (stores the database), Cloudflare R2 (stores photos), Sentry (crash reports), Expo, with Firebase on Android and Apple on iPhone (push notifications) and 2Factor (sends sign-in codes by SMS). They process data only to provide these services to SportClan.',
       ],
     },
     {

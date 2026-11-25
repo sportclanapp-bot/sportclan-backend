@@ -344,25 +344,59 @@ export function superOverResultText(winnerName: string, so: { A: number; B: numb
 export const INNINGS_MINUTES_MIN = 1; // Stage 13 · CR3: any time, 1 minute or more
 export const INNINGS_MINUTES_MAX = Number.MAX_SAFE_INTEGER;
 
+/** Why the innings clock was stopped (item 46, 25 Nov 2026). */
+export const INNINGS_PAUSE_REASONS = ['Rain', 'Bad light', 'Drinks', 'Injury', 'Other break'] as const;
+type ClockEvent = { event_type: string; payload?: unknown; created_at?: string | null };
+/** A stop / restart of the innings clock: a note { kind: 'clock_pause', reason } / { kind: 'clock_resume' }. */
+export function isInningsPauseNote(e: { event_type?: string; payload?: unknown }): boolean {
+  const kind = (e.payload as { kind?: unknown } | null | undefined)?.kind;
+  return (e.event_type === undefined || e.event_type === 'note') && (kind === 'clock_pause' || kind === 'clock_resume');
+}
+/** When an event was recorded: an action sent late (the offline queue) keeps its tap time as payload.recorded_at. */
+function recordedAtMs(e: ClockEvent): number {
+  const rec = (e.payload as { recorded_at?: unknown } | null | undefined)?.recorded_at;
+  const t = typeof rec === 'string' ? Date.parse(rec) : NaN;
+  return Number.isFinite(t) ? t : e.created_at ? Date.parse(e.created_at) : NaN;
+}
+
 /**
  * BUILD 3.10 · how long `side`'s innings has run: from its first delivery to
  * `now`. Null before it starts. `warn` from 5 minutes before the cap, `over`
  * once it's reached — the pad says so; nothing is enforced.
+ * Item 46 (25 Nov 2026): less the time it was stopped for rain or a break (a delivery bowled while
+ * stopped restarts it: the scorer forgot to), from each ball's own time, however late it was sent.
+ * `nowMs` is on the server's clock, as the events are.
  */
 export function inningsClock(
-  events: ReadonlyArray<{ event_type: string; payload?: unknown; created_at?: string | null }>,
+  events: ReadonlyArray<ClockEvent>,
   side: 'A' | 'B',
   capMinutes: number | null | undefined,
   nowMs: number,
-): { elapsed: number; cap: number; warn: boolean; over: boolean } | null {
+): { elapsed: number; cap: number; warn: boolean; over: boolean; paused: boolean; reason: string | null } | null {
   if (!capMinutes) return null;
-  const first = events.find((ev) =>
-    (ev.event_type === 'ball' || ev.event_type === 'extra' || ev.event_type === 'wicket')
-    && ((ev.payload as { team_side?: unknown } | undefined)?.team_side === 'B' ? 'B' : 'A') === side);
-  const start = first?.created_at ? Date.parse(first.created_at) : NaN;
+  const isDelivery = (ev: ClockEvent) => ev.event_type === 'ball' || ev.event_type === 'extra' || ev.event_type === 'wicket';
+  const from = events.findIndex((ev) => isDelivery(ev) && ((ev.payload as { team_side?: unknown } | undefined)?.team_side === 'B' ? 'B' : 'A') === side);
+  const start = from < 0 ? NaN : recordedAtMs(events[from]!);
   if (!Number.isFinite(start)) return null;
-  const elapsed = Math.max(0, Math.floor((nowMs - start) / 60000));
-  return { elapsed, cap: capMinutes, warn: elapsed >= capMinutes - 5, over: elapsed >= capMinutes };
+  let stoppedMs = 0;
+  let since: number | null = null;
+  let reason: string | null = null;
+  for (const ev of events.slice(from + 1)) {
+    const kind = isInningsPauseNote(ev) ? (ev.payload as { kind?: unknown }).kind : null;
+    const stop = kind === 'clock_pause';
+    if (!stop && kind !== 'clock_resume' && !isDelivery(ev)) continue;
+    const at = recordedAtMs(ev);
+    if (!Number.isFinite(at)) continue;
+    if (stop && since == null) {
+      since = at;
+      const r = (ev.payload as { reason?: unknown }).reason;
+      reason = typeof r === 'string' ? r : null;
+    } else if (!stop && since != null) { stoppedMs += Math.max(0, at - since); since = null; reason = null; }
+  }
+  const now = Math.max(nowMs, start);
+  if (since != null) stoppedMs += Math.max(0, now - since);
+  const elapsed = Math.max(0, Math.floor((now - start - stoppedMs) / 60000));
+  return { elapsed, cap: capMinutes, warn: elapsed >= capMinutes - 5, over: elapsed >= capMinutes, paused: since != null, reason };
 }
 
 /**

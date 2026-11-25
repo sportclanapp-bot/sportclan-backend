@@ -188,6 +188,12 @@ export interface MatchRules {
   secondPeriodMoves?: number | null;
   secondPeriodMinutes?: number | null;
   /**
+   * Fix list 25 Nov 2026, item 36 · chess: the game is timed on a physical clock. The time control
+   * above still says the speed (Bullet / Blitz / Rapid / Classical, so the rating), but the app runs
+   * and shows no clock and never asks about a flag. Absent on older rules = the app's clock.
+   */
+  physicalClock?: boolean;
+  /**
    * Stage 14 · VB2 · substitutions on the pad, any team sport: `maxSubs` counted
    * per match, per set (volleyball, FIVB 15.6: 6) or per period; who may come
    * back on — 'free' (rolling: basketball, hockey), 'same_spot' (FIVB: a starter
@@ -294,6 +300,12 @@ export const SPORT_RULES: Record<string, Omit<MatchRules, 'v'>> = {
   basketball: { players: null, periods: 4, periodMinutes: null, overtimeMinutes: 5, targetScore: null, pointSet: '123', foulOut: 5, drawAllowed: false, maxSubs: null, subsPer: 'match', reentry: 'free', timeouts: null, teamFoulBonus: null, teamFoulPossessionAt: null, overtimeTo: null, ejectAfter: 2, ejectCounts: 'tech_flagrant', coachEjectC: 2, coachEjectB: 3, tie: null }, // Stage 14 · VB2: unlimited (FIBA) · Stage 15: time-outs, the bonus, 3x3's overtime, ejections (null = by the game); a series (tie)
   chess: { baseMinutes: 5, incrementSeconds: 0, drawAllowed: true, tie: null, penaltyLadder: null, delaySeconds: null, incrementFromMove: null, secondPeriodMoves: null, secondPeriodMinutes: null }, // Stage 12 · CH5: team matches · CH6: the rest of the clock
 };
+
+/**
+ * Item 36 (25 Nov 2026): rules a sport may carry that its standard leaves out, so stored rules that
+ * don't use them stay exactly as they were (and older apps read them as before).
+ */
+const OPTIONAL_RULES: Record<string, readonly string[]> = { chess: ['physicalClock'] };
 
 /** The sport's standard rules, versioned. Unknown sport → just the version. */
 export function standardRules(sport: string | null | undefined): MatchRules {
@@ -677,6 +689,8 @@ export function chessClockText(r: Partial<MatchRules>): string {
   if (r.delaySeconds) parts.push(`${r.delaySeconds} s delay`);
   return parts.join(' · ');
 }
+/** Item 36 (25 Nov 2026): is this chess game timed on a physical clock (the app runs none)? */
+export const chessPhysicalClock = (r: Partial<MatchRules> | null | undefined): boolean => r?.physicalClock === true;
 /** Stage 12 · CH6 · the extra minutes a second period adds inside FIDE's 60 moves. */
 export const chessExtraMinutes = (r: Partial<MatchRules>): number => (r.secondPeriodMoves && r.secondPeriodMoves < 60 ? r.secondPeriodMinutes ?? 0 : 0);
 /**
@@ -735,6 +749,7 @@ export function normalizeRules(
     if (k === 'v') continue;
     out[k] = k in given && given[k] !== undefined ? given[k] : (base as unknown as Record<string, unknown>)[k];
   }
+  for (const k of OPTIONAL_RULES[lengthKey(sport)] ?? []) if (given[k] != null) out[k] = given[k]; // item 36: kept only when set
   // N-R7-57: box and pair cricket left at 'Std' overs play their own standard (box 6, pair 8 —
   // the New match form's standard), not limited overs' 20.
   if (lengthKey(sport) === 'cricket' && (given.style === 'box' || given.style === 'pair') && given.overs == null) {
@@ -778,7 +793,7 @@ const refuse = (error: string, field: string | null = null): Refusal => ({ error
 const FIELD_NAMES: Record<string, string> = {
   style: 'Match type', overs: 'Overs', players: 'Players a side', lastManStands: 'Last man stands', retireAt: 'Retire at', bowlerOvers: 'Max overs per bowler', extraRuns: 'Wide / no-ball runs', rebowl: 'Re-bowl wides and no-balls', freeHit: 'Free hit', inningsMinutes: 'Innings time cap', powerplayOvers: 'Powerplay overs', oneTipOneHand: 'One tip, one hand', sixAndOut: 'Six and out', noLbw: 'No LBW', bestOf: 'Match length', target: 'Points to win a game', cap: 'Point cap',
   finalTarget: 'Deciding game target', winBy2: 'Win by 2', allGames: 'Every game played', periods: 'Periods', periodMinutes: 'Period length', halfTimeMinutes: 'Half-time', penaltyKicks: 'Penalty kicks', extraTimeMinutes: 'Extra time', walkoverGoals: 'Walkover score', rollingSubs: 'Rolling subs', offside: 'Offside', sinBinMinutes: 'Sin bin', shootoutTakers: 'Shoot-out takers', yellowCardMinutes: 'Yellow card', overtimeMinutes: 'Overtime', targetScore: 'First to', pointSet: 'Points', foulOut: 'Foul-out', timeoutsPerSet: 'Timeouts a set', rubbers: 'Rubbers', scoring: 'Scoring', gamesPerSet: 'Games a set', tiebreak: 'Tiebreak', tiebreakTo: 'Tiebreak points', matchTiebreak: 'Match tiebreak', adScoring: 'Game scoring', timeLimitMinutes: 'Time limit', timedLevel: 'Level at time', tiebreakAt: 'Tiebreak at', finalSetTiebreakTo: 'Final-set tiebreak', noLet: 'Lets', ballChange: 'New balls', penaltyLadder: 'Code violations', tie: 'Team tie', queenPoints: 'Queen', queenCutoff: 'Queen cut-off', boardCap: 'Boards a game', gameMinutes: 'Minutes a game', carromMode: 'Carrom game', queenValue: 'Queen (point carrom)',
-  drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment',
+  drawAllowed: 'Draws', baseMinutes: 'Clock', incrementSeconds: 'Increment', physicalClock: 'Physical clock',
   // Stage 15.
   timeouts: 'Time-outs', teamFoulBonus: 'Bonus from team foul', teamFoulPossessionAt: 'Free throws and the ball from team foul', overtimeTo: 'Overtime to', ejectAfter: 'Ejection after', ejectCounts: 'Ejections count', coachEjectC: 'Coach ejection (C)', coachEjectB: 'Coach ejection (B)',
   // Stage 14.
@@ -801,7 +816,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
   const std = SPORT_RULES[key];
   if (!std) return refuse('Match rules aren’t available for this sport.');
   for (const k of Object.keys(given)) {
-    if (k !== 'v' && !(k in std)) return refuse(`${FIELD_NAMES[k] ?? k} doesn’t apply to this sport.`, k);
+    if (k !== 'v' && !(k in std) && !(OPTIONAL_RULES[key] ?? []).includes(k)) return refuse(`${FIELD_NAMES[k] ?? k} doesn’t apply to this sport.`, k);
   }
   const r = normalizeRules(key, given) as unknown as Record<string, unknown>;
   const stdMap = std as Record<string, unknown>;
@@ -1046,6 +1061,7 @@ export function rulesRefusal(sport: string | null | undefined, rules: unknown): 
     // BUILD 3.67: any clock (the chips are presets). Stage 12 · CH6 (Dipak): no top — 1 minute or more, any increment.
     if (!isWhole(r.baseMinutes) || r.baseMinutes < CHESS_BASE_MINUTES[0]) return refuse('The clock must be 1 minute or more.', 'baseMinutes');
     if (!isWhole(r.incrementSeconds) || r.incrementSeconds < 0) return refuse('The increment is a whole number of seconds a move.', 'incrementSeconds');
+    if (r.physicalClock != null && typeof r.physicalClock !== 'boolean') return refuse('The clock is in the app, or a physical clock.', 'physicalClock'); // item 36
     if (r.delaySeconds != null && (!isWhole(r.delaySeconds) || r.delaySeconds < 0)) return refuse('A delay is a whole number of seconds.', 'delaySeconds');
     if (r.incrementFromMove != null && (!isWhole(r.incrementFromMove) || r.incrementFromMove < 1)) return refuse('The increment starts at move 1 or later.', 'incrementFromMove');
     if ((r.secondPeriodMoves == null) !== (r.secondPeriodMinutes == null)) return refuse('A second period needs both its move and its minutes.', 'secondPeriodMoves');
@@ -1421,6 +1437,7 @@ export function timedRulesLabel(sport: string | null | undefined, rules: MatchRu
     if (rules.ballChange === true) parts.push('new balls 7/9'); // Stage 9 · T10
     return parts.length ? parts.join(' · ') : null;
   }
+  if (key === 'chess') return chessPhysicalClock(rules) ? 'physical clock' : null; // item 36 (25 Nov 2026)
   if (key !== 'football' && key !== 'hockey' && key !== 'basketball') return null;
   if (rules.players) parts.push(`${rules.players}-a-side`);
   // BUILD 3.17: "2 × 25 min", and the half-time when it's set.

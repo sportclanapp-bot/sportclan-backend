@@ -16,7 +16,7 @@ test('display order, ties kept in their order', () => {
 test('getMe, the public profile and the save all use it', () => {
   const src = fs.readFileSync(path.join(__dirname, '../controllers/users.controller.ts'), 'utf8');
   expect(src).toMatch(/safe\(orderedSportIds\(userId\), \[\] as string\[\]\)/);
-  expect(src).toMatch(/safeUser\.sport_ids = await profileSportIds\(id\)/);
+  expect(src).toMatch(/profileSportIds\(id\)\.catch[\s\S]*safeUser\.sport_ids = sport_ids;/);
   expect(src).toMatch(/valid = inDisplayOrder\(/);
   expect(src).not.toMatch(/from\('user_sports'\)\.select\('sport_id'\)\.eq\('user_id', userId\)\n\s*\.then/);
 });

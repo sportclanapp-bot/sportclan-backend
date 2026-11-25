@@ -18,7 +18,7 @@ import { writeAbandonNotes } from '../utils/abandonNote';
 import { syncMatchChatMembers } from '../utils/matchChat';
 import { syncAfterSuccess } from '../utils/tournamentChat';
 import { attachTeamNames } from '../utils/teamNames';
-import { myScheduledMatches, pickNextMatch, myMatchesWithStatus, sortMyLive } from '../utils/nextMatch';
+import { myHomeMatches, myScheduledMatches, pickNextMatch, myMatchesWithStatus, sortMyLive } from '../utils/nextMatch';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
@@ -1447,6 +1447,32 @@ export async function myLiveMatches(req: Request, res: Response) {
   }
 }
 
+/**
+ * Item 26 (25 Nov 2026) · GET /matches/home: what GET /matches/next and GET /matches/my-live answer, in
+ * one call that shares their reads. { next: { match, overdue }, my_live: { matches, total } }.
+ */
+export async function homeMatches(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const [activeIds, mine] = await Promise.all([activeSportIds(), myHomeMatches(userId)]);
+    const live = sortMyLive(mine.live.filter((m) => !activeIds || activeIds.includes(m.sport_id)));
+    const { match, overdue } = mine.next;
+    await Promise.all([attachTeamNames(live), match ? attachTeamNames([match]) : null]);
+    return res.json({ next: { match, overdue }, my_live: { matches: live, total: live.length } });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/**
+ * Item 13 (25 Nov 2026): the columns a match LIST sends — every one an app version reads. Left out
+ * (unread in lists): squad_locked_at, scorecard_locked_at, mvp_user_id, result_type, is_test_seed,
+ * called_by, official_report, loser_next_match_id, loser_next_slot, umpire_offer_by, umpire_offer_at,
+ * client_key. GET /matches/:id still sends the whole row.
+ */
+export const MATCH_LIST_COLUMNS = 'id, sport_id, tournament_id, team_a_id, team_b_id, team_a_name, team_b_name, scheduled_at, venue, city_id, format, overs, status, winner_team_id, score_summary, created_by, umpire_id, created_at, updated_at, is_open, players_needed, is_ranked, round, match_no, group_label, next_match_id, next_slot, chat_id, ground_label, join_policy, voided_at, voided_by, void_reason, rules, third_place, scorer_id, called_at, toss_winner_team_id, toss_choice, completed_at, tie_toss, bracket, replaced_by';
+
 export async function listMatches(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1469,7 +1495,7 @@ export async function listMatches(req: Request, res: Response) {
     const TEST_SIDES = ', xta:teams!team_a_id(id), xtb:teams!team_b_id(id)';
     let query = supabase
       .from('matches')
-      .select(`*${hideTestRows ? TEST_SIDES : ''}`, { count: 'exact' })
+      .select(`${MATCH_LIST_COLUMNS}${hideTestRows ? TEST_SIDES : ''}`, { count: 'exact' })
       .range(p.from, p.to);
     // SC-443 (M5) · results are ordered by when they FINISHED.
     //
@@ -2023,7 +2049,7 @@ export async function getMatch(req: Request, res: Response) {
     const matchWithRating: any = { ...match };
     // N-R7-509 (SIDE-C7x-2): the sport's slug beside its id (cached per process), so a phone whose
     // GET /sports failed still knows the sport — a live football match was drawn as cricket.
-    matchWithRating.sport_slug = await sportSlugOf(match.sport_id).catch(() => null);
+    matchWithRating.sport_slug = null; // set below, with the checks (the key keeps its place)
     if (liveStatus) matchWithRating.live_status = liveStatus;
     if (scoringLease.ok) matchWithRating.scoring_lease = scoringLease.v;
     if (ratings && ratings.length > 0) {
@@ -2044,11 +2070,37 @@ export async function getMatch(req: Request, res: Response) {
     // shows "Requested" (or that it was declined) instead of the join button.
     matchWithRating.my_join_request = myJoinRequest === 'pending' || myJoinRequest === 'rejected' ? myJoinRequest : null;
     matchWithRating.umpire = umpire;
+    // Item 14 (25 Nov 2026): everything below needs only the match row and the reads above. It was asked
+    // one after the other (up to 9 more trips); now together. Each check is the same call as before.
+    const openForPlay = !!userId && (match.status === 'scheduled' || match.status === 'live');
+    const officiates = openForPlay ? canOfficiateMatch(match as never, userId, { scorers: false }) : Promise.resolve(false);
+    const offerBy = (match as { umpire_offer_by?: string | null }).umpire_offer_by ?? null;
+    const personCard = (uid: string) => Promise.resolve(supabase.from('users').select('id, name, username').eq('id', uid).is('deleted_at', null).maybeSingle())
+      .then(({ data: u }) => u ?? null, () => null);
+    const participantIds = (participants ?? []).map((p) => {
+      const u = (p as { user?: { id?: string } | Array<{ id?: string }> | null }).user;
+      return (Array.isArray(u) ? u[0]?.id : u?.id) ?? '';
+    }).filter(Boolean);
+    const [sportSlug, scorer, canDefaultHere, canWalkoverHere, hubHolder, canVoid, canRate, selfMode, umpireOffer, viewerCan] = await Promise.all([
+      sportSlugOf(match.sport_id).catch(() => null),
+      match.scorer_id ? personCard(match.scorer_id as string) : null,
+      openForPlay ? canDefault(match as never, userId, officiates) : false,
+      officiates, // Q41: canGiveWalkover's rule (the organiser's or the umpire's only)
+      openForPlay && match.tournament_id ? hubHolderElsewhere(match.tournament_id as string, userId, deviceIdOf(req)) : null,
+      userId ? canVoidMatch(match, userId).catch(() => false) : false,
+      !!userId && match.status === 'completed' && !match.voided_at ? tookPartInMatch(match, userId).catch(() => false) : false,
+      !userId || match.umpire_id ? ('none' as const) : selfOfficiateMode(match as SelfOfficiateMatch, userId).catch(() => 'none' as const),
+      offerBy && userId && match.created_by === userId ? personCard(offerBy) : null,
+      viewerCanPlay(match, userId, participantIds),
+      // Chess: attach both players' real ELO for this sport (ranked 1v1). Null for
+      // guests/casual — never faked.
+      attachChessElo([matchWithRating]),
+      attachTeamNames([matchWithRating]), // SC-366: real team names on detail too
+    ]);
+
+    matchWithRating.sport_slug = sportSlug;
     // Cricket gap 3: …and its scorer, when one is named (one more read only then).
-    matchWithRating.scorer = match.scorer_id
-      ? await Promise.resolve(supabase.from('users').select('id, name, username').eq('id', match.scorer_id).is('deleted_at', null).maybeSingle())
-        .then(({ data: u }) => u ?? null, () => null)
-      : null;
+    matchWithRating.scorer = scorer;
 
     // SC-287: authoritative "can this caller score/officiate this match" flag,
     // computed with the SAME canOfficiateMatch the scoring/toss/complete APIs
@@ -2061,13 +2113,13 @@ export async function getMatch(req: Request, res: Response) {
     matchWithRating.can_manage = canManage;
     // N-R7-S33: who may give a walkover / default here (completeMatch's rule), so the app offers it to them only.
     // (a tournament's referee may give one without officiating the fixture; asked only while it can still be given)
-    matchWithRating.can_default = !!userId && (match.status === 'scheduled' || match.status === 'live') && (await canDefault(match as never, userId));
+    matchWithRating.can_default = canDefaultHere;
     // Q41: a walkover is the organiser's or the umpire's only (the app's Walkover button reads this).
-    matchWithRating.can_walkover = !!userId && (match.status === 'scheduled' || match.status === 'live') && (await canGiveWalkover(match as never, userId));
+    matchWithRating.can_walkover = canWalkoverHere;
     // Q32 (Dipak, 21 Nov 2026: A): the venue hub runs on another phone — this phone views only (the app
     // hides its scoring and result buttons and says where to record). Null when this phone may record.
-    if (userId && match.tournament_id && (match.status === 'scheduled' || match.status === 'live')) {
-      const holder = await hubHolderElsewhere(match.tournament_id as string, userId, deviceIdOf(req));
+    if (openForPlay && match.tournament_id) {
+      const holder = hubHolder;
       matchWithRating.hub_elsewhere = holder ? { by: holder.user_id === userId ? 'your other phone' : holder.name ? `${holder.name}’s phone` : 'another phone' } : null;
     }
     // Audit #35/#36: Cancel and Void by the same rules cancelMatch and
@@ -2079,7 +2131,7 @@ export async function getMatch(req: Request, res: Response) {
       && !match.group_label && Number(match.round ?? 0) > 0;
     matchWithRating.can_cancel = !!userId && !isTerminalMatchStatus(match.status)
       && (match.tournament_id ? canManage === true && !koMatch : match.created_by === userId);
-    matchWithRating.can_void = !!userId && await canVoidMatch(match, userId).catch(() => false);
+    matchWithRating.can_void = canVoid;
     // E-097 / E-096 (Round 6): decideMatch and setMatchOfficials allow the
     // organiser of a tournament fixture, and a casual match's CREATOR — not its
     // umpire, whom can_manage includes (the umpire was shown a Decide that
@@ -2091,38 +2143,19 @@ export async function getMatch(req: Request, res: Response) {
     }
     // E-100 (Round 6): may the viewer rate it? rateMatchHandler's own rule, so
     // the app offers the card to exactly the people the server accepts.
-    matchWithRating.can_rate = !!userId && match.status === 'completed' && !match.voided_at
-      && await tookPartInMatch(match, userId).catch(() => false);
+    matchWithRating.can_rate = canRate;
     // Audit #5: may the viewer take the official's seat themselves ('assign'),
     // only offer to ('offer', casual matches: the creator accepts), or not at
     // all ('none', a tournament fixture they don't officiate)? And a pending
     // offer: who made it (the creator answers it) / that it's the viewer's own.
-    matchWithRating.self_officiate_mode = !userId || match.umpire_id
-      ? 'none'
-      : await selfOfficiateMode(match as SelfOfficiateMatch, userId).catch(() => 'none');
-    const offerBy = (match as { umpire_offer_by?: string | null }).umpire_offer_by ?? null;
+    matchWithRating.self_officiate_mode = selfMode;
     matchWithRating.my_umpire_offer = !!userId && offerBy === userId;
-    matchWithRating.umpire_offer = offerBy && userId && match.created_by === userId
-      ? await Promise.resolve(supabase.from('users').select('id, name, username').eq('id', offerBy).is('deleted_at', null).maybeSingle())
-        .then(({ data: u }) => u ?? null, () => null)
-      : null;
+    matchWithRating.umpire_offer = umpireOffer;
 
     // U-13: could this viewer actually be in the line-up? Only then is "Are you
     // playing?" a question worth asking them. It was shown to everyone — the
     // umpire and pure spectators included. True for someone already in the
     // line-up, or on either team's roster; never for the match's umpire.
-    const participantIds = (participants ?? []).map((p) => {
-      const u = (p as { user?: { id?: string } | Array<{ id?: string }> | null }).user;
-      return (Array.isArray(u) ? u[0]?.id : u?.id) ?? '';
-    }).filter(Boolean);
-    // These three need the line-up or the row, and touch different fields.
-    const [viewerCan] = await Promise.all([
-      viewerCanPlay(match, userId, participantIds),
-      // Chess: attach both players' real ELO for this sport (ranked 1v1). Null for
-      // guests/casual — never faked.
-      attachChessElo([matchWithRating]),
-      attachTeamNames([matchWithRating]), // SC-366: real team names on detail too
-    ]);
     matchWithRating.viewer_can_play = viewerCan;
 
     // SC-259: expose the parent tournament's FORMAT so the client can tell a real

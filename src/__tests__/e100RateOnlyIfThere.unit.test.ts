@@ -50,5 +50,5 @@ test('the match page carries can_rate from the same rule', () => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const src: string = require('fs').readFileSync(require('path').join(__dirname, '..', 'controllers', 'matches.controller.ts'), 'utf8');
   const get = src.slice(src.indexOf('export async function getMatch'));
-  expect(get).toMatch(/can_rate = !!userId && match\.status === 'completed' && !match\.voided_at\s+&& await tookPartInMatch\(match, userId\)/);
+  expect(get).toMatch(/!!userId && match\.status === 'completed' && !match\.voided_at \? tookPartInMatch\(match, userId\)\.catch\(\(\) => false\) : false,[\s\S]*can_rate = canRate;/);
 });

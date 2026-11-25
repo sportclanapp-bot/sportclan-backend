@@ -4,7 +4,7 @@ import path from 'path';
 
 const src = fs.readFileSync(path.join(__dirname, '../controllers/matches.controller.ts'), 'utf8');
 test('can_void is the void endpoint’s own check (organiser, umpire, creator — or an admin)', () => {
-  expect(src).toMatch(/matchWithRating\.can_void = !!userId && await canVoidMatch\(match, userId\)/);
+  expect(src).toMatch(/userId \? canVoidMatch\(match, userId\)\.catch\(\(\) => false\) : false,[\s\S]*matchWithRating\.can_void = canVoid;/);
   expect(src).toMatch(/async function canVoidMatch[\s\S]{0,300}return isAdminUser\(userId\)/);
 });
 test('can_cancel: the organiser on a tournament fixture (not a knockout match), else the creator; never once finished', () => {

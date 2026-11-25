@@ -12,7 +12,7 @@
  * one), else the team's members (a singles entry is the player's own one-person team).
  */
 import { supabase } from './supabase';
-import { allRows } from './selectAll';
+import { allRows, inParallel } from './selectAll';
 
 export type Honour = {
   tournament_id: string;
@@ -44,31 +44,38 @@ export async function honoursOfTeams(teamIds: string[]): Promise<Honour[]> {
   if (ids.length === 0) return [];
   const out: Honour[] = [];
   const teamNames = new Map<string, string | null>();
-  for (const part of chunks(ids)) {
-    const champs = await allRows<TRow>(() => supabase.from('tournaments').select(T_COLS).eq('status', 'completed').in('champion_team_id', part));
+  // Item 24 (25 Nov 2026): the reads go together (51–76 trips one after another for a player in many
+  // teams), and a lost match is sent only when it can be a final: of a completed knockout-style
+  // tournament with a champion (its row comes with it), not the third place or the back draw.
+  const LOST = `id, tournament_id, team_a_id, team_b_id, winner_team_id, bracket, third_place, t:tournaments!tournament_id!inner(${T_COLS}, status)`;
+  type Lost = Omit<Final, 'loser'> & { team_a_id: string; team_b_id: string; t: TRow };
+  const lost = (side: 'team_a_id' | 'team_b_id', part: string[]) => allRows<Lost>(() => supabase.from('matches')
+    .select(LOST).in(side, part)
+    .not('tournament_id', 'is', null).is('next_match_id', null).is('group_label', null).is('voided_at', null)
+    .not('winner_team_id', 'is', null).in('status', ['completed', 'abandoned'])
+    .eq('t.status', 'completed').not('t.champion_team_id', 'is', null)
+    .not('t.format', 'in', `(${[...TABLE_FORMATS].join(',')})`)
+    .not('third_place', 'is', true).or('bracket.is.null,bracket.neq.back'));
+  const read = await inParallel(chunks(ids), async (part) => Promise.all([
+    allRows<TRow>(() => supabase.from('tournaments').select(T_COLS).eq('status', 'completed').in('champion_team_id', part)),
+    lost('team_a_id', part),
+    lost('team_b_id', part),
+  ]));
+  for (const [champs, lostA, lostB] of read) {
     for (const t of champs) out.push({ tournament_id: t.id, tournament_name: nameOf(t), place: 'champion', team_id: t.champion_team_id as string, team_name: null, date: dateOf(t) });
-    // the finals these teams lost: no next match, no group, not the third-place match, decided
-    const lostA = await allRows<{ tournament_id: string; team_a_id: string; winner_team_id: string; bracket: string | null; third_place: boolean | null }>(() => supabase.from('matches')
-      .select('id, tournament_id, team_a_id, winner_team_id, bracket, third_place').in('team_a_id', part)
-      .not('tournament_id', 'is', null).is('next_match_id', null).is('group_label', null).is('voided_at', null)
-      .not('winner_team_id', 'is', null).in('status', ['completed', 'abandoned']));
-    const lostB = await allRows<{ tournament_id: string; team_b_id: string; winner_team_id: string; bracket: string | null; third_place: boolean | null }>(() => supabase.from('matches')
-      .select('id, tournament_id, team_b_id, winner_team_id, bracket, third_place').in('team_b_id', part)
-      .not('tournament_id', 'is', null).is('next_match_id', null).is('group_label', null).is('voided_at', null)
-      .not('winner_team_id', 'is', null).in('status', ['completed', 'abandoned']));
-    const finals = [
-      ...lostA.map((m) => ({ ...m, loser: m.team_a_id })),
-      ...lostB.map((m) => ({ ...m, loser: m.team_b_id })),
+    const finals: Final[] = [
+      ...lostA.map((m) => ({ tournament_id: m.tournament_id, winner_team_id: m.winner_team_id, bracket: m.bracket, third_place: m.third_place, loser: m.team_a_id })),
+      ...lostB.map((m) => ({ tournament_id: m.tournament_id, winner_team_id: m.winner_team_id, bracket: m.bracket, third_place: m.third_place, loser: m.team_b_id })),
     ];
-    const tids = Array.from(new Set(finals.map((m) => m.tournament_id)));
-    for (const tpart of chunks(tids)) {
-      const ts = await allRows<TRow>(() => supabase.from('tournaments').select(T_COLS).eq('status', 'completed').in('id', tpart));
-      for (const h of runnerUpsFrom(finals, ts)) if (!out.some((x) => x.tournament_id === h.tournament_id && x.team_id === h.team_id)) out.push(h);
+    const ts = [...new Map([...lostA, ...lostB].map((m) => [m.tournament_id, m.t])).values()];
+    const seen = new Set(out.map((x) => `${x.tournament_id}|${x.team_id}`));
+    for (const h of runnerUpsFrom(finals, ts)) {
+      const key = `${h.tournament_id}|${h.team_id}`;
+      if (!seen.has(key)) { seen.add(key); out.push(h); }
     }
   }
   const need = Array.from(new Set(out.map((h) => h.team_id)));
-  for (const part of chunks(need)) {
-    const rows = await allRows<{ id: string; name: string | null }>(() => supabase.from('teams').select('id, name').in('id', part));
+  for (const rows of await inParallel(chunks(need), (part) => allRows<{ id: string; name: string | null }>(() => supabase.from('teams').select('id, name').in('id', part)))) {
     for (const r of rows) teamNames.set(r.id, r.name);
   }
   for (const h of out) h.team_name = teamNames.get(h.team_id) ?? null;
@@ -102,19 +109,28 @@ export function sortHonours(hs: Honour[]): Honour[] {
 
 /** A player's honours: their squad's in that tournament, else (no squad named) as one of the team's members. */
 export async function honoursOfUser(userId: string): Promise<Honour[]> {
-  const squads = await allRows<{ tournament_id: string; team_id: string }>(() => supabase.from('tournament_squads')
-    .select('id, tournament_id, team_id').eq('user_id', userId).is('removed_at', null));
-  const members = await allRows<{ team_id: string }>(() => supabase.from('team_members').select('id, team_id').eq('user_id', userId));
+  const [squads, members] = await Promise.all([
+    allRows<{ tournament_id: string; team_id: string }>(() => supabase.from('tournament_squads')
+      .select('id, tournament_id, team_id').eq('user_id', userId).is('removed_at', null)),
+    allRows<{ team_id: string }>(() => supabase.from('team_members').select('id, team_id').eq('user_id', userId)),
+  ]);
   const memberOf = new Set(members.map((m) => m.team_id));
   const inSquad = new Set(squads.map((s) => `${s.tournament_id}|${s.team_id}`));
   const all = await honoursOfTeams([...squads.map((s) => s.team_id), ...memberOf]);
   if (all.length === 0) return [];
   // which of those (tournament, team) pairs named a squad at all
   const named = new Set<string>();
-  for (const part of chunks(Array.from(new Set(all.map((h) => h.tournament_id))))) {
-    const rows = await allRows<{ tournament_id: string; team_id: string }>(() => supabase.from('tournament_squads')
-      .select('id, tournament_id, team_id').in('tournament_id', part).is('removed_at', null));
-    for (const r of rows) named.add(`${r.tournament_id}|${r.team_id}`);
+  // Item 24: only where it can matter (a pair the player is in no squad of).
+  const unsure = all.filter((h) => !inSquad.has(`${h.tournament_id}|${h.team_id}`));
+  const teamsOf = new Set(unsure.map((h) => h.team_id));
+  for (const rows of await inParallel(chunks(Array.from(new Set(unsure.map((h) => h.tournament_id)))), (part) => {
+    const teams = Array.from(new Set(unsure.filter((h) => part.includes(h.tournament_id)).map((h) => h.team_id)));
+    return allRows<{ tournament_id: string; team_id: string }>(() => {
+      const q = supabase.from('tournament_squads').select('id, tournament_id, team_id').in('tournament_id', part).is('removed_at', null);
+      return teams.length <= CHUNK ? q.in('team_id', teams) : q;
+    });
+  })) {
+    for (const r of rows) if (teamsOf.has(r.team_id)) named.add(`${r.tournament_id}|${r.team_id}`);
   }
   return all.filter((h) => {
     const key = `${h.tournament_id}|${h.team_id}`;

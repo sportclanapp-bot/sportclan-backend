@@ -5,6 +5,6 @@ import path from 'path';
 test('the tournament carries can_manage from isTournamentOrganiser', () => {
   const src = fs.readFileSync(path.join(__dirname, '../controllers/tournaments.controller.ts'), 'utf8');
   const fn = src.slice(src.indexOf('export async function getTournament('), src.indexOf('\nexport ', src.indexOf('export async function getTournament(') + 10));
-  expect(fn).toMatch(/const organiser = await isTournamentOrganiser\(id, userId\)/);
+  expect(fn).toMatch(/isTournamentOrganiser\(id, userId\)\.then\(async \(org\) => \{[\s\S]*organiser: org/);
   expect(fn).toMatch(/tournament: \{ \.\.\.tournament, can_manage: organiser === true \}/);
 });

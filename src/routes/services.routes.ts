@@ -51,10 +51,13 @@ async function findableFilter(viewerId: string | undefined): Promise<string> {
  * same filters as the type lists (not deleted, not blocked, no test accounts for a
  * real viewer, the city when one is chosen). Sorted as the type lists are.
  */
-async function officialsFor(viewerId: string | undefined, cityId: string | null) {
-  const blocked = await blockedUserIds(viewerId);
-  const hide = await hideTestFor(viewerId);
-  const findable = await findableFilter(viewerId); // Q37
+type ListFilters = { blocked: Set<string>; hide: boolean; findable: string };
+async function listFilters(viewerId: string | undefined): Promise<ListFilters> {
+  const [blocked, hide, findable] = await Promise.all([blockedUserIds(viewerId), hideTestFor(viewerId), findableFilter(viewerId) /* Q37 */]);
+  return { blocked, hide, findable };
+}
+async function officialsFor(viewerId: string | undefined, cityId: string | null, filters?: ListFilters) {
+  const { blocked, hide, findable } = filters ?? await listFilters(viewerId);
   const rows = await selectAll<any>((from, to) => {
     let q = supabase.from('user_account_types').select(PROVIDER_EMBED)
       .in('account_type', [...OFFICIAL_TYPES]).is('users.deleted_at', null)
@@ -175,6 +178,30 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
   return res.json({ providers, ...pageMeta(count, p) });
 });
 
+/**
+ * Item 32 (25 Nov 2026): the cards' numbers by type in one grouped call (migration 170, the lists' own
+ * filters); before it runs, or on a failure, one count per type as before (null = no number, never a 0).
+ */
+async function typeCounts(viewerId: string | undefined, cityId: string | null, types: string[], f: ListFilters): Promise<Array<readonly [string, number | null]>> {
+  const counted = await Promise.resolve().then(() => supabase.rpc('services_type_counts', { p_viewer: viewerId ?? null, p_city: cityId, p_hide_test: f.hide })).catch(() => null);
+  const data = counted && !counted.error ? counted.data : null;
+  if (data && typeof data === 'object' && !Array.isArray(data)) return types.map((t) => [t, Number((data as Record<string, number>)[t] ?? 0)] as const);
+  return Promise.all(types.map(async (type) => {
+    let q = supabase
+      .from('user_account_types')
+      .select('user_id, users:user_id!inner(id, city_id)', { count: 'exact', head: true })
+      .eq('account_type', type)
+      .is('users.deleted_at', null)
+      .is('users.suspended_at', null); // Q19 + Q46: the count is what the list shows
+    q = excludeIds(q, 'user_id', f.blocked);
+    q = q.or(f.findable, { referencedTable: 'users' }); // Q37
+    if (f.hide) q = excludeTestEmbed(q, 'users');
+    if (cityId) q = q.eq('users.city_id', cityId);
+    const { count, error: e } = await q;
+    return [type, e ? null : (count ?? 0)] as const;
+  }));
+}
+
 // GET /services/counts — B16 (V079, D20): how many providers each category
 // has, with the SAME filters as the list (not deleted, not blocked either way,
 // no test accounts for a real viewer), so a count never promises a row the list
@@ -183,33 +210,17 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
 // chip), so a card's number is what its list shows; and `categories` holds the
 // officials' cards (umpires / referees / arbiters).
 router.get('/counts', authenticateToken, async (req: Request, res: Response) => {
-  const blocked = await blockedUserIds(req.userId);
-  const hide = await hideTestFor(req.userId);
   const cityId = cityOf(req.query.city_id);
-  const findable = await findableFilter(req.userId); // Q37: counts as the lists
+  const filters = await listFilters(req.userId); // Q37: counts as the lists
   // Item 1 (25 Nov 2026): the officials' numbers come from the one merged list below.
   const types = [...SERVICE_TYPES].filter((t) => !isOfficialType(t));
-  const results = await Promise.all(types.map(async (type) => {
-    let q = supabase
-      .from('user_account_types')
-      .select('user_id, users:user_id!inner(id, city_id)', { count: 'exact', head: true })
-      .eq('account_type', type)
-      .is('users.deleted_at', null)
-      .is('users.suspended_at', null); // Q19 + Q46: the count is what the list shows
-    q = excludeIds(q, 'user_id', blocked);
-    q = q.or(findable, { referencedTable: 'users' }); // Q37
-    if (hide) q = excludeTestEmbed(q, 'users');
-    if (cityId) q = q.eq('users.city_id', cityId);
-    const { count, error } = await q;
-    return [type, error ? null : (count ?? 0)] as const;
-  }));
+  const [results, officials] = await Promise.all([typeCounts(req.userId, cityId, types, filters), officialsFor(req.userId, cityId, filters).catch(() => null)]);
   let categories: Record<OfficialCategory, number> | null = null;
   let officialsCount: number | null = null; // null = couldn't be read: no number, never a 0
-  try {
-    const officials = await officialsFor(req.userId, cityId);
+  if (officials) { // else the officials' cards show no number
     officialsCount = officials.length;
     categories = Object.fromEntries(OFFICIAL_CATEGORIES.map((c) => [c, officials.filter((o) => o.categories.has(c)).length])) as Record<OfficialCategory, number>;
-  } catch { /* the officials' cards then show no number */ }
+  }
   // Both keys are the one merged group, counted once (older apps read either; the lists answer the same).
   const counts = { ...Object.fromEntries(results), ...Object.fromEntries(OFFICIAL_TYPES.map((t) => [t, officialsCount])) };
   return res.json({ counts, categories });

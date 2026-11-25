@@ -17,8 +17,13 @@ export function hideOfficialReport(_req: Request, res: Response, next: NextFunct
       const strip = (m: unknown) => {
         if (m && typeof m === 'object' && 'official_report' in m) delete (m as { official_report?: unknown }).official_report;
       };
-      strip(b.match);
-      if (Array.isArray(b.matches)) b.matches.forEach(strip);
+      // Item 26 (25 Nov 2026): GET /matches/home carries the two replies side by side (next, my_live).
+      const parts = [b, (b as { next?: unknown }).next, (b as { my_live?: unknown }).my_live] as Array<{ match?: unknown; matches?: unknown } | null | undefined>;
+      for (const part of parts) {
+        if (!part || typeof part !== 'object') continue;
+        strip(part.match);
+        if (Array.isArray(part.matches)) part.matches.forEach(strip);
+      }
     }
     return json(body);
   }) as Response['json'];

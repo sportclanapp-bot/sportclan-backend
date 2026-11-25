@@ -810,16 +810,17 @@ export async function getTournament(req: Request, res: Response) {
       .eq('id', id)
       .maybeSingle();
     if (error || !tournament) return res.status(404).json({ error: 'Tournament not found' });
-    // Cricket gap 10 (5 Oct 2026): who has paid the entry fee is the organisers'
-    // record — read only for them; nobody else gets the columns.
-    const organiser = await isTournamentOrganiser(id, userId);
-    // Oct 2026 (Dipak: no full download): an app that pages entries gets the
-    // counts and only the entries it needs here (the viewer's own, the
-    // champion's); the list comes from GET /tournaments/:id/entries. An older
-    // app gets every entry, as before.
+    // Item 17 (25 Nov 2026): the reads below were one after the other (11–12 trips); the ones that
+    // don't need each other's answer go together.
     const paged = clientHas(req, 'entries_paged');
-    const [entries, entry_summary] = paged
-      ? await Promise.all([
+    const isParent = (tournament as { is_parent?: boolean }).is_parent === true;
+    const parentId = isParent ? null : (tournament as { parent_id?: string | null }).parent_id ?? null;
+    const readEntries = async (organiser: boolean): Promise<[unknown, unknown]> => (paged
+      // Oct 2026 (Dipak: no full download): an app that pages entries gets the
+      // counts and only the entries it needs here (the viewer's own, the
+      // champion's); the list comes from GET /tournaments/:id/entries. An older
+      // app gets every entry, as before.
+      ? Promise.all([
         keyEntries(id, userId, organiser, (tournament as { champion_team_id?: string | null }).champion_team_id ?? null),
         entrySummary(id, organiser, (tournament as { format?: string }).format === 'groups_knockout'),
       ])
@@ -827,35 +828,42 @@ export async function getTournament(req: Request, res: Response) {
         .from('tournament_entries')
         // Phase 3 B08-F5: team_id too — the fixture editor keys its team chips on it.
         .select(`${entryCols(organiser)}`)
-        .eq('tournament_id', id)), undefined];
-    // SC-293: authoritative fixture count so the Overview's Quick Stats agrees
-    // with the Bracket + Officials tabs. Was: the FE showed fixtures.length, but
-    // fixtures are only fetched on the Bracket tab → the Overview (landing tab)
-    // always showed "0 fixtures" even for a completed tournament with a full
-    // bracket. Counted server-side here (same universe the bracket renders).
-    const { count: fixturesCount } = await supabase
-      .from('matches')
-      .select('id', { count: 'exact', head: true })
-      .eq('tournament_id', id);
+        .eq('tournament_id', id)), undefined]);
+    const [{ organiser, entries, entry_summary }, { count: fixturesCount }, replaced, hasResult, can_open_chat, parentStatus, events, parentRow] = await Promise.all([
+      // Cricket gap 10 (5 Oct 2026): who has paid the entry fee is the organisers'
+      // record — read only for them; nobody else gets the columns.
+      isTournamentOrganiser(id, userId).then(async (org) => {
+        const [e, sum] = await readEntries(org);
+        return { organiser: org, entries: e as unknown[], entry_summary: sum };
+      }),
+      // SC-293: authoritative fixture count so the Overview's Quick Stats agrees
+      // with the Bracket + Officials tabs. Was: the FE showed fixtures.length, but
+      // fixtures are only fetched on the Bracket tab → the Overview (landing tab)
+      // always showed "0 fixtures" even for a completed tournament with a full
+      // bracket. Counted server-side here (same universe the bracket renders).
+      supabase.from('matches').select('id', { count: 'exact', head: true }).eq('tournament_id', id),
+      replacedMatchIds(id),
+      tournamentHasResult(id),
+      // B02 (N2): whether THIS viewer may open the tournament chat, so the app can
+      // hide a button that would only answer 403. Signed-out viewers can't.
+      canOpenTournamentChat(id, userId),
+      // Badminton gap 1: a parent lists its events (status brought up to date);
+      // an event names its tournament and its sibling events.
+      isParent ? refreshParentStatus(id) : null,
+      isParent || parentId ? eventsOf(isParent ? id : parentId!) : null,
+      parentId ? supabase.from('tournaments').select('id, name, status, entry_code, settings').eq('id', parentId).maybeSingle() : null,
+    ]);
     // N-R7-S124: a replaced fixture isn't one of the bracket's (its corrected copy is).
-    (tournament as { fixtures_count?: number }).fixtures_count = Math.max(0, (fixturesCount ?? 0) - (fixturesCount ? (await replacedMatchIds(String(tournament.id))).size : 0));
+    (tournament as { fixtures_count?: number }).fixtures_count = Math.max(0, (fixturesCount ?? 0) - (fixturesCount ? replaced.size : 0));
     // BUILD 4.1: whether any result is in — the points and tie-breaks are fixed from then on.
-    (tournament as { has_results?: boolean }).has_results = (fixturesCount ?? 0) > 0 ? await tournamentHasResult(String(tournament.id)) : false;
-    // B02 (N2): whether THIS viewer may open the tournament chat, so the app can
-    // hide a button that would only answer 403. Signed-out viewers can't.
-    const can_open_chat = req.userId ? await canOpenTournamentChat(String(tournament.id), req.userId) : false;
-    // Badminton gap 1: a parent lists its events (status brought up to date);
-    // an event names its tournament and its sibling events.
+    (tournament as { has_results?: boolean }).has_results = (fixturesCount ?? 0) > 0 ? hasResult : false;
     const family: Record<string, unknown> = {};
-    if ((tournament as { is_parent?: boolean }).is_parent) {
-      const st = await refreshParentStatus(String(tournament.id));
-      if (st) (tournament as { status?: string }).status = st;
-      family.events = await eventsOf(String(tournament.id));
-    } else if ((tournament as { parent_id?: string | null }).parent_id) {
-      const pid = String((tournament as { parent_id: string }).parent_id);
-      const { data: parent } = await supabase.from('tournaments').select('id, name, status, entry_code, settings').eq('id', pid).maybeSingle();
-      family.parent = parent ?? null;
-      family.events = await eventsOf(pid);
+    if (isParent) {
+      if (parentStatus) (tournament as { status?: string }).status = parentStatus;
+      family.events = events;
+    } else if (parentId) {
+      family.parent = parentRow?.data ?? null;
+      family.events = events;
     }
     // Audit #37: whether the viewer organises it (the creator or a co-organiser)
     // comes with the tournament, so a co-organiser's controls show at once.

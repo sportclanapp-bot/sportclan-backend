@@ -36,6 +36,7 @@ import {
   getCommentary,
   matchHistory,
   nextMatch,
+  homeMatches, // item 26
   myLiveMatches,
 } from '../controllers/matches.controller';
 import { replaceVoidedMatch } from '../controllers/matchReplace.controller';
@@ -67,6 +68,7 @@ router.get('/', authenticateToken, listMatches);
 router.get('/open', authenticateToken, listOpenMatches);
 // B04 (D1): Home's "Your next match" — before '/:id', or 'next' is read as an id.
 router.get('/next', authenticateToken, nextMatch);
+router.get('/home', authenticateToken, homeMatches); // item 26: next + my-live in one call
 router.get('/my-live', authenticateToken, myLiveMatches); // N-R7-267
 // Phase 3: played + officiated, before '/:id' so 'history' is not read as an id.
 router.get('/history', authenticateToken, matchHistory);

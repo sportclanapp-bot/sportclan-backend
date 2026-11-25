@@ -7,6 +7,7 @@ import {
   runReEngagement,
   runWeeklyDigest,
 } from '../controllers/features.controller';
+import { sweepAvailabilityAutoOff } from '../utils/availability';
 import { sweepExpiredInvites } from '../controllers/invites.controller';
 import {
   sweepStaleLiveMatches,
@@ -85,6 +86,16 @@ router.post('/sweep-matches', async (_req, res) => {
   const live = await sweepStaleLiveMatches();
   const unplayed = await sweepUnplayedScheduledMatches();
   res.json({ staleLiveAbandoned: live.abandoned, staleLiveCompleted: live.completed, unplayedAbandoned: unplayed.abandoned }); // F191
+});
+
+// Item 3 (25 Nov 2026): "Available to play" off for everyone away 30 days. Also hourly in
+// process (index.ts). Idempotent: only rows still on are touched.
+router.post('/availability-auto-off', async (_req, res) => {
+  try {
+    return res.json(await sweepAvailabilityAutoOff());
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 export default router;

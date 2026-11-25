@@ -8,7 +8,7 @@ import { blockedUserIds, excludeIds } from '../utils/blocks';
 import { queryText } from '../utils/validation';
 import { sortSports } from '../constants/sportOrder';
 import { selectAll } from '../utils/selectAll';
-import { OFFICIAL_CATEGORIES, OFFICIAL_TYPES, isOfficialCategory, officialCategoriesOf, type OfficialCategory } from '../utils/officialCategories';
+import { OFFICIAL_CATEGORIES, OFFICIAL_TYPES, isOfficialCategory, isOfficialType, officialCategoriesOf, type OfficialCategory } from '../utils/officialCategories';
 
 const router = Router();
 
@@ -122,6 +122,18 @@ router.get('/', authenticateToken, async (req: Request, res: Response) => {
 
   const p = parsePagination(req.query as Record<string, unknown>, { defaultLimit: 20, maxLimit: 50 });
 
+  // Fix list 25 Nov 2026, item 1: 'umpire' and 'official' are one role, so the older
+  // ?type= lists (apps before the cards by sport) give the one group for either, each
+  // person once.
+  if (isOfficialType(type)) {
+    try {
+      const all = await officialsFor(req.userId, cityOf(req.query.city_id));
+      return res.json({ providers: all.slice(p.from, p.to + 1).map((o) => o.provider), ...pageMeta(all.length, p) });
+    } catch (e: any) {
+      return res.status(500).json({ error: e?.message ?? 'Could not load the list' });
+    }
+  }
+
   // F-63 / D7 — this directory was the one people-listing endpoint with NEITHER
   // filter on it. Search, the feed, kudos, rivals and the follower lists all
   // exclude blocked and soft-deleted users; /services excluded neither, so a
@@ -175,7 +187,8 @@ router.get('/counts', authenticateToken, async (req: Request, res: Response) => 
   const hide = await hideTestFor(req.userId);
   const cityId = cityOf(req.query.city_id);
   const findable = await findableFilter(req.userId); // Q37: counts as the lists
-  const types = [...SERVICE_TYPES];
+  // Item 1 (25 Nov 2026): the officials' numbers come from the one merged list below.
+  const types = [...SERVICE_TYPES].filter((t) => !isOfficialType(t));
   const results = await Promise.all(types.map(async (type) => {
     let q = supabase
       .from('user_account_types')
@@ -191,11 +204,15 @@ router.get('/counts', authenticateToken, async (req: Request, res: Response) => 
     return [type, error ? null : (count ?? 0)] as const;
   }));
   let categories: Record<OfficialCategory, number> | null = null;
+  let officialsCount: number | null = null; // null = couldn't be read: no number, never a 0
   try {
     const officials = await officialsFor(req.userId, cityId);
+    officialsCount = officials.length;
     categories = Object.fromEntries(OFFICIAL_CATEGORIES.map((c) => [c, officials.filter((o) => o.categories.has(c)).length])) as Record<OfficialCategory, number>;
   } catch { /* the officials' cards then show no number */ }
-  return res.json({ counts: Object.fromEntries(results), categories });
+  // Both keys are the one merged group, counted once (older apps read either; the lists answer the same).
+  const counts = { ...Object.fromEntries(results), ...Object.fromEntries(OFFICIAL_TYPES.map((t) => [t, officialsCount])) };
+  return res.json({ counts, categories });
 });
 
 export default router;

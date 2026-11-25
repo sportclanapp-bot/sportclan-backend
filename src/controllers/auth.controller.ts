@@ -21,6 +21,7 @@ import {
   verifyRefreshToken,
 } from '../utils/jwt';
 import { setOtp, getOtp, deleteOtp, bumpCounter, readCounter, clearCounter } from '../utils/otpStore';
+import { withRestoredAvailability } from '../utils/availability';
 import { normalizeAccountTypes, isValidAccountType } from '../constants/accountTypes';
 import { signupProfileProblem, cleanLocalArea, USERNAME_RE, RESERVED_USERNAMES, GENDERS, GENDER_ERROR } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
@@ -689,7 +690,7 @@ export async function otpLogin(req: Request, res: Response) {
 
   const { data: user, error } = await supabase
     .from('users')
-    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, is_admin, created_at, deleted_at')
+    .select('id, phone, name, username, email, gender, dob, link, bio, city_id, account_type, profile_picture_url, coin_balance, is_available, is_admin, created_at, deleted_at')
     // SC-386: look up EVERY form. Deliberately permissive — an account still
     // stored the legacy way must keep logging in, both in the window before
     // migration 083 runs and afterwards if a value could not be canonicalised.
@@ -723,7 +724,7 @@ export async function otpLogin(req: Request, res: Response) {
   const refreshToken = generateRefreshToken(user.id);
   const sid = await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
   const accessToken = generateAccessToken(user.id, sid); // decision 15: tied to this sign-in
-  return res.json({ user: { ...user, account_types: await accountTypesFor(user.id, user.account_type), sport_ids: await orderedSportIds(user.id).catch(() => [] as string[]) }, accessToken, refreshToken, isNewUser: false });
+  return res.json({ user: { ...(await withRestoredAvailability(user.id, user)), account_types: await accountTypesFor(user.id, user.account_type), sport_ids: await orderedSportIds(user.id).catch(() => [] as string[]) }, accessToken, refreshToken, isNewUser: false });
 }
 
 // POST /auth/login  { phone, password } or { email, password }
@@ -739,7 +740,7 @@ export async function login(req: Request, res: Response) {
 
   let query = supabase
     .from('users')
-    .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, coin_balance, is_admin, created_at, deleted_at');
+    .select('id, phone, name, username, email, password_hash, city_id, account_type, profile_picture_url, coin_balance, is_available, is_admin, created_at, deleted_at');
 
   if (email) {
     query = query.ilike('email', escapeLike(email.trim())); // B01-F11: `_` is a literal
@@ -787,7 +788,7 @@ export async function login(req: Request, res: Response) {
   const sid = await insertRefreshToken(user.id, refreshToken, req); // B15 (D17): with its device
   const accessToken = generateAccessToken(user.id, sid); // decision 15: tied to this sign-in
   const { password_hash: _ph, deleted_at: _da, ...safe } = user;
-  return res.json({ user: { ...safe, account_types: await accountTypesFor(user.id, user.account_type), sport_ids: await orderedSportIds(user.id).catch(() => [] as string[]) }, accessToken, refreshToken });
+  return res.json({ user: { ...(await withRestoredAvailability(user.id, safe)), account_types: await accountTypesFor(user.id, user.account_type), sport_ids: await orderedSportIds(user.id).catch(() => [] as string[]) }, accessToken, refreshToken });
 }
 
 /**

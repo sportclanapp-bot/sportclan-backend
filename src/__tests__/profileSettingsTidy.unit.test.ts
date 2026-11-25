@@ -78,7 +78,7 @@ describe('2 · Services: officials by their sports\' word, counts by city', () =
     expect([...officialCategoriesOf(['chess'], ['official'])]).toEqual(['arbiters']);
     expect([...officialCategoriesOf(['hockey', 'badminton'], ['official'])]).toEqual(['umpires']);
     expect([...officialCategoriesOf([], ['umpire'])]).toEqual(['umpires']);
-    expect([...officialCategoriesOf([], ['official'])]).toEqual(['referees']);
+    expect([...officialCategoriesOf([], ['official'])]).toEqual(['umpires']); // 25 Nov 2026, item 1: one role, one group
   });
 
   const user = (id: string, name: string, city: string, sports: string[]) => ({ id, name, username: name.toLowerCase(), profile_picture_url: null, bio: null, city_id: city, deleted_at: null, is_test_seed: false, city: { name: city }, sports: sports.map((s) => ({ sport: { slug: s, name: s } })) });
@@ -115,7 +115,9 @@ describe('2 · Services: officials by their sports\' word, counts by city', () =
       expect(await names('arbiters')).toEqual(['Kiran']);
       expect((await get('/services?category=nope')).status).toBe(400);
       // The old ?type= lists still answer (the released app uses them).
-      expect((await get('/services?type=umpire')).body.providers.length).toBe(3);
+      // Item 1 (25 Nov 2026): umpire and official are one role, each person once (Ravi, Asha, Kiran, Both).
+      expect((await get('/services?type=umpire')).body.providers.length).toBe(4);
+      expect((await get('/services?type=official')).body.providers.length).toBe(4);
     } finally { close(); }
   });
 

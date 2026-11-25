@@ -9,12 +9,17 @@
  * sports use for one (sportTerms — the same file as the app's): Umpires (cricket,
  * hockey, badminton, tennis, table tennis, carrom), Referees (football,
  * basketball, volleyball, pickleball, kabaddi), Arbiters (chess). Someone who
- * officiates two kinds of sport is in both. An official with no sports listed
- * goes by their account type (`umpire` → Umpires, `official` → Referees).
+ * officiates two kinds of sport is in both. Fix list 25 Nov 2026, item 1: the two
+ * types are one role (Umpire / Referee / Official), so an official with no sports
+ * listed is in one group, Umpires, whichever of the two is stored.
  */
 import { sportTerms } from './sportTerms';
 
 export const OFFICIAL_TYPES = ['umpire', 'official'] as const;
+/** Either stored value of the one officials' role. */
+export function isOfficialType(t: string): boolean {
+  return (OFFICIAL_TYPES as readonly string[]).includes(t);
+}
 export type OfficialCategory = 'umpires' | 'referees' | 'arbiters';
 export const OFFICIAL_CATEGORIES: readonly OfficialCategory[] = ['umpires', 'referees', 'arbiters'];
 
@@ -27,8 +32,7 @@ export function officialCategoriesOf(sportSlugs: readonly string[], accountTypes
     if (c) out.add(c);
   }
   if (out.size === 0) {
-    if (accountTypes.includes('umpire')) out.add('umpires');
-    if (accountTypes.includes('official')) out.add('referees');
+    if (accountTypes.some((t) => (OFFICIAL_TYPES as readonly string[]).includes(t))) out.add('umpires');
   }
   return out;
 }

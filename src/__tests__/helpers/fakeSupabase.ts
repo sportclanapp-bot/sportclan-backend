@@ -60,6 +60,8 @@ export function fakeDb(seed: Record<string, Row[]> = {}, opts: { maxRows?: numbe
       gte(c: string, v: any) { filters.push((r) => at(r, c) >= v); return b; },
       lt(c: string, v: any) { filters.push((r) => at(r, c) < v); return b; },
       lte(c: string, v: any) { filters.push((r) => at(r, c) <= v); return b; },
+      // 25 Nov 2026: a LIKE pattern, with `\\_` / `\\%` as the literal characters.
+      like(c: string, p: string) { const re = new RegExp(`^${p.replace(/\\([_%])/g, (_m, ch) => (ch === '_' ? '\u0001' : '\u0002')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.').replace(/\u0001/g, '_').replace(/\u0002/g, '%')}$`); filters.push((r) => re.test(String(at(r, c) ?? ''))); return b; },
       ilike(c: string, p: string) { const re = new RegExp(`^${p.replace(/%/g, '.*')}$`, 'i'); filters.push((r) => re.test(String(at(r, c) ?? ''))); return b; },
       // F117 (Round 3): a simple 'a.eq.x,b.eq.y' (any of them) is applied; anything fancier stays a no-op, as before.
       or(expr?: string) {

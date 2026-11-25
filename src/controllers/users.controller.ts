@@ -21,6 +21,7 @@ import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/valid
 import { RESERVED_USERNAMES, EMAIL_RE, GENDERS, GENDER_ERROR, dobProblem, localAreaProblem, cleanLocalArea } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
+import { isMissingColumn, restoreAvailabilityOnOpen, shouldCheckRestore, withRestoredAvailability } from '../utils/availability';
 import { VALID_ACCOUNT_TYPES, OFFICIATING_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
@@ -248,6 +249,8 @@ export async function getMe(req: Request, res: Response) {
   // fetching /me IS activity — also refresh last_active_at as a foreground ping so
   // presence stays warm even between explicit heartbeats). Best-effort.
   (data as any).is_online = true;
+  // Item 3 (25 Nov 2026): opening the app switches "Available to play" back on if the app switched it off.
+  (data as any).is_available = (await withRestoredAvailability(userId, data as { is_available?: unknown })).is_available;
   void supabase.from('users').update({ last_active_at: new Date().toISOString() }).eq('id', userId);
 
   // Profile-completion bonus — 10 coins, once per user. Idempotent via
@@ -293,6 +296,8 @@ export async function heartbeat(req: Request, res: Response) {
   const now = new Date().toISOString();
   const { error } = await supabase.from('users').update({ last_active_at: now }).eq('id', userId);
   if (error) return res.status(500).json({ error: sanitizeError(error) });
+  // Item 3: an app still running from before comes back by a heartbeat, not GET /users/me.
+  if (shouldCheckRestore(userId)) void restoreAvailabilityOnOpen(userId);
   return res.json({ ok: true, last_active_at: now });
 }
 
@@ -881,12 +886,10 @@ export async function updateMe(req: Request, res: Response) {
   }
 
   patch.updated_at = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('users')
-    .update(patch)
-    .eq('id', userId)
-    .select(PUBLIC_FIELDS)
-    .single();
+  const save = (p: Record<string, unknown>) => supabase.from('users').update(p).eq('id', userId).select(PUBLIC_FIELDS).single();
+  // Item 3 (25 Nov 2026): the person set it themselves, so the app's own auto-off mark goes, in the same write.
+  let { data, error } = await save('is_available' in patch ? { ...patch, is_available_auto_off: false } : patch);
+  if (error && 'is_available' in patch && isMissingColumn(error)) ({ data, error } = await save(patch)); // before migration 169
   if (error) return res.status(500).json({ error: error.message });
   // F040: the account types and sports, only after every check above passed.
   if (types) {

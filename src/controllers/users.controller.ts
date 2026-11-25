@@ -432,6 +432,25 @@ export async function getUserById(req: Request, res: Response) {
   });
 }
 
+/**
+ * Item 31 (25 Nov 2026) · GET /users/:id/card: what a chat's header shows of the other person — the same
+ * rules as their profile (a deleted account, or a block either way, is not found).
+ */
+export async function getUserCard(req: Request, res: Response) {
+  const { id } = req.params;
+  const notFound = () => res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
+  if (!isUuid(id)) return notFound();
+  const viewerId = req.userId;
+  const [{ data, error }, blocked] = await Promise.all([
+    excludeDeleted(supabase.from('users').select('id, name, username, profile_picture_url, last_active_at').eq('id', id)).maybeSingle(),
+    viewerId && viewerId !== id ? isBlockedBetween(viewerId, id) : false,
+  ]);
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data || blocked) return notFound();
+  const { last_active_at, ...u } = data as { last_active_at?: string | null } & Record<string, unknown>;
+  return res.json({ user: { ...u, is_online: computeIsOnline(last_active_at ?? null) } });
+}
+
 // PATCH /users/me — update own profile.
 // Change #4: NO size limit on profile_picture_url. We accept any URL.
 const ALLOWED_FIELDS = [

@@ -1473,6 +1473,29 @@ export async function homeMatches(req: Request, res: Response) {
  */
 export const MATCH_LIST_COLUMNS = 'id, sport_id, tournament_id, team_a_id, team_b_id, team_a_name, team_b_name, scheduled_at, venue, city_id, format, overs, status, winner_team_id, score_summary, created_by, umpire_id, created_at, updated_at, is_open, players_needed, is_ranked, round, match_no, group_label, next_match_id, next_slot, chat_id, ground_label, join_policy, voided_at, voided_by, void_reason, rules, third_place, scorer_id, called_at, toss_winner_team_id, toss_choice, completed_at, tie_toss, bracket, replaced_by';
 
+/**
+ * Item 28 (25 Nov 2026): a team's next scheduled match, by the app's own rule (pickNextMatch in
+ * TeamDetailScreen): the first still ahead, else one with no time yet, else the most recent overdue one.
+ * It read the team's first 100 to show one (and past 100 overdue fixtures missed the next).
+ */
+async function teamNextMatch(teamId: string, tournamentId: string | null, sportId: string | null): Promise<any | null> {
+  const now = new Date().toISOString();
+  const activeIds = await activeSportIds();
+  const one = (narrow: (q: any) => any) => {
+    let q: any = notVoided(supabase.from('matches').select(MATCH_LIST_COLUMNS).eq('status', 'scheduled').or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`));
+    if (tournamentId) q = q.eq('tournament_id', tournamentId);
+    if (sportId) q = q.eq('sport_id', sportId);
+    if (activeIds) q = q.in('sport_id', activeIds);
+    return narrow(q).limit(1).then(({ data, error }: { data: any[] | null; error: unknown }) => { if (error) throw error; return data?.[0] ?? null; });
+  };
+  const [ahead, untimed, overdue] = await Promise.all([
+    one((q) => q.gte('scheduled_at', now).order('scheduled_at', { ascending: true }).order('id', { ascending: true })),
+    one((q) => q.is('scheduled_at', null).order('id', { ascending: true })),
+    one((q) => q.lt('scheduled_at', now).order('scheduled_at', { ascending: false }).order('id', { ascending: false })),
+  ]);
+  return ahead ?? untimed ?? overdue;
+}
+
 export async function listMatches(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1487,6 +1510,12 @@ export async function listMatches(req: Request, res: Response) {
     }
     const resolvedSportId = await resolveSportId(sport_id);
     if (sport_id && !resolvedSportId) return res.status(400).json({ error: 'Unknown sport', code: 'BAD_SPORT' });
+    // Item 28 (25 Nov 2026): a team page's one next match (?pick=next).
+    if (team_id && status === 'scheduled' && (req.query as Record<string, unknown>).pick === 'next') {
+      const match = await teamNextMatch(team_id, tournament_id ?? null, resolvedSportId ?? null);
+      if (match) await Promise.all([attachChessElo([match]), attachTeamNames([match])]);
+      return res.json({ matches: match ? [match] : [], total: match ? 1 : 0, limit: 1, offset: 0, has_more: false });
+    }
     const p = parsePagination(req.query as Record<string, unknown>);
     // B03 test fixtures are hidden from a real viewer's discovery lists, not from history scopes.
     const hideTestRows = !mine && !team_id && !tournament_id && (await hideTestFor(userId));

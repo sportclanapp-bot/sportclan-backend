@@ -151,3 +151,22 @@ describe('migration 170', () => {
     expect(sql).not.toMatch(/\b(DELETE|UPDATE|DROP|TRUNCATE|ALTER TABLE)\b/);
   });
 });
+
+describe('items 28 + 31 · the two small calls', () => {
+  const s = src('controllers/matches.controller.ts');
+  it('28: the app’s own rule: first ahead, else untimed, else the latest overdue; voided never', () => {
+    const b = s.slice(s.indexOf('async function teamNextMatch('), s.indexOf('export async function listMatches('));
+    expect(b).toContain('return ahead ?? untimed ?? overdue;');
+    expect(b).toContain('notVoided(');
+    expect(s).toContain("if (team_id && status === 'scheduled' && (req.query as Record<string, unknown>).pick === 'next')");
+  });
+  it('31: the same gate as the profile (deleted or blocked: not found), five fields, no private one', () => {
+    const u = src('controllers/users.controller.ts');
+    const b = u.slice(u.indexOf('export async function getUserCard('), u.indexOf('// PATCH /users/me — update own profile.'));
+    expect(b).toContain('excludeDeleted(');
+    expect(b).toContain('isBlockedBetween(viewerId, id)');
+    expect(b).toContain("select('id, name, username, profile_picture_url, last_active_at')");
+    expect(b).toContain("code: 'USER_NOT_FOUND'");
+    expect(src('routes/users.routes.ts')).toMatch(/router\.get\('\/:id\/card', authenticateToken, getUserCard\)/);
+  });
+});

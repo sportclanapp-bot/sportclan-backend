@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import sharp from 'sharp';
 import { uploadBuffer } from '../utils/r2';
+import { SMALL_IMAGE_QUALITY, SMALL_IMAGE_SIDE, smallKeyOf } from '../utils/smallImage';
 
 // SC-351: heic/heif accepted — an iPhone's default camera format. Both the honest
 // mime and the mislabelled one are handled (see sniffing below).
@@ -119,10 +120,18 @@ export async function uploadProfilePhoto(req: Request, res: Response) {
     return res.status(400).json({ error: 'That file isn\u2019t an image we can use. Try a JPG, PNG, WebP or HEIC photo.', code: 'INVALID_IMAGE' });
   }
 
-  const key = `profile-photos/${userId}/${randomUUID()}.jpg`;
+  // Item 34: `.v2` says a small copy was made beside it (utils/smallImage).
+  const key = `profile-photos/${userId}/${randomUUID()}.v2.jpg`;
+  const full = buf;
 
   try {
-    const url = await uploadBuffer(key, buf, 'image/jpeg');
+    const [url] = await Promise.all([
+      uploadBuffer(key, full, 'image/jpeg'),
+      // Best effort: without it the app shows the full photo.
+      sharp(full).resize(SMALL_IMAGE_SIDE, SMALL_IMAGE_SIDE, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: SMALL_IMAGE_QUALITY }).toBuffer()
+        .then((small) => uploadBuffer(smallKeyOf(key), small, 'image/jpeg'))
+        .catch((err: any) => { console.warn('[upload] small copy failed', err?.message); }), // eslint-disable-line no-console
+    ]);
     return res.json({ url });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Upload failed' });

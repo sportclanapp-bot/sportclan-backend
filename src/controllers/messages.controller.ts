@@ -1,7 +1,8 @@
+import crypto from 'crypto';
 import { inBackground } from '../utils/background';
 import { requestKeyOf, isUniqueClash } from '../utils/idempotency';
 import { Request, Response } from 'express';
-import { allRows, selectAllIn } from '../utils/selectAll';
+import { inParallel, allRows, selectAllIn } from '../utils/selectAll';
 import { isUuid } from '../utils/uuid';
 import { supabase } from '../utils/supabase';
 import { chunks } from '../utils/inChunks';
@@ -165,18 +166,26 @@ async function dmSendGate(
 // recipient's poll — NOT on send — so it is distinct from "read" (which only fires
 // when they open the thread). Bounded to the undelivered delta (messages this user
 // hasn't been added to yet), so steady-state polls do ~zero writes.
+// Item 9 (25 Nov 2026): one update for the whole delta (migration 171), and never before the reply.
+const DELIVERED_CAP = 500;
 async function markDeliveredForUser(chatIds: string[], userId: string): Promise<void> {
+  if (chatIds.length === 0) return;
+  const { error } = await supabase.rpc('mark_messages_delivered', { p_user: userId, p_limit: DELIVERED_CAP });
+  if (!error) return;
+  await markDeliveredOneByOne(chatIds, userId); // before migration 171
+}
+async function markDeliveredOneByOne(chatIds: string[], userId: string): Promise<void> {
   if (chatIds.length === 0) return;
   const pending: Array<{ id: string; delivered_to: unknown }> = [];
   for (const part of chunks(chatIds)) { // BUILD 1.13: never one huge id list
-    if (pending.length >= 500) break;
+    if (pending.length >= DELIVERED_CAP) break;
     const { data } = await supabase
       .from('messages')
       .select('id, delivered_to')
       .in('chat_id', part)
       .neq('sender_id', userId)
       .not('delivered_to', 'cs', `{${userId}}`)
-      .limit(500 - pending.length);
+      .limit(DELIVERED_CAP - pending.length);
     pending.push(...((data ?? []) as Array<{ id: string; delivered_to: unknown }>));
   }
   if (pending.length === 0) return;
@@ -222,65 +231,51 @@ export function parseChatCursor(v: unknown): ChatHead | null {
   return { id: m[2], last_message_at: m[1], created_at: null };
 }
 
-export async function listChats(req: Request, res: Response) {
-  const userId = req.userId!;
-
-  // N-RWG4-1 (launch test plan): every chat this person is in. One read stopped at
-  // PostgREST's 1000 rows, so someone in more chats never saw the rest — the one
-  // with their newest message could be among the missing. Read 1000 at a time.
-  let chatIds: string[];
-  try {
-    const participations = await allRows<{ chat_id: string }>(() => supabase
-      .from('chat_participants')
-      .select('chat_id')
-      .is('left_at', null)
-      .eq('user_id', userId));
-    chatIds = [...new Set(participations.map((p) => p.chat_id))];
-  } catch (pErr) {
-    return res.status(500).json({ error: sanitizeError(pErr as { message?: string }) });
+/** Item 10: a chat row's version: anything a row shows changes it (a message, a read, a name, a photo, a member…). */
+export function chatRowVersion(row: Record<string, unknown>): string {
+  const { v: _v, ...content } = row;
+  return crypto.createHash('sha1').update(JSON.stringify(content)).digest('hex').slice(0, 12);
+}
+/** Item 10: the rows an app says it holds, `<chat id>.<version>` by commas; anything else is ignored (sent whole). */
+export function parseKnownChats(raw: unknown): Map<string, string> | null {
+  if (typeof raw !== 'string') return null;
+  const out = new Map<string, string>();
+  for (const part of raw.split(',').slice(0, 200)) {
+    const m = /^([0-9a-f-]{36})\.([0-9a-f]{12})$/i.exec(part);
+    if (m) out.set(m[1].toLowerCase(), m[2].toLowerCase());
   }
-  if (chatIds.length === 0) return res.json({ data: [], chats: [] });
+  return out;
+}
 
-  const before = req.query.before;
-  const cursor = before === undefined ? null : parseChatCursor(before);
-  if (before !== undefined && !cursor) {
-    return res.status(400).json({ error: 'before must be a cursor from the last page', code: 'INVALID_CURSOR' });
+/**
+ * Item 8 (25 Nov 2026): a page's people, last messages and unread counts in one call (migration 171); it was
+ * three reads a chat. Before the function exists, or if it fails, chat by chat as before.
+ */
+async function enrichChats(chats: Array<Record<string, any>>, userId: string, blocked: Set<string>): Promise<Array<Record<string, any>>> {
+  if (chats.length === 0) return [];
+  const bulk = await Promise.resolve().then(() => supabase.rpc('chat_list_extras', { p_user: userId, p_chats: chats.map((c) => c.id), p_blocked: [...blocked], p_cap: UNREAD_SCAN_CAP })).catch(() => null);
+  if (bulk && !bulk.error && Array.isArray(bulk.data)) {
+    const by = new Map((bulk.data as Array<{ chat_id: string; participants: Array<Record<string, any>>; last: unknown; unread: number }>).map((x) => [x.chat_id, x]));
+    if (chats.every((c) => by.has(c.id))) {
+      return chats.map((chat) => {
+        const x = by.get(chat.id)!;
+        return {
+          ...chat,
+          // N-R7-440: someone blocked (either way) is marked, so the app can leave them out of suggestions.
+          participants: (x.participants ?? []).map((p) => (blocked.has(p.user_id) ? { ...p, blocked: true } : p)),
+          lastMessage: x.last ?? null,
+          unreadCount: x.unread ?? 0,
+        };
+      });
+    }
   }
+  return enrichChatsOneByOne(chats, userId, blocked);
+}
 
-  // SC-341: the recipient's list poll is where "delivered" is stamped — their app
-  // has now received these messages even though they haven't opened the thread.
-  await markDeliveredForUser(chatIds, userId);
-
-  const lcp = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
-  // BUILD 1.13: too many chats for one id list in the URL — read each chunk's
-  // order keys. N-RWG4-1/2: then order them all here by last activity (newest
-  // first, ties by id) and fetch just the page: by `offset`, or after the
-  // `before` cursor, which a new message moving a chat to the top can't shift.
-  const heads: ChatHead[] = [];
-  for (const part of chunks(chatIds)) {
-    const r = await supabase.from('chats').select('id, last_message_at, created_at').in('id', part)
-      .is('deleted_at', null); // soft-deleted groups (098) are in no list
-    if (r.error) return res.status(500).json({ error: sanitizeError(r.error) });
-    heads.push(...((r.data ?? []) as ChatHead[]));
-  }
-  heads.sort(byChatActivity);
-  const first = cursor ? heads.findIndex((h) => byChatActivity(h, cursor) > 0) : lcp.from;
-  const start = first < 0 ? heads.length : first;
-  const pageHeads = heads.slice(start, start + lcp.limit);
-  const pageIds = pageHeads.map((h) => h.id);
-  const r = pageIds.length > 0 ? await supabase.from('chats').select('*').in('id', pageIds) : { data: [], error: null };
-  if (r.error) return res.status(500).json({ error: sanitizeError(r.error) });
-  const byId = new Map(((r.data ?? []) as Array<Record<string, any>>).map((c) => [c.id as string, c]));
-  const chats = pageIds.map((id) => byId.get(id)).filter((c): c is Record<string, any> => !!c);
-  // B09-F20: count the chats that are listed — a deleted one made `total` too big.
-  const liveTotal = heads.length;
-  const page = { ...lcp, offset: start, from: start, to: start + lcp.limit - 1 };
-  const nextCursor = start + lcp.limit < liveTotal && pageHeads.length > 0 ? chatCursor(pageHeads[pageHeads.length - 1]) : null;
-
-  const blocked = await blockedUserIds(userId);
+async function enrichChatsOneByOne(chats: Array<Record<string, any>>, userId: string, blocked: Set<string>): Promise<Array<Record<string, any>>> {
   // Enrich with participants and last message
   const withUnread = await Promise.all(
-    (chats || []).map(async (chat) => {
+    chats.map(async (chat) => {
       const { data: participants } = await supabase
         .from('chat_participants')
         .select(`
@@ -321,15 +316,88 @@ export async function listChats(req: Request, res: Response) {
     })
   );
   const dead = await deletedIdSet([...new Set(withUnread.flatMap((c) => c.unread.map((m) => m.sender_id)))]);
-  const enriched = withUnread.map(({ chat, unread }) => ({
+  return withUnread.map(({ chat, unread }) => ({
     ...chat,
     unreadCount: unread.filter((m) => !dead.has(m.sender_id)).length,
   }));
+}
+
+export async function listChats(req: Request, res: Response) {
+  const userId = req.userId!;
+
+  // N-RWG4-1 (launch test plan): every chat this person is in. One read stopped at
+  // PostgREST's 1000 rows, so someone in more chats never saw the rest — the one
+  // with their newest message could be among the missing. Read 1000 at a time.
+  let chatIds: string[];
+  try {
+    const participations = await allRows<{ chat_id: string }>(() => supabase
+      .from('chat_participants')
+      .select('chat_id')
+      .is('left_at', null)
+      .eq('user_id', userId));
+    chatIds = [...new Set(participations.map((p) => p.chat_id))];
+  } catch (pErr) {
+    return res.status(500).json({ error: sanitizeError(pErr as { message?: string }) });
+  }
+  if (chatIds.length === 0) return res.json({ data: [], chats: [] });
+
+  const before = req.query.before;
+  const cursor = before === undefined ? null : parseChatCursor(before);
+  if (before !== undefined && !cursor) {
+    return res.status(400).json({ error: 'before must be a cursor from the last page', code: 'INVALID_CURSOR' });
+  }
+
+  // SC-341: the recipient's list poll is where "delivered" is stamped — their app
+  // has now received these messages even though they haven't opened the thread.
+  // Item 9 (25 Nov 2026): after the reply, not before it (the list's rows don't carry it).
+  inBackground(markDeliveredForUser(chatIds, userId), 'mark delivered');
+
+  const lcp = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
+  // BUILD 1.13: too many chats for one id list in the URL — read each chunk's
+  // order keys. N-RWG4-1/2: then order them all here by last activity (newest
+  // first, ties by id) and fetch just the page: by `offset`, or after the
+  // `before` cursor, which a new message moving a chat to the top can't shift.
+  // Item 8 (25 Nov 2026): the chunks a few at a time (someone in 6,800 chats waited for 69 in a row).
+  let heads: ChatHead[];
+  try {
+    heads = (await inParallel(chunks(chatIds), async (part) => {
+      const r = await supabase.from('chats').select('id, last_message_at, created_at').in('id', part)
+        .is('deleted_at', null); // soft-deleted groups (098) are in no list
+      if (r.error) throw r.error;
+      return (r.data ?? []) as ChatHead[];
+    })).flat();
+  } catch (hErr) {
+    return res.status(500).json({ error: sanitizeError(hErr as { message?: string }) });
+  }
+  heads.sort(byChatActivity);
+  const first = cursor ? heads.findIndex((h) => byChatActivity(h, cursor) > 0) : lcp.from;
+  const start = first < 0 ? heads.length : first;
+  const pageHeads = heads.slice(start, start + lcp.limit);
+  const pageIds = pageHeads.map((h) => h.id);
+  const r = pageIds.length > 0 ? await supabase.from('chats').select('*').in('id', pageIds) : { data: [], error: null };
+  if (r.error) return res.status(500).json({ error: sanitizeError(r.error) });
+  const byId = new Map(((r.data ?? []) as Array<Record<string, any>>).map((c) => [c.id as string, c]));
+  const chats = pageIds.map((id) => byId.get(id)).filter((c): c is Record<string, any> => !!c);
+  // B09-F20: count the chats that are listed — a deleted one made `total` too big.
+  const liveTotal = heads.length;
+  const page = { ...lcp, offset: start, from: start, to: start + lcp.limit - 1 };
+  const nextCursor = start + lcp.limit < liveTotal && pageHeads.length > 0 ? chatCursor(pageHeads[pageHeads.length - 1]) : null;
+
+  const blocked = await blockedUserIds(userId);
+  const enriched = await enrichChats(chats, userId, blocked);
 
   // SC-299: pagination envelope so the FE knows whether older chats remain. The
   // true total is the number of chats the user participates in (chatIds), not the
   // ranged page — so has_more is accurate regardless of the page window.
   // N-RWG4-1: next_cursor asks for the page after this one (`?before=`).
+  // Item 10 (25 Nov 2026): an app that keeps the list (`?v=1`) gets each row's version; sent back on the
+  // next poll (`?known=<id>.<v>,…`) it gets the order and only the rows that changed.
+  const known = req.query.v === '1' ? parseKnownChats(req.query.known) : null;
+  if (req.query.v === '1') for (const c of enriched) c.v = chatRowVersion(c);
+  if (known) {
+    const changed = enriched.filter((c) => known.get(c.id as string) !== c.v);
+    return res.json({ delta: true, order: enriched.map((c) => c.id), chats: changed, ...pageMeta(liveTotal, page), next_cursor: nextCursor });
+  }
   return res.json({ data: enriched, chats: enriched, ...pageMeta(liveTotal, page), next_cursor: nextCursor });
 }
 

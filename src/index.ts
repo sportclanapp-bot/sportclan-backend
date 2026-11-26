@@ -59,6 +59,7 @@ import { sanitizeErrorResponses, globalErrorHandler } from './middleware/errorSa
 import { sentryErrorHandler } from './middleware/sentryError';
 import { queryAliases } from './middleware/queryAliases.middleware';
 import { sweepStaleLiveMatches, sweepUnplayedScheduledMatches } from './controllers/matches.controller';
+import { sweepAvailabilityAutoOff } from './utils/availability';
 import { sweepTournamentsDue } from './controllers/tournaments.controller';
 import { purgeExpiredAccountsCore } from './controllers/account.controller';
 import { checkPushReceipts } from './utils/expoPush';
@@ -448,6 +449,18 @@ app.listen(PORT, () => {
   };
   void runAccountPurge();
   setInterval(runAccountPurge, 60 * 60 * 1000).unref();
+
+  // Item 3 (25 Nov 2026): "Available to play" goes off after 30 days away, hourly.
+  const runAvailability = async () => {
+    try {
+      const { switchedOff } = await sweepAvailabilityAutoOff();
+      if (switchedOff) console.log(`[availability] switched off ${switchedOff} away 30 days`); // eslint-disable-line no-console
+    } catch (e) {
+      console.warn('[availability] failed', e instanceof Error ? e.message : e); // eslint-disable-line no-console
+    }
+  };
+  void runAvailability();
+  setInterval(runAvailability, 60 * 60 * 1000).unref();
 
   // Push receipts, hourly. Expo answers a send with a ticket at once and a
   // receipt ~15 minutes later saying what FCM did. DeviceNotRegistered on a

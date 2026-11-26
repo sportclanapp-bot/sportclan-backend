@@ -21,6 +21,7 @@ import { LIMITS, firstInvalidUrl, firstDisallowedImageUrl } from '../utils/valid
 import { RESERVED_USERNAMES, EMAIL_RE, GENDERS, GENDER_ERROR, dobProblem, localAreaProblem, cleanLocalArea } from '../utils/profileRules';
 import { escapeLike } from '../utils/likeSearch';
 import { isUuid } from '../utils/uuid';
+import { isMissingColumn, restoreAvailabilityOnOpen, shouldCheckRestore, withRestoredAvailability } from '../utils/availability';
 import { VALID_ACCOUNT_TYPES, OFFICIATING_TYPES, isValidAccountType } from '../constants/accountTypes';
 import { excludeDeleted, excludeDeletedEmbed } from '../utils/activeUser';
 import { blockedUserIds, excludeIds, isBlockedBetween, targetUserHidden } from '../utils/blocks';
@@ -248,6 +249,8 @@ export async function getMe(req: Request, res: Response) {
   // fetching /me IS activity — also refresh last_active_at as a foreground ping so
   // presence stays warm even between explicit heartbeats). Best-effort.
   (data as any).is_online = true;
+  // Item 3 (25 Nov 2026): opening the app switches "Available to play" back on if the app switched it off.
+  (data as any).is_available = (await withRestoredAvailability(userId, data as { is_available?: unknown })).is_available;
   void supabase.from('users').update({ last_active_at: new Date().toISOString() }).eq('id', userId);
 
   // Profile-completion bonus — 10 coins, once per user. Idempotent via
@@ -293,6 +296,8 @@ export async function heartbeat(req: Request, res: Response) {
   const now = new Date().toISOString();
   const { error } = await supabase.from('users').update({ last_active_at: now }).eq('id', userId);
   if (error) return res.status(500).json({ error: sanitizeError(error) });
+  // Item 3: an app still running from before comes back by a heartbeat, not GET /users/me.
+  if (shouldCheckRestore(userId)) void restoreAvailabilityOnOpen(userId);
   return res.json({ ok: true, last_active_at: now });
 }
 
@@ -303,29 +308,72 @@ export async function getUserById(req: Request, res: Response) {
   // instead of 500ing on the Postgres uuid cast (A11-002).
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!UUID_RE.test(id)) return res.status(404).json({ error: 'User not found' });
-  // SC-77: a soft-deleted account 404s (never renders a "Deleted User" profile).
-  const { data, error } = await excludeDeleted(supabase
-    .from('users')
-    // SC-246: a DIFFERENT viewer only ever gets the narrow public projection —
-    // never phone/email/coin_balance/referral_code/is_admin/prefs. (getMe keeps
-    // the full PUBLIC_FIELDS for the user's own data.)
-    // SC-200: embed city → flat city_name (flattened into safeUser below).
-    .select(`${PUBLIC_USER_FIELDS}, city:cities!city_id(id, name)`)
-    .eq('id', id))
-    .maybeSingle();
-  if (error) return res.status(500).json({ error: error.message });
-  if (!data) return res.status(404).json({ error: 'User not found' });
-
-  // Block gate (SC-31): if a block exists in either direction between the
-  // viewer and this profile's owner, the profile is invisible — return 404 so
-  // the block itself isn't disclosed. Anonymous viewers (optionalAuth with no
-  // token) and self-views are unaffected.
+  // Item 22 (25 Nov 2026): the profile row, the block check and every other read were one after the
+  // other (10 trips). They don't depend on each other: one round. Nothing read is returned when the
+  // profile is missing, deleted or blocked.
   const viewerId = req.userId;
-  if (viewerId && viewerId !== id) {
+  const other = !!viewerId && viewerId !== id;
+  const [{ data, error }, blocked, accountRows, hideTestFollows, sportRows, followRow, pendRows, gifts, officiated_count, sport_ids] = await Promise.all([
+    // SC-77: a soft-deleted account 404s (never renders a "Deleted User" profile).
+    excludeDeleted(supabase
+      .from('users')
+      // SC-246: a DIFFERENT viewer only ever gets the narrow public projection —
+      // never phone/email/coin_balance/referral_code/is_admin/prefs. (getMe keeps
+      // the full PUBLIC_FIELDS for the user's own data.)
+      // SC-200: embed city → flat city_name (flattened into safeUser below).
+      .select(`${PUBLIC_USER_FIELDS}, city:cities!city_id(id, name)`)
+      .eq('id', id))
+      .maybeSingle(),
+    // Block gate (SC-31): if a block exists in either direction between the
+    // viewer and this profile's owner, the profile is invisible — return 404 so
+    // the block itself isn't disclosed. Anonymous viewers (optionalAuth with no
+    // token) and self-views are unaffected.
     // E-001 (Round 6): the shared pairwise check — this inline .or().maybeSingle()
     // read a block from BOTH sides (two rows) as an error, i.e. "not blocked".
-    if (await isBlockedBetween(viewerId, id)) return res.status(404).json({ error: 'User not found' });
-  }
+    other ? isBlockedBetween(viewerId!, id) : false,
+    // SC-221: surface the FULL account-type set (join table) so OTHER users'
+    // profiles can render Coach/Umpire/Business badges. getUserById previously
+    // returned only the legacy singular `account_type`, so the FE (UserProfile
+    // reads `user.account_types`) showed no badges for anyone but yourself
+    // (getMe already returns this). Mirrors getMe's lookup + legacy fallback.
+    Promise.resolve(supabase.from('user_account_types').select('account_type').eq('user_id', id))
+      .then(({ data: rows }) => (rows ?? []) as Array<{ account_type: string }>, () => [] as Array<{ account_type: string }>),
+    hideTestFor(viewerId), // N-R7-S153
+    // SC-325/SC-328: public account-level total matches for the stats card. An
+    // aggregate of user_sport_profiles (PUBLIC-by-nature; does NOT re-leak anything
+    // SC-246 removed). city_rank removed — per-sport City/Global ranks now come from
+    // getSportProfile. Best-effort — never fails the profile.
+    Promise.resolve(supabase.from('user_sport_profiles').select('matches_played').eq('user_id', id))
+      .then(({ data: rows }) => (rows ?? []) as Array<{ matches_played?: number | null }>, () => []),
+    // Check if the caller follows this user (for isFollowing state on frontend)
+    other ? supabase.from('follow_relationships').select('id').eq('follower_id', viewerId!).eq('following_id', id).maybeSingle() : null,
+    // SC-331/SC-332: the VIEWER's PENDING, still-FRESH (<48h) play-invites to this
+    // user. Drives the profile's PER-SPORT invite button — sport_ids for state,
+    // invite ids so the button can WITHDRAW (SC-332 task 1). Invites are sport-scoped
+    // (uq_invites_pending) and a >48h-old pending row is NOT counted (auto-frees the
+    // button before the hygiene sweep even runs).
+    other ? supabase.from('invites').select('id, sport_id').eq('sender_id', viewerId!).eq('receiver_id', id).eq('status', 'pending').gte('created_at', inviteFreshCutoffIso()) : null,
+    // Aggregate gifts received grouped by gift type for the profile display.
+    // Oct 2026 sweep: it grouped the newest 100, so the counts stopped there.
+    selectAll<{ gift_id: string; gift_emoji: string; gift_name: string }>((from, to) => supabase.from('gift_transactions')
+      .select('id, gift_id, gift_emoji, gift_name')
+      .eq('receiver_id', id)
+      .order('id', { ascending: true })
+      .range(from, to)).catch(() => []),
+    // Phase 3 · decision 4: an umpire's public profile shows what they've officiated.
+    officiatedCount(id),
+    // Audit #3: the sports they play, in display order — their profile opens on the first.
+    profileSportIds(id).catch(() => [] as string[]),
+  ]);
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'User not found' });
+  if (blocked) return res.status(404).json({ error: 'User not found' });
+  // Counts (followers/following): they need to know whether test accounts are hidden.
+  // N-RWG4-6: deleted accounts are not counted (the lists already hide them).
+  const [followersRes, followingRes] = await Promise.all([
+    countLiveFollows('following_id', id, 'follower_id', hideTestFollows),
+    countLiveFollows('follower_id', id, 'following_id', hideTestFollows),
+  ]);
 
   // Respect the DOB privacy toggle (PRD 17.5): if the owner hid their DOB,
   // strip it from the public response. Viewing your own profile hits
@@ -344,21 +392,7 @@ export async function getUserById(req: Request, res: Response) {
     safeUser.dob = null;
   }
 
-  // SC-221: surface the FULL account-type set (join table) so OTHER users'
-  // profiles can render Coach/Umpire/Business badges. getUserById previously
-  // returned only the legacy singular `account_type`, so the FE (UserProfile
-  // reads `user.account_types`) showed no badges for anyone but yourself
-  // (getMe already returns this). Mirrors getMe's lookup + legacy fallback.
-  let accountTypes: string[] = [];
-  try {
-    const { data: atRows } = await supabase
-      .from('user_account_types')
-      .select('account_type')
-      .eq('user_id', id);
-    accountTypes = (atRows ?? []).map((r: { account_type: string }) => r.account_type);
-  } catch {
-    // fall back below
-  }
+  let accountTypes: string[] = accountRows.map((r) => r.account_type);
   if (accountTypes.length === 0 && safeUser.account_type) {
     accountTypes = isValidAccountType(safeUser.account_type) ? [safeUser.account_type] : ['player'];
   }
@@ -373,80 +407,18 @@ export async function getUserById(req: Request, res: Response) {
   // "fixing" the casing would have wrongly masked the profiles of users who
   // self-assign a service type in Edit Profile without being premium. Removed.
 
-  // Counts (followers/following) — best-effort, never fail the request.
-  const hideTestFollows = await hideTestFor(req.userId); // N-R7-S153
-  const [followersRes, followingRes, giftsRes] = await Promise.all([
-    // N-RWG4-6: deleted accounts are not counted (the lists already hide them).
-    countLiveFollows('following_id', id, 'follower_id', hideTestFollows),
-    countLiveFollows('follower_id', id, 'following_id', hideTestFollows),
-    // Aggregate gifts received grouped by gift type for the profile display.
-    // Oct 2026 sweep: it grouped the newest 100, so the counts stopped there.
-    selectAll<{ gift_id: string; gift_emoji: string; gift_name: string }>((from, to) => supabase.from('gift_transactions')
-      .select('id, gift_id, gift_emoji, gift_name')
-      .eq('receiver_id', id)
-      .order('id', { ascending: true })
-      .range(from, to)).catch(() => []),
-  ]);
-
   // Group gifts by type with count
   const giftMap = new Map<string, { emoji: string; name: string; count: number }>();
-  for (const g of giftsRes) {
+  for (const g of gifts) {
     const existing = giftMap.get(g.gift_id);
     if (existing) existing.count++;
     else giftMap.set(g.gift_id, { emoji: g.gift_emoji, name: g.gift_name, count: 1 });
   }
-
-  // Check if the caller follows this user (for isFollowing state on frontend)
-  let isFollowing = false;
-  const callerId = req.userId;
-  if (callerId && callerId !== id) {
-    const { data: followRow } = await supabase
-      .from('follow_relationships')
-      .select('id')
-      .eq('follower_id', callerId)
-      .eq('following_id', id)
-      .maybeSingle();
-    isFollowing = !!followRow;
-  }
-
-  // SC-331/SC-332: the VIEWER's PENDING, still-FRESH (<48h) play-invites to this
-  // user. Drives the profile's PER-SPORT invite button — sport_ids for state,
-  // invite ids so the button can WITHDRAW (SC-332 task 1). Invites are sport-scoped
-  // (uq_invites_pending) and a >48h-old pending row is NOT counted (auto-frees the
-  // button before the hygiene sweep even runs).
-  let pendingInvites: { id: string; sport_id: string }[] = [];
-  if (callerId && callerId !== id) {
-    const { data: pend } = await supabase
-      .from('invites')
-      .select('id, sport_id')
-      .eq('sender_id', callerId)
-      .eq('receiver_id', id)
-      .eq('status', 'pending')
-      .gte('created_at', inviteFreshCutoffIso());
-    pendingInvites = (pend || []).map((r: any) => ({ id: r.id, sport_id: r.sport_id }));
-  }
-
-  // SC-325/SC-328: public account-level total matches for the stats card. An
-  // aggregate of user_sport_profiles (PUBLIC-by-nature; does NOT re-leak anything
-  // SC-246 removed). city_rank removed — per-sport City/Global ranks now come from
-  // getSportProfile. Best-effort — never fails the profile.
-  let total_matches = 0;
-  try {
-    const { data: sp } = await supabase
-      .from('user_sport_profiles')
-      .select('matches_played')
-      .eq('user_id', id);
-    if (sp && sp.length) {
-      total_matches = sp.reduce((s, p: any) => s + (p.matches_played ?? 0), 0);
-    }
-  } catch {
-    // best-effort — a stats hiccup must not fail the profile
-  }
-  safeUser.total_matches = total_matches;
-  // Phase 3 · decision 4: an umpire's public profile shows what they've officiated.
-  safeUser.officiated_count = await officiatedCount(id);
-  // Audit #3: the sports they play, in display order — their profile opens on the first.
-  safeUser.sport_ids = await profileSportIds(id).catch(() => [] as string[]);
+  const isFollowing = !!followRow?.data;
+  const pendingInvites = ((pendRows?.data ?? []) as Array<{ id: string; sport_id: string }>).map((r) => ({ id: r.id, sport_id: r.sport_id }));
+  safeUser.total_matches = sportRows.reduce((n, p) => n + (p.matches_played ?? 0), 0);
+  safeUser.officiated_count = officiated_count;
+  safeUser.sport_ids = sport_ids;
 
   return res.json({
     user: safeUser,
@@ -456,8 +428,27 @@ export async function getUserById(req: Request, res: Response) {
     pending_invite_sport_ids: pendingInvites.map((p) => p.sport_id),
     pending_invites: pendingInvites,
     gifts: Array.from(giftMap.values()),
-    totalGifts: giftsRes.length,
+    totalGifts: gifts.length,
   });
+}
+
+/**
+ * Item 31 (25 Nov 2026) · GET /users/:id/card: what a chat's header shows of the other person — the same
+ * rules as their profile (a deleted account, or a block either way, is not found).
+ */
+export async function getUserCard(req: Request, res: Response) {
+  const { id } = req.params;
+  const notFound = () => res.status(404).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
+  if (!isUuid(id)) return notFound();
+  const viewerId = req.userId;
+  const [{ data, error }, blocked] = await Promise.all([
+    excludeDeleted(supabase.from('users').select('id, name, username, profile_picture_url, last_active_at').eq('id', id)).maybeSingle(),
+    viewerId && viewerId !== id ? isBlockedBetween(viewerId, id) : false,
+  ]);
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data || blocked) return notFound();
+  const { last_active_at, ...u } = data as { last_active_at?: string | null } & Record<string, unknown>;
+  return res.json({ user: { ...u, is_online: computeIsOnline(last_active_at ?? null) } });
 }
 
 // PATCH /users/me — update own profile.
@@ -881,12 +872,10 @@ export async function updateMe(req: Request, res: Response) {
   }
 
   patch.updated_at = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('users')
-    .update(patch)
-    .eq('id', userId)
-    .select(PUBLIC_FIELDS)
-    .single();
+  const save = (p: Record<string, unknown>) => supabase.from('users').update(p).eq('id', userId).select(PUBLIC_FIELDS).single();
+  // Item 3 (25 Nov 2026): the person set it themselves, so the app's own auto-off mark goes, in the same write.
+  let { data, error } = await save('is_available' in patch ? { ...patch, is_available_auto_off: false } : patch);
+  if (error && 'is_available' in patch && isMissingColumn(error)) ({ data, error } = await save(patch)); // before migration 169
   if (error) return res.status(500).json({ error: error.message });
   // F040: the account types and sports, only after every check above passed.
   if (types) {
@@ -1782,6 +1771,13 @@ export async function getSportProfile(req: Request, res: Response) {
     // Tennis fell through and its serve/point sportStats were silently omitted.
     const slug = (sportRow?.slug ?? '').toLowerCase().replace(/[-_\s]/g, '');
 
+    const inningsP = slug === 'cricket'
+      ? allRows<any>(() => supabase
+        .from('innings_stats')
+        .select('match_id, runs, balls_faced, fours, sixes, is_out, bowling_overs, bowling_runs, bowling_wickets, catches, runouts')
+        .eq('user_id', id))
+      : Promise.resolve([] as any[]);
+    inningsP.catch(() => undefined);
     // Get user's match IDs.
     // SC-424: through an !inner join on matches so a VOIDED match drops out here,
     // once, for every per-sport branch below. Before this the per-sport career
@@ -1802,11 +1798,10 @@ export async function getSportProfile(req: Request, res: Response) {
       // voided match's innings still moved their batting average, strike rate,
       // highest score, 50s/100s and bowling economy — permanently.
       // Oct 2026: every match (it read the first 500).
-      const innings = await selectAllIn(matchIds, (c, f, to) => supabase
-        .from('innings_stats')
-        .select('runs, balls_faced, fours, sixes, is_out, bowling_overs, bowling_runs, bowling_wickets, catches, runouts')
-        .eq('user_id', id)
-        .in('match_id', c).order('id').range(f, to));
+      // Item 23 (25 Nov 2026): by the player, and the matches picked here (it was the match ids 150 at a
+      // time, one read after another). Read while the match list is.
+      const onRecord = new Set(matchIds);
+      const innings = (await inningsP).filter((i) => onRecord.has(i.match_id));
 
       if (innings && innings.length > 0) {
         const totalRuns = innings.reduce((s, i) => s + (i.runs ?? 0), 0);

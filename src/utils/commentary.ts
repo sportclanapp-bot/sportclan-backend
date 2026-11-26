@@ -286,6 +286,9 @@ function sportLine(eventType: string, p: Record<string, any>, ctx: CommentaryCon
     const named = sideTeam === 'B' ? ctx.teamB : ctx.teamA;
     const opp = sideTeam === 'B' ? ctx.teamA : ctx.teamB;
     if (p.kind === 'kickoff') return ctx.sport === 'basketball' ? (ctx.period > 0 ? '⏱ Clock started' : '⏱ Tip-off') : ctx.sport === 'chess' ? '⏱ Clocks started' : '⏱ Clock started';
+    // Item 46 (25 Nov 2026): cricket's innings clock, with why it was stopped.
+    if (p.kind === 'clock_pause' && ctx.sport === 'cricket') return `⏸ Play stopped${typeof p.reason === 'string' && p.reason.trim() ? ` · ${p.reason.trim().slice(0, 40)}` : ''}`;
+    if (p.kind === 'clock_resume' && ctx.sport === 'cricket') return '▶ Play restarted';
     if (p.kind === 'clock_pause') return '⏸ Clock stopped';
     if (p.kind === 'clock_resume') return '▶ Clock restarted';
     // F177: the number is time played; basketball's clock counts down, so it reads in time left.

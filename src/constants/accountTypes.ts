@@ -7,8 +7,9 @@
 export const VALID_ACCOUNT_TYPES = [
   'player', 'umpire', 'coach', 'commentator', 'organiser',
   'business', 'association', 'club', 'leagues', 'other',
-  // B16 (V080, D20): officials of the other sports — badminton, tennis,
-  // table-tennis and pickleball umpires, volleyball referees, chess arbiters.
+  // Fix list 25 Nov 2026, item 1: the same role as 'umpire' (Umpire / Referee /
+  // Official). The app stores 'umpire' for new picks; rows saved as 'official'
+  // before (and older apps that still send it) keep working.
   'official',
 ] as const;
 

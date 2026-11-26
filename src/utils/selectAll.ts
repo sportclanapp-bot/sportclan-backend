@@ -36,11 +36,28 @@ export async function selectAllIn<T>(
   page: (ids: string[], from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
 ): Promise<T[]> {
   const uniq = [...new Set(ids)];
-  const out: T[] = [];
-  for (let i = 0; i < uniq.length; i += IN_CHUNK) {
-    const chunk = uniq.slice(i, i + IN_CHUNK);
-    out.push(...(await selectAll<T>((from, to) => page(chunk, from, to))));
-  }
+  const chunks: string[][] = [];
+  for (let i = 0; i < uniq.length; i += IN_CHUNK) chunks.push(uniq.slice(i, i + IN_CHUNK));
+  // Item 23 (25 Nov 2026): the chunks were read one after another (a 1,364-match player's 10). A few at
+  // a time now; the rows come back in the same order.
+  const got = await inParallel(chunks, (chunk) => selectAll<T>((from, to) => page(chunk, from, to)));
+  return got.flat();
+}
+
+/** How many reads of one request go at the same time (a long list of chunks must not flood the database). */
+export const PARALLEL_READS = 6;
+/** `fn` over `items`, at most `limit` at a time, the results in the items' order. The first error is thrown. */
+export async function inParallel<A, B>(items: readonly A[], fn: (item: A, index: number) => Promise<B>, limit = PARALLEL_READS): Promise<B[]> {
+  const out = new Array<B>(items.length);
+  let next = 0;
+  let failed = false;
+  const worker = async () => {
+    while (next < items.length && !failed) {
+      const i = next++;
+      try { out[i] = await fn(items[i]!, i); } catch (e) { failed = true; throw e; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return out;
 }
 

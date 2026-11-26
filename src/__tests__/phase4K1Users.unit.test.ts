@@ -144,7 +144,7 @@ describe('K1-33 (846ad07) · bowling economy reads overs in cricket notation', (
     mockNext = (q) => {
       if (q[0] === 'from:user_sport_profiles' && q.some((c) => c.startsWith('maybeSingle'))) return { data: { rating: 1200, matches_played: 1 } };
       if (q[0] === 'from:match_participants') return { data: [{ match_id: 'm1' }] };
-      if (q[0] === 'from:innings_stats') return { data: [{ runs: 0, balls_faced: 0, is_out: false, bowling_overs: 0.4, bowling_runs: 24, bowling_wickets: 1 }] };
+      if (q[0] === 'from:innings_stats') return { data: [{ match_id: 'm1', runs: 0, balls_faced: 0, is_out: false, bowling_overs: 0.4, bowling_runs: 24, bowling_wickets: 1 }] };
       return { data: null };
     };
     const r = await call(getSportProfile, { params: { id: ME, sportId: 'cricket' } });

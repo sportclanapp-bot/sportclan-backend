@@ -141,8 +141,10 @@ export async function isTournamentScorer(tournamentId: string, userId: string): 
 export async function canDefault(
   match: { tournament_id?: string | null; created_by?: string | null; umpire_id?: string | null; scorer_id?: string | null },
   userId: string,
+  /** Item 14 (25 Nov 2026): canOfficiateMatch without scorers, when the caller has asked it already. */
+  officiates: Promise<boolean> | boolean = canOfficiateMatch(match, userId, { scorers: false }),
 ): Promise<boolean> {
-  if (await canOfficiateMatch(match, userId, { scorers: false })) return true;
+  if (await officiates) return true;
   if (!match.tournament_id) return false;
   const ids = await familyLookupIds(match.tournament_id);
   const { data } = await supabase.from('tournament_officials').select('id')

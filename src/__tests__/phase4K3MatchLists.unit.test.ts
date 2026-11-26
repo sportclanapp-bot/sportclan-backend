@@ -39,7 +39,8 @@ const res = () => {
   return r;
 };
 const list = async (fn: any, query: object) => { const r = res(); await fn({ userId: ME, params: {}, query, body: {}, headers: {} }, r); return r; };
-const matchesQ = () => mockLog.find((q) => q[0] === 'from:matches' && q.some((c) => c.startsWith('select:["*"')))!.join();
+// Item 13 (25 Nov 2026): the list names its columns (voided_at among them), so only the filters are read here.
+const matchesQ = () => mockLog.find((q) => q[0] === 'from:matches' && q.some((c) => c.startsWith('select:["id, sport_id') || c.startsWith('select:["*"')))!.filter((c) => !c.startsWith('select:')).join();
 const cutoff = new Date(NOW - DISCOVERY_GRACE_HOURS * 3600_000).toISOString();
 
 beforeEach(() => {

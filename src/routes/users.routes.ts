@@ -4,6 +4,7 @@ import { getUserHonours } from '../controllers/honours.controller';
 import {
   getMe,
   getUserById,
+  getUserCard,
   updateMe,
   updateAccountTypes,
   updateMySports,
@@ -60,6 +61,7 @@ router.get('/:id/advanced-stats', authenticateToken, getAdvancedStats);
 router.get('/discover', authenticateToken, discoverPlayers);
 
 router.get('/:id', authenticateToken, getUserById); // audit #7: sign-in only
+router.get('/:id/card', authenticateToken, getUserCard); // item 31: a chat header's name, photo and online dot
 router.get('/:id/followers', authenticateToken, getFollowers); // audit #7
 router.get('/:id/following', authenticateToken, getFollowing); // audit #7
 router.get('/:id/sport-profile/:sportId', authenticateToken, getSportProfile);

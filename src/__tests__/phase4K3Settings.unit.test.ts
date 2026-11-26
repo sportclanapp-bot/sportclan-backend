@@ -74,8 +74,10 @@ describe('SC-383 · Refer a friend', () => {
   it('K3-28b (5a2301e): stats sum every reward page, not the first 1000 rows', async () => {
     mockNext = (q) => {
       if (q[0] === 'from:users' && q.includes('maybeSingle')) return { data: { referral_code: 'SCX', referred_by: null } };
-      if (q[0] === 'from:users') return { count: 1005 };
-      if (q[0] === 'from:coin_events') return has(q, 'range:[0,999]') ? { data: Array.from({ length: 1000 }, () => ({ coins: 20 })) } : { data: Array.from({ length: 5 }, () => ({ coins: 20 })) };
+      // Item 5 (25 Nov 2026): the friends themselves are read (links + reward events, each once), in pages.
+      if (q[0] === 'from:users') return has(q, 'range:[0,999]') ? { data: Array.from({ length: 1000 }, (_, i) => ({ id: `f${i}` })) } : { data: Array.from({ length: 5 }, (_, i) => ({ id: `f${1000 + i}` })) };
+      if (q[0] === 'from:coin_events' && has(q, 'applied')) return { data: [] };
+      if (q[0] === 'from:coin_events') return has(q, 'range:[0,999]') ? { data: Array.from({ length: 1000 }, (_, i) => ({ coins: 20, event_type: `referral_reward_f${i}` })) } : { data: Array.from({ length: 5 }, (_, i) => ({ coins: 20, event_type: `referral_reward_f${1000 + i}` })) };
       return {};
     };
     const r = await call(getStats, {});

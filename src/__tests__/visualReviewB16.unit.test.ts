@@ -17,10 +17,11 @@ it('official is a role, and may officiate', () => {
 
 it('V079: /services/counts filters like the list (deleted, blocked, test)', () => {
   const r = code('routes/services.routes.ts');
-  const i = r.indexOf("router.get('/counts'");
-  const body = r.slice(i, i + 1200);
+  // Item 32 (25 Nov 2026): one grouped call with the lists' filters (migration 170); this is its fallback.
+  const i = r.indexOf('async function typeCounts');
+  const body = r.slice(i, i + 1800);
   expect(body).toMatch(/\.is\('users\.deleted_at', null\)/);
-  expect(body).toMatch(/excludeIds\(q, 'user_id', blocked\)/);
+  expect(body).toMatch(/excludeIds\(q, 'user_id', f\.blocked\)/);
   expect(body).toMatch(/excludeTestEmbed\(q, 'users'\)/);
 });
 

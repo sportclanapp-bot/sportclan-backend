@@ -29,7 +29,7 @@ import { gameEndSuperOver, superOverWinner, allOutBySide, allowedOnFreeHit, bowl
 import { typedChessBoards, typedMatchPoints, typedPeriodPoints, typedPeriodSport, typedSeriesPoints, typedScoreSport, typedScoreText, typedTiePoints, type TypedSet } from '../utils/typedScore';
 import { FOUL_KINDS, canStartNextPeriodOf } from '../utils/basketballRules';
 import { gameShootout, shootoutKicksOf, shootoutProblem } from '../utils/shootoutRules'; // Stage 15 follow-up
-import { BASKETBALL_STAT_KEYS, goalHowFor, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules, expediteCutoff, chessSpeedOf } from '../utils/matchRules';
+import { BASKETBALL_STAT_KEYS, goalHowFor, DOUBLES_PLAYERS, RALLY_TIMED, carromOptsOf, conductLadder, doublesLineupProblem, gamesWinner, ladderStepDef, rulesOf, setConfigOf, standardRules, tennisOptsOf, tieSpecOf, winsToWin, type MatchRules, expediteCutoff, chessPhysicalClock, chessSpeedOf } from '../utils/matchRules';
 import { boardPointsFor, boardWhite, splitTie, tieNeed, unitsFor, unitsOf, type RubberResult, type TieRubber, type TieSpec } from '../utils/tieCore';
 import { trumpsFor } from '../utils/tieTrumps';
 import { sideOutReplay } from '../utils/pickleballCore';
@@ -1188,7 +1188,10 @@ export async function listEvents(req: Request, res: Response) {
     // replayed it as the whole match — a 50-over game has more. Pages now have
     // a stable order (created_at, then id: an offline batch shares one
     // timestamp), an offset, and has_more.
-    const size = n >= 1 ? Math.min(n, 1000) : 500;
+    // 25 Nov 2026 (found with item 15): 999, not 1000 — PostgREST sends at most 1000 rows, so a page of 1000
+    // never got its one extra row: has_more said false and a match past 1000 events lost the rest (the pads
+    // replayed 1000 of 1224).
+    const size = n >= 1 ? Math.min(n, 999) : 500;
     let query = supabase
       .from('match_events')
       .select('*')
@@ -2192,12 +2195,17 @@ export async function recomputeSummary(
   if (slug === 'chess' && !tieSummary) { // Stage 12 · CH5: a team match's summary is its tie's
     // N-R7-S177: the arbiter's time added since a side's last stored clock (a side yet to move: its start time).
     const chessInitial = (() => { const mm = /(\d+)\s*\+/.exec(String((match as any).format ?? '')); return mm ? parseInt(mm[1]!, 10) * 60 : null; })();
+    // Item 39 (25 Nov 2026): a clock nobody used has no time to show — no clock start, no move with a clock
+    // (a result only, or a game on a physical clock): not its full time, the arbiter's added time or 0:00.
+    const clockUsed = !chessPhysicalClock(rulesOf('chess', match as never)) && events.some((e: any) => (e.event_type === 'move' && typeof e.clock_seconds === 'number')
+      || (e.event_type === 'note' && (e.payload as any)?.kind === 'kickoff'));
+    if (!clockUsed) { chessClockWhite = null; chessClockBlack = null; chessBonus.A = 0; chessBonus.B = 0; }
     const withBonus = (clk: number | null, add: number) => (add > 0 ? (clk ?? chessInitial) === null ? clk : (clk ?? (chessInitial as number)) + add : clk);
     chessClockWhite = withBonus(chessClockWhite, chessBonus.A);
     chessClockBlack = withBonus(chessClockBlack, chessBonus.B);
     // N-R7-132 (SP-CHS-S01): lost on time — the loser's clock ran out (0:00), not its last stored time.
-    if (chessReason === 'timeout' && chessWinner === 'A') chessClockBlack = 0;
-    if (chessReason === 'timeout' && chessWinner === 'B') chessClockWhite = 0;
+    if (clockUsed && chessReason === 'timeout' && chessWinner === 'A') chessClockBlack = 0;
+    if (clockUsed && chessReason === 'timeout' && chessWinner === 'B') chessClockWhite = 0;
     summary.result = chessResult ?? 'No result yet';
     summary.winner_side = chessWinner;
     // Real move/clock rollup (no eval, no SAN — those need an engine / heavy

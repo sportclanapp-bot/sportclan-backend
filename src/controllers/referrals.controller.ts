@@ -3,6 +3,7 @@ import { supabase } from '../utils/supabase';
 import { awardCoins } from '../utils/coins';
 import { COIN_RULES } from '../utils/coinRules';
 import crypto from 'crypto';
+import { selectAll } from '../utils/selectAll';
 import { canonicalisePhone, isValidIndianPhone } from '../utils/phone';
 
 /**
@@ -142,56 +143,59 @@ export async function applyReferral(req: Request, res: Response) {
   });
 }
 
+/** The like-pattern prefixes of the referral coin events (underscores escaped: `_` is a LIKE wildcard). */
+const REWARD = 'referral_reward_';
+const APPLIED = 'referral_applied_';
+const likePrefix = (p: string) => `${p.replace(/_/g, '\\_')}%`;
+
 // GET /referrals/stats
-// Returns the caller's referral code, count of people they've referred,
-// and total coins earned from referrals (sum of their coin_events rows
-// whose event_type starts with 'referral_reward_').
+// Returns the caller's referral code, the count of people they've referred, and
+// the coins referrals earned them: 'referral_reward_<friend>' (a friend used
+// their code) and 'referral_applied_<friend>' (they used a friend's).
 export async function getStats(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { data: me } = await supabase
+  // Item 4 (25 Nov 2026): a failed read used to answer 200 with no code; the app shows its Retry on an error.
+  const { data: me, error: meErr } = await supabase
     .from('users')
     .select('referral_code, referred_by, created_at')
     .eq('id', userId)
     .maybeSingle();
+  if (meErr) return res.status(500).json({ error: 'Could not load referral stats' });
+  if (!me) return res.status(404).json({ error: 'User not found' });
 
-  // count:'exact' is the true total (not a loaded page length) — but the error
-  // still has to be surfaced, or a failed count reads as "0 people referred".
-  const { count: referralCount, error: countErr } = await supabase
-    .from('users')
-    .select('id', { count: 'exact', head: true })
-    .eq('referred_by', userId);
-  if (countErr) return res.status(500).json({ error: 'Could not load referral stats' });
-
-  // SC-383: sum every reward row, in pages, and do NOT swallow the error.
-  // Two bugs this app has shipped repeatedly are both live in this one query:
-  // a discarded error reads as a plausible 0 ("you've earned nothing" instead
-  // of "we couldn't tell"), and an unpaged select is capped by PostgREST's row
-  // limit, so a prolific referrer's total would silently stop growing at the
-  // page size. Page until exhausted and surface a failure as a failure.
-  const PAGE = 1000;
+  // Item 5 (25 Nov 2026): a friend's purged account loses its referred_by link, so the
+  // links alone dropped the count while the coins stayed. Friends = the links plus the
+  // friends in the reward events, each once. Only the number leaves the server.
+  // SC-383: read in pages, and an error is an error (never a plausible 0).
+  const friends = new Set<string>();
   let totalCoinsEarned = 0;
-  for (let from = 0; ; from += PAGE) {
-    const { data: events, error: evErr } = await supabase
-      .from('coin_events')
-      .select('coins')
-      .eq('user_id', userId)
-      .like('event_type', 'referral_reward_%')
-      .range(from, from + PAGE - 1);
-    if (evErr) return res.status(500).json({ error: 'Could not load referral stats' });
-    totalCoinsEarned += (events ?? []).reduce((sum, e: any) => sum + (e.coins ?? 0), 0);
-    if (!events || events.length < PAGE) break;
+  try {
+    const links = await selectAll<{ id: string }>((from, to) => supabase.from('users')
+      .select('id').eq('referred_by', userId).order('id', { ascending: true }).range(from, to));
+    for (const l of links) friends.add(l.id);
+    for (const prefix of [REWARD, APPLIED]) {
+      const events = await selectAll<{ event_type: string; coins: number | null }>((from, to) => supabase.from('coin_events')
+        .select('event_type, coins').eq('user_id', userId).like('event_type', likePrefix(prefix))
+        .order('event_type', { ascending: true }).range(from, to));
+      for (const e of events) {
+        totalCoinsEarned += e.coins ?? 0; // Item 6: and the coins for using a friend's code
+        if (prefix === REWARD) friends.add(e.event_type.slice(REWARD.length));
+      }
+    }
+  } catch {
+    return res.status(500).json({ error: 'Could not load referral stats' });
   }
 
   return res.json({
-    referralCode: me?.referral_code ?? null,
-    referralCount: referralCount ?? 0,
+    referralCode: me.referral_code ?? null,
+    referralCount: friends.size,
     totalCoinsEarned,
     // Phase 3 B10-F18: the app hides "Have a friend's code?" once one is used —
     // it only learned that on submit ("Referral already applied").
-    alreadyApplied: !!me?.referred_by,
+    alreadyApplied: !!me.referred_by,
     // Decision 9: when this account's window to use a friend's code closes.
-    applyUntil: referralApplyUntil(me?.created_at),
+    applyUntil: referralApplyUntil(me.created_at),
   });
 }

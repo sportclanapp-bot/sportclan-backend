@@ -1,4 +1,4 @@
-import { selectAll } from './selectAll';
+import { inParallel, selectAll } from './selectAll';
 import { supabase } from './supabase';
 /**
  * SC-413 · ONE rule for "does this match count toward a user's record".
@@ -146,23 +146,29 @@ export async function countParticipantsByMatch(matchIds: string[]): Promise<Map<
   const out = new Map<string, number>();
   if (!matchIds.length) return out;
   const unique = Array.from(new Set(matchIds));
-  // Oct 2026 sweep: one read of every participant row stopped at 1000 rows
-  // (PostgREST's cap) — a few hundred matches — so the rest counted 0 players
-  // and dropped out of the record. 100 matches at a time, every page read.
-  for (let i = 0; i < unique.length; i += 100) {
-    const chunk = unique.slice(i, i + 100);
-    let rows: { match_id: string }[];
-    try {
-      rows = await selectAll<{ match_id: string }>((from, to) => supabase
-        .from('match_participants')
-        .select('match_id')
-        .in('match_id', chunk)
-        .order('id', { ascending: true })
-        .range(from, to));
-    } catch {
-      return out;
-    }
-    for (const r of rows) out.set(r.match_id, (out.get(r.match_id) ?? 0) + 1);
+  // Item 18 (25 Nov 2026): one call for any number of matches (migration 170). It was 100 matches at a
+  // time, one after another: 184 trips and 10 s for a 1,700-match player's season recap.
+  const counted = await Promise.resolve().then(() => supabase.rpc('match_participant_counts', { p_ids: unique })).catch(() => null);
+  const data = counted && !counted.error ? counted.data : null;
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    for (const [id, n] of Object.entries(data as Record<string, number>)) out.set(id, Number(n));
+    return out;
   }
+  // Before migration 170 (no function), or a failed call: 100 matches at a time, every page read
+  // (Oct 2026 sweep: one read stopped at 1000 rows), a few at a time.
+  const chunks: string[][] = [];
+  for (let k = 0; k < unique.length; k += 100) chunks.push(unique.slice(k, k + 100));
+  let rows: { match_id: string }[];
+  try {
+    rows = (await inParallel(chunks, (chunk) => selectAll<{ match_id: string }>((from, to) => supabase
+      .from('match_participants')
+      .select('match_id')
+      .in('match_id', chunk)
+      .order('id', { ascending: true })
+      .range(from, to)))).flat();
+  } catch {
+    return out;
+  }
+  for (const r of rows) out.set(r.match_id, (out.get(r.match_id) ?? 0) + 1);
   return out;
 }

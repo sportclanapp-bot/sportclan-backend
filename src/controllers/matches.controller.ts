@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { voidClosedOn } from '../utils/voidClosedOn';
 import { deciderAfterResult } from './decider.controller';
 import { hubHolderElsewhere, hubRefusal } from '../utils/hubReadOnly';
@@ -18,7 +19,7 @@ import { writeAbandonNotes } from '../utils/abandonNote';
 import { syncMatchChatMembers } from '../utils/matchChat';
 import { syncAfterSuccess } from '../utils/tournamentChat';
 import { attachTeamNames } from '../utils/teamNames';
-import { myScheduledMatches, pickNextMatch, myMatchesWithStatus, sortMyLive } from '../utils/nextMatch';
+import { myHomeMatches, myScheduledMatches, pickNextMatch, myMatchesWithStatus, sortMyLive } from '../utils/nextMatch';
 import { hideTestFor, excludeTest } from '../utils/testContent';
 import { Request, Response } from 'express';
 import { recordDeltas, applyRecordDeltas, notVoided, shouldHideVoided } from '../utils/matchVoid';
@@ -1447,6 +1448,55 @@ export async function myLiveMatches(req: Request, res: Response) {
   }
 }
 
+/**
+ * Item 26 (25 Nov 2026) · GET /matches/home: what GET /matches/next and GET /matches/my-live answer, in
+ * one call that shares their reads. { next: { match, overdue }, my_live: { matches, total } }.
+ */
+export async function homeMatches(req: Request, res: Response) {
+  const userId = req.userId;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const [activeIds, mine] = await Promise.all([activeSportIds(), myHomeMatches(userId)]);
+    const live = sortMyLive(mine.live.filter((m) => !activeIds || activeIds.includes(m.sport_id)));
+    const { match, overdue } = mine.next;
+    await Promise.all([attachTeamNames(live), match ? attachTeamNames([match]) : null]);
+    return res.json({ next: { match, overdue }, my_live: { matches: live, total: live.length } });
+  } catch {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/**
+ * Item 13 (25 Nov 2026): the columns a match LIST sends — every one an app version reads. Left out
+ * (unread in lists): squad_locked_at, scorecard_locked_at, mvp_user_id, result_type, is_test_seed,
+ * called_by, official_report, loser_next_match_id, loser_next_slot, umpire_offer_by, umpire_offer_at,
+ * client_key. GET /matches/:id still sends the whole row.
+ */
+export const MATCH_LIST_COLUMNS = 'id, sport_id, tournament_id, team_a_id, team_b_id, team_a_name, team_b_name, scheduled_at, venue, city_id, format, overs, status, winner_team_id, score_summary, created_by, umpire_id, created_at, updated_at, is_open, players_needed, is_ranked, round, match_no, group_label, next_match_id, next_slot, chat_id, ground_label, join_policy, voided_at, voided_by, void_reason, rules, third_place, scorer_id, called_at, toss_winner_team_id, toss_choice, completed_at, tie_toss, bracket, replaced_by';
+
+/**
+ * Item 28 (25 Nov 2026): a team's next scheduled match, by the app's own rule (pickNextMatch in
+ * TeamDetailScreen): the first still ahead, else one with no time yet, else the most recent overdue one.
+ * It read the team's first 100 to show one (and past 100 overdue fixtures missed the next).
+ */
+async function teamNextMatch(teamId: string, tournamentId: string | null, sportId: string | null): Promise<any | null> {
+  const now = new Date().toISOString();
+  const activeIds = await activeSportIds();
+  const one = (narrow: (q: any) => any) => {
+    let q: any = notVoided(supabase.from('matches').select(MATCH_LIST_COLUMNS).eq('status', 'scheduled').or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`));
+    if (tournamentId) q = q.eq('tournament_id', tournamentId);
+    if (sportId) q = q.eq('sport_id', sportId);
+    if (activeIds) q = q.in('sport_id', activeIds);
+    return narrow(q).limit(1).then(({ data, error }: { data: any[] | null; error: unknown }) => { if (error) throw error; return data?.[0] ?? null; });
+  };
+  const [ahead, untimed, overdue] = await Promise.all([
+    one((q) => q.gte('scheduled_at', now).order('scheduled_at', { ascending: true }).order('id', { ascending: true })),
+    one((q) => q.is('scheduled_at', null).order('id', { ascending: true })),
+    one((q) => q.lt('scheduled_at', now).order('scheduled_at', { ascending: false }).order('id', { ascending: false })),
+  ]);
+  return ahead ?? untimed ?? overdue;
+}
+
 export async function listMatches(req: Request, res: Response) {
   const userId = req.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1461,6 +1511,12 @@ export async function listMatches(req: Request, res: Response) {
     }
     const resolvedSportId = await resolveSportId(sport_id);
     if (sport_id && !resolvedSportId) return res.status(400).json({ error: 'Unknown sport', code: 'BAD_SPORT' });
+    // Item 28 (25 Nov 2026): a team page's one next match (?pick=next).
+    if (team_id && status === 'scheduled' && (req.query as Record<string, unknown>).pick === 'next') {
+      const match = await teamNextMatch(team_id, tournament_id ?? null, resolvedSportId ?? null);
+      if (match) await Promise.all([attachChessElo([match]), attachTeamNames([match])]);
+      return res.json({ matches: match ? [match] : [], total: match ? 1 : 0, limit: 1, offset: 0, has_more: false });
+    }
     const p = parsePagination(req.query as Record<string, unknown>);
     // B03 test fixtures are hidden from a real viewer's discovery lists, not from history scopes.
     const hideTestRows = !mine && !team_id && !tournament_id && (await hideTestFor(userId));
@@ -1469,7 +1525,7 @@ export async function listMatches(req: Request, res: Response) {
     const TEST_SIDES = ', xta:teams!team_a_id(id), xtb:teams!team_b_id(id)';
     let query = supabase
       .from('matches')
-      .select(`*${hideTestRows ? TEST_SIDES : ''}`, { count: 'exact' })
+      .select(`${MATCH_LIST_COLUMNS}${hideTestRows ? TEST_SIDES : ''}`, { count: 'exact' })
       .range(p.from, p.to);
     // SC-443 (M5) · results are ordered by when they FINISHED.
     //
@@ -1779,6 +1835,122 @@ export async function sweepUnplayedScheduledMatches(): Promise<{ abandoned: numb
 }
 
 
+/** The commentary lines of a match's events, newest first (GET /commentary and GET /timeline share it). */
+async function commentaryLines(match: Record<string, any>, events: Array<{ id: string; event_type: string; period: number | null; clock_seconds: number | null; payload: any; created_at: string }>): Promise<any[]> {
+  // The sport by its slug: this compared the sport's UUID with 'cric', which
+  // is never true, so a cricket timeline never got its over.ball labels.
+  const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
+  const isCricket = slug === 'cricket';
+  const teamA = match.team_a_name ?? 'Team A';
+  const teamB = match.team_b_name ?? 'Team B';
+  let periods = 1;
+  let moves = 0;
+  // N-SPP1-CHS-2 / CHS-3: a team chess match on clocks — each board's own moves, and its White.
+  const chessSpec = slug === 'chess' ? tieSpecOf('chess', rulesOf('chess', match)) : null;
+  const movesByBoard = new Map<string, number>();
+  // N-R7-S114 (SPP1-CHS-133): a board result sent without its board (results entered one after
+  // another, from an older pad or the API) belongs to the board in play — the first one not yet
+  // decided, as the app's tie split reads it — so its timeline line can name the board.
+  const decidedBoards = new Set<string>();
+  const legalBallsBySide: Record<'A' | 'B', number> = { A: 0, B: 0 };
+  const enriched: Array<any> = [];
+  for (const ev of events ?? []) {
+    const p: any = ev.payload ?? {};
+    // Stage 10 · TT3: a result typed from the score sheet says so once, not point by point.
+    if (ev.event_type === 'score' && p.typed === true) continue;
+    if (silentOnTimeline(ev.event_type as string, p)) continue; // audit #111
+
+    // For cricket, compute the over.ball label from a running legal-ball
+    // count. Wides and no-balls don't advance the legal count.
+    // Per innings (it ran one count across both), deliveries only, and byes /
+    // leg-byes are legal balls — the same rule as the scorecard.
+    let overBallLabel: string | null = null;
+    if (isCricket && (ev.event_type === 'ball' || ev.event_type === 'extra' || ev.event_type === 'wicket')) {
+      const side: 'A' | 'B' = p.team_side === 'B' ? 'B' : 'A';
+      const isLegal = isBallOfOver(ev.event_type, p);
+      if (isLegal) legalBallsBySide[side] += 1;
+      const legalBalls = legalBallsBySide[side];
+      const displayBalls = isLegal ? legalBalls : legalBalls + 1;
+      const overNum = Math.floor((displayBalls - 1) / 6);
+      const ballInOver = ((displayBalls - 1) % 6) + 1;
+      overBallLabel = `${overNum}.${ballInOver}`;
+    }
+
+    let commentary = ev.event_type as string;
+    let isWicket = false;
+    let isBoundary = false;
+    if (ev.event_type === 'period_change') periods += 1;
+    if (ev.event_type === 'move') moves += 1;
+    const boardIdx = timelineBoardIndex(chessSpec, ev.event_type as string, p, decidedBoards);
+    if (boardIdx >= 0 && ev.event_type === 'move') movesByBoard.set(p.board, (movesByBoard.get(p.board) ?? 0) + 1);
+    const boardCtx = boardIdx >= 0 ? { board: chessSpec!.rubbers[boardIdx]!.label, boardWhiteTeam: boardWhite(chessSpec!, boardIdx), move: movesByBoard.get(p.board) ?? 0 } : {};
+    // Audit batch 4 (#111 / #112 / #136): every line from one place (utils/commentary) — cricket too, and
+    // plain words for anything else; it printed `note {…}` raw.
+    const line = timelineLine(ev.event_type as string, p, {
+      sport: slug, teamA, teamB, period: periods - 1, move: moves, clockSeconds: (ev as any).clock_seconds ?? null,
+      regulation: rulesOf(slug, match).periods ?? null, // BUILD 3.17: the match's own periods
+      periodMinutes: rulesOf(slug, match).periodMinutes ?? null, // BUILD 3.22: the timeline minute
+      extraMinutes: (rulesOf(slug, match) as { extraTimeMinutes?: number | null }).extraTimeMinutes ?? null, // F186
+      threeByThree: slug === 'basketball' && rulesOf(slug, match).pointSet === '12', // Stage 15 follow-up
+      ...boardCtx,
+    });
+    commentary = line.text;
+    isWicket = line.isWicket;
+    isBoundary = line.isBoundary;
+
+    enriched.push({
+      id: ev.id,
+      over_ball: overBallLabel,
+      event_type: ev.event_type,
+      // The app's CommentaryLine reads `text` (and falls back to `payload`).
+      // We were only sending `commentary`, so the timeline never saw the
+      // computed string and recomputed it from a missing payload — every
+      // ball rendered as "Dot ball". Send `text` (the rich string) and the
+      // raw `payload` so both the primary path and the fallback are correct.
+      // `commentary` is kept for backwards-compatibility with any other reader.
+      commentary,
+      text: commentary,
+      payload: p,
+      timestamp: ev.created_at,
+      is_wicket: isWicket,
+      is_boundary: isBoundary,
+    });
+  }
+
+  // Stage 10 · TT1b: a team tie's toss (who names A, B, C) opens its timeline.
+  // N-R7-96: with no toss recorded the line says who is A, B anyway (the first-named side).
+  const toss = tieTossOf((match as { tie_toss?: unknown }).tie_toss);
+  const tossSpec = tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null);
+  const tossLine = tieTossTimelineLine(tossSpec, toss, { A: teamA, B: teamB });
+  if (tossLine) {
+    enriched.unshift({ id: `tie-toss-${match.id}`, over_ball: null, event_type: 'note', commentary: tossLine, text: tossLine, payload: { kind: 'tie_toss' }, timestamp: toss?.at ?? null, is_wicket: false, is_boundary: false });
+  }
+
+  // Stage 11 follow-up: the trump picks, once the tie has started (before that a
+  // side's pick is hidden from the other side, like its order).
+  const trumpSpec = tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null);
+  const picks = trumpSpec?.trump ? await trumpsFor(match.id as string) : null;
+  const trumpLine = trumpSpec && picks && ((picks.A && picks.B) || (match as { status?: string }).status !== 'scheduled')
+    ? tieTrumpText(trumpSpec, picks, { A: teamA, B: teamB }) : null;
+  if (trumpLine) enriched.splice(tossLine ? 1 : 0, 0, { id: `tie-trumps-${match.id}`, over_ball: null, event_type: 'note', commentary: trumpLine, text: trumpLine, payload: { kind: 'tie_trumps' }, timestamp: null, is_wicket: false, is_boundary: false });
+  // 2.14: a trump match's result where it happened — "Trump won: Delhi ×2 · tie now 1–2", and with
+  // PBL's rule on, "Trump lost: Pune −1 · tie now −1–1".
+  if (trumpSpec?.trump && picks && events?.length) {
+    const roll = rollupTieSpec(slug, rulesOf(slug, match as never) as MatchRules, { ...trumpSpec, trumps: picks }, events as never, (p: any) => (p?.team_side === 'B' ? 'B' : 'A'));
+    roll.ends.forEach((at, i) => {
+      const lines = tieTrumpResultLines({ ...trumpSpec, trumps: picks }, roll.finished.slice(0, i + 1), { A: teamA, B: teamB });
+      const ev = events![at];
+      if (!lines.length || !ev) return;
+      const pos = enriched.findIndex((x) => x.id === ev.id);
+      enriched.splice(pos < 0 ? enriched.length : pos + 1, 0, ...lines.map((line, k) => ({ id: `tie-trump-${i}-${k}-${match.id}`, over_ball: null, event_type: 'note', commentary: line, text: line, payload: { kind: 'tie_trump_result' }, timestamp: ev.created_at, is_wicket: false, is_boundary: false })));
+    });
+  }
+
+  // Newest first.
+  enriched.reverse();
+  return enriched;
+}
+
 // GET /matches/:id/commentary — returns match_events formatted into
 // human-readable commentary lines. Cheap — reads only the events table.
 export async function getCommentary(req: Request, res: Response) {
@@ -1806,117 +1978,7 @@ export async function getCommentary(req: Request, res: Response) {
       return res.status(500).json({ error: sanitizeError(error as never) });
     }
 
-    // The sport by its slug: this compared the sport's UUID with 'cric', which
-    // is never true, so a cricket timeline never got its over.ball labels.
-    const slug = normSportSlug((await getSport(match.sport_id as string))?.slug);
-    const isCricket = slug === 'cricket';
-    const teamA = match.team_a_name ?? 'Team A';
-    const teamB = match.team_b_name ?? 'Team B';
-    let periods = 1;
-    let moves = 0;
-    // N-SPP1-CHS-2 / CHS-3: a team chess match on clocks — each board's own moves, and its White.
-    const chessSpec = slug === 'chess' ? tieSpecOf('chess', rulesOf('chess', match)) : null;
-    const movesByBoard = new Map<string, number>();
-    // N-R7-S114 (SPP1-CHS-133): a board result sent without its board (results entered one after
-    // another, from an older pad or the API) belongs to the board in play — the first one not yet
-    // decided, as the app's tie split reads it — so its timeline line can name the board.
-    const decidedBoards = new Set<string>();
-    const legalBallsBySide: Record<'A' | 'B', number> = { A: 0, B: 0 };
-    const enriched: Array<any> = [];
-    for (const ev of events ?? []) {
-      const p: any = ev.payload ?? {};
-      // Stage 10 · TT3: a result typed from the score sheet says so once, not point by point.
-      if (ev.event_type === 'score' && p.typed === true) continue;
-      if (silentOnTimeline(ev.event_type as string, p)) continue; // audit #111
-
-      // For cricket, compute the over.ball label from a running legal-ball
-      // count. Wides and no-balls don't advance the legal count.
-      // Per innings (it ran one count across both), deliveries only, and byes /
-      // leg-byes are legal balls — the same rule as the scorecard.
-      let overBallLabel: string | null = null;
-      if (isCricket && (ev.event_type === 'ball' || ev.event_type === 'extra' || ev.event_type === 'wicket')) {
-        const side: 'A' | 'B' = p.team_side === 'B' ? 'B' : 'A';
-        const isLegal = isBallOfOver(ev.event_type, p);
-        if (isLegal) legalBallsBySide[side] += 1;
-        const legalBalls = legalBallsBySide[side];
-        const displayBalls = isLegal ? legalBalls : legalBalls + 1;
-        const overNum = Math.floor((displayBalls - 1) / 6);
-        const ballInOver = ((displayBalls - 1) % 6) + 1;
-        overBallLabel = `${overNum}.${ballInOver}`;
-      }
-
-      let commentary = ev.event_type as string;
-      let isWicket = false;
-      let isBoundary = false;
-      if (ev.event_type === 'period_change') periods += 1;
-      if (ev.event_type === 'move') moves += 1;
-      const boardIdx = timelineBoardIndex(chessSpec, ev.event_type as string, p, decidedBoards);
-      if (boardIdx >= 0 && ev.event_type === 'move') movesByBoard.set(p.board, (movesByBoard.get(p.board) ?? 0) + 1);
-      const boardCtx = boardIdx >= 0 ? { board: chessSpec!.rubbers[boardIdx]!.label, boardWhiteTeam: boardWhite(chessSpec!, boardIdx), move: movesByBoard.get(p.board) ?? 0 } : {};
-      // Audit batch 4 (#111 / #112 / #136): every line from one place (utils/commentary) — cricket too, and
-      // plain words for anything else; it printed `note {…}` raw.
-      const line = timelineLine(ev.event_type as string, p, {
-        sport: slug, teamA, teamB, period: periods - 1, move: moves, clockSeconds: (ev as any).clock_seconds ?? null,
-        regulation: rulesOf(slug, match).periods ?? null, // BUILD 3.17: the match's own periods
-        periodMinutes: rulesOf(slug, match).periodMinutes ?? null, // BUILD 3.22: the timeline minute
-        extraMinutes: (rulesOf(slug, match) as { extraTimeMinutes?: number | null }).extraTimeMinutes ?? null, // F186
-        threeByThree: slug === 'basketball' && rulesOf(slug, match).pointSet === '12', // Stage 15 follow-up
-        ...boardCtx,
-      });
-      commentary = line.text;
-      isWicket = line.isWicket;
-      isBoundary = line.isBoundary;
-
-      enriched.push({
-        id: ev.id,
-        over_ball: overBallLabel,
-        event_type: ev.event_type,
-        // The app's CommentaryLine reads `text` (and falls back to `payload`).
-        // We were only sending `commentary`, so the timeline never saw the
-        // computed string and recomputed it from a missing payload — every
-        // ball rendered as "Dot ball". Send `text` (the rich string) and the
-        // raw `payload` so both the primary path and the fallback are correct.
-        // `commentary` is kept for backwards-compatibility with any other reader.
-        commentary,
-        text: commentary,
-        payload: p,
-        timestamp: ev.created_at,
-        is_wicket: isWicket,
-        is_boundary: isBoundary,
-      });
-    }
-
-    // Stage 10 · TT1b: a team tie's toss (who names A, B, C) opens its timeline.
-    // N-R7-96: with no toss recorded the line says who is A, B anyway (the first-named side).
-    const toss = tieTossOf((match as { tie_toss?: unknown }).tie_toss);
-    const tossSpec = tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null);
-    const tossLine = tieTossTimelineLine(tossSpec, toss, { A: teamA, B: teamB });
-    if (tossLine) {
-      enriched.unshift({ id: `tie-toss-${match.id}`, over_ball: null, event_type: 'note', commentary: tossLine, text: tossLine, payload: { kind: 'tie_toss' }, timestamp: toss?.at ?? null, is_wicket: false, is_boundary: false });
-    }
-
-    // Stage 11 follow-up: the trump picks, once the tie has started (before that a
-    // side's pick is hidden from the other side, like its order).
-    const trumpSpec = tieSpecOf(slug, (match as { rules?: Partial<MatchRules> | null }).rules ?? null);
-    const picks = trumpSpec?.trump ? await trumpsFor(match.id as string) : null;
-    const trumpLine = trumpSpec && picks && ((picks.A && picks.B) || (match as { status?: string }).status !== 'scheduled')
-      ? tieTrumpText(trumpSpec, picks, { A: teamA, B: teamB }) : null;
-    if (trumpLine) enriched.splice(tossLine ? 1 : 0, 0, { id: `tie-trumps-${match.id}`, over_ball: null, event_type: 'note', commentary: trumpLine, text: trumpLine, payload: { kind: 'tie_trumps' }, timestamp: null, is_wicket: false, is_boundary: false });
-    // 2.14: a trump match's result where it happened — "Trump won: Delhi ×2 · tie now 1–2", and with
-    // PBL's rule on, "Trump lost: Pune −1 · tie now −1–1".
-    if (trumpSpec?.trump && picks && events?.length) {
-      const roll = rollupTieSpec(slug, rulesOf(slug, match as never) as MatchRules, { ...trumpSpec, trumps: picks }, events as never, (p: any) => (p?.team_side === 'B' ? 'B' : 'A'));
-      roll.ends.forEach((at, i) => {
-        const lines = tieTrumpResultLines({ ...trumpSpec, trumps: picks }, roll.finished.slice(0, i + 1), { A: teamA, B: teamB });
-        const ev = events![at];
-        if (!lines.length || !ev) return;
-        const pos = enriched.findIndex((x) => x.id === ev.id);
-        enriched.splice(pos < 0 ? enriched.length : pos + 1, 0, ...lines.map((line, k) => ({ id: `tie-trump-${i}-${k}-${match.id}`, over_ball: null, event_type: 'note', commentary: line, text: line, payload: { kind: 'tie_trump_result' }, timestamp: ev.created_at, is_wicket: false, is_boundary: false })));
-      });
-    }
-
-    // Return newest-first.
-    enriched.reverse();
+    const enriched = await commentaryLines(match, events);
     return res.json({
       commentary: enriched,
       match: {
@@ -1926,6 +1988,45 @@ export async function getCommentary(req: Request, res: Response) {
         team_b_name: match.team_b_name,
       },
     });
+  } catch (e) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+/** Item 15: what a phone's copy of a timeline hashes to (its events and its lines, exactly as sent). */
+export function timelineVersion(events: unknown[], lines: unknown[]): string {
+  return crypto.createHash('sha1').update(JSON.stringify(events)).update(JSON.stringify(lines)).digest('hex').slice(0, 16);
+}
+
+/**
+ * Item 15 (25 Nov 2026) · GET /matches/:id/timeline — a match's events and commentary in one call (it was two,
+ * each the whole list, at every score). `?events=<m>&lines=<n>&have=<v>`: a phone that holds the first m events
+ * and the oldest n lines, with the version it was given, gets only what came after. Anything that changed what
+ * it holds (an edit, an undo, a late offline event, a new team name, a toss) makes the version differ: then everything.
+ */
+export async function getTimeline(req: Request, res: Response) {
+  if (!req.userId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { id } = req.params;
+    const [{ data: match, error: mErr }, read] = await Promise.all([
+      supabase.from('matches').select('id, sport_id, team_a_name, team_b_name, format, overs, rules, tie_toss, status').eq('id', id).maybeSingle(),
+      selectAll<any>((f, to) => supabase.from('match_events').select('*').eq('match_id', id)
+        .order('created_at', { ascending: true }).order('id', { ascending: true }).range(f, to))
+        .then((rows) => ({ rows, error: null as unknown }), (error) => ({ rows: [] as any[], error: error as unknown })),
+    ]);
+    if (mErr) return res.status(DB_UNAVAILABLE_STATUS).json(DB_UNAVAILABLE);
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (read.error) return res.status(500).json({ error: sanitizeError(read.error as never) });
+    const events = read.rows;
+    const lines = await commentaryLines(match, events);
+    const v = timelineVersion(events, lines);
+    const int = (x: unknown) => (typeof x === 'string' && /^\d{1,7}$/.test(x) ? parseInt(x, 10) : null);
+    const m = int(req.query.events); const n = int(req.query.lines);
+    const held = m !== null && n !== null && typeof req.query.have === 'string' && m <= events.length && n <= lines.length
+      && timelineVersion(events.slice(0, m), lines.slice(lines.length - n)) === req.query.have;
+    return res.json(held
+      ? { partial: true, v, events: events.slice(m!), commentary: lines.slice(0, lines.length - n!) }
+      : { partial: false, v, events, commentary: lines });
   } catch (e) {
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -2023,7 +2124,7 @@ export async function getMatch(req: Request, res: Response) {
     const matchWithRating: any = { ...match };
     // N-R7-509 (SIDE-C7x-2): the sport's slug beside its id (cached per process), so a phone whose
     // GET /sports failed still knows the sport — a live football match was drawn as cricket.
-    matchWithRating.sport_slug = await sportSlugOf(match.sport_id).catch(() => null);
+    matchWithRating.sport_slug = null; // set below, with the checks (the key keeps its place)
     if (liveStatus) matchWithRating.live_status = liveStatus;
     if (scoringLease.ok) matchWithRating.scoring_lease = scoringLease.v;
     if (ratings && ratings.length > 0) {
@@ -2044,11 +2145,37 @@ export async function getMatch(req: Request, res: Response) {
     // shows "Requested" (or that it was declined) instead of the join button.
     matchWithRating.my_join_request = myJoinRequest === 'pending' || myJoinRequest === 'rejected' ? myJoinRequest : null;
     matchWithRating.umpire = umpire;
+    // Item 14 (25 Nov 2026): everything below needs only the match row and the reads above. It was asked
+    // one after the other (up to 9 more trips); now together. Each check is the same call as before.
+    const openForPlay = !!userId && (match.status === 'scheduled' || match.status === 'live');
+    const officiates = openForPlay ? canOfficiateMatch(match as never, userId, { scorers: false }) : Promise.resolve(false);
+    const offerBy = (match as { umpire_offer_by?: string | null }).umpire_offer_by ?? null;
+    const personCard = (uid: string) => Promise.resolve(supabase.from('users').select('id, name, username').eq('id', uid).is('deleted_at', null).maybeSingle())
+      .then(({ data: u }) => u ?? null, () => null);
+    const participantIds = (participants ?? []).map((p) => {
+      const u = (p as { user?: { id?: string } | Array<{ id?: string }> | null }).user;
+      return (Array.isArray(u) ? u[0]?.id : u?.id) ?? '';
+    }).filter(Boolean);
+    const [sportSlug, scorer, canDefaultHere, canWalkoverHere, hubHolder, canVoid, canRate, selfMode, umpireOffer, viewerCan] = await Promise.all([
+      sportSlugOf(match.sport_id).catch(() => null),
+      match.scorer_id ? personCard(match.scorer_id as string) : null,
+      openForPlay ? canDefault(match as never, userId, officiates) : false,
+      officiates, // Q41: canGiveWalkover's rule (the organiser's or the umpire's only)
+      openForPlay && match.tournament_id ? hubHolderElsewhere(match.tournament_id as string, userId, deviceIdOf(req)) : null,
+      userId ? canVoidMatch(match, userId).catch(() => false) : false,
+      !!userId && match.status === 'completed' && !match.voided_at ? tookPartInMatch(match, userId).catch(() => false) : false,
+      !userId || match.umpire_id ? ('none' as const) : selfOfficiateMode(match as SelfOfficiateMatch, userId).catch(() => 'none' as const),
+      offerBy && userId && match.created_by === userId ? personCard(offerBy) : null,
+      viewerCanPlay(match, userId, participantIds),
+      // Chess: attach both players' real ELO for this sport (ranked 1v1). Null for
+      // guests/casual — never faked.
+      attachChessElo([matchWithRating]),
+      attachTeamNames([matchWithRating]), // SC-366: real team names on detail too
+    ]);
+
+    matchWithRating.sport_slug = sportSlug;
     // Cricket gap 3: …and its scorer, when one is named (one more read only then).
-    matchWithRating.scorer = match.scorer_id
-      ? await Promise.resolve(supabase.from('users').select('id, name, username').eq('id', match.scorer_id).is('deleted_at', null).maybeSingle())
-        .then(({ data: u }) => u ?? null, () => null)
-      : null;
+    matchWithRating.scorer = scorer;
 
     // SC-287: authoritative "can this caller score/officiate this match" flag,
     // computed with the SAME canOfficiateMatch the scoring/toss/complete APIs
@@ -2061,13 +2188,13 @@ export async function getMatch(req: Request, res: Response) {
     matchWithRating.can_manage = canManage;
     // N-R7-S33: who may give a walkover / default here (completeMatch's rule), so the app offers it to them only.
     // (a tournament's referee may give one without officiating the fixture; asked only while it can still be given)
-    matchWithRating.can_default = !!userId && (match.status === 'scheduled' || match.status === 'live') && (await canDefault(match as never, userId));
+    matchWithRating.can_default = canDefaultHere;
     // Q41: a walkover is the organiser's or the umpire's only (the app's Walkover button reads this).
-    matchWithRating.can_walkover = !!userId && (match.status === 'scheduled' || match.status === 'live') && (await canGiveWalkover(match as never, userId));
+    matchWithRating.can_walkover = canWalkoverHere;
     // Q32 (Dipak, 21 Nov 2026: A): the venue hub runs on another phone — this phone views only (the app
     // hides its scoring and result buttons and says where to record). Null when this phone may record.
-    if (userId && match.tournament_id && (match.status === 'scheduled' || match.status === 'live')) {
-      const holder = await hubHolderElsewhere(match.tournament_id as string, userId, deviceIdOf(req));
+    if (openForPlay && match.tournament_id) {
+      const holder = hubHolder;
       matchWithRating.hub_elsewhere = holder ? { by: holder.user_id === userId ? 'your other phone' : holder.name ? `${holder.name}’s phone` : 'another phone' } : null;
     }
     // Audit #35/#36: Cancel and Void by the same rules cancelMatch and
@@ -2079,7 +2206,7 @@ export async function getMatch(req: Request, res: Response) {
       && !match.group_label && Number(match.round ?? 0) > 0;
     matchWithRating.can_cancel = !!userId && !isTerminalMatchStatus(match.status)
       && (match.tournament_id ? canManage === true && !koMatch : match.created_by === userId);
-    matchWithRating.can_void = !!userId && await canVoidMatch(match, userId).catch(() => false);
+    matchWithRating.can_void = canVoid;
     // E-097 / E-096 (Round 6): decideMatch and setMatchOfficials allow the
     // organiser of a tournament fixture, and a casual match's CREATOR — not its
     // umpire, whom can_manage includes (the umpire was shown a Decide that
@@ -2091,38 +2218,19 @@ export async function getMatch(req: Request, res: Response) {
     }
     // E-100 (Round 6): may the viewer rate it? rateMatchHandler's own rule, so
     // the app offers the card to exactly the people the server accepts.
-    matchWithRating.can_rate = !!userId && match.status === 'completed' && !match.voided_at
-      && await tookPartInMatch(match, userId).catch(() => false);
+    matchWithRating.can_rate = canRate;
     // Audit #5: may the viewer take the official's seat themselves ('assign'),
     // only offer to ('offer', casual matches: the creator accepts), or not at
     // all ('none', a tournament fixture they don't officiate)? And a pending
     // offer: who made it (the creator answers it) / that it's the viewer's own.
-    matchWithRating.self_officiate_mode = !userId || match.umpire_id
-      ? 'none'
-      : await selfOfficiateMode(match as SelfOfficiateMatch, userId).catch(() => 'none');
-    const offerBy = (match as { umpire_offer_by?: string | null }).umpire_offer_by ?? null;
+    matchWithRating.self_officiate_mode = selfMode;
     matchWithRating.my_umpire_offer = !!userId && offerBy === userId;
-    matchWithRating.umpire_offer = offerBy && userId && match.created_by === userId
-      ? await Promise.resolve(supabase.from('users').select('id, name, username').eq('id', offerBy).is('deleted_at', null).maybeSingle())
-        .then(({ data: u }) => u ?? null, () => null)
-      : null;
+    matchWithRating.umpire_offer = umpireOffer;
 
     // U-13: could this viewer actually be in the line-up? Only then is "Are you
     // playing?" a question worth asking them. It was shown to everyone — the
     // umpire and pure spectators included. True for someone already in the
     // line-up, or on either team's roster; never for the match's umpire.
-    const participantIds = (participants ?? []).map((p) => {
-      const u = (p as { user?: { id?: string } | Array<{ id?: string }> | null }).user;
-      return (Array.isArray(u) ? u[0]?.id : u?.id) ?? '';
-    }).filter(Boolean);
-    // These three need the line-up or the row, and touch different fields.
-    const [viewerCan] = await Promise.all([
-      viewerCanPlay(match, userId, participantIds),
-      // Chess: attach both players' real ELO for this sport (ranked 1v1). Null for
-      // guests/casual — never faked.
-      attachChessElo([matchWithRating]),
-      attachTeamNames([matchWithRating]), // SC-366: real team names on detail too
-    ]);
     matchWithRating.viewer_can_play = viewerCan;
 
     // SC-259: expose the parent tournament's FORMAT so the client can tell a real
